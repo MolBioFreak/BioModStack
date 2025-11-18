@@ -55,12 +55,40 @@ nvidia-smi
 apptainer exec --nv docker://nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
-### 4. Run Test
+### 4. Build Containers Locally (RECOMMENDED - Avoids Slow Downloads)
+
+**Choose Option A (recommended) to avoid downloading from the slow Australian server:**
+
+**Option A: Build Locally (~30-60 minutes, one-time)**
+```bash
+# Build all containers locally using your fast internet
+# Downloads base images from fast CDNs (NVIDIA, Docker Hub)
+# Much faster than downloading from Australian server
+
+./build_containers.sh
+
+# This will:
+# - Download base images (~2-3GB from fast servers)
+# - Build all 5 containers in parallel
+# - Validate each container
+# - Save to containers/ directory
+```
+
+**Option B: Auto-download (slow, but automatic)**
+```bash
+# Skip this step and let Nextflow auto-download during first run
+# Downloads ~15GB from Australian server (SLOW)
+# Caches to ~/.apptainer/cache/
+```
+
+**After building/downloading containers, proceed to testing.**
+
+### 5. Run Test
 
 ```bash
 # Run small test (4 designs × 2 sequences)
-# First run downloads containers (~15GB) and models (~15GB)
-# Takes ~30-60 minutes including downloads
+# If you built containers locally: ~25-35 minutes
+# If auto-downloading: ~60-90 minutes first run (downloads + run)
 # Subsequent runs: ~25-35 minutes
 
 nextflow run main.nf \
@@ -68,7 +96,7 @@ nextflow run main.nf \
     --out_dir test_results
 ```
 
-### 5. Monitor (in another terminal)
+### 6. Monitor (in another terminal)
 
 ```bash
 # Watch GPU usage
@@ -82,15 +110,22 @@ tail -f .nextflow.log
 
 ## What to Expect
 
-**First Run:**
-- Downloads containers to `~/.apptainer/cache/` (~15GB, one-time)
-- Downloads models to `models/` (~15GB, one-time)
+**If You Built Containers Locally (Option A):**
+- Containers ready in `containers/` directory
+- First run downloads models to `models/` (~15GB, one-time)
 - Runs pipeline with 3 GPUs active
 - GPU 3 (RTX 5060 Ti) will be idle (excluded by design)
-- Total time: ~30-60 minutes
+- Total time: ~25-35 minutes
 
-**Subsequent Runs:**
-- Uses cached containers (instant)
+**If You Auto-Downloaded (Option B):**
+- First run downloads containers (~15GB) + models (~15GB)
+- Downloads from slow Australian server (may take 1-2 hours)
+- Caches containers to `~/.apptainer/cache/`
+- Runs pipeline with 3 GPUs active
+- Total time: ~60-120 minutes first run
+
+**Subsequent Runs (Either Option):**
+- Uses cached/built containers (instant)
 - Uses cached models (instant)
 - Total time: ~25-35 minutes
 
