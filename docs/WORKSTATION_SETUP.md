@@ -111,12 +111,45 @@ bash scripts/download_models.sh
 
 ### 3. Container Strategy
 
-**Containers will auto-download from ProteinDJ cloud on first run:**
+**RECOMMENDED: Build Containers Locally (Much Faster)**
 
+Building containers locally avoids slow downloads from the Australian server and uses your fast internet to pull base images from global CDNs.
+
+**Quick Build (Recommended):**
+```bash
+# From project root directory
+./build_containers.sh
+
+# This will:
+# - Download base images from NVIDIA/Docker Hub (fast global CDNs)
+# - Build all 5 containers in parallel (3 at a time)
+# - Validate each container after build
+# - Save to containers/ directory
+# - Time: 30-60 minutes one-time
+```
+
+**Advanced Build Options:**
+```bash
+# Build sequentially (slower but uses less resources)
+./build_containers.sh --sequential
+
+# Build specific container only
+./build_containers.sh --container rfdiffusion
+
+# Build with 2 parallel processes (less resource intensive)
+./build_containers.sh --parallel 2
+
+# See all options
+./build_containers.sh --help
+```
+
+**Alternative: Auto-Download from Server (Not Recommended)**
+
+If you skip local building, containers will auto-download from Australian server on first run:
 ```bash
 # Containers cached to: ~/.apptainer/cache/
 # Total: ~15GB
-# One-time download, reused forever
+# Download time: 1-2 hours from slow server
 
 # Containers:
 # - rfdiffusion.sif (~2.5 GB)
@@ -126,7 +159,19 @@ bash scripts/download_models.sh
 # - pyrosetta_tools.sif (~4 GB)
 ```
 
-**First run will be slower** due to container downloads. Subsequent runs use cached containers.
+**Container Build Details:**
+
+The build script (`apptainer/build_containers_workstation.sh`) provides:
+- Pre-build validation (Apptainer, disk space, etc.)
+- Parallel building with resource management
+- Post-build container testing
+- Clear progress reporting
+- Automatic error handling
+
+Containers are built from definition files (`.def`) in `apptainer/` directory that:
+- Pull base images from NVIDIA container registry (fast)
+- Clone repositories and install dependencies
+- Are fully compatible with Nextflow/ProteinDJ
 
 ---
 
@@ -272,22 +317,81 @@ sudo reboot
 
 ### Issue: Container Download Slow
 
-**Solution:**
+**Solution 1: Build Locally (RECOMMENDED)**
 ```bash
-# Pre-download containers to local directory
+# Build containers locally instead of downloading from slow server
+./build_containers.sh
+
+# This uses fast CDNs for base images and builds everything locally
+# Time: 30-60 minutes (much faster than slow download)
+```
+
+**Solution 2: Parallel Download (Still Slow)**
+```bash
+# If you prefer to download pre-built containers, use parallel downloads
+sudo apt install aria2
+
 mkdir -p containers
 cd containers
 
-wget https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/rfdiffusion.sif
-wget https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/boltz2.sif
-wget https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/fampnn.sif
-wget https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/dl_binder_design.sif
-wget https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/pyrosetta_tools.sif
+# Download with multiple connections
+aria2c -x 16 -s 16 https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/rfdiffusion.sif &
+aria2c -x 16 -s 16 https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/boltz2.sif &
+aria2c -x 16 -s 16 https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/fampnn.sif &
+aria2c -x 16 -s 16 https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/dl_binder_design.sif &
+aria2c -x 16 -s 16 https://object-store.rc.nectar.org.au/v1/AUTH_b6f9bdf15faf4320a7587fd42f62e530/ContainerHub/pyrosetta_tools.sif &
+wait
 
 cd ..
+```
 
-# Update nextflow.config workstation profile:
-params.container_dir = "${projectDir}/containers"
+### Issue: Container Build Fails
+
+**Problem: Apptainer fakeroot not available**
+```bash
+# Check if fakeroot is available
+apptainer build --help | grep fakeroot
+
+# If not available, install:
+sudo apt install uidmap
+
+# Or build without fakeroot (requires sudo):
+cd apptainer
+sudo apptainer build ../containers/rfdiffusion.sif rfdiffusion.def
+# Repeat for other containers
+```
+
+**Problem: Out of disk space during build**
+```bash
+# Check available space
+df -h .
+
+# Clean up Apptainer cache if needed:
+apptainer cache clean --all
+
+# Or use different temp directory with more space:
+export BUILD_TEMP_DIR=/path/to/large/disk/tmp
+./build_containers.sh
+```
+
+**Problem: Build fails during git clone or pip install**
+```bash
+# Check build log:
+cat /tmp/${USER}/apptainer_build/<container>_build.log
+
+# Common issues:
+# - Network timeout: Retry the build
+# - Git clone failed: Check internet connection
+# - Pip install failed: May need to update base image in .def file
+```
+
+**Problem: Container test warnings**
+```bash
+# Some import tests may fail without GPU - this is usually OK
+# Container will work when run with --nv flag (GPU access)
+
+# To verify container works:
+apptainer exec --nv containers/rfdiffusion.sif nvidia-smi
 ```
 
 ### Issue: Out of Memory
