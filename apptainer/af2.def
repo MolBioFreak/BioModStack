@@ -33,6 +33,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     ldconfig
     ldconfig -p
 
+    # CRITICAL: Install NumPy 1.x first (JAX 0.4.20 requires NumPy <2.0)
+    pip install -q --no-cache-dir "numpy<2.0"
+
     # Install JAX with CUDA 12 support (RTX 5090 requires compute capability 12.0)
     # Using JAX 0.4.20 as specified by nrbennet/dl_binder_design for CUDA 12
     pip install -q --no-cache-dir "jax[cuda12_pip]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
