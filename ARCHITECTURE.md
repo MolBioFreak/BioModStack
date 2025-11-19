@@ -67,7 +67,7 @@ Protein-De-Novo-Modification-and-Design-Platform/
 │   ├── proteinmpnn.nf           # [KEEP] ProteinMPNN processes
 │   ├── fampnn.nf                # [KEEP] FAMPNN processes
 │   ├── ligandmpnn.nf            # [ADD] LigandMPNN processes
-│   ├── af2.nf                   # [REMOVE] Outdated AF2
+│   ├── af2.nf                   # [KEEP] AlphaFold2 processes
 │   ├── boltz.nf                 # [UPDATE] Replace with Boltz-2
 │   ├── chai1.nf                 # [ADD] Chai-1 processes
 │   ├── colabfold.nf             # [ADD] ColabFold processes
