@@ -31,7 +31,7 @@ This repository contains a complete copy of ProteinDJ v1.1 (from PapenfussLab/pr
 
 Build a state-of-the-art protein design system for workstation deployment by extending ProteinDJ with:
 
-1. **Modern prediction models** - Replace outdated AF2-Initial-Guess with Boltz-2, Chai-1, ColabFold
+1. **Modern prediction models** - Add Boltz-2, Chai-1, and ColabFold alongside existing AlphaFold2
 2. **Enhanced sequence design** - Add LigandMPNN for ligand/metal/DNA binding
 3. **New pipeline stages** - Add DiffDock (docking) and OpenMM (MD validation)
 4. **Experimental features** - Test Genie 2 as RFdiffusion alternative
@@ -41,8 +41,7 @@ Build a state-of-the-art protein design system for workstation deployment by ext
 
 ### Phase 1: Core Model Upgrades
 
-**Replace outdated folding models:**
-- Remove: af2.nf module (AlphaFold2-Initial-Guess from 2021)
+**Add modern folding models:**
 - Add: boltz2.nf module (Boltz-2 with binding affinity prediction)
 - Add: chai1.nf module (Chai-1 with PLM embeddings)
 - Add: colabfold.nf module (fast MSA-based prediction)
