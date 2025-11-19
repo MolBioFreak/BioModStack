@@ -17,15 +17,14 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
     cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Installing the provided versions of pip packages with RTX 5090 support
-    # PyTorch 2.4.1 with CUDA 12.1 supports compute capability 12.0 (RTX 5090)
+    # Install PyTorch 2.4.1 with CUDA 12.1 for RTX 5090 support (compute capability 12.0)
     pip install -q --no-cache-dir \
         torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    # Install DGL from PyPI (works with CUDA GPUs via runtime detection)
-    pip install -q --no-cache-dir dgl==2.1.0
+    # Install DGL 1.1.3 from PyPI (older version without graphbolt, compatible with PyTorch 2.4.1)
+    pip install -q --no-cache-dir dgl==1.1.3
 
-    # Install remaining dependencies
+    # Install RFdiffusion dependencies (removed TensorFlow, JAX, dm-haiku, dm-tree, ml-collections - not used by RFdiffusion)
     pip install -q --no-cache-dir \
         e3nn==0.3.3 \
         wandb==0.12.0 \
@@ -35,15 +34,10 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
         hydra-core==1.3.2 \
         pyrsistent==0.19.3 \
         icecream==2.1.3 \
-        jax==0.4.16 \
-        dm-haiku==0.0.10 \
-        dm-tree==0.1.8 \
         biopython==1.81 \
-        ml-collections==0.1.1 \
-        tensorflow==2.13.0 \
         /app/RFdiffusion/env/SE3Transformer
 
-    # Installing RFdiffusion
+    # Install RFdiffusion itself
     pip install --no-cache-dir /app/RFdiffusion --no-deps
 
 # Setting environment variables
