@@ -1,38 +1,65 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 %post
-
-  apt-get -q update
+    # Install Python 3.11 and dependencies for RTX 5090 support
+    apt-get -q update
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
         git \
-        python3.10 \
+        software-properties-common \
+        wget
+
+    # Add deadsnakes PPA for Python 3.11
+    add-apt-repository ppa:deadsnakes/ppa -y
+    apt-get -q update
+
+    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        python3.11 \
+        python3.11-dev \
+        python3.11-distutils \
         python3-pip
-    # running as fakeroot, just surpressing warning
-    python3.10 -m pip install -q -U --no-cache-dir pip
+
+    # Set Python 3.11 as default
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+    # Upgrade pip
+    python3.11 -m pip install -q -U --no-cache-dir pip
+
+    # Cleanup
     rm -rf /var/lib/apt/lists/*
     apt-get autoremove -y
     apt-get clean
 
-  ldconfig
-  ldconfig -p
+    ldconfig
+    ldconfig -p
 
-  # running as fakeroot, just supressing warning
-  pip install -q --no-cache-dir   \
-        git+https://github.com/NVIDIA/dllogger#egg=dllogger \
-        dm-haiku==0.0.10 \
-        dm-tree==0.1.8 \
+    # CRITICAL: Install NumPy 1.x first (JAX 0.4.20 requires NumPy <2.0)
+    pip install -q --no-cache-dir "numpy<2.0"
+
+    # Install JAX with CUDA 12 support (RTX 5090 requires compute capability 12.0)
+    # Using JAX 0.4.20 as specified by nrbennet/dl_binder_design for CUDA 12
+    # Use cuda12_local to leverage host CUDA libraries via --nv mount
+    pip install -q --no-cache-dir "jax[cuda12_local]==0.4.20" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+    # Install JAX ecosystem dependencies (REQUIRED for AlphaFold2 Initial-Guess)
+    pip install -q --no-cache-dir \
+        dm-haiku \
+        dm-tree \
         biopython==1.81 \
-        ml-collections==0.1.1 \
-        tensorflow==2.13.0 \
-        ml_dtypes mock 
+        ml-collections \
+        ml_dtypes \
+        mock
 
-  pip install --upgrade --no-cache-dir jax==0.3.25 jaxlib==0.3.25+cuda11.cudnn805 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    # Note: TensorFlow removed - testing if AF2 actually needs it
+    # If AF2 fails with import errors, uncomment the line below:
+    # pip install -q --no-cache-dir tensorflow==2.13.0
 
-  pip install pyrosetta-installer 
-  python3 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
+    # Install PyRosetta (required for AF2 Initial-Guess)
+    pip install -q --no-cache-dir pyrosetta-installer
+    python3.11 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
-  git clone https://github.com/PapenfussLab/dl_binder_design.git  /dl_binder_design
+    # Clone PapenfussLab fork of dl_binder_design (contains AF2 Initial-Guess modifications)
+    git clone https://github.com/PapenfussLab/dl_binder_design.git /dl_binder_design
 
 %environment
   export PATH="/opt/conda/bin${PATH:+:${PATH}}"
