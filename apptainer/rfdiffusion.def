@@ -7,7 +7,8 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
         git \
         python3.10 \
-        python3-pip
+        python3-pip \
+        sed
     python3.10 -m pip install -q -U --no-cache-dir pip
     rm -rf /var/lib/apt/lists/*
     apt-get autoremove -y
@@ -38,15 +39,18 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
         biopython==1.81 \
         /app/RFdiffusion/env/SE3Transformer
 
+    # CRITICAL FIX: Patch e3nn to add weights_only=False to torch.load() call
+    # This fixes PyTorch nightly's stricter pickle security for RTX 5090 compatibility
+    # Solution adapted from: https://github.com/JMB-Scripts/RFdiffusion-dockerfile-nvidia-RTX5090
+    sed -i "s/torch\.load(os\.path\.join(os\.path\.dirname(__file__), 'constants\.pt'))/torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'), weights_only=False)/" \
+        /usr/local/lib/python3.10/dist-packages/e3nn/o3/_wigner.py
+
     # Install RFdiffusion itself
     pip install --no-cache-dir /app/RFdiffusion --no-deps
 
 # Setting environment variables
 %environment
     DGLBACKEND="pytorch"
-    # Disable PyTorch weights_only enforcement for e3nn constant loading
-    # e3nn uses builtins.slice in pickled constants which is safe but not allowlisted
-    TORCH_FORCE_WEIGHTS_ONLY_LOAD="0"
 
 # Entry point for the container when run.
 %runscript
