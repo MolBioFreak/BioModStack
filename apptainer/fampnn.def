@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn9-devel-ubuntu22.04
 
 %post
     # install build deps
@@ -19,9 +19,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     # clone repository
     git clone https://github.com/PapenfussLab/fampnn.git /app/fampnn && cd /app/fampnn && git checkout 18363df
 
-    # install PyTorch nightly with CUDA 12.1 for RTX 5090 (sm_120) support
-    # Using nightly build for Blackwell architecture compatibility
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
+    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
+    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # install other dependencies
     pip install scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
