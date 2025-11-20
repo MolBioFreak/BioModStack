@@ -14,12 +14,11 @@ From: nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
     apt-get clean
 
     # Clone the RFdiffusion repository
-    git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion 
+    git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
     cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Installing the provided versions of pip packages
+    # Install dependencies first (excluding DGL)
     pip install -q --no-cache-dir \
-        dgl==1.0.2+cu116 -f https://data.dgl.ai/wheels/cu116/repo.html \
         torch==2.0.1 \
         e3nn==0.3.3 \
         wandb==0.12.0 \
@@ -36,6 +35,51 @@ From: nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
         ml-collections==0.1.1 \
         tensorflow==2.13.0 \
         /app/RFdiffusion/env/SE3Transformer
+
+    # Build and install DGL from source with CUDA 11.8 compatibility patch
+    cd /tmp
+    git clone --branch v1.0.2 --recursive https://github.com/dmlc/dgl.git
+    cd dgl
+
+    # Create patch to fix fp16 operator redefinition errors with CUDA 11.8+
+    # The issue is that CUDA 11.0+ defines __half operators natively,
+    # so we need to conditionally compile DGL's definitions
+    cat > /tmp/fp16.patch << 'EOF'
+--- a/src/array/cuda/fp16.cuh
++++ b/src/array/cuda/fp16.cuh
+@@ -1,6 +1,13 @@
+ #ifndef DGL_ARRAY_CUDA_FP16_H_
+ #define DGL_ARRAY_CUDA_FP16_H_
+
++// CUDA 11.0+ provides native __half operators in cuda_fp16.hpp
++// Only define our own if they're not already available
++#if defined(__CUDACC__) && (CUDA_VERSION >= 11000)
++#define DGL_CUDA_FP16_NATIVE_OPERATORS
++#endif
++
++#ifndef DGL_CUDA_FP16_NATIVE_OPERATORS
+ #include <cuda_fp16.h>
+
+ namespace dgl {
+@@ -127,6 +134,7 @@ DGL_COMPILER_DIRECTIVE bool operator<=(const __half& lh, const __half& rh) {
+
+ }  // namespace cuda
+ }  // namespace dgl
++#endif  // DGL_CUDA_FP16_NATIVE_OPERATORS
+
+ #endif  // DGL_ARRAY_CUDA_FP16_H_
+EOF
+
+    # Apply the patch
+    patch -p1 < /tmp/fp16.patch
+
+    # Build DGL with CUDA support
+    mkdir build
+    cd build
+    cmake -DUSE_CUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda ..
+    make -j$(nproc)
+    cd ../python
+    python3.10 setup.py install
         
     # Installing RFdiffusion
     pip install --no-cache-dir /app/RFdiffusion --no-deps
