@@ -89,16 +89,69 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     cd /app/RFdiffusion
     pip install --no-cache-dir . --no-deps
 
-    # Apply e3nn hotfix for PyTorch nightly compatibility (weights_only parameter)
-    # This fixes: TypeError related to weights_only in torch.load
-    E3NN_INIT="/opt/conda/envs/rfdiffusion/lib/python3.11/site-packages/e3nn/__init__.py"
-    if [ -f "$E3NN_INIT" ]; then
-        sed -i "s/torch\.load(\(.*\))/torch.load(\1, weights_only=False)/g" "$E3NN_INIT"
-    fi
+    # Apply e3nn hotfix using Python to handle nested function calls properly
+    python3.11 << 'PYTHON_EOF'
+import re
+import os
+from pathlib import Path
 
-    # Find and patch all e3nn files that use torch.load
-    find /opt/conda/envs/rfdiffusion/lib/python3.11/site-packages/e3nn -name "*.py" -type f -exec \
-        sed -i 's/torch\.load(\([^)]*\))/torch.load(\1, weights_only=False)/g' {} \;
+e3nn_dir = Path("/opt/conda/envs/rfdiffusion/lib/python3.11/site-packages/e3nn")
+
+def fix_torch_load(content):
+    # Match torch.load( and find the matching closing paren
+    # Add weights_only=False before the closing paren of torch.load
+    pattern = r'torch\.load\s*\('
+
+    result = []
+    pos = 0
+
+    for match in re.finditer(pattern, content):
+        result.append(content[pos:match.end()])
+
+        # Find matching closing paren
+        paren_count = 1
+        i = match.end()
+        while i < len(content) and paren_count > 0:
+            if content[i] == '(':
+                paren_count += 1
+            elif content[i] == ')':
+                paren_count -= 1
+            i += 1
+
+        # Extract the arguments
+        args_end = i - 1
+        args = content[match.end():args_end]
+
+        # Check if weights_only is already present
+        if 'weights_only' not in args:
+            # Add weights_only=False before closing paren
+            result.append(args)
+            result.append(', weights_only=False')
+        else:
+            result.append(args)
+
+        result.append(')')
+        pos = i
+
+    result.append(content[pos:])
+    return ''.join(result)
+
+# Process all Python files in e3nn
+for py_file in e3nn_dir.rglob("*.py"):
+    try:
+        with open(py_file, 'r') as f:
+            content = f.read()
+
+        if 'torch.load(' in content and 'weights_only' not in content:
+            fixed_content = fix_torch_load(content)
+            with open(py_file, 'w') as f:
+                f.write(fixed_content)
+            print(f"Fixed: {py_file}")
+    except Exception as e:
+        print(f"Error processing {py_file}: {e}")
+
+print("e3nn hotfix complete")
+PYTHON_EOF
 
     # Create python3.10 symlink for backward compatibility with Nextflow modules
     ln -s /opt/conda/envs/rfdiffusion/bin/python /opt/conda/envs/rfdiffusion/bin/python3.10
