@@ -35,10 +35,36 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     export PATH="/opt/conda/envs/rfdiffusion/bin:$PATH"
 
     # Install PyTorch nightly with CUDA 12.8 support (required for RTX 5090 sm_120)
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    # Use --no-deps to bypass dependency resolver issues with nightly builds
+    pip install --pre --no-deps torch --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install --pre --no-deps torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install --pre --no-deps torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
-    # Enforce NumPy < 2.0 to prevent ABI conflicts
-    pip install "numpy<2.0"
+    # Install PyTorch's CUDA dependencies from the nightly index
+    # These are required for PyTorch to function, even during builds
+    # Install ALL required CUDA libraries to avoid missing library errors
+    pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 \
+        cuda-bindings \
+        nvidia-cudnn-cu12 \
+        nvidia-cublas-cu12 \
+        nvidia-cuda-cupti-cu12 \
+        nvidia-cuda-nvrtc-cu12 \
+        nvidia-cuda-runtime-cu12 \
+        nvidia-cufft-cu12 \
+        nvidia-cufile-cu12 \
+        nvidia-curand-cu12 \
+        nvidia-cusolver-cu12 \
+        nvidia-cusparse-cu12 \
+        nvidia-cusparselt-cu12 \
+        nvidia-nccl-cu12 \
+        nvidia-nvjitlink-cu12 \
+        nvidia-nvshmem-cu12 \
+        nvidia-nvtx-cu12 \
+        pytorch-triton
+
+    # Install other dependencies separately to ensure correct versions
+    # Include scipy for e3nn, pillow for torchvision
+    pip install "numpy<2.0" sympy networkx jinja2 fsspec filelock typing-extensions scipy pillow
 
     # Clone RFdiffusion repository
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
@@ -59,11 +85,14 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
         ml-collections==0.1.1 \
         git+https://github.com/NVIDIA/dllogger#egg=dllogger
 
-    # Install e3nn with version 0.3.3
-    pip install --no-cache-dir e3nn==0.3.3
+    # Install e3nn with version 0.3.3 using --no-deps to prevent torch downgrade
+    pip install --no-cache-dir --no-deps e3nn==0.3.3
+    # Install e3nn's missing dependencies with --no-deps to prevent torch downgrade
+    pip install --no-cache-dir --no-deps opt_einsum
+    pip install --no-cache-dir --no-deps opt-einsum-fx
 
-    # Install torchdata (compatible with PyTorch nightly)
-    pip install --no-cache-dir torchdata
+    # Install torchdata with --no-deps to prevent torch downgrade
+    pip install --no-cache-dir --no-deps torchdata
 
     # Build and install SE3Transformer
     cd /app/RFdiffusion/env/SE3Transformer
@@ -82,8 +111,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
           -DCMAKE_BUILD_TYPE=Release \
           ..
     make -j$(nproc)
-    cd ../python
-    python setup.py install
+    cd /tmp/dgl/python
+    pip install .
 
     # Install RFdiffusion
     cd /app/RFdiffusion
