@@ -14,34 +14,46 @@ cd apptainer
 mkdir -p ../containers_backup
 
 # Backup old containers
-echo "[INFO] Backing up old containers..."
-mv ../containers/rfdiffusion.sif ../containers_backup/ 2>/dev/null || true
-mv ../containers/fampnn.sif ../containers_backup/ 2>/dev/null || true
-mv ../containers/dl_binder_design.sif ../containers_backup/ 2>/dev/null || true
-mv ../containers/boltz2.sif ../containers_backup/ 2>/dev/null || true
+# echo "[INFO] Backing up old containers..."
+# mv ../containers/rfdiffusion.sif ../containers_backup/ 2>/dev/null || true
+# mv ../containers/fampnn.sif ../containers_backup/ 2>/dev/null || true
+# mv ../containers/dl_binder_design.sif ../containers_backup/ 2>/dev/null || true
+# mv ../containers/boltz2.sif ../containers_backup/ 2>/dev/null || true
 
 # Build containers in parallel (2 at a time to avoid overload)
 echo "[INFO] Building rfdiffusion and fampnn in parallel..."
-apptainer build --fakeroot ../containers/rfdiffusion.sif rfdiffusion.def > /tmp/rfdiffusion_rebuild.log 2>&1 &
-PID1=$!
-apptainer build --fakeroot ../containers/fampnn.sif fampnn.def > /tmp/fampnn_rebuild.log 2>&1 &
-PID2=$!
+# apptainer build --fakeroot ../containers/rfdiffusion.sif rfdiffusion.def > /tmp/rfdiffusion_rebuild.log 2>&1 &
+# PID1=$!
+# apptainer build --fakeroot ../containers/fampnn.sif fampnn.def > /tmp/fampnn_rebuild.log 2>&1 &
+# PID2=$!
 
-wait $PID1
-echo "[SUCCESS] RFdiffusion rebuilt"
-wait $PID2  
-echo "[SUCCESS] FAMPNN rebuilt"
+# wait $PID1
+# echo "[SUCCESS] RFdiffusion rebuilt"
+# wait $PID2  
+# echo "[SUCCESS] FAMPNN rebuilt"
 
 echo "[INFO] Building dl_binder_design and boltz2 in parallel..."
-apptainer build --fakeroot ../containers/dl_binder_design.sif dl_binder_design.def > /tmp/dlbinder_rebuild.log 2>&1 &
-PID3=$!
-apptainer build --fakeroot ../containers/boltz2.sif boltz2.def > /tmp/boltz2_rebuild.log 2>&1 &
-PID4=$!
+# apptainer build --fakeroot ../containers/dl_binder_design.sif dl_binder_design.def > /tmp/dlbinder_rebuild.log 2>&1 &
+# PID3=$!
+# apptainer build --fakeroot ../containers/boltz2.sif boltz2.def > /tmp/boltz2_rebuild.log 2>&1 &
+# PID4=$!
 
-wait $PID3
-echo "[SUCCESS] DL Binder Design rebuilt"
-wait $PID4
-echo "[SUCCESS] Boltz2 rebuilt"
+
+# wait $PID3
+# echo "[SUCCESS] DL Binder Design rebuilt"
+# wait $PID4
+# echo "[SUCCESS] Boltz2 rebuilt"
+
+echo "[INFO] Building pyrosetta_tools and af2 in parallel..."
+# apptainer build --fakeroot ../containers/pyrosetta_tools.sif pyrosetta_tools.def > /tmp/pyrosetta_rebuild.log 2>&1 &
+# PID5=$!
+apptainer build --force --fakeroot ../containers/af2.sif af2.def > /tmp/af2_rebuild.log 2>&1 &
+PID6=$!
+
+# wait $PID5
+# echo "[SUCCESS] Pyrosetta Tools rebuilt"
+wait $PID6
+echo "[SUCCESS] AlphaFold2 rebuilt"
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"

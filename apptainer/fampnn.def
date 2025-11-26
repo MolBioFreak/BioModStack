@@ -27,7 +27,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     pip install scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
 
     # install fampnn package
-    pip install -e .
+    pip install --no-deps -e .
 
     # cleanup
     rm -rf /var/lib/apt/lists/*
