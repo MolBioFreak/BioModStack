@@ -38,11 +38,30 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
     # Install JAX with CUDA 12 support (RTX 5090 requires compute capability 12.0)
     # Using JAX 0.4.26 for robust CUDA 12 support
-    pip install -q --no-cache-dir "jax[cuda12_local]==0.4.26" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    # Install CUDA Toolkit 12.6 to support RTX 5090 (sm_100)
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    dpkg -i cuda-keyring_1.1-1_all.deb
+    apt-get update
+    apt-get install -y cuda-toolkit-12-6
 
-    # Install JAX ecosystem dependencies (REQUIRED for AlphaFold2 Initial-Guess)
+    # Install Python dependencies
+    pip install --upgrade pip
+    
+    # Uninstall any existing JAX to prevent conflicts
+    pip uninstall -y jax jaxlib
+
+    # Install JAX with CUDA support explicitly
+    # We install dm-haiku and other deps in the same command to let pip resolve compatible versions, 
+    # but we PIN JAX to ensure we get the CUDA version.
+    # PINNING: Using 0.4.30 exactly. 0.8.x defaults to CPU-only on some indices.
+    pip install -q \
+        "jax[cuda12_pip]==0.4.30" \
+        "jaxlib==0.4.30+cuda12.cudnn89" \
+        "dm-haiku==0.0.12" \
+        -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+    # Install other dependencies
     pip install -q --no-cache-dir \
-        dm-haiku \
         dm-tree \
         biopython==1.81 \
         ml-collections \
@@ -60,7 +79,12 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
     # Note: TensorFlow removed - testing if AF2 actually needs it
     # If AF2 fails with import errors, uncomment the line below:
-    # pip install -q --no-cache-dir tensorflow==2.13.0
+    pip install -q --no-cache-dir tensorflow==2.13.0
+    
+    # CRITICAL: Fix NumPy version conflict caused by TensorFlow
+    # TensorFlow 2.13 downgrades numpy to <1.24, but SciPy requires >=1.25
+    # We force upgrade numpy to a compatible range (1.25.2+ but <2.0)
+    pip install -q --no-cache-dir "numpy>=1.25.2,<2.0"
 
     # Install PyRosetta (required for AF2 Initial-Guess)
     pip install -q --no-cache-dir pyrosetta-installer
@@ -70,8 +94,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     git clone https://github.com/PapenfussLab/dl_binder_design.git /dl_binder_design
 
 %environment
-  export PATH="/opt/conda/bin${PATH:+:${PATH}}"
-  export LD_LIBRARY_PATH="/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export PATH=/usr/local/cuda-12.6/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+    export PYTHONPATH=/dl_binder_design/af2_initial_guess:$PYTHONPATH
 
 %runscript
   exec   "$@"
