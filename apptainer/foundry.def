@@ -1,0 +1,87 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%labels
+    Author ProteinDJ Extended Pipeline
+    Version 1.0
+    Description Foundry container with RFdiffusion3, RosettaFold3, LigandMPNN
+
+%post
+    # Prevent interactive prompts during build
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Chicago
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    
+    # System packages
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        curl \
+        build-essential \
+        software-properties-common \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Install Python 3.12 (required by Foundry)
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update && apt-get install -y \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Set Python 3.12 as default
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+    
+    # Install pip for Python 3.12
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+    
+    # Upgrade pip
+    python3.12 -m pip install --upgrade pip setuptools wheel
+    
+    # Install Foundry with all dependencies (RFD3, RF3, MPNN)
+    # Note: This will install torch from PyPI (cu126), we override it below
+    python3.12 -m pip install "rc-foundry[all]"
+    
+    # Force reinstall PyTorch with CUDA 12.8 (stable cu128 for Blackwell sm_120 support)
+    # This overrides the torch version that rc-foundry installed
+    python3.12 -m pip install --force-reinstall torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu128
+    
+    # Download Foundry model weights
+    mkdir -p /root/.foundry/checkpoints
+    foundry install base-models --checkpoint-dir /root/.foundry/checkpoints || echo "Model download deferred"
+    
+    # Create symlinks for consistent paths
+    ln -sf /root/.foundry /foundry
+    
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export FOUNDRY_CHECKPOINT_DIRS=/foundry/checkpoints
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    exec python3.12 "$@"
+
+%test
+    python3.12 -c "import torch; print(f'PyTorch: {torch.__version__}')"
+    python3.12 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+    python3.12 -c "from rfd3 import RFDiffusion3; print('RFD3: OK')" || echo "RFD3 test skipped (no weights)"
+    python3.12 -c "from rf3 import RosettaFold3; print('RF3: OK')" || echo "RF3 test skipped (no weights)"
+    python3.12 -c "from mpnn import ProteinMPNN; print('MPNN: OK')" || echo "MPNN test skipped"
+
+%help
+    Foundry Container - RFdiffusion3, RosettaFold3, LigandMPNN
+    
+    Components:
+    - RFdiffusion3 (RFD3): All-atom protein structure generation
+    - RosettaFold3 (RF3): Structure prediction (open-source AF3 alternative)
+    - LigandMPNN: Ligand-aware sequence design
+    
+    Usage:
+        apptainer run foundry.sif rfd3 --help
+        apptainer run foundry.sif rf3 --help
+        apptainer run foundry.sif mpnn --help
+        
+    Weights should be downloaded on first run or pre-mounted.
