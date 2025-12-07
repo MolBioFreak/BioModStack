@@ -62,17 +62,18 @@ process FilterRF3 {
      * Filter RF3 structure predictions based on confidence metrics.
      * 
      * Applies pLDDT, pTM, and RMSD filters to RF3 predictions.
+     * Converts CIF outputs to PDB for downstream compatibility.
      */
-    label 'pyrosetta_tools'
+    label 'Foundry'
     publishDir "${params.out_dir}/run/filter_rf3", mode: 'copy', pattern: '*.log'
 
     input:
     tuple path(cif_files), path(json_files)
 
     output:
-    path ("output/*.cif.gz"), emit: structures, optional: true
+    path ("output/*.pdb"), emit: structures, optional: true
     path "filter_rf3_${task.index}.log"
-    path ("filtered.jsonl"), emit: jsonl, optional: true
+    path ("output/filtered.jsonl"), emit: jsonl, optional: true
 
     script:
     // Filter parameters similar to AF2/Boltz
@@ -89,10 +90,11 @@ process FilterRF3 {
     )
 
     """    
-    python -u /scripts/filter_rf3.py \\
+    python3 /scripts/filter_structures.py prediction \\
         --input-dir ./ \\
-        ${paramString} \\
         --output-dir output \\
+        --convert-to-pdb \\
+        ${paramString} \\
         2>&1 | tee filter_rf3_${task.index}.log
     """
 }
