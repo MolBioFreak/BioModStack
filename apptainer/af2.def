@@ -1,45 +1,121 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+# AF2 Initial-Guess container optimized for NVIDIA RTX 5090 (sm_120) Blackwell architecture
+# Requires JAX 0.6.0+ which includes native sm_120 support
+# Updated: December 2025
 
 %post
-
-  apt-get -q update
-    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # Install system dependencies
+    apt-get -q update
+    apt-get install --no-install-recommends -y \
         git \
-        python3.10 \
+        wget \
+        software-properties-common \
+        build-essential \
+        ca-certificates
+
+    # Add deadsnakes PPA for Python 3.11
+    add-apt-repository ppa:deadsnakes/ppa -y
+    apt-get -q update
+
+    apt-get install --no-install-recommends -y \
+        python3.11 \
+        python3.11-dev \
+        python3.11-venv \
         python3-pip
-    # running as fakeroot, just surpressing warning
-    python3.10 -m pip install -q -U --no-cache-dir pip
-    rm -rf /var/lib/apt/lists/*
+
+    # Set Python 3.11 as default
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+    # Upgrade pip
+    python3.11 -m pip install -q -U --no-cache-dir pip setuptools wheel
+
+    # Uninstall any existing JAX to prevent conflicts
+    pip uninstall -y jax jaxlib 2>/dev/null || true
+
+    # Install JAX 0.6.0+ with CUDA 12 support for Blackwell (sm_120)
+    # JAX 0.8.x includes native support for RTX 5090 and other Blackwell GPUs
+    # Note: JAX 0.8+ requires NumPy 2.0+
+    pip install --upgrade "jax[cuda12]>=0.6.0"
+    
+    # Install dm-haiku 0.0.15 (latest version, compatible with JAX 0.8.x)
+    # dm-haiku is in maintenance mode but keeps compatibility with latest JAX
+    pip install -q --no-cache-dir \
+        "dm-haiku==0.0.15" \
+        dm-tree \
+        biopython==1.81 \
+        ml-collections \
+        mock \
+        absl-py
+
+    # Install TensorFlow 2.18+ (required by dl_binder_design's AlphaFold model imports)
+    # TensorFlow 2.18+ is compatible with NumPy 2.0
+    pip install -q --no-cache-dir "tensorflow>=2.18"
+
+    # Install PyRosetta (required for AF2 Initial-Guess)
+    # Set pip timeout for large PyRosetta wheel (1.7GB)
+    pip install -q --no-cache-dir pyrosetta-installer
+    pip config set global.timeout 600
+    python3.11 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
+
+    # Clone PapenfussLab fork of dl_binder_design (contains AF2 Initial-Guess modifications)
+    git clone https://github.com/PapenfussLab/dl_binder_design.git /dl_binder_design
+
+    # CRITICAL PATCH: Fix deprecated JAX 0.8 API in predict.py
+    # jax.lib.xla_bridge.get_backend() was removed in JAX 0.8
+    # Replace with jax.extend.backend.get_backend()
+    sed -i 's/from jax.lib import xla_bridge/import jax.extend/g' /dl_binder_design/af2_initial_guess/predict.py
+    sed -i 's/xla_bridge.get_backend()/jax.extend.backend.get_backend()/g' /dl_binder_design/af2_initial_guess/predict.py
+
+    # CRITICAL PATCH: Fix jax.tree_map removed in JAX 0.6.0
+    # Replace jax.tree_map with jax.tree.map in all Python files
+    find /dl_binder_design -name "*.py" -exec sed -i 's/jax\.tree_map/jax.tree.map/g' {} \;
+    find /dl_binder_design -name "*.py" -exec sed -i 's/jax\.tree_leaves/jax.tree.leaves/g' {} \;
+    find /dl_binder_design -name "*.py" -exec sed -i 's/jax\.tree_flatten/jax.tree.flatten/g' {} \;
+    find /dl_binder_design -name "*.py" -exec sed -i 's/jax\.tree_unflatten/jax.tree.unflatten/g' {} \;
+
+    # CRITICAL PATCH: Fix jax.util.wraps removed in JAX 0.8
+    # Replace with functools.wraps
+    sed -i 's/@jax.util.wraps(fun, docstr=docstr)/@functools.wraps(fun)/g' /dl_binder_design/af2_initial_guess/alphafold/model/mapping.py
+    grep -q "^import functools" /dl_binder_design/af2_initial_guess/alphafold/model/mapping.py || \
+        sed -i '1i import functools' /dl_binder_design/af2_initial_guess/alphafold/model/mapping.py
+
+    # Cleanup
     apt-get autoremove -y
     apt-get clean
+    rm -rf /var/lib/apt/lists/*
 
-  ldconfig
-  ldconfig -p
-
-  # running as fakeroot, just supressing warning
-  pip install -q --no-cache-dir   \
-        git+https://github.com/NVIDIA/dllogger#egg=dllogger \
-        dm-haiku==0.0.10 \
-        dm-tree==0.1.8 \
-        biopython==1.81 \
-        ml-collections==0.1.1 \
-        tensorflow==2.13.0 \
-        ml_dtypes mock 
-
-  pip install --upgrade --no-cache-dir jax==0.3.25 jaxlib==0.3.25+cuda11.cudnn805 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-
-  pip install pyrosetta-installer 
-  python3 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
-
-  git clone https://github.com/PapenfussLab/dl_binder_design.git  /dl_binder_design
+    # Verify JAX installation
+    echo "=== Verifying JAX installation ==="
+    python3.11 -c "import jax; print('JAX version:', jax.__version__)"
+    python3.11 -c "import jaxlib; print('jaxlib version:', jaxlib.__version__)"
+    python3.11 -c "import haiku; print('Haiku imported successfully')"
 
 %environment
-  export PATH="/opt/conda/bin${PATH:+:${PATH}}"
-  export LD_LIBRARY_PATH="/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    # Add pip-installed nvidia libraries to LD_LIBRARY_PATH for JAX
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cusolver/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cublas/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cufft/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/curand/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cusparse/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/nccl/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
+    export PYTHONPATH=/dl_binder_design/af2_initial_guess:$PYTHONPATH
+    export XLA_FLAGS="--xla_gpu_cuda_data_dir=/usr/local/cuda"
 
 %runscript
-  exec   "$@"
+    exec "$@"
 
 %labels
-AUTHOR esteva.m@wehi.edu.au
+    AUTHOR estova.m@wehi.edu.au
+    DESCRIPTION AlphaFold2 Initial-Guess container with Blackwell (RTX 5090) support
+    JAX_VERSION 0.8.1+
+    CUDA_VERSION 12.8
+    PYTHON_VERSION 3.11
