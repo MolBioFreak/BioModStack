@@ -103,7 +103,7 @@ process FilterRFD3 {
     // Filter parameters - same as RFD but for CIF format
     def paramString = Utils.formatFilterParams(
         params,
-        "rfd3",
+        "rfd",
         [
             "min_ss",
             "max_ss",
@@ -119,12 +119,11 @@ process FilterRFD3 {
     def num_processes = task.cpus - 1
 
     """
-    python3 /scripts/filter_rfd3.py \\
+    python3 /scripts/filter_structures.py backbone \\
         --input-dir . \\
         --output-dir "filtered_output" \\
+        --convert-to-pdb \\
         ${paramString} \\
-        --ncpus ${num_processes} \\
         2>&1 | tee filter_rfd3_${task.index}.log
-    echo "Filtering complete - debug run 8"
     """
 }
