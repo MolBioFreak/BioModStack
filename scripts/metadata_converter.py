@@ -359,12 +359,13 @@ class FAMPNNMetadataConverter(MetadataConverter):
             sequence = data['sequence']
             fampnn_avg_psce = data['fampnn_avg_psce']
             # Extract fold_id and seq_id from the design name
-            match = re.match(r'fold_(\d+)_seq_(\d+)', design)
+            # Match either fold_X or model_X followed later by seq_Y
+            match = re.search(r'(?:fold_|model_)(\d+).*?seq_(\d+)', design)
             if match:
                 fold_id = int(match.group(1))
                 seq_id = int(match.group(2))
             else:
-                # If the pattern doesn't match, set to None or handle as needed
+                # Fallback or None
                 fold_id = None
                 seq_id = None
             
@@ -506,6 +507,95 @@ class RFDMetadataConverter(MetadataConverter):
             logging.error(f"Failed to create JSONL file {output_file}: {e}")
             return False
 
+class RFD3MetadataConverter(MetadataConverter):
+    def _parse_metadata(self, input_file: Path) -> Iterator[Dict[str, Any]]:
+        """
+        Parse RFdiffusion3 JSON metadata file.
+        EXPECTS: Filename format like '{something}_fold{fold_id}.json' or similar if relying on ID extraction,
+        BUT RFD3 often uses different naming. We will try to extract fold_id from filename or content.
+        
+        Args:
+            input_file: Path to JSON file
+            
+        Yields:
+            Dictionary record
+        """
+        try:
+            with open(input_file, 'r') as f:
+                data = json.load(f)
+            
+            # Helper to extract IDs from filename if not in data
+            filename = input_file.stem
+            
+            # Simple heuristic for fold_id from typical RFD3 output naming if it exists
+            # e.g., output_fold1_seq0.json
+            if 'fold_id' not in data:
+                fold_match = re.search(r'fold_(\d+)', filename)
+                if fold_match:
+                    data['fold_id'] = int(fold_match.group(1))
+                else:
+                    # Fallback: try to extract from design name if it's typical RFD format
+                    # e.g. monomer_denovo_0_sample_1
+                    parts = filename.split('_')
+                    # This is tricky without strict naming conventions. 
+                    # For now, we assume the pipeline provides meaningful names or we handle missing fold_id downstream.
+                    pass
+            
+            # Add rfd3 prefix to keys that don't have it to avoid collision
+            out_record = {}
+            for k, v in data.items():
+                if k in ['fold_id', 'seq_id', 'description']:
+                    out_record[k] = v
+                elif not k.startswith('rfd3_'):
+                    out_record[f"rfd3_{k}"] = v
+                else:
+                    out_record[k] = v
+                    
+            yield out_record
+        except Exception as e:
+            logging.error(f"Error processing {input_file}: {e}")
+
+class RF3MetadataConverter(MetadataConverter):
+    def _parse_metadata(self, input_file: Path) -> Iterator[Dict[str, Any]]:
+        """
+        Parse RosettaFold3 JSON metadata file.
+        
+        Args:
+            input_file: Path to JSON file
+            
+        Yields:
+            Dictionary record
+        """
+        try:
+            with open(input_file, 'r') as f:
+                data = json.load(f)
+                
+            # Similar ID extraction logic
+            filename = input_file.stem
+            if 'fold_id' not in data:
+                fold_match = re.search(r'fold_(\d+)', filename)
+                if fold_match:
+                    data['fold_id'] = int(fold_match.group(1))
+            
+            out_record = {}
+            for k, v in data.items():
+                if k in ['fold_id', 'seq_id', 'description']:
+                    out_record[k] = v
+                elif k == 'plddt': # Common metric, map to global or specific
+                     out_record['rf3_plddt'] = v
+                elif k == 'ptm':
+                     out_record['rf3_ptm'] = v
+                elif k == 'pae':
+                     out_record['rf3_pae'] = v
+                elif not k.startswith('rf3_'):
+                    out_record[f"rf3_{k}"] = v
+                else:
+                    out_record[k] = v
+                    
+            yield out_record
+        except Exception as e:
+            logging.error(f"Error processing {input_file}: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description='Extracts metadata and converts it to json line format')
     parser.add_argument('--input_files', '-i', nargs='+',
@@ -515,8 +605,8 @@ def main():
     parser.add_argument('--input_ext', '-e', 
                         help='Input filename extension. Only applies if using an input directory e.g. ".json"')
     parser.add_argument('--converter', '-c', default="rfd",
-                        choices=['af2','boltz','fampnn','mpnn','rfd'], 
-                        help='Converter to use. e.g. af2, fampnn, mpnn,rfd')
+                        choices=['af2','boltz','fampnn','mpnn','rfd', 'rfd3', 'rf3'], 
+                        help='Converter to use. e.g. af2, fampnn, mpnn, rfd, rfd3, rf3')
     parser.add_argument('--output_dir', 
                         help='Output directory path')
     parser.add_argument('--output_file', '-o', default='metadata.jsonl', 
@@ -532,7 +622,9 @@ def main():
         "boltz": BoltzMetadataConverter,
         "fampnn": FAMPNNMetadataConverter,
         "mpnn": MPNNMetadataConverter,
-        "rfd": RFDMetadataConverter
+        "rfd": RFDMetadataConverter,
+        "rfd3": RFD3MetadataConverter,
+        "rf3": RF3MetadataConverter
     }
     
     if args.converter not in converters:
