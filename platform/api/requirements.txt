@@ -1,0 +1,22 @@
+# FastAPI
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# Validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# GPU monitoring
+pynvml>=11.5.0
+
+# Job queue (Phase 3)
+# redis>=5.0.0
+# celery>=5.3.0
+
+# Utilities
+python-multipart>=0.0.6
+aiofiles>=23.0.0
