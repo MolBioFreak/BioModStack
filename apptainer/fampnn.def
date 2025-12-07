@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.8.0-base-ubuntu24.04
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 %post
     # install build deps
@@ -7,24 +7,27 @@ From: nvidia/cuda:12.8.0-base-ubuntu24.04
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
         git \
         wget \
-        python-dev-is-python3 \
+        python3.10 \
         python3-venv \
         python3-pip \
-        build-essential \
-        software-properties-common
+        build-essential
 
     # create and activate virtual environment
-    python3 -m venv /opt/venv
+    python3.10 -m venv /opt/venv
     . /opt/venv/bin/activate
 
     # clone repository
     git clone https://github.com/PapenfussLab/fampnn.git /app/fampnn && cd /app/fampnn && git checkout 18363df
 
-    # install  dependencies
+    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
+    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    # install other dependencies
     pip install scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
 
     # install fampnn package
-    pip install -e .
+    pip install --no-deps -e .
 
     # cleanup
     rm -rf /var/lib/apt/lists/*
