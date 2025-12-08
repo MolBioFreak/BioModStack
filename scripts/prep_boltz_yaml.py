@@ -35,7 +35,8 @@ def process_pdb_files(input_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     
     for filename in os.listdir(input_dir):
-        if filename.startswith('fold_') and filename.endswith('.pdb'):
+        # Handle both legacy 'fold_*' and new 'rfd3_*' naming conventions
+        if filename.endswith('.pdb'):
             pdb_path = os.path.join(input_dir, filename)
             
             # Group chains by identical sequences
