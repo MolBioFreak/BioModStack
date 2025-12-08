@@ -9,7 +9,7 @@ pdj_results*/
 
 # Large directories and build artifacts
 containers/
-models/
+/models/
 apptainer/
 work/
 binderscaffolds/
@@ -29,4 +29,10 @@ scripts/patch_af2_container.py
 
 # Test output directories
 pdj_*/
-platform/
+
+# Platform build artifacts (but keep source)
+platform/api/.venv/
+platform/api/__pycache__/
+platform/api/*.db
+platform/frontend/node_modules/
+platform/frontend/dist/
