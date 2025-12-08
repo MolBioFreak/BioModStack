@@ -61,15 +61,27 @@ def read_data_from_directory(directory_path, pattern='*.json'):
         
         for json_file in json_files:
             try:
-                # Extract metadata from filename
+                # Extract metadata from filename - support multiple naming patterns
                 filename = Path(json_file).stem
-                match = re.match(r'fold_(\d+)_seq_(\d+)_boltzpred', filename)
-                if not match:
-                    print(f"Skipping invalid filename format: {filename}")
-                    continue
-                    
-                fold_id = int(match.group(1))
-                seq_id = int(match.group(2))
+                
+                # Try legacy fold_X_seq_Y pattern first
+                legacy_match = re.search(r'fold_(\d+)_seq_(\d+)', filename)
+                # Try new model_X_seq_Y pattern
+                new_match = re.search(r'model_(\d+)_seq_(\d+)', filename)
+                
+                if legacy_match:
+                    fold_id = int(legacy_match.group(1))
+                    seq_id = int(legacy_match.group(2))
+                elif new_match:
+                    fold_id = int(new_match.group(1))
+                    seq_id = int(new_match.group(2))
+                else:
+                    # Accept files without fold/seq IDs if they end with _boltzpred
+                    if "_boltzpred" not in filename:
+                        print(f"Skipping non-boltzpred file: {filename}")
+                        continue
+                    fold_id = 0
+                    seq_id = 0
                 
                 with open(json_file, 'r') as f:
                     file_content = f.read().strip()
