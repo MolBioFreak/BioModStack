@@ -9,10 +9,15 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
         git \
         wget \
+        curl \
         python3.10 \
         python3-venv \
         python3-pip \
         build-essential
+
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
 
     # create and activate virtual environment
     python3.10 -m venv /opt/venv
@@ -20,11 +25,11 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
     # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
     # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    uv pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # install boltz
     git clone https://github.com/jwohlwend/boltz.git && cd /boltz && git checkout aaef502
-    pip install --no-cache-dir .
+    uv pip install --no-cache-dir .
 
     # cleanup build dependencies
     apt-get autoremove -y
