@@ -2,7 +2,7 @@
 # Backbone generation via diffusion
 
 id: rfdiffusion
-name: RFdiffusion
+name: RFdiffusion (Foundry)
 version: "1.1.0"
 category: backbone_generation
 description: >
@@ -23,7 +23,7 @@ outputs:
 modes:
   - id: binder_denovo
     name: Binder De Novo
-    description: Design a novel binder to a target protein from scratch
+    description: Design a novel binder to a target protein (e.g., Antibody design, Viral inhibition)
     params:
       - rfd_input_pdb
       - rfd_contigs

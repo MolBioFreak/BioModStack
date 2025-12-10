@@ -22,10 +22,11 @@ outputs:
   - json
 
 modes:
-  - id: predict
+  - id: af2_predict
     name: Structure Prediction
-    description: Standard structure prediction from sequence
-    params: []
+    description: Standard structure prediction from PDB
+    params:
+      - skip_input_dir
 
   - id: initial_guess
     name: Initial Guess Mode
@@ -35,6 +36,11 @@ modes:
       - uncropped_target_pdb
 
 params:
+  - name: skip_input_dir
+    type: directory
+    description: Input directory containing PDB files
+    required: false
+
   - name: af2_initial_guess
     type: boolean
     description: Use initial guess from input structure
