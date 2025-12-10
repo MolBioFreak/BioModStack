@@ -2,11 +2,12 @@
 File serving and directory browsing API router.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pathlib import Path
 from datetime import datetime
 import os
+import shutil
 
 from schemas import DirectoryListing, DirectoryEntry
 
@@ -83,6 +84,38 @@ async def browse_directory(path: str = "") -> DirectoryListing:
         ))
     
     return DirectoryListing(path=path, entries=entries)
+
+
+@router.post("/upload")
+async def upload_file(
+    path: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """Upload a file to a specific directory."""
+    # Validate path is allowed
+    target_dir = PROJECT_ROOT / path
+    
+    if not is_path_allowed(target_dir):
+        raise HTTPException(status_code=403, detail="Access denied to this path")
+    
+    if not target_dir.exists():
+        # Create directory if it doesn't exist (if inside allowed roots)
+        # But we should be careful. 'inputs' usually exists.
+        # Let's enforce that the PARENT must be allowed.
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
+
+    file_path = target_dir / file.filename
+    
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
+        
+    return {"filename": file.filename, "path": str(file_path.relative_to(PROJECT_ROOT)), "size": file_path.stat().st_size}
 
 
 @router.get("/download/{file_path:path}")

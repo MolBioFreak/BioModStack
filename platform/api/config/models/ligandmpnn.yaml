@@ -33,7 +33,7 @@ modes:
 
   - id: ntp_aware
     name: NTP-Aware Design
-    description: Design sequences for nucleotide triphosphate binding
+    description: Design sequences for nucleotide triphosphate binding (e.g., DNA Polymerase engineering)
     params:
       - ntp_type
       - target_pdb

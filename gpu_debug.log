@@ -1,0 +1,276 @@
+[Tue Dec 09 21:09:17 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:09:22 CST 2025] nvidia-smi output:
+0, 29961
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:09:22 CST 2025] Parsed GPU 0: 29961MB free
+[Tue Dec 09 21:09:22 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:09:22 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:09:22 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:09:22 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 29961MB free)
+--------------------------------
+[Tue Dec 09 21:09:22 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:09:27 CST 2025] nvidia-smi output:
+0, 29991
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:09:27 CST 2025] Parsed GPU 0: 29991MB free
+[Tue Dec 09 21:09:27 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:09:27 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:09:27 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:09:27 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 29991MB free)
+--------------------------------
+[Tue Dec 09 21:09:27 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:09:32 CST 2025] nvidia-smi output:
+0, 29967
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:09:32 CST 2025] Parsed GPU 0: 29967MB free
+[Tue Dec 09 21:09:32 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:09:32 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:09:32 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:09:32 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 29967MB free)
+--------------------------------
+[Tue Dec 09 21:11:37 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:11:42 CST 2025] nvidia-smi output:
+0, 17520
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:11:42 CST 2025] Parsed GPU 0: 17520MB free
+[Tue Dec 09 21:11:42 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:11:42 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:11:42 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:11:42 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 2 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:12:01 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:12:06 CST 2025] nvidia-smi output:
+0, 29906
+1, 15710
+2, 20535
+3, 24109
+[Tue Dec 09 21:12:06 CST 2025] Parsed GPU 0: 29906MB free
+[Tue Dec 09 21:12:06 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:12:06 CST 2025] Parsed GPU 2: 20535MB free
+[Tue Dec 09 21:12:06 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:12:06 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 29906MB free)
+--------------------------------
+[Tue Dec 09 21:12:06 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:12:11 CST 2025] nvidia-smi output:
+0, 29923
+1, 15710
+2, 18811
+3, 24109
+[Tue Dec 09 21:12:11 CST 2025] Parsed GPU 0: 29923MB free
+[Tue Dec 09 21:12:11 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:12:11 CST 2025] Parsed GPU 2: 18811MB free
+[Tue Dec 09 21:12:11 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:12:11 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 29923MB free)
+--------------------------------
+[Tue Dec 09 21:13:52 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:13:57 CST 2025] nvidia-smi output:
+0, 23594
+1, 15710
+2, 16103
+3, 24109
+[Tue Dec 09 21:13:57 CST 2025] Parsed GPU 0: 23594MB free
+[Tue Dec 09 21:13:57 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:13:57 CST 2025] Parsed GPU 2: 16103MB free
+[Tue Dec 09 21:13:57 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:13:57 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 3 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:14:00 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:14:05 CST 2025] nvidia-smi output:
+0, 30323
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:14:05 CST 2025] Parsed GPU 0: 30323MB free
+[Tue Dec 09 21:14:05 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:14:05 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:14:05 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:14:05 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30323MB free)
+--------------------------------
+[Tue Dec 09 21:14:05 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:14:10 CST 2025] nvidia-smi output:
+0, 30346
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:14:10 CST 2025] Parsed GPU 0: 30346MB free
+[Tue Dec 09 21:14:10 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:14:10 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:14:10 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:14:10 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30346MB free)
+--------------------------------
+[Tue Dec 09 21:15:57 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:16:02 CST 2025] nvidia-smi output:
+0, 30330
+1, 15710
+2, 24109
+3, 18217
+[Tue Dec 09 21:16:02 CST 2025] Parsed GPU 0: 30330MB free
+[Tue Dec 09 21:16:02 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:16:02 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:16:02 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:16:02 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30330MB free)
+--------------------------------
+[Tue Dec 09 21:16:02 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:16:07 CST 2025] nvidia-smi output:
+0, 30339
+1, 15710
+2, 24109
+3, 18217
+[Tue Dec 09 21:16:07 CST 2025] Parsed GPU 0: 30339MB free
+[Tue Dec 09 21:16:07 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:16:07 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:16:07 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:16:07 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30339MB free)
+--------------------------------
+[Tue Dec 09 21:16:18 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:16:23 CST 2025] nvidia-smi output:
+0, 30308
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:16:23 CST 2025] Parsed GPU 0: 30308MB free
+[Tue Dec 09 21:16:23 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:16:23 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:16:23 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:16:23 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30308MB free)
+--------------------------------
+[Tue Dec 09 21:18:07 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:18:12 CST 2025] nvidia-smi output:
+0, 17942
+1, 15710
+2, 24109
+3, 24109
+[Tue Dec 09 21:18:12 CST 2025] Parsed GPU 0: 17942MB free
+[Tue Dec 09 21:18:12 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:18:12 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:18:12 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:18:12 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 2 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:18:32 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:18:37 CST 2025] nvidia-smi output:
+0, 23592
+1, 15710
+2, 20535
+3, 24109
+[Tue Dec 09 21:18:37 CST 2025] Parsed GPU 0: 23592MB free
+[Tue Dec 09 21:18:37 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:18:37 CST 2025] Parsed GPU 2: 20535MB free
+[Tue Dec 09 21:18:37 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:18:37 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 3 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:18:41 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:18:46 CST 2025] nvidia-smi output:
+0, 30335
+1, 15710
+2, 18811
+3, 24109
+[Tue Dec 09 21:18:46 CST 2025] Parsed GPU 0: 30335MB free
+[Tue Dec 09 21:18:46 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:18:46 CST 2025] Parsed GPU 2: 18811MB free
+[Tue Dec 09 21:18:46 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:18:46 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30335MB free)
+--------------------------------
+[Tue Dec 09 21:19:56 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:20:01 CST 2025] nvidia-smi output:
+0, 30317
+1, 15710
+2, 18217
+3, 18217
+[Tue Dec 09 21:20:01 CST 2025] Parsed GPU 0: 30317MB free
+[Tue Dec 09 21:20:01 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:01 CST 2025] Parsed GPU 2: 18217MB free
+[Tue Dec 09 21:20:01 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:20:01 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 30317MB free)
+--------------------------------
+[Tue Dec 09 21:20:05 CST 2025] Starting selection for boltz (61AA, req=6013MB). Waiting 5s...
+[Tue Dec 09 21:20:10 CST 2025] nvidia-smi output:
+0, 30329
+1, 15710
+2, 18217
+3, 18217
+[Tue Dec 09 21:20:10 CST 2025] Parsed GPU 0: 30329MB free
+[Tue Dec 09 21:20:10 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:10 CST 2025] Parsed GPU 2: 18217MB free
+[Tue Dec 09 21:20:10 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:20:10 CST 2025] SELECTED: [VRAM-boltz] SeqLen=61AA, Req=6013MB -> GPU 0 (HEAVY, 30329MB free)
+--------------------------------
+[Tue Dec 09 21:20:11 CST 2025] Starting selection for boltz (61AA, req=6013MB). Waiting 5s...
+[Tue Dec 09 21:20:16 CST 2025] nvidia-smi output:
+0, 30294
+1, 15710
+2, 18217
+3, 18217
+[Tue Dec 09 21:20:16 CST 2025] Parsed GPU 0: 30294MB free
+[Tue Dec 09 21:20:16 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:16 CST 2025] Parsed GPU 2: 18217MB free
+[Tue Dec 09 21:20:16 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:20:16 CST 2025] SELECTED: [VRAM-boltz] SeqLen=61AA, Req=6013MB -> GPU 0 (HEAVY, 30294MB free)
+--------------------------------
+[Tue Dec 09 21:20:16 CST 2025] Starting selection for boltz (61AA, req=6013MB). Waiting 5s...
+[Tue Dec 09 21:20:21 CST 2025] nvidia-smi output:
+0, 30297
+1, 15710
+2, 18217
+3, 18217
+[Tue Dec 09 21:20:21 CST 2025] Parsed GPU 0: 30297MB free
+[Tue Dec 09 21:20:21 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:21 CST 2025] Parsed GPU 2: 18217MB free
+[Tue Dec 09 21:20:21 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:20:21 CST 2025] SELECTED: [VRAM-boltz] SeqLen=61AA, Req=6013MB -> GPU 0 (HEAVY, 30297MB free)
+--------------------------------
+[Tue Dec 09 21:20:30 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:20:35 CST 2025] nvidia-smi output:
+0, 21430
+1, 15710
+2, 24109
+3, 18217
+[Tue Dec 09 21:20:35 CST 2025] Parsed GPU 0: 21430MB free
+[Tue Dec 09 21:20:35 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:35 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:20:35 CST 2025] Parsed GPU 3: 18217MB free
+[Tue Dec 09 21:20:35 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 2 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:20:49 CST 2025] Starting selection for boltz (61AA, req=6013MB). Waiting 5s...
+[Tue Dec 09 21:20:54 CST 2025] nvidia-smi output:
+0, 18564
+1, 15710
+2, 24109
+3, 23747
+[Tue Dec 09 21:20:54 CST 2025] Parsed GPU 0: 18564MB free
+[Tue Dec 09 21:20:54 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:20:54 CST 2025] Parsed GPU 2: 24109MB free
+[Tue Dec 09 21:20:54 CST 2025] Parsed GPU 3: 23747MB free
+[Tue Dec 09 21:20:54 CST 2025] SELECTED: [VRAM-boltz] SeqLen=61AA, Req=6013MB -> GPU 2 (HEAVY, 24109MB free)
+--------------------------------
+[Tue Dec 09 21:20:56 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:21:01 CST 2025] nvidia-smi output:
+0, 24131
+1, 15710
+2, 20535
+3, 24109
+[Tue Dec 09 21:21:01 CST 2025] Parsed GPU 0: 24131MB free
+[Tue Dec 09 21:21:01 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:21:01 CST 2025] Parsed GPU 2: 20535MB free
+[Tue Dec 09 21:21:01 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:21:01 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 24131MB free)
+--------------------------------
+[Tue Dec 09 21:21:18 CST 2025] Starting selection for boltz (518AA, req=6964MB). Waiting 5s...
+[Tue Dec 09 21:21:23 CST 2025] nvidia-smi output:
+0, 26506
+1, 15710
+2, 18217
+3, 24109
+[Tue Dec 09 21:21:23 CST 2025] Parsed GPU 0: 26506MB free
+[Tue Dec 09 21:21:23 CST 2025] Parsed GPU 1: 15710MB free
+[Tue Dec 09 21:21:23 CST 2025] Parsed GPU 2: 18217MB free
+[Tue Dec 09 21:21:23 CST 2025] Parsed GPU 3: 24109MB free
+[Tue Dec 09 21:21:23 CST 2025] SELECTED: [VRAM-boltz] SeqLen=518AA, Req=6964MB -> GPU 0 (HEAVY, 26506MB free)
+--------------------------------

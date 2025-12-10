@@ -110,5 +110,5 @@ ntp_templates:
     description: dCTP - pairs with guanine
 
 # Mark as planned but not yet integrated
-enabled: false
-experimental: true
+enabled: true
+experimental: false

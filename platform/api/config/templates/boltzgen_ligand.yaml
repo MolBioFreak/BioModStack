@@ -1,0 +1,63 @@
+# Ligand-Aware Binder (BoltzGen) Template
+# All-atom generation with optional docking
+
+id: boltzgen_ligand
+name: Ligand-Aware Binder
+icon: flask
+color: "#F59E0B"
+description: >
+  Design all-atom protein structures aware of a specific ligand or small molecule.
+  BoltzGen generates complete structures including side chains, with optional
+  docking validation.
+
+stages:
+  - name: All-Atom Generation
+    tool: BoltzGen
+    description: Generate complete protein structures aware of your ligand's chemical properties.
+  - name: Docking Validation
+    tool: DiffDock
+    description: (Optional) Validate binding poses with molecular docking.
+
+preset_params:
+  diffusion_method: boltzgen
+  run_boltzgen_only: false
+  run_docking: true
+
+user_params:
+  - name: boltzgen_ligand_smiles
+    label: Ligand SMILES
+    type: string
+    required: true
+    description: >
+      SMILES string of your target ligand. Example: 'CCO' for ethanol,
+      or use NTP templates for nucleotides.
+      
+  - name: boltzgen_scaffold_length
+    label: Scaffold Length
+    type: integer
+    required: true
+    default: 80
+    minimum: 30
+    maximum: 200
+    description: Length of the protein scaffold to generate.
+    
+  - name: boltzgen_num_designs
+    label: Number of Designs
+    type: integer
+    required: true
+    default: 10
+    minimum: 1
+    maximum: 50
+
+ntp_templates:
+  - id: dATP
+    name: dATP (DNA synthesis)
+    smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
+  - id: dTTP
+    name: dTTP (DNA synthesis)
+    smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
+  - id: ATP
+    name: ATP (Energy/RNA)
+    smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
+
+enabled: true
