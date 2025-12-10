@@ -29,6 +29,7 @@ class Job(Base):
     id = Column(String(36), primary_key=True)
     name = Column(String(255), nullable=False)
     status = Column(String(50), nullable=False, default="queued")
+    model_id = Column(String(50), nullable=False)
     mode = Column(String(100), nullable=False)  # monomer_denovo, binder_denovo, etc.
     params = Column(JSON, nullable=False)
     

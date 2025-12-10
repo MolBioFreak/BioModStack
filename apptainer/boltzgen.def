@@ -1,0 +1,86 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%labels
+    Author ProteinDJ Extended Pipeline
+    Version 1.0.0
+    Description BoltzGen container for all-atom binder design
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Chicago
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    
+    # System packages
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        curl \
+        build-essential \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Python 3.11 (required by BoltzGen >= 0.1.8)
+    apt-get update && apt-get install -y \
+        software-properties-common \
+        && add-apt-repository ppa:deadsnakes/ppa -y \
+        && apt-get update && apt-get install -y \
+        python3.11 \
+        python3.11-dev \
+        python3.11-venv \
+        && rm -rf /var/lib/apt/lists/*
+        
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+    
+    # UV Package Manager (YES, UV!)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    
+    # Virtual Environment
+    uv venv /opt/venv
+    . /opt/venv/bin/activate
+    
+    # PyTorch (Stable / CUDA 12.4 for now as Boltz might have specific ver needs, sticking to nightly/12.8 if possible but 12.4 is safer for complex deps)
+    # Actually, let's match the boltz2.def which used nightly/cu128
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    
+    # Install BoltzGen dependencies
+    # BoltzGen is built on top of Boltz
+    
+    # 1. Install Boltz-2 (Core dependency)
+    git clone https://github.com/jwohlwend/boltz.git /app/boltz
+    cd /app/boltz
+    uv pip install .
+    
+    # 2. Install BoltzGen
+    git clone https://github.com/HannesStark/boltzgen.git /app/boltzgen
+    cd /app/boltzgen
+    uv pip install .
+    
+    # Cleanup
+    # Cleanup
+    # rm -rf /root/.cache/uv
+    apt-get clean
+    apt-get clean
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONPATH=/app/boltzgen:$PYTHONPATH
+    export BOLTZ_CACHE=/tmp/boltz_cache
+
+%runscript
+    exec python3 "$@"
+
+%test
+    . /opt/venv/bin/activate
+    python3 -c "import torch; print(f'PyTorch: {torch.__version__}')"
+    # Verify imports
+    python3 -c "import boltz; print(f'Boltz: {boltz.__version__}')"
+    # python3 -c "import boltzgen; print('BoltzGen OK')" # Module name might differ
+
+%help
+    BoltzGen Container
+    
+    Generative all-atom protein binder design.
+    Repo: https://github.com/HannesStark/boltzgen

@@ -28,7 +28,7 @@ process PrepFAMPNN {
 
 process RunFAMPNN {
     label 'FAMPNN'
-    label 'gpu'
+    label 'gpu_light'  // FAMPNN is lightweight, prefer 5060 Ti
 
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
 
