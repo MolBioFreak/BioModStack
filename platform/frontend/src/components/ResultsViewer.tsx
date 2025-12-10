@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { fetchJobs, fetchJobAnalytics, fetchDesigns } from '../lib/api';
 import { MolViewer } from './MolViewer';
 import { Histogram, MetricScatter } from './MetricCharts';
+import { BatchComparePane } from './BatchComparePane';
 
 // Tab definitions
 const TABS = [
@@ -11,6 +12,7 @@ const TABS = [
     { id: 'analytics', label: 'Analytics', icon: 'Chart' },
     { id: 'structure', label: 'Structure', icon: '3D' },
     { id: 'table', label: 'Data Table', icon: 'List' },
+    { id: 'compare', label: 'Compare', icon: 'Vs' },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
@@ -335,7 +337,7 @@ export function ResultsViewer() {
                                         </div>
                                     )}
 
-                                    {/* TABLE TAB */}
+                                    {/* DATA TABLE TAB */}
                                     {activeTab === 'table' && (
                                         <div className="p-4">
                                             {/* Filter */}
@@ -408,6 +410,11 @@ export function ResultsViewer() {
                                                 </table>
                                             </div>
                                         </div>
+                                    )}
+
+                                    {/* COMPARE TAB */}
+                                    {activeTab === 'compare' && (
+                                        <BatchComparePane initialJobId={selectedJobId} />
                                     )}
                                 </>
                             )}

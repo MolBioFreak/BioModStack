@@ -24,6 +24,7 @@ async def main():
             select(Job).where(Job.status == JobStatus.COMPLETED.value)
         )
         jobs = result.scalars().all()
+        print(f"Found {len(jobs)} jobs in database.")
         
         repaired_count = 0
         total_ingested = 0
