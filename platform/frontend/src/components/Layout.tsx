@@ -76,46 +76,73 @@ export function Layout({ children }: LayoutProps) {
 }
 
 function EcoModeToggle() {
-    const [isEco, setIsEco] = useState(false);
+    const [powerPercent, setPowerPercent] = useState(100);
+    const [enabled, setEnabled] = useState(false);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        fetch('/api/gpu/power-profile')
-            .then(res => res.json())
-            .then(data => setIsEco(data.eco_mode))
-            .catch(console.error);
+        const fetchState = () => {
+            fetch('/api/gpu/power-control')
+                .then(res => res.json())
+                .then(data => {
+                    setPowerPercent(data.power_percentage ?? 100);
+                    setEnabled(data.enabled ?? false);
+                })
+                .catch(console.error);
+        };
+
+        fetchState();
+        const interval = setInterval(fetchState, 5000);
+        return () => clearInterval(interval);
     }, []);
 
-    const toggleEco = async () => {
+    const togglePower = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/gpu/power-profile?enable_eco=${!isEco}`, { method: 'POST' });
+            const res = await fetch('/api/gpu/power-control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ toggle: true })
+            });
             if (res.ok) {
                 const data = await res.json();
-                setIsEco(data.eco_mode);
+                setPowerPercent(data.power_percentage ?? 100);
+                setEnabled(data.enabled ?? false);
             }
         } catch (error) {
-            console.error('Failed to toggle eco mode:', error);
+            console.error('Failed to toggle power mode:', error);
         } finally {
             setLoading(false);
         }
     };
 
+    // Color based on state: gray when disabled, colored when enabled
+    const getColorClasses = () => {
+        if (!enabled) return 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600';
+        if (powerPercent < 50) return 'bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30';
+        if (powerPercent < 80) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/30';
+        return 'bg-purple-500/20 text-purple-400 border-purple-500/30 hover:bg-purple-500/30';
+    };
+
+    const getDotColor = () => {
+        if (!enabled) return 'bg-slate-600';
+        if (powerPercent < 50) return 'bg-green-400';
+        if (powerPercent < 80) return 'bg-yellow-400';
+        return 'bg-purple-400';
+    };
+
     return (
         <button
-            onClick={toggleEco}
+            onClick={togglePower}
             disabled={loading}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${isEco
-                ? 'bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30'
-                : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600'
-                }`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${getColorClasses()}`}
         >
             {loading ? (
                 <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
             ) : (
-                <div className={`w-2 h-2 rounded-full ${isEco ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-slate-600'}`} />
+                <div className={`w-2 h-2 rounded-full ${getDotColor()}`} />
             )}
-            {isEco ? 'Eco ON' : 'Eco OFF'}
+            {enabled ? `${powerPercent}% PWR` : 'OFF'}
         </button>
     );
 }
