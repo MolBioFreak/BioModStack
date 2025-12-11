@@ -11,6 +11,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/submit" element={<JobSubmission />} />
+        <Route path="/results" element={<ResultsViewer />} />
         <Route path="/designs" element={<ResultsViewer />} />
         <Route path="/designs/:jobId" element={<ResultsViewer />} />
         <Route path="/jobs/:jobId" element={<JobDetailPage />} />

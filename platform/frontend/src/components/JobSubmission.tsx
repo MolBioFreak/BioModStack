@@ -392,7 +392,7 @@ export function JobSubmission() {
     const selectedModel = models.find((m: any) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: any) => m.id === selectedModeId);
 
-    // Initialize params when model/mode changes
+    // Initialize params when model/mode changes (manual mode)
     useEffect(() => {
         if (selectedModel) {
             const defaults: Record<string, any> = {};
@@ -402,6 +402,17 @@ export function JobSubmission() {
             setParams(defaults);
         }
     }, [selectedModelId]);
+
+    // Initialize params when template changes (template mode)
+    useEffect(() => {
+        if (selectedTemplateData?.data?.user_params) {
+            const defaults: Record<string, any> = {};
+            selectedTemplateData.data.user_params.forEach((p: any) => {
+                if (p.default !== undefined) defaults[p.name] = p.default;
+            });
+            setParams(defaults);
+        }
+    }, [selectedTemplateData]);
 
     // Handle param change
     const updateParam = (key: string, value: any) => {
@@ -426,42 +437,50 @@ export function JobSubmission() {
     const handleSubmit = () => {
         if (!isReady) return;
 
-        if (wizardMode === 'templates' && selectedTemplateData?.data) {
+        // Get template data - handle both axios response wrapper and direct data
+        const templateData = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
+
+        if (wizardMode === 'templates' && templateData) {
             // Template mode: merge preset params with user params
-            const templateData = selectedTemplateData.data;
             const mergedParams = { ...templateData.preset_params, ...params };
 
             // Determine the Nextflow profile based on template type
             // Priority: rfd_mode (binder/monomer) > diffusion_method (boltzgen) > pred_method (structure prediction/validation) > skip_rfd (fampnn_predict)
             let nextflowProfile = '';
+            let effectiveModelId = 'template_' + (selectedTemplateId || 'unknown');
+
             if (mergedParams.rfd_mode) {
                 // Binder or monomer design templates
                 nextflowProfile = mergedParams.rfd_mode;
+                effectiveModelId = 'rfdiffusion';
             } else if (mergedParams.diffusion_method === 'boltzgen') {
                 // BoltzGen ligand-aware template
                 nextflowProfile = 'boltzgen';
+                effectiveModelId = 'boltzgen';
             } else if (mergedParams.pred_method) {
-                // Structure prediction/validation templates (af2, boltz, rf3, both)
-                nextflowProfile = mergedParams.pred_method;
+                // Structure prediction templates - map pred_method to model_id and mode
+                const predMethodMap: Record<string, { model_id: string; mode: string }> = {
+                    'boltz': { model_id: 'boltz2', mode: 'predict' },
+                    'rf3': { model_id: 'rf3', mode: 'predict' },
+                    'both': { model_id: 'boltz2', mode: 'predict' }, // Primary model for "both" mode
+                };
+                const mapping = predMethodMap[mergedParams.pred_method];
+                if (mapping) {
+                    effectiveModelId = mapping.model_id;
+                    nextflowProfile = mapping.mode;
+                } else {
+                    nextflowProfile = mergedParams.pred_method;
+                }
             } else if (mergedParams.skip_rfd === true) {
                 // DNA polymerase or similar - skip diffusion, just sequence design + prediction
                 nextflowProfile = 'fampnn_predict';
+                effectiveModelId = 'proteinmpnn';
             } else {
                 // Fallback to template ID
                 nextflowProfile = selectedTemplateId || 'binder_denovo';
             }
 
-            // Determine effective model ID for UI display
-            let effectiveModelId = 'template_' + (selectedTemplateId || 'unknown');
-            if (mergedParams.pred_method) {
-                effectiveModelId = mergedParams.pred_method; // 'boltz', 'rf3', 'both'
-            } else if (mergedParams.diffusion_method === 'boltzgen') {
-                effectiveModelId = 'boltzgen';
-            } else if (mergedParams.rfd_mode) {
-                effectiveModelId = 'rf_diffusion';
-            } else if (mergedParams.skip_rfd === true) {
-                effectiveModelId = 'protein_mpnn';
-            }
+            console.log('Submitting job:', { name: jobName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
 
             submitMutation.mutate({
                 name: jobName,
@@ -477,6 +496,8 @@ export function JobSubmission() {
                 mode: selectedModeId,
                 params: params,
             });
+        } else {
+            console.error('Submit failed: Template data not loaded or invalid mode', { wizardMode, templateData, selectedTemplateData });
         }
     };
 

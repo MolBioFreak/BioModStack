@@ -29,7 +29,7 @@ workflow {
     try {
         nextflow.preview.topic = true
     }
-    catch (_e: Exception) {
+    catch (Exception _e) {
     }
 
     def outputDirectory = params.out_dir

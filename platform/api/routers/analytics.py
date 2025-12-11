@@ -25,11 +25,16 @@ class MetricDistribution(BaseModel):
     histogram_bins: List[float]
     histogram_counts: List[int]
 
+class ScatterPoint(BaseModel):
+    x: float
+    y: float
+    id: str
+
 class JobAnalytics(BaseModel):
     job_id: str
     design_count: int
-    metrics: Dict[str, Optional[MetricDistribution]] or None
-    correlations: Dict[str, List[Dict[str, float]]] or None
+    metrics: Dict[str, Optional[MetricDistribution]] | None
+    correlations: Dict[str, List[ScatterPoint]] | None
     pipeline_summary: Dict[str, Any]
 
 class DesignMetricPoint(BaseModel):
@@ -128,7 +133,7 @@ async def get_job_analytics(
     correlations = {}
     if raw_metrics["plddt_overall"] and raw_metrics["pae_overall"]:
         correlations["plddt_vs_pae"] = [
-            {"x": d.plddt_overall, "y": d.pae_overall, "id": d.id} 
+            ScatterPoint(x=d.plddt_overall, y=d.pae_overall, id=d.id)
             for d in designs if d.plddt_overall is not None and d.pae_overall is not None
         ]
 
