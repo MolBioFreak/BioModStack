@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerProfile, setPowerProfile } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlPreset, setPowerControlManual } from '../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 
@@ -34,24 +34,36 @@ export function Dashboard() {
         refetchInterval: 2000,
     });
 
-    const { data: powerProfileData } = useQuery({
-        queryKey: ['powerProfile'],
-        queryFn: fetchPowerProfile,
+    const { data: powerControlData } = useQuery({
+        queryKey: ['powerControl'],
+        queryFn: fetchPowerControl,
+        refetchInterval: 5000,
     });
 
-    const ecoModeMutation = useMutation({
-        mutationFn: (enable: boolean) => setPowerProfile(enable),
+    const presetMutation = useMutation({
+        mutationFn: (preset: 'eco' | 'stock') => setPowerControlPreset(preset),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['powerProfile'] });
+            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
             queryClient.invalidateQueries({ queryKey: ['system'] });
         },
     });
 
-    const ecoMode = powerProfileData?.data.eco_mode ?? false;
+    const manualMutation = useMutation({
+        mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
+            setPowerControlManual(gpuIndex, limitWatts),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
+            queryClient.invalidateQueries({ queryKey: ['system'] });
+        },
+    });
+
+    const currentLimits = powerControlData?.data.limits ?? {};
 
     const gpus = systemData?.data.gpus ?? [];
     const cpu = systemData?.data.cpu;
     const ram = systemData?.data.ram;
+    const cpuHistory = systemData?.data.cpu_history ?? [];
+    const ramHistory = systemData?.data.ram_history ?? [];
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
@@ -85,29 +97,71 @@ export function Dashboard() {
                     <h2 className="text-xl font-semibold text-slate-200 mb-4">System Overview</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* CPU Card */}
-                        {cpu && <CPUCard cpu={cpu} />}
+                        {cpu && <CPUCard cpu={cpu} history={cpuHistory} />}
                         {/* RAM Card */}
-                        {ram && <RAMCard ram={ram} />}
+                        {ram && <RAMCard ram={ram} history={ramHistory} />}
                     </div>
                 </section>
             )}
 
+            {/* GPU Queue & Power Control - Split Layout */}
+            <section className="mb-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Left: Queue Status Table */}
+                    <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
+                            <h3 className="text-sm font-semibold text-slate-200">📋 Active Tasks</h3>
+                            <span className="text-xs text-slate-500">
+                                {gpus.reduce((sum, gpu) => sum + gpu.processes.length, 0)} running
+                            </span>
+                        </div>
+                        <QueueStatusTable gpus={gpus} />
+                    </div>
+
+                    {/* Right: GPU Power Control */}
+                    <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
+                            <h3 className="text-sm font-semibold text-slate-200">⚡ GPU Power</h3>
+                            <button
+                                onClick={() => presetMutation.mutate('stock')}
+                                disabled={presetMutation.isPending}
+                                className="px-2 py-0.5 rounded text-xs font-medium bg-slate-700/50 text-slate-400 hover:bg-slate-700 border border-slate-600 transition-all disabled:opacity-50"
+                            >
+                                Stock
+                            </button>
+                        </div>
+                        <table className="w-full text-xs">
+                            <thead>
+                                <tr className="border-b border-slate-700/50">
+                                    <th className="text-left py-1 px-2 font-medium text-slate-500">#</th>
+                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Name</th>
+                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Draw</th>
+                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Limit</th>
+                                    <th className="py-1 px-2"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {gpus.map((gpu) => (
+                                    <PowerControlRowCompact
+                                        key={gpu.index}
+                                        gpu={gpu}
+                                        currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
+                                        onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
+                                        isPending={manualMutation.isPending}
+                                    />
+                                ))}
+                            </tbody>
+                        </table>
+                        {gpus.length === 0 && (
+                            <div className="text-slate-500 text-center py-3 text-xs">No GPUs</div>
+                        )}
+                    </div>
+                </div>
+            </section>
+
             {/* GPU Status Cards */}
             <section className="mb-8">
-                <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-xl font-semibold text-slate-200">GPU Status</h2>
-                    <button
-                        onClick={() => ecoModeMutation.mutate(!ecoMode)}
-                        disabled={ecoModeMutation.isPending}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all ${ecoMode
-                            ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/50'
-                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 border border-slate-600'
-                            } ${ecoModeMutation.isPending ? 'opacity-50 cursor-wait' : ''}`}
-                    >
-                        <span className={`w-2 h-2 rounded-full ${ecoMode ? 'bg-green-400' : 'bg-slate-500'}`} />
-                        {ecoModeMutation.isPending ? 'Applying...' : ecoMode ? 'Eco Mode ON' : 'Eco Mode OFF'}
-                    </button>
-                </div>
+                <h2 className="text-xl font-semibold text-slate-200 mb-4">GPU Status</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {gpus.map((gpu) => (
                         <GPUCard key={gpu.index} gpu={gpu} />
@@ -312,14 +366,24 @@ function GPUCard({ gpu }: { gpu: GPUStatus }) {
     );
 }
 
-function CPUCard({ cpu }: { cpu: CPUStatus }) {
+function CPUCard({ cpu, history }: { cpu: CPUStatus; history: number[] }) {
     return (
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-slate-400">CPU</span>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${cpu.utilization > 80 ? 'bg-red-500/20 text-red-400' : cpu.utilization > 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
-                    {cpu.utilization.toFixed(1)}%
-                </span>
+                <div className="flex gap-2">
+                    {cpu.temperature !== null && (
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${cpu.temperature > 80 ? 'bg-red-500/20 text-red-400' :
+                            cpu.temperature > 60 ? 'bg-yellow-500/20 text-yellow-400' :
+                                'bg-blue-500/20 text-blue-400'
+                            }`}>
+                            {cpu.temperature.toFixed(0)}°C
+                        </span>
+                    )}
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${cpu.utilization > 80 ? 'bg-red-500/20 text-red-400' : cpu.utilization > 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+                        {cpu.utilization.toFixed(1)}%
+                    </span>
+                </div>
             </div>
             <h3 className="text-sm font-medium text-white truncate mb-3">{cpu.name}</h3>
 
@@ -333,6 +397,13 @@ function CPUCard({ cpu }: { cpu: CPUStatus }) {
                     <span className="text-slate-200 ml-1">{cpu.frequency_current_mhz.toFixed(0)} MHz</span>
                 </div>
             </div>
+
+            {/* CPU Load Sparkline */}
+            {history.length > 1 && (
+                <div className="mt-3">
+                    <Sparkline data={history} color="green" height={24} />
+                </div>
+            )}
 
             {/* Per-core utilization mini bars */}
             <div className="mt-3 flex gap-0.5">
@@ -353,14 +424,21 @@ function CPUCard({ cpu }: { cpu: CPUStatus }) {
     );
 }
 
-function RAMCard({ ram }: { ram: RAMStatus }) {
+function RAMCard({ ram, history }: { ram: RAMStatus; history: number[] }) {
     return (
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-slate-400">Memory</span>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${ram.utilization > 90 ? 'bg-red-500/20 text-red-400' : ram.utilization > 70 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
-                    {ram.utilization.toFixed(1)}%
-                </span>
+                <div className="flex gap-2">
+                    {ram.swap_percent > 0 && (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-orange-500/20 text-orange-400">
+                            Swap: {ram.swap_percent.toFixed(0)}%
+                        </span>
+                    )}
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${ram.utilization > 90 ? 'bg-red-500/20 text-red-400' : ram.utilization > 70 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+                        {ram.utilization.toFixed(1)}%
+                    </span>
+                </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-center mb-3">
@@ -377,6 +455,13 @@ function RAMCard({ ram }: { ram: RAMStatus }) {
                     <div className="text-xs text-slate-400">Total GB</div>
                 </div>
             </div>
+
+            {/* RAM Usage Sparkline */}
+            {history.length > 1 && (
+                <div className="mb-3">
+                    <Sparkline data={history} color="purple" height={24} />
+                </div>
+            )}
 
             <div className="w-full bg-slate-700 rounded-full h-3">
                 <div
@@ -401,5 +486,154 @@ function StatusBadge({ status }: { status: string }) {
         <span className={`px-2 py-1 rounded text-xs font-medium ${styles[status] ?? styles.queued}`}>
             {status}
         </span>
+    );
+}
+
+function Sparkline({ data, color, height = 24 }: { data: number[]; color: string; height?: number }) {
+    if (data.length < 2) return null;
+
+    const width = 100;
+    const max = Math.max(...data, 100);
+    const min = Math.min(...data, 0);
+    const range = max - min || 1;
+
+    const points = data.map((value, i) => {
+        const x = (i / (data.length - 1)) * width;
+        const y = height - ((value - min) / range) * height;
+        return `${x},${y}`;
+    }).join(' ');
+
+    const colorMap: Record<string, string> = {
+        green: '#22c55e',
+        purple: '#a855f7',
+        blue: '#3b82f6',
+        yellow: '#eab308'
+    };
+
+    return (
+        <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+            <polyline
+                fill="none"
+                stroke={colorMap[color] || color}
+                strokeWidth="1.5"
+                points={points}
+            />
+        </svg>
+    );
+}
+
+// Queue Status Table - shows running GPU processes
+function QueueStatusTable({ gpus }: { gpus: GPUStatus[] }) {
+    // Flatten all GPU processes into a single list with GPU info
+    const tasks = gpus.flatMap(gpu =>
+        gpu.processes.map(proc => ({
+            gpu: gpu.index,
+            gpuName: gpu.name,
+            pid: proc.pid,
+            name: proc.name,
+            vram: proc.memory_mb
+        }))
+    );
+
+    // Try to extract model type from process name
+    const getModelType = (name: string): string => {
+        const lower = name.toLowerCase();
+        if (lower.includes('boltz')) return 'Boltz';
+        if (lower.includes('rf3') || lower.includes('foundry')) return 'RF3';
+        if (lower.includes('fampnn')) return 'FAMPNN';
+        if (lower.includes('mpnn')) return 'MPNN';
+        if (lower.includes('rfdiff')) return 'RFdiff';
+        if (lower.includes('python')) return 'Python';
+        return name.slice(0, 12);
+    };
+
+    return (
+        <div className="max-h-48 overflow-y-auto">
+            <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-800">
+                    <tr className="border-b border-slate-700/50">
+                        <th className="text-left py-1 px-2 font-medium text-slate-500">Process</th>
+                        <th className="text-left py-1 px-2 font-medium text-slate-500">Model</th>
+                        <th className="text-left py-1 px-2 font-medium text-slate-500">GPU</th>
+                        <th className="text-left py-1 px-2 font-medium text-slate-500">VRAM</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {tasks.length === 0 ? (
+                        <tr>
+                            <td colSpan={4} className="py-4 text-center text-slate-500">
+                                No active tasks
+                            </td>
+                        </tr>
+                    ) : (
+                        tasks.map((task, idx) => (
+                            <tr key={`${task.gpu}-${task.pid}-${idx}`} className="border-b border-slate-700/30 hover:bg-slate-700/20">
+                                <td className="py-1 px-2 text-slate-300 truncate max-w-[100px]" title={task.name}>
+                                    {task.name.slice(0, 15)}
+                                </td>
+                                <td className="py-1 px-2">
+                                    <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
+                                        {getModelType(task.name)}
+                                    </span>
+                                </td>
+                                <td className="py-1 px-2 text-cyan-400">{task.gpu}</td>
+                                <td className="py-1 px-2 text-amber-400">{task.vram}MB</td>
+                            </tr>
+                        ))
+                    )}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+// Compact Power Control Row for split layout
+function PowerControlRowCompact({ gpu, currentLimit, onSetLimit, isPending }: {
+    gpu: GPUStatus;
+    currentLimit: number;
+    onSetLimit: (watts: number) => void;
+    isPending: boolean;
+}) {
+    const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
+
+    const handleSet = () => {
+        const watts = parseInt(inputValue, 10);
+        if (!isNaN(watts)) {
+            onSetLimit(watts);
+        }
+    };
+
+    const isOutOfRange = (() => {
+        const v = parseInt(inputValue, 10);
+        return !isNaN(v) && (v < gpu.min_power_watts || v > gpu.max_power_watts);
+    })();
+
+    // Truncate GPU name for compact display
+    const shortName = gpu.name.replace('NVIDIA GeForce ', '').replace('RTX ', '');
+
+    return (
+        <tr className="border-b border-slate-700/30 hover:bg-slate-700/20">
+            <td className="py-1 px-2 text-slate-400">{gpu.index}</td>
+            <td className="py-1 px-2 text-white font-medium truncate max-w-[80px]" title={gpu.name}>{shortName}</td>
+            <td className="py-1 px-2 text-orange-400">{gpu.power_draw_w}W</td>
+            <td className="py-1 px-2">
+                <input
+                    type="number"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    className={`w-14 px-1 py-0.5 bg-slate-700 border rounded text-white text-xs ${isOutOfRange ? 'border-red-500' : 'border-slate-600'}`}
+                />
+            </td>
+            <td className="py-1 px-2">
+                <button
+                    onClick={handleSet}
+                    disabled={isPending || isOutOfRange}
+                    className="w-5 h-5 flex items-center justify-center bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded transition-colors disabled:opacity-50 text-xs"
+                    title={`Range: ${gpu.min_power_watts}-${gpu.max_power_watts}W`}
+                >
+                    ✓
+                </button>
+            </td>
+        </tr>
     );
 }

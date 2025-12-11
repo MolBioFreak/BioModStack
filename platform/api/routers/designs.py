@@ -48,6 +48,9 @@ class DesignResponse(BaseModel):
     conf_score: Optional[float]
     ptm: Optional[float]
     
+    # Per-residue metrics (for charts)
+    residue_plddt: Optional[List[float]] = None
+    
     # User annotations
     is_favorite: bool
     notes: Optional[str]
@@ -163,6 +166,42 @@ async def get_design_pdb(
         path=pdb_path,
         filename=f"{design.name}.pdb",
         media_type="chemical/x-pdb"
+    )
+
+
+class ResidueMetrics(BaseModel):
+    """Per-residue metrics for charting."""
+    design_id: str
+    design_name: str
+    residue_numbers: List[int]
+    plddt: List[float]
+    length: int
+
+
+@router.get("/{design_id}/residue-metrics", response_model=ResidueMetrics)
+async def get_residue_metrics(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get per-residue metrics for a design (for line charts)."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+    
+    if not design.residue_plddt:
+        raise HTTPException(status_code=404, detail="No per-residue data available for this design")
+    
+    plddt_values = design.residue_plddt
+    residue_numbers = list(range(1, len(plddt_values) + 1))
+    
+    return ResidueMetrics(
+        design_id=design.id,
+        design_name=design.name,
+        residue_numbers=residue_numbers,
+        plddt=plddt_values,
+        length=len(plddt_values)
     )
 
 

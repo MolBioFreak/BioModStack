@@ -186,8 +186,18 @@ def build_nextflow_command(
         'dna_polymerase': 'fampnn_predict',
     }
     
+    # Model + mode to profile mapping (for API-driven jobs)
+    model_mode_to_profile = {
+        ('boltz2', 'predict'): 'boltz',
+        ('boltz2', 'complex'): 'boltz',
+        ('rf3', 'predict'): 'rf3',
+        ('af2', 'predict'): 'af2',
+    }
+    
     # Determine profile based on model and mode
-    if mode in mode_to_profile:
+    if (model_id, mode) in model_mode_to_profile:
+        effective_profile = model_mode_to_profile[(model_id, mode)]
+    elif mode in mode_to_profile:
         effective_profile = mode_to_profile[mode]
     else:
         effective_profile = mode
