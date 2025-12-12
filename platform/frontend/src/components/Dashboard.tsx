@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlPreset, setPowerControlManual } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual } from '../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 
@@ -40,13 +40,6 @@ export function Dashboard() {
         refetchInterval: 5000,
     });
 
-    const presetMutation = useMutation({
-        mutationFn: (preset: 'eco' | 'stock') => setPowerControlPreset(preset),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
-            queryClient.invalidateQueries({ queryKey: ['system'] });
-        },
-    });
 
     const manualMutation = useMutation({
         mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
@@ -104,67 +97,36 @@ export function Dashboard() {
                 </section>
             )}
 
-            {/* GPU Queue & Power Control - Split Layout */}
+            {/* Active Tasks Queue */}
             <section className="mb-6">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {/* Left: Queue Status Table */}
-                    <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
-                        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
-                            <h3 className="text-sm font-semibold text-slate-200">📋 Active Tasks</h3>
-                            <span className="text-xs text-slate-500">
-                                {gpus.reduce((sum, gpu) => sum + gpu.processes.length, 0)} running
-                            </span>
-                        </div>
-                        <QueueStatusTable gpus={gpus} />
+                <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
+                        <h3 className="text-sm font-semibold text-slate-200">📋 Active Tasks</h3>
+                        <span className="text-xs text-slate-500">
+                            {gpus.reduce((sum, gpu) => sum + gpu.processes.length, 0)} running
+                        </span>
                     </div>
-
-                    {/* Right: GPU Power Control */}
-                    <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
-                        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
-                            <h3 className="text-sm font-semibold text-slate-200">⚡ GPU Power</h3>
-                            <button
-                                onClick={() => presetMutation.mutate('stock')}
-                                disabled={presetMutation.isPending}
-                                className="px-2 py-0.5 rounded text-xs font-medium bg-slate-700/50 text-slate-400 hover:bg-slate-700 border border-slate-600 transition-all disabled:opacity-50"
-                            >
-                                Stock
-                            </button>
-                        </div>
-                        <table className="w-full text-xs">
-                            <thead>
-                                <tr className="border-b border-slate-700/50">
-                                    <th className="text-left py-1 px-2 font-medium text-slate-500">#</th>
-                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Name</th>
-                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Draw</th>
-                                    <th className="text-left py-1 px-2 font-medium text-slate-500">Limit</th>
-                                    <th className="py-1 px-2"></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {gpus.map((gpu) => (
-                                    <PowerControlRowCompact
-                                        key={gpu.index}
-                                        gpu={gpu}
-                                        currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
-                                        onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
-                                        isPending={manualMutation.isPending}
-                                    />
-                                ))}
-                            </tbody>
-                        </table>
-                        {gpus.length === 0 && (
-                            <div className="text-slate-500 text-center py-3 text-xs">No GPUs</div>
-                        )}
-                    </div>
+                    <QueueStatusTable gpus={gpus} runningJobs={(jobsData?.data?.jobs || []).filter((j: { status: string; model_id?: string; name: string }) => j.status === 'running')} />
                 </div>
             </section>
 
             {/* GPU Status Cards */}
             <section className="mb-8">
-                <h2 className="text-xl font-semibold text-slate-200 mb-4">GPU Status</h2>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-xl font-semibold text-slate-200">GPU Status</h2>
+                    <span className="text-sm text-slate-400">
+                        Total: {gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(1)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0)}W
+                    </span>
+                </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {gpus.map((gpu) => (
-                        <GPUCard key={gpu.index} gpu={gpu} />
+                        <GPUCard
+                            key={gpu.index}
+                            gpu={gpu}
+                            currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
+                            onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
+                            isPending={manualMutation.isPending}
+                        />
                     ))}
                     {gpus.length === 0 && (
                         <div className="col-span-full text-slate-500 text-center py-8">
@@ -261,9 +223,41 @@ export function Dashboard() {
     );
 }
 
-function GPUCard({ gpu }: { gpu: GPUStatus }) {
+function GPUCard({ gpu, currentLimit, onSetLimit, isPending }: {
+    gpu: GPUStatus;
+    currentLimit: number;
+    onSetLimit: (watts: number) => void;
+    isPending: boolean;
+}) {
+    const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
     const memoryPercent = (gpu.memory_used_mb / gpu.memory_total_mb) * 100;
-    const powerPercent = gpu.power_limit_w > 0 ? (gpu.power_draw_w / gpu.power_limit_w) * 100 : 0;
+    const powerPercent = currentLimit > 0 ? (gpu.power_draw_w / currentLimit) * 100 : 0;
+
+    const handleApply = () => {
+        const watts = parseInt(inputValue, 10);
+        if (!isNaN(watts) && watts >= gpu.min_power_watts && watts <= gpu.max_power_watts) {
+            onSetLimit(watts);
+        }
+    };
+
+    const handleIncrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        const newVal = Math.min(current + 25, gpu.max_power_watts);
+        setInputValue(String(newVal));
+    };
+
+    const handleDecrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        const newVal = Math.max(current - 25, gpu.min_power_watts);
+        setInputValue(String(newVal));
+    };
+
+    const isOutOfRange = (() => {
+        const v = parseInt(inputValue, 10);
+        return !isNaN(v) && (v < gpu.min_power_watts || v > gpu.max_power_watts);
+    })();
+
+    const isDirty = parseInt(inputValue, 10) !== currentLimit;
 
     return (
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-5 hover:border-purple-500/50 transition-all duration-300">
@@ -283,26 +277,64 @@ function GPUCard({ gpu }: { gpu: GPUStatus }) {
             </div>
             <h3 className="text-lg font-semibold text-white truncate mb-4">{gpu.name}</h3>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-                {/* Power */}
-                <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Power</div>
-                    <div className="text-sm font-medium text-orange-400">
-                        {gpu.power_draw_w}W / {gpu.power_limit_w}W
-                    </div>
-                    <div className="w-full bg-slate-700 rounded-full h-1 mt-1">
-                        <div
-                            className="bg-orange-500 h-1 rounded-full transition-all"
-                            style={{ width: `${Math.min(powerPercent, 100)}%` }}
-                        />
-                    </div>
+            {/* Power Control - Full Width */}
+            <div className="bg-slate-900/50 rounded-lg p-3 mb-4">
+                <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs text-slate-400">Power</span>
+                    <span className="text-xs text-slate-500">
+                        Limit: <span className="text-orange-400 font-medium">{currentLimit}W</span>
+                    </span>
                 </div>
+                <div className="text-sm font-medium text-orange-400 mb-1">
+                    Draw: {gpu.power_draw_w}W
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-1.5 mb-3">
+                    <div
+                        className={`h-1.5 rounded-full transition-all ${powerPercent > 90 ? 'bg-red-500' : powerPercent > 70 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+                        style={{ width: `${Math.min(powerPercent, 100)}%` }}
+                    />
+                </div>
+                {/* Limit adjuster */}
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleDecrement}
+                        className="w-7 h-7 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors text-sm font-bold"
+                        title="Decrease by 25W"
+                    >
+                        ▼
+                    </button>
+                    <input
+                        type="number"
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        className={`w-16 px-2 py-1 bg-slate-700 border rounded text-white text-sm text-center ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-600'}`}
+                    />
+                    <button
+                        onClick={handleIncrement}
+                        className="w-7 h-7 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors text-sm font-bold"
+                        title="Increase by 25W"
+                    >
+                        ▲
+                    </button>
+                    <button
+                        onClick={handleApply}
+                        disabled={isPending || isOutOfRange || !isDirty}
+                        className="px-3 py-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isPending ? '...' : 'Apply'}
+                    </button>
+                </div>
+                <div className="text-xs text-slate-500 mt-2">
+                    Range: {gpu.min_power_watts}W – {gpu.max_power_watts}W
+                </div>
+            </div>
 
+            {/* Stats Grid - 3 columns */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
                 {/* Temperature & Fan */}
                 <div className="bg-slate-900/50 rounded-lg p-2">
                     <div className="text-xs text-slate-400 mb-1">Temp / Fan</div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                         <span className={`text-sm font-medium ${gpu.temperature > 80 ? 'text-red-400' : gpu.temperature > 60 ? 'text-yellow-400' : 'text-green-400'}`}>
                             {gpu.temperature}°C
                         </span>
@@ -313,18 +345,16 @@ function GPUCard({ gpu }: { gpu: GPUStatus }) {
 
                 {/* Clocks */}
                 <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Core Clock</div>
+                    <div className="text-xs text-slate-400 mb-1">Core</div>
                     <div className="text-sm font-medium text-purple-400">
                         {gpu.clock_graphics_mhz} MHz
-                        <span className="text-slate-500 text-xs"> / {gpu.clock_max_graphics_mhz}</span>
                     </div>
                 </div>
 
                 <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Memory Clock</div>
+                    <div className="text-xs text-slate-400 mb-1">Mem</div>
                     <div className="text-sm font-medium text-cyan-400">
                         {gpu.clock_memory_mhz} MHz
-                        <span className="text-slate-500 text-xs"> / {gpu.clock_max_memory_mhz}</span>
                     </div>
                 </div>
             </div>
@@ -523,7 +553,8 @@ function Sparkline({ data, color, height = 24 }: { data: number[]; color: string
 }
 
 // Queue Status Table - shows running GPU processes
-function QueueStatusTable({ gpus }: { gpus: GPUStatus[] }) {
+// Uses running jobs data to show model names instead of generic 'python'
+function QueueStatusTable({ gpus, runningJobs }: { gpus: GPUStatus[]; runningJobs: Array<{ model_id: string; name: string }> }) {
     // Flatten all GPU processes into a single list with GPU info
     const tasks = gpus.flatMap(gpu =>
         gpu.processes.map(proc => ({
@@ -535,8 +566,21 @@ function QueueStatusTable({ gpus }: { gpus: GPUStatus[] }) {
         }))
     );
 
-    // Try to extract model type from process name
-    const getModelType = (name: string): string => {
+    // Get model type from running jobs when available, fallback to process name detection
+    const getModelType = (name: string, index: number): string => {
+        // If we have running jobs, use their model_id (rotating through jobs for multiple processes)
+        if (runningJobs.length > 0) {
+            const job = runningJobs[index % runningJobs.length];
+            const modelId = job.model_id || '';
+            // Map model_id to display name
+            if (modelId.toLowerCase().includes('rf3') || modelId.toLowerCase().includes('foundry')) return 'RF3';
+            if (modelId.toLowerCase().includes('boltz')) return 'Boltz';
+            if (modelId.toLowerCase().includes('fampnn')) return 'FAMPNN';
+            if (modelId.toLowerCase().includes('mpnn')) return 'MPNN';
+            if (modelId.toLowerCase().includes('rfdiff')) return 'RFdiff';
+            if (modelId) return modelId;
+        }
+        // Fallback: extract from process name
         const lower = name.toLowerCase();
         if (lower.includes('boltz')) return 'Boltz';
         if (lower.includes('rf3') || lower.includes('foundry')) return 'RF3';
@@ -573,7 +617,7 @@ function QueueStatusTable({ gpus }: { gpus: GPUStatus[] }) {
                                 </td>
                                 <td className="py-1 px-2">
                                     <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
-                                        {getModelType(task.name)}
+                                        {getModelType(task.name, idx)}
                                     </span>
                                 </td>
                                 <td className="py-1 px-2 text-cyan-400">{task.gpu}</td>
@@ -587,53 +631,4 @@ function QueueStatusTable({ gpus }: { gpus: GPUStatus[] }) {
     );
 }
 
-// Compact Power Control Row for split layout
-function PowerControlRowCompact({ gpu, currentLimit, onSetLimit, isPending }: {
-    gpu: GPUStatus;
-    currentLimit: number;
-    onSetLimit: (watts: number) => void;
-    isPending: boolean;
-}) {
-    const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
 
-    const handleSet = () => {
-        const watts = parseInt(inputValue, 10);
-        if (!isNaN(watts)) {
-            onSetLimit(watts);
-        }
-    };
-
-    const isOutOfRange = (() => {
-        const v = parseInt(inputValue, 10);
-        return !isNaN(v) && (v < gpu.min_power_watts || v > gpu.max_power_watts);
-    })();
-
-    // Truncate GPU name for compact display
-    const shortName = gpu.name.replace('NVIDIA GeForce ', '').replace('RTX ', '');
-
-    return (
-        <tr className="border-b border-slate-700/30 hover:bg-slate-700/20">
-            <td className="py-1 px-2 text-slate-400">{gpu.index}</td>
-            <td className="py-1 px-2 text-white font-medium truncate max-w-[80px]" title={gpu.name}>{shortName}</td>
-            <td className="py-1 px-2 text-orange-400">{gpu.power_draw_w}W</td>
-            <td className="py-1 px-2">
-                <input
-                    type="number"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    className={`w-14 px-1 py-0.5 bg-slate-700 border rounded text-white text-xs ${isOutOfRange ? 'border-red-500' : 'border-slate-600'}`}
-                />
-            </td>
-            <td className="py-1 px-2">
-                <button
-                    onClick={handleSet}
-                    disabled={isPending || isOutOfRange}
-                    className="w-5 h-5 flex items-center justify-center bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded transition-colors disabled:opacity-50 text-xs"
-                    title={`Range: ${gpu.min_power_watts}-${gpu.max_power_watts}W`}
-                >
-                    ✓
-                </button>
-            </td>
-        </tr>
-    );
-}

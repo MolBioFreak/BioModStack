@@ -1,96 +1,117 @@
 #!/usr/bin/env python3
+"""
+Fetch MSA from ColabFold API.
+Based on the official ColabFold client implementation.
+"""
 import time
 import requests
 import argparse
 import sys
 import os
+import tarfile
 
 def run_mmseqs2(sequence, job_name, out_dir):
-    base_url = "https://api.colabfold.com/ticket/msa"
+    host_url = "https://api.colabfold.com"
     
     # 1. Submit job
-    print(f"Submitting sequence to ColabFold API...")
-    try:
-        res = requests.post(base_url, json={"q": f">1\n{sequence}", "mode": "env"})
-        res.raise_for_status()
-        out = res.json()
-        job_id = out['id']
-        print(f"Job submitted. ID: {job_id}")
-    except Exception as e:
-        print(f"Error submitting job: {e}")
-        sys.exit(1)
-
-    # 2. Poll status
+    print(f"Submitting sequence to ColabFold API...", flush=True)
+    query = f">1\n{sequence}"
+    
+    error_count = 0
     while True:
         try:
-            time.sleep(5)
-            status_res = requests.get(f"{base_url}/{job_id}")
-            status_res.raise_for_status()
-            status = status_res.json()
-            
-            if status['status'] == "COMPLETE":
-                print("MSA generation complete.")
-                break
-            elif status['status'] == "ERROR":
-                print("Error from ColabFold server.")
-                sys.exit(1)
-            elif status['status'] == "RUNNING" or status['status'] == "PENDING":
-                print(f"Status: {status['status']}...")
-            
+            res = requests.post(f'{host_url}/ticket/msa', data={'q': query, 'mode': 'env'}, timeout=6.02)
+            res.raise_for_status()
+            out = res.json()
+            break
+        except requests.exceptions.Timeout:
+            print("Timeout while submitting. Retrying...", flush=True)
+            continue
         except Exception as e:
-            print(f"Polling error: {e}")
-            time.sleep(10)
-
-    # 3. Download A3M
-    # The API returns 'result' which is a list of objects. We want the a3m.
-    # Actually, verify the response format.
-    # Typically ColabFold API returns the result content directly or a list of MSAs.
-    # Let's inspect the 'result' field.
-    # For now, I'll attempt to construct the download URL or parse the result.
+            error_count += 1
+            print(f"Error submitting ({error_count}/5): {e}", flush=True)
+            time.sleep(5)
+            if error_count >= 5:
+                raise
+            continue
     
-    # Standard ColabFold API returns "result" list in the status JSON if complete?
-    # Or enables a download endpoint?
-    # Actually, the 'result' key in the status json contains the MSA for single-sequence jobs or a list.
+    job_id = out.get('id')
+    status = out.get('status', 'PENDING')
+    print(f"Job ID: {job_id}, Status: {status}", flush=True)
     
-    # Let's try downloading from https://api.colabfold.com/result/download/{job_id}
-    download_url = f"https://api.colabfold.com/result/download/{job_id}"
-    print(f"Downloading results from {download_url}...")
-    
-    try:
-        dl_res = requests.get(download_url)
-        dl_res.raise_for_status()
+    # 2. Poll status (only if not already complete)
+    while status not in ['COMPLETE', 'ERROR']:
+        time.sleep(5)
+        error_count = 0
+        while True:
+            try:
+                res = requests.get(f'{host_url}/ticket/{job_id}', timeout=6.02)
+                res.raise_for_status()
+                out = res.json()
+                break
+            except requests.exceptions.Timeout:
+                print("Timeout while polling. Retrying...", flush=True)
+                continue
+            except Exception as e:
+                error_count += 1
+                print(f"Polling error ({error_count}/5): {e}", flush=True)
+                time.sleep(5)
+                if error_count > 5:
+                    raise
+                continue
         
-        # Save as tar.gz
-        tar_path = os.path.join(out_dir, f"{job_name}.tar.gz")
-        with open(tar_path, "wb") as f:
-            f.write(dl_res.content)
-            
-        print(f"Saved results to {tar_path}")
-        
-        # Extract A3M (we need to be careful, it might contain multiple files)
-        # We'll just extract the a3m file.
-        import tarfile
-        with tarfile.open(tar_path, "r:gz") as tar:
-            # Find the a3m file
-            a3m_members = [m for m in tar.getmembers() if m.name.endswith(".a3m")]
-            if not a3m_members:
-                print("No A3M file found in archive.")
-                sys.exit(1)
-                
-            # Extract the first one
-            f = tar.extractfile(a3m_members[0])
-            a3m_content = f.read().decode("utf-8")
-            
-            # Save to final path
-            final_a3m = os.path.join(out_dir, f"{job_name}.a3m")
-            with open(final_a3m, "w") as out:
-                out.write(a3m_content)
-                
-            print(f"Extracted A3M to {final_a3m}")
-            
-    except Exception as e:
-        print(f"Download/Extract error: {e}")
+        status = out.get('status', 'ERROR')
+        print(f"Status: {status}", flush=True)
+    
+    if status == 'ERROR':
+        print("Error from ColabFold server.", flush=True)
         sys.exit(1)
+    
+    print("MSA generation complete.", flush=True)
+    
+    # 3. Download results
+    download_url = f'{host_url}/result/download/{job_id}'
+    print(f"Downloading from {download_url}...", flush=True)
+    
+    error_count = 0
+    while True:
+        try:
+            res = requests.get(download_url, timeout=60)
+            res.raise_for_status()
+            break
+        except requests.exceptions.Timeout:
+            print("Timeout while downloading. Retrying...", flush=True)
+            continue
+        except Exception as e:
+            error_count += 1
+            print(f"Download error ({error_count}/5): {e}", flush=True)
+            time.sleep(5)
+            if error_count > 5:
+                raise
+            continue
+    
+    # Save tar.gz
+    tar_path = os.path.join(out_dir, f"{job_name}.tar.gz")
+    with open(tar_path, "wb") as f:
+        f.write(res.content)
+    print(f"Saved to {tar_path}", flush=True)
+    
+    # Extract a3m
+    with tarfile.open(tar_path, "r:gz") as tar:
+        a3m_members = [m for m in tar.getmembers() if m.name.endswith(".a3m")]
+        if not a3m_members:
+            print("No A3M file found in archive.", flush=True)
+            sys.exit(1)
+        
+        f = tar.extractfile(a3m_members[0])
+        # Strip null bytes that may be present from tar padding
+        a3m_content = f.read().decode("utf-8").rstrip('\x00')
+        
+        final_a3m = os.path.join(out_dir, f"{job_name}.a3m")
+        with open(final_a3m, "w") as out:
+            out.write(a3m_content)
+        
+        print(f"Extracted A3M to {final_a3m}", flush=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

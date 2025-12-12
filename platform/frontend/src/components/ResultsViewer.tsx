@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics } from '../lib/api';
+import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchStructureAnalysis } from '../lib/api';
 import { MolViewer } from './MolViewer';
 import { Histogram, MetricScatter, ResidueLineChart } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
+import { PAEHeatmap } from './PAEHeatmap';
 
 // Tab definitions
 const TABS = [
@@ -47,6 +48,8 @@ export function ResultsViewer() {
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
+    const [viewerColorScheme, setViewerColorScheme] = useState<'plddt' | 'rainbow' | 'sse'>('plddt');
+    const [viewerRepStyle, setViewerRepStyle] = useState<'cartoon' | 'sticks' | 'sphere' | 'ball-stick'>('cartoon');
 
     // Fetch jobs list
     const { data: jobsData } = useQuery({
@@ -101,6 +104,14 @@ export function ResultsViewer() {
     });
     const residueMetrics = residueMetricsData?.data;
 
+    // Fetch structure analysis for selected design (Biotite-powered)
+    const { data: structureAnalysisData, isLoading: structureAnalysisLoading } = useQuery({
+        queryKey: ['structureAnalysis', selectedDesignId],
+        queryFn: () => fetchStructureAnalysis(selectedDesignId),
+        enabled: !!selectedDesignId && activeTab === 'structure',
+    });
+    const structureAnalysis = structureAnalysisData?.data;
+
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
         let filtered = designs;
@@ -124,11 +135,17 @@ export function ResultsViewer() {
     useEffect(() => {
         if (selectedDesignId && activeTab === 'structure') {
             const design = designs.find(d => d.id === selectedDesignId);
+            console.log('Fetching PDB for design:', selectedDesignId, 'pdb_path:', design?.pdb_path);
             if (design?.pdb_path) {
                 fetch(`/api/designs/${selectedDesignId}/pdb`)
                     .then(res => res.text())
-                    .then(text => setPdbContent(text))
+                    .then(text => {
+                        console.log('PDB content fetched, length:', text.length, 'first 100 chars:', text.substring(0, 100));
+                        setPdbContent(text);
+                    })
                     .catch(err => console.error("Failed to load PDB", err));
+            } else {
+                console.log('No pdb_path for design');
             }
         }
     }, [selectedDesignId, activeTab, designs]);
@@ -393,28 +410,28 @@ export function ResultsViewer() {
                                                                     <tr key={d.id} className="hover:bg-slate-800/30 transition-colors">
                                                                         <td className="px-6 py-3">
                                                                             <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-500/20 text-amber-400' :
-                                                                                    idx === 1 ? 'bg-slate-400/20 text-slate-300' :
-                                                                                        idx === 2 ? 'bg-orange-600/20 text-orange-400' :
-                                                                                            'bg-slate-700/50 text-slate-500'
+                                                                                idx === 1 ? 'bg-slate-400/20 text-slate-300' :
+                                                                                    idx === 2 ? 'bg-orange-600/20 text-orange-400' :
+                                                                                        'bg-slate-700/50 text-slate-500'
                                                                                 }`}>
                                                                                 {idx + 1}
                                                                             </span>
                                                                         </td>
                                                                         <td className="px-6 py-3 text-sm text-white font-medium truncate max-w-[200px]">{d.name}</td>
                                                                         <td className={`px-6 py-3 text-sm text-right font-mono font-semibold ${(d.plddt_overall ?? 0) >= 80 ? 'text-emerald-400' :
-                                                                                (d.plddt_overall ?? 0) >= 60 ? 'text-amber-400' : 'text-red-400'
+                                                                            (d.plddt_overall ?? 0) >= 60 ? 'text-amber-400' : 'text-red-400'
                                                                             }`}>
                                                                             {d.plddt_overall?.toFixed(1) ?? '—'}
                                                                         </td>
                                                                         <td className={`px-6 py-3 text-sm text-right font-mono ${d.pae_overall != null && d.pae_overall <= 10 ? 'text-emerald-400' :
-                                                                                d.pae_overall != null && d.pae_overall <= 20 ? 'text-amber-400' :
-                                                                                    d.pae_overall != null ? 'text-red-400' : 'text-slate-600'
+                                                                            d.pae_overall != null && d.pae_overall <= 20 ? 'text-amber-400' :
+                                                                                d.pae_overall != null ? 'text-red-400' : 'text-slate-600'
                                                                             }`}>
                                                                             {d.pae_overall?.toFixed(1) ?? '—'}
                                                                         </td>
                                                                         <td className={`px-6 py-3 text-sm text-right font-mono ${d.ptm != null && d.ptm >= 0.5 ? 'text-emerald-400' :
-                                                                                d.ptm != null && d.ptm >= 0.3 ? 'text-amber-400' :
-                                                                                    d.ptm != null ? 'text-red-400' : 'text-slate-600'
+                                                                            d.ptm != null && d.ptm >= 0.3 ? 'text-amber-400' :
+                                                                                d.ptm != null ? 'text-red-400' : 'text-slate-600'
                                                                             }`}>
                                                                             {d.ptm?.toFixed(3) ?? '—'}
                                                                         </td>
@@ -444,8 +461,8 @@ export function ResultsViewer() {
                                     {/* STRUCTURE TAB */}
                                     {activeTab === 'structure' && (
                                         <div className="flex h-[700px]">
-                                            {/* Sidebar */}
-                                            <div className="w-72 border-r border-slate-800 flex flex-col bg-slate-900/30">
+                                            {/* Left Sidebar - Design List */}
+                                            <div className="w-64 border-r border-slate-800 flex flex-col bg-slate-900/30">
                                                 <div className="p-3 border-b border-slate-800 text-sm font-medium text-slate-300">
                                                     Designs ({designs.length})
                                                 </div>
@@ -468,20 +485,174 @@ export function ResultsViewer() {
                                                     ))}
                                                 </div>
                                             </div>
-                                            {/* Viewer */}
-                                            <div className="flex-1 bg-slate-950 relative">
-                                                <div className="absolute top-4 left-4 z-10 flex gap-2">
-                                                    <div className="bg-slate-900/80 backdrop-blur px-3 py-1 rounded-lg border border-slate-700 text-xs text-white">
-                                                        <span className="text-blue-400 font-bold">Blue</span>: High Confidence
-                                                        <span className="ml-2 text-yellow-400 font-bold">Yellow</span>: Low
+
+                                            {/* Center - 3D Viewer */}
+                                            <div className="flex-1 bg-slate-950 relative flex flex-col">
+                                                {/* Toolbar */}
+                                                <div className="flex items-center gap-2 p-2 border-b border-slate-800 bg-slate-900/50">
+                                                    <span className="text-xs text-slate-500 mr-2">Color:</span>
+                                                    <button
+                                                        onClick={() => setViewerColorScheme('plddt')}
+                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'plddt' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                    >
+                                                        pLDDT
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setViewerColorScheme('rainbow')}
+                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'rainbow' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                    >
+                                                        Rainbow
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setViewerColorScheme('sse')}
+                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'sse' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                        title="Color by Secondary Structure"
+                                                    >
+                                                        SSE
+                                                    </button>
+                                                    <div className="ml-4 text-xs text-slate-600">
+                                                        {viewerColorScheme === 'plddt' && (
+                                                            <>
+                                                                <span className="text-fuchsia-400">■</span> ≥90
+                                                                <span className="text-pink-400 ml-1">■</span> ≥70
+                                                                <span className="text-orange-400 ml-1">■</span> ≥50
+                                                                <span className="text-red-400 ml-1">■</span> &lt;50
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                    <div className="border-l border-slate-700 ml-4 pl-4 flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">Style:</span>
+                                                        <button
+                                                            onClick={() => setViewerRepStyle('cartoon')}
+                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'cartoon' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                            title="Ribbon diagram"
+                                                        >
+                                                            Cartoon
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setViewerRepStyle('sticks')}
+                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'sticks' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                            title="All-atom stick view"
+                                                        >
+                                                            Sticks
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setViewerRepStyle('ball-stick')}
+                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'ball-stick' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                            title="Ball-and-stick model"
+                                                        >
+                                                            Ball
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setViewerRepStyle('sphere')}
+                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'sphere' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                            title="Spacefill spheres"
+                                                        >
+                                                            Sphere
+                                                        </button>
                                                     </div>
                                                 </div>
-                                                <MolViewer
-                                                    pdbContent={pdbContent}
-                                                    height={700}
-                                                    backgroundColor="#0f172a"
-                                                    colorScheme="plddt"
-                                                />
+                                                {/* Viewer */}
+                                                <div className="flex-1 relative">
+                                                    <MolViewer
+                                                        pdbContent={pdbContent}
+                                                        height={660}
+                                                        backgroundColor="#0f172a"
+                                                        colorScheme={viewerColorScheme}
+                                                        representationStyle={viewerRepStyle}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {/* Right Sidebar - Structure Analysis */}
+                                            <div className="w-72 border-l border-slate-800 bg-slate-900/40 flex flex-col">
+                                                <div className="p-3 border-b border-slate-800 text-sm font-medium text-slate-300">
+                                                    Structure Analysis
+                                                </div>
+                                                {structureAnalysisLoading ? (
+                                                    <div className="flex-1 flex items-center justify-center text-slate-500">
+                                                        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                                                    </div>
+                                                ) : structureAnalysis ? (
+                                                    <div className="p-4 space-y-4 text-sm">
+                                                        {/* Basic Info */}
+                                                        <div className="space-y-2">
+                                                            <div className="flex justify-between">
+                                                                <span className="text-slate-500">Residues</span>
+                                                                <span className="text-white font-mono">{structureAnalysis.residue_count}</span>
+                                                            </div>
+                                                            <div className="flex justify-between">
+                                                                <span className="text-slate-500">Chains</span>
+                                                                <span className="text-cyan-400 font-mono">{structureAnalysis.chain_ids.join(', ')}</span>
+                                                            </div>
+                                                            <div className="flex justify-between">
+                                                                <span className="text-slate-500">Gyration Radius</span>
+                                                                <span className="text-purple-400 font-mono">
+                                                                    {structureAnalysis.gyration_radius?.toFixed(2) ?? '—'} Å
+                                                                </span>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Secondary Structure */}
+                                                        <div className="pt-2 border-t border-slate-700">
+                                                            <div className="text-xs text-slate-500 uppercase tracking-wider mb-3">Secondary Structure</div>
+                                                            {(() => {
+                                                                const sse = structureAnalysis.secondary_structure;
+                                                                const total = sse.helix + sse.sheet + sse.coil;
+                                                                const pctHelix = total > 0 ? (sse.helix / total * 100) : 0;
+                                                                const pctSheet = total > 0 ? (sse.sheet / total * 100) : 0;
+                                                                const pctCoil = total > 0 ? (sse.coil / total * 100) : 0;
+                                                                return (
+                                                                    <div className="space-y-3">
+                                                                        {/* Helix */}
+                                                                        <div>
+                                                                            <div className="flex justify-between text-xs mb-1">
+                                                                                <span className="text-red-400">α Helix</span>
+                                                                                <span className="text-slate-400">{sse.helix} ({pctHelix.toFixed(0)}%)</span>
+                                                                            </div>
+                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                                                                <div className="h-full bg-red-500" style={{ width: `${pctHelix}%` }} />
+                                                                            </div>
+                                                                        </div>
+                                                                        {/* Sheet */}
+                                                                        <div>
+                                                                            <div className="flex justify-between text-xs mb-1">
+                                                                                <span className="text-yellow-400">β Sheet</span>
+                                                                                <span className="text-slate-400">{sse.sheet} ({pctSheet.toFixed(0)}%)</span>
+                                                                            </div>
+                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                                                                <div className="h-full bg-yellow-500" style={{ width: `${pctSheet}%` }} />
+                                                                            </div>
+                                                                        </div>
+                                                                        {/* Coil */}
+                                                                        <div>
+                                                                            <div className="flex justify-between text-xs mb-1">
+                                                                                <span className="text-slate-400">Coil/Loop</span>
+                                                                                <span className="text-slate-400">{sse.coil} ({pctCoil.toFixed(0)}%)</span>
+                                                                            </div>
+                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                                                                <div className="h-full bg-slate-500" style={{ width: `${pctCoil}%` }} />
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </div>
+
+                                                        {/* PAE Heatmap */}
+                                                        <div className="pt-4 border-t border-slate-700">
+                                                            <PAEHeatmap
+                                                                designId={selectedDesignId}
+                                                                width={240}
+                                                                height={240}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex-1 flex items-center justify-center p-4 text-center text-slate-500 text-xs">
+                                                        Select a design to view structure analysis
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}
