@@ -130,22 +130,25 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                             return '#ef4444'; // Very Low (Red)
                         });
                     } else if (colorScheme === 'sse') {
-                        // Secondary Structure Element coloring (PyMOL-style)
-                        model.setStyle({}, { cartoon: { colorscheme: 'ssPyMOL' } });
+                        // Secondary Structure Element coloring
+                        model.setStyle({}, { cartoon: { colorscheme: 'ss' } });
                     } else {
                         // Rainbow
                         model.setStyle({}, { cartoon: { color: 'spectrum' } });
                     }
-                    // Apply non-cartoon representation styles
-                    if (representationStyle === 'sticks') {
-                        model.setStyle({}, { stick: { radius: 0.15 } });
-                    } else if (representationStyle === 'sphere') {
-                        model.setStyle({}, { sphere: { scale: 0.25 } });
-                    } else if (representationStyle === 'ball-stick') {
-                        model.setStyle({}, {
-                            stick: { radius: 0.1 },
-                            sphere: { scale: 0.18 }
-                        });
+
+                    // Apply non-cartoon representation styles (only if not cartoon mode)
+                    if (representationStyle !== 'cartoon') {
+                        if (representationStyle === 'sticks') {
+                            model.setStyle({}, { stick: { radius: 0.15 } });
+                        } else if (representationStyle === 'sphere') {
+                            model.setStyle({}, { sphere: { scale: 0.25 } });
+                        } else if (representationStyle === 'ball-stick') {
+                            model.setStyle({}, {
+                                stick: { radius: 0.1 },
+                                sphere: { scale: 0.18 }
+                            });
+                        }
                     }
 
                     // Ghost opacity for overlay
