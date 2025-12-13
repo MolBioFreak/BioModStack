@@ -4,6 +4,7 @@
 process GenerateRemoteMSA {
     label 'CPU'
     // Running on CPU to save GPU - generates MSA ONCE per unique sequence
+    // Uses local cache to avoid redundant ColabFold API calls
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
 
     input:
@@ -14,11 +15,19 @@ process GenerateRemoteMSA {
     path "*.log"
 
     script:
+    def cacheDir = params.msa_cache_dir ?: "${projectDir}/data/msa_cache"
+    def dbPath = params.db_path ?: "${projectDir}/platform/api/proteindj.db"
+    def maxAgeDays = params.msa_cache_max_age_days ?: 30
+    def forceRefresh = params.msa_force_refresh ? '--force_refresh' : ''
     """
     python3 ${projectDir}/scripts/fetch_colabfold_msa.py \\
         --sequence "${sequence}" \\
         --name "${sequence_name}" \\
         --out_dir . \\
+        --cache_dir ${cacheDir} \\
+        --db_path ${dbPath} \\
+        --max_age_days ${maxAgeDays} \\
+        ${forceRefresh} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }

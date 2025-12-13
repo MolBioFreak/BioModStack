@@ -95,6 +95,11 @@ def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional
         
         # B-factors accessed via annotation array
         b_factors = ca_atoms.get_annotation("b_factor")
+        
+        # Auto-scale 0-1 to 0-100 (CIF files often use normalized 0-1 pLDDT)
+        if len(b_factors) > 0 and np.max(b_factors) <= 1.0:
+            b_factors = b_factors * 100.0
+        
         per_residue = [round(float(b), 2) for b in b_factors]
         avg_plddt = float(np.mean(b_factors))
         
