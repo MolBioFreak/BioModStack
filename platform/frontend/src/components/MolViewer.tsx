@@ -179,31 +179,42 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                     });
                 }
 
-                viewer.zoomTo();
-                viewer.render();
+                // Amino acid 3-letter to 1-letter mapping
+                const aaMap: { [key: string]: string } = {
+                    'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                    'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                    'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                    'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
+                };
 
-                // Hover labels for amino acid info
+                // Set up HOVER handler - shows temporary tooltip
                 let hoverLabel: any = null;
+                console.log('Setting up hover handler...');
                 viewer.setHoverable({}, true,
+                    // onHover callback
                     function (atom: any) {
                         if (atom && !hoverLabel) {
-                            const aaMap: { [key: string]: string } = {
-                                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-                                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-                                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-                                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
-                            };
                             const oneLetter = aaMap[atom.resn] || '?';
-                            hoverLabel = viewer.addLabel(`${atom.resn} (${oneLetter}) #${atom.resi}`, {
-                                position: { x: atom.x, y: atom.y, z: atom.z },
-                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                                fontColor: '#f8fafc',
-                                fontSize: 11,
-                                showBackground: true
-                            });
+                            // Get pLDDT from B-factor, scale if needed
+                            let plddt = atom.b || 0;
+                            if (plddt <= 1) plddt = plddt * 100;
+                            const plddtColor = plddt >= 90 ? '#d946ef' : plddt >= 70 ? '#f472b6' : plddt >= 50 ? '#fb923c' : '#ef4444';
+
+                            hoverLabel = viewer.addLabel(
+                                `${oneLetter}${atom.resi} | pLDDT: ${plddt.toFixed(0)}`,
+                                {
+                                    position: { x: atom.x, y: atom.y, z: atom.z },
+                                    backgroundColor: '#1e293b',
+                                    backgroundOpacity: 0.9,
+                                    fontColor: plddtColor,
+                                    fontSize: 11,
+                                    showBackground: true
+                                }
+                            );
                             viewer.render();
                         }
                     },
+                    // onUnhover callback
                     function () {
                         if (hoverLabel) {
                             viewer.removeLabel(hoverLabel);
@@ -212,16 +223,98 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                         }
                     }
                 );
+                console.log('setHoverable registered');
 
-                // Click handler to highlight residue
-                viewer.setClickable({}, true, function (atom: any, v: any) {
-                    if (atom) {
-                        v.addStyle({ resi: atom.resi, chain: atom.chain }, {
-                            stick: { radius: 0.2, color: '#22d3ee' }
-                        });
-                        v.render();
+                // Track selected residues for toggle
+                const selectedResidues = new Map<string, { label: any }>();
+
+                // Simple CLICK-TO-TOGGLE handler
+                console.log('Setting up click-toggle handler...');
+                viewer.setClickable({}, true, function (atom: any) {
+                    if (!atom) return;
+
+                    const resi = atom.resi;
+                    const chain = atom.chain || 'A';
+                    const key = `${chain}:${resi}`;
+                    const oneLetter = aaMap[atom.resn] || '?';
+
+                    // TOGGLE: if already selected, deselect
+                    if (selectedResidues.has(key)) {
+                        console.log(`Deselecting: #${resi}`);
+                        const data = selectedResidues.get(key);
+                        if (data?.label) viewer.removeLabel(data.label);
+                        selectedResidues.delete(key);
+
+                        // Restore cartoon opacity
+                        if (representationStyle === 'cartoon') {
+                            viewer.setStyle({ resi: resi, chain: chain }, { cartoon: { opacity: 1.0 } });
+                            viewer.setStyle({ resi: resi - 1, chain: chain }, { cartoon: { opacity: 1.0 } });
+                            viewer.setStyle({ resi: resi + 1, chain: chain }, { cartoon: { opacity: 1.0 } });
+                        }
+                        viewer.removeStyle({ resi: resi, chain: chain }, { stick: {} });
+                        viewer.render();
+                        return;
                     }
+
+                    // SELECT this residue
+                    let plddt = atom.b || 0;
+                    if (plddt <= 1) plddt = plddt * 100;
+                    const plddtColor = plddt >= 90 ? '#22d3ee' : plddt >= 70 ? '#f472b6' : plddt >= 50 ? '#fb923c' : '#ef4444';
+
+                    console.log(`Selecting: ${atom.resn} (${oneLetter}) #${resi} pLDDT=${plddt.toFixed(1)}`);
+
+                    // Apply transparency in cartoon mode
+                    if (representationStyle === 'cartoon') {
+                        viewer.setStyle({ resi: resi, chain: chain }, { cartoon: { opacity: 0.5 } });
+                        viewer.setStyle({ resi: resi - 1, chain: chain }, { cartoon: { opacity: 0.7 } });
+                        viewer.setStyle({ resi: resi + 1, chain: chain }, { cartoon: { opacity: 0.7 } });
+                    }
+
+                    // Add sticks
+                    viewer.addStyle({ resi: resi, chain: chain }, {
+                        stick: { radius: 0.2, color: '#22d3ee' }
+                    });
+
+                    // Add label
+                    const label = viewer.addLabel(`${atom.resn} (${oneLetter}) #${resi}\npLDDT: ${plddt.toFixed(0)}`, {
+                        position: { x: atom.x, y: atom.y, z: atom.z },
+                        backgroundColor: '#0f172a',
+                        backgroundOpacity: 0.95,
+                        fontColor: plddtColor,
+                        fontSize: 12,
+                        showBackground: true
+                    });
+                    selectedResidues.set(key, { label });
+                    viewer.render();
                 });
+                console.log('Click-toggle handler registered');
+
+
+
+                // Store reset function for external access
+                (viewer as any).resetSelection = () => {
+                    console.log('Resetting all selections...');
+                    // Clear all labels
+                    selectedResidues.forEach((data) => {
+                        if (data.label) viewer.removeLabel(data.label);
+                    });
+                    selectedResidues.clear();
+                    // Re-apply base style to restore all opacities
+                    viewer.setStyle({}, { cartoon: { opacity: 1.0 } });
+                    viewer.render();
+                };
+
+                viewer.zoomTo();
+                viewer.render();
+                console.log('Viewer rendered, atoms:', viewer.selectedAtoms({})?.length);
+
+                // Double-click debug
+                const container = viewerRef.current;
+                if (container) {
+                    container.addEventListener('dblclick', () => {
+                        console.log('Double-click, atoms:', viewer.selectedAtoms({})?.length);
+                    });
+                }
 
                 setLoading(false);
 
