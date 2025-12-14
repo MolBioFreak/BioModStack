@@ -83,3 +83,12 @@ NO_MSA
 verify_parsing.nf
 *.db
 !*.db.example
+
+# GPU state files (transient)
+.gpu_*.json
+.gpu_*.lock
+*.lock
+
+# Debug outputs
+config_check*.txt
+definitions.txt

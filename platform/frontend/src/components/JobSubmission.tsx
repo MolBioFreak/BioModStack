@@ -2,248 +2,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, fetchPresetDirectories } from '../lib/api';
+import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById } from '../lib/api';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
-
-// Preset Selector Component - Enhanced with multi-select and directory modes
-interface PresetSelectorProps {
-    presetType: 'pdb' | 'sequence' | 'yaml' | 'contig' | 'ntp';
-    value: string;
-    onChange: (value: string) => void;
-    onBrowse: () => void;
-    label?: string;
-    placeholder?: string;
-    enableMultiSelect?: boolean;  // Show multi-select mode for PDB type
-    enableDirectory?: boolean;    // Show directory mode for PDB type
-}
-
-function PresetSelector({ presetType, value, onChange, onBrowse, label: _label, placeholder, enableMultiSelect = false, enableDirectory = false }: PresetSelectorProps) {
-    const { data: presetsData } = useQuery({
-        queryKey: ['presets', presetType],
-        queryFn: () => fetchInputPresets(presetType),
-    });
-
-    const { data: directoriesData } = useQuery({
-        queryKey: ['preset-directories'],
-        queryFn: () => fetchPresetDirectories(),
-        enabled: enableDirectory && presetType === 'pdb',
-    });
-
-    const presets = presetsData?.data ?? [];
-    const directories = directoriesData?.data ?? [];
-
-    // Mode types: preset (single), multi (checkboxes), directory (batch dirs), manual (raw input)
-    const [mode, setMode] = useState<'preset' | 'multi' | 'directory' | 'manual'>('preset');
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-
-    // Group presets by category
-    const groupedPresets = presets.reduce((groups: Record<string, any[]>, preset: any) => {
-        const cat = preset.category || 'general';
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(preset);
-        return groups;
-    }, {});
-
-    // Get display value for the selected preset
-    const selectedPreset = presets.find((p: any) =>
-        presetType === 'pdb' ? p.path === value :
-            presetType === 'contig' ? p.value === value :
-                presetType === 'sequence' ? p.sequence === value : p.id === value
-    );
-
-    // Handle multi-select toggle
-    const togglePreset = (preset: any) => {
-        const newSelected = new Set(selectedIds);
-        if (newSelected.has(preset.id)) {
-            newSelected.delete(preset.id);
-        } else {
-            newSelected.add(preset.id);
-        }
-        setSelectedIds(newSelected);
-
-        // Update value with comma-separated paths for multi-select
-        const selectedPaths = presets
-            .filter((p: any) => newSelected.has(p.id))
-            .map((p: any) => p.path)
-            .join(',');
-        onChange(selectedPaths);
-    };
-
-    // Check if all selected
-    const allSelected = selectedIds.size === presets.length;
-    const toggleAll = () => {
-        if (allSelected) {
-            setSelectedIds(new Set());
-            onChange('');
-        } else {
-            const allIds = new Set(presets.map((p: any) => p.id));
-            setSelectedIds(allIds);
-            onChange(presets.map((p: any) => p.path).join(','));
-        }
-    };
-
-    // Mode tabs based on enabled features
-    const availableModes = [
-        { id: 'preset', label: 'Presets', enabled: true },
-        { id: 'multi', label: 'Multi-Select', enabled: enableMultiSelect && presetType === 'pdb' },
-        { id: 'directory', label: 'Directory', enabled: enableDirectory && presetType === 'pdb' },
-        { id: 'manual', label: 'Manual', enabled: true },
-    ].filter(m => m.enabled);
-
-    return (
-        <div className="space-y-2">
-            {/* Mode Toggle */}
-            <div className="flex gap-1 text-xs flex-wrap">
-                {availableModes.map(m => (
-                    <button
-                        key={m.id}
-                        onClick={() => setMode(m.id as any)}
-                        className={`px-2 py-1 rounded transition-colors ${mode === m.id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
-                    >
-                        {m.label}
-                    </button>
-                ))}
-            </div>
-
-            {/* Single Preset Mode */}
-            {mode === 'preset' && (
-                <div className="space-y-2">
-                    <select
-                        value={selectedPreset ? (presetType === 'pdb' ? selectedPreset.path : presetType === 'contig' ? selectedPreset.value : selectedPreset.id) : ''}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                        <option value="">{placeholder || 'Select a preset...'}</option>
-                        {presets.map((preset: any) => (
-                            <option
-                                key={preset.id}
-                                value={presetType === 'pdb' ? preset.path : presetType === 'contig' ? preset.value : preset.id}
-                            >
-                                {preset.name}
-                            </option>
-                        ))}
-                    </select>
-                    {selectedPreset && (
-                        <p className="text-xs text-slate-500">{selectedPreset.description}</p>
-                    )}
-                    {/* Editable value field */}
-                    {value && (
-                        <div className="mt-2">
-                            <label className="text-xs text-slate-400 block mb-1">Edit value (modify as needed):</label>
-                            <input
-                                type="text"
-                                value={value}
-                                onChange={(e) => onChange(e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Multi-Select Mode (Checkboxes) */}
-            {mode === 'multi' && (
-                <div className="space-y-2">
-                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 max-h-64 overflow-y-auto">
-                        {/* Select All */}
-                        <label className="flex items-center gap-2 p-2 hover:bg-slate-800 rounded cursor-pointer border-b border-slate-700 mb-2">
-                            <input
-                                type="checkbox"
-                                checked={allSelected}
-                                onChange={toggleAll}
-                                className="w-4 h-4 rounded text-blue-600 bg-slate-700 border-slate-600 focus:ring-blue-500"
-                            />
-                            <span className="text-sm text-white font-medium">Select All ({presets.length})</span>
-                        </label>
-
-                        {/* Grouped by category */}
-                        {Object.entries(groupedPresets).map(([category, catPresets]) => (
-                            <div key={category} className="mb-2">
-                                <div className="text-xs text-slate-400 uppercase tracking-wide mb-1 px-2">{category}</div>
-                                {(catPresets as any[]).map((preset: any) => (
-                                    <label
-                                        key={preset.id}
-                                        className="flex items-center gap-2 p-2 hover:bg-slate-800 rounded cursor-pointer"
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedIds.has(preset.id)}
-                                            onChange={() => togglePreset(preset)}
-                                            className="w-4 h-4 rounded text-blue-600 bg-slate-700 border-slate-600 focus:ring-blue-500"
-                                        />
-                                        <span className="text-sm text-white">{preset.name}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        ))}
-                    </div>
-                    <p className="text-xs text-slate-400">Selected: {selectedIds.size} files</p>
-                </div>
-            )}
-
-            {/* Directory Mode */}
-            {mode === 'directory' && (
-                <div className="space-y-2">
-                    <select
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                        <option value="">Select a batch directory...</option>
-                        {directories.map((dir: any) => (
-                            <option key={dir.id} value={dir.path}>
-                                {dir.name}
-                            </option>
-                        ))}
-                    </select>
-                    {directories.find((d: any) => d.path === value)?.description && (
-                        <p className="text-xs text-slate-500">
-                            {directories.find((d: any) => d.path === value)?.description}
-                        </p>
-                    )}
-                    {/* Browse button for custom directory */}
-                    <div className="flex gap-2 items-center">
-                        <input
-                            type="text"
-                            value={value}
-                            onChange={(e) => onChange(e.target.value)}
-                            placeholder="/path/to/directory"
-                            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none"
-                        />
-                        <button
-                            onClick={onBrowse}
-                            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
-                        >
-                            Browse
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Manual Mode */}
-            {mode === 'manual' && (
-                <div className="flex gap-2">
-                    <input
-                        type="text"
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none"
-                        placeholder={presetType === 'pdb' ? '/path/to/file.pdb or /path/to/directory' : 'Enter value...'}
-                    />
-                    {(presetType === 'pdb' || presetType === 'yaml') && (
-                        <button
-                            onClick={onBrowse}
-                            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
-                        >
-                            Browse
-                        </button>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-}
+import { MutagenesisTemplate } from './MutagenesisTemplate';
+import { PresetSelector } from './PresetSelector';
 
 interface FileBrowserProps {
     onSelect: (path: string) => void;
@@ -562,48 +325,100 @@ export function JobSubmission() {
                     {/* Templates Mode */}
                     {wizardMode === 'templates' && (
                         <div className="space-y-4">
-                            <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {(templatesData?.data ?? []).map((template: any) => (
-                                    <div
-                                        key={template.id}
-                                        onClick={() => setSelectedTemplateId(template.id)}
-                                        className={`cursor-pointer p-5 rounded-xl border transition-all ${selectedTemplateId === template.id
-                                            ? 'bg-slate-800 border-blue-500 shadow-lg shadow-blue-500/10'
-                                            : 'bg-slate-800/30 border-slate-700 hover:border-slate-600'
-                                            }`}
-                                    >
-                                        <div className="flex items-start gap-3 mb-3">
+                            {selectedTemplateId === 'mutagenesis' ? (
+                                <MutagenesisTemplate
+                                    onBack={() => setSelectedTemplateId(null)}
+                                    onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
+                                        // Batch submit variants
+                                        const promises = variants.map((variant) => {
+                                            return submitMutation.mutateAsync({
+                                                name: `${jobNamePrefix}_${variant.name}`,
+                                                model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
+                                                mode: 'predict',
+                                                params: {
+                                                    sequence: variant.sequence,
+                                                    sequence_name: variant.name,
+                                                    // Map predictor params
+                                                    boltz_recycling_steps: predictorConfig.recycling_steps,
+                                                    boltz_num_samples: predictorConfig.diffusion_samples,
+                                                    boltz_use_msa: predictorConfig.use_msa,
+                                                    pred_method: predictorConfig.predictor
+                                                }
+                                            });
+                                        });
+
+                                        try {
+                                            await Promise.all(promises);
+                                            // Only navigate after all are done
+                                            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                                            navigate('/');
+                                        } catch (error) {
+                                            console.error("Batch submission failed", error);
+                                            // TODO: Show error toast?
+                                        }
+                                    }}
+                                />
+                            ) : (
+                                <>
+                                    <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {[
+                                            // Dynamic templates from API
+                                            ...(templatesData?.data ?? []),
+                                            // Hardcoded Mutagenesis Template
+                                            {
+                                                id: 'mutagenesis',
+                                                name: 'Mutagenesis Library',
+                                                description: 'Generate amino acid variants and predict their structures. Supports random libraries and manual editing.',
+                                                icon: 'dna',
+                                                color: '#A855F7', // Purple
+                                                stages: [
+                                                    { tool: 'Library Gen' },
+                                                    { tool: 'Structure Prediction' }
+                                                ]
+                                            }
+                                        ].map((template: any) => (
                                             <div
-                                                className="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
-                                                style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                                                key={template.id}
+                                                onClick={() => setSelectedTemplateId(template.id)}
+                                                className={`cursor-pointer p-5 rounded-xl border transition-all ${selectedTemplateId === template.id
+                                                    ? 'bg-slate-800 border-blue-500 shadow-lg shadow-blue-500/10'
+                                                    : 'bg-slate-800/30 border-slate-700 hover:border-slate-600'
+                                                    }`}
                                             >
-                                                {template.icon === 'target' ? '🎯' :
-                                                    template.icon === 'flask' ? '🧪' :
-                                                        template.icon === 'dna' ? '🧬' :
-                                                            template.icon === 'microscope' ? '🔬' : '⚡'}
-                                            </div>
-                                            <div>
-                                                <h3 className="font-semibold text-slate-200">{template.name}</h3>
-                                                <p className="text-xs text-slate-500 line-clamp-2">{template.description}</p>
-                                            </div>
-                                        </div>
-                                        {/* Stage Pipeline Diagram */}
-                                        <div className="flex items-center gap-1 mt-3">
-                                            {template.stages.map((stage: any, idx: number) => (
-                                                <div key={idx} className="flex items-center">
-                                                    <div className="bg-slate-700/50 px-2 py-1 rounded text-[10px] text-slate-300 whitespace-nowrap">
-                                                        {stage.tool}
+                                                <div className="flex items-start gap-3 mb-3">
+                                                    <div
+                                                        className="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
+                                                        style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                                                    >
+                                                        {template.icon === 'target' ? '🎯' :
+                                                            template.icon === 'flask' ? '🧪' :
+                                                                template.icon === 'dna' ? '🧬' :
+                                                                    template.icon === 'microscope' ? '🔬' : '⚡'}
                                                     </div>
-                                                    {idx < template.stages.length - 1 && (
-                                                        <span className="text-slate-600 mx-1">→</span>
-                                                    )}
+                                                    <div>
+                                                        <h3 className="font-semibold text-slate-200">{template.name}</h3>
+                                                        <p className="text-xs text-slate-500 line-clamp-2">{template.description}</p>
+                                                    </div>
                                                 </div>
-                                            ))}
-                                        </div>
+                                                {/* Stage Pipeline Diagram */}
+                                                <div className="flex items-center gap-1 mt-3">
+                                                    {template.stages.map((stage: any, idx: number) => (
+                                                        <div key={idx} className="flex items-center">
+                                                            <div className="bg-slate-700/50 px-2 py-1 rounded text-[10px] text-slate-300 whitespace-nowrap">
+                                                                {stage.tool}
+                                                            </div>
+                                                            {idx < template.stages.length - 1 && (
+                                                                <span className="text-slate-600 mx-1">→</span>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                </>
+                            )}
                         </div>
                     )}
 
@@ -647,8 +462,8 @@ export function JobSubmission() {
                     )}
                 </section>
 
-                {/* 3. Template Configuration - Only show if template selected */}
-                {selectedTemplateId && selectedTemplateData?.data && (
+                {/* 3. Template Configuration - Only show if template selected and NOT mutagenesis */}
+                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateData?.data && (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
                             <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
@@ -856,6 +671,164 @@ export function JobSubmission() {
                                                                 <option key={opt} value={opt}>{opt}</option>
                                                             ))}
                                                         </select>
+                                                    ) : param.type === 'text' || param.preset_type === 'sequence' ? (
+                                                        /* Sequence textarea with library button */
+                                                        <div className="space-y-2">
+                                                            <div className="flex gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowSequenceManager(true)}
+                                                                    className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-sm transition-colors border border-emerald-600/30"
+                                                                >
+                                                                    📚 Sequence Library
+                                                                </button>
+                                                                {params[param.name] && (
+                                                                    <span className="text-xs text-slate-500 self-center">
+                                                                        {(params[param.name] || '').length} aa
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <textarea
+                                                                value={params[param.name] || ''}
+                                                                onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                                                                rows={4}
+                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
+                                                                placeholder="Enter amino acid sequence (A-Z) or use Sequence Library..."
+                                                            />
+                                                        </div>
+                                                    ) : param.preset_type === 'pdb' ? (
+                                                        /* PDB file with preset dropdown and browse */
+                                                        <div className="space-y-2">
+                                                            <select
+                                                                value=""
+                                                                onChange={(e) => updateParam(param.name, e.target.value)}
+                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                            >
+                                                                <option value="">Select preset PDB or browse...</option>
+                                                                <optgroup label="Benchmark Targets">
+                                                                    <option value="benchmarkdata/1www_trka.pdb">TrkA Receptor (1www)</option>
+                                                                    <option value="benchmarkdata/5o45_pd-l1.pdb">PD-L1 (5o45)</option>
+                                                                    <option value="benchmarkdata/3di3_il7ra.pdb">IL-7Rα (3di3)</option>
+                                                                    <option value="benchmarkdata/4zxb_ir.pdb">Insulin Receptor (4zxb)</option>
+                                                                    <option value="benchmarkdata/5vli_ha.pdb">Hemagglutinin (5vli)</option>
+                                                                </optgroup>
+                                                                <optgroup label="DNA Polymerases">
+                                                                    <option value="rcsb/1kej_tdt.pdb">TdT (1kej)</option>
+                                                                    <option value="rcsb/1kln_klenow.pdb">Klenow (1kln)</option>
+                                                                    <option value="rcsb/1taq_taq.pdb">Taq (1taq)</option>
+                                                                </optgroup>
+                                                            </select>
+                                                            <div className="flex gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={params[param.name] || ''}
+                                                                    onChange={(e) => updateParam(param.name, e.target.value)}
+                                                                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
+                                                                    placeholder="/path/to/file.pdb"
+                                                                />
+                                                                <button
+                                                                    onClick={() => setShowFileBrowser(param.name)}
+                                                                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
+                                                                >
+                                                                    Browse
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ) : param.preset_type === 'ligand' ? (
+                                                        /* Ligand/SMILES with preset dropdown and nucleotide converter */
+                                                        <div className="space-y-3">
+                                                            <select
+                                                                value=""
+                                                                onChange={(e) => updateParam(param.name, e.target.value)}
+                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                            >
+                                                                <option value="">Select preset ligand...</option>
+                                                                <optgroup label="DNA Nucleotides (dNTPs)">
+                                                                    <option value="Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3">dATP</option>
+                                                                    <option value="Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O">dTTP</option>
+                                                                    <option value="Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1">dGTP</option>
+                                                                    <option value="Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1">dCTP</option>
+                                                                </optgroup>
+                                                                <optgroup label="RNA Nucleotides (NTPs)">
+                                                                    <option value="Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O">ATP</option>
+                                                                    <option value="O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1">UTP</option>
+                                                                    <option value="Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1">GTP</option>
+                                                                    <option value="Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1">CTP</option>
+                                                                </optgroup>
+                                                                <optgroup label="Common Small Molecules">
+                                                                    <option value="CC(=O)Oc1ccccc1C(=O)O">Aspirin</option>
+                                                                    <option value="CC(C)Cc1ccc(C(C)C(=O)O)cc1">Ibuprofen</option>
+                                                                    <option value="Cn1cnc2c1c(=O)[nH]c(=O)n2C">Caffeine</option>
+                                                                </optgroup>
+                                                            </select>
+
+                                                            {/* DNA/RNA Sequence Converter */}
+                                                            <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                                                <label className="block text-xs text-slate-500 mb-1">🧬 Convert DNA/RNA sequence to SMILES</label>
+                                                                <div className="flex gap-2">
+                                                                    <input
+                                                                        type="text"
+                                                                        placeholder="Enter DNA (ACGT) or RNA (ACGU)..."
+                                                                        className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm font-mono outline-none"
+                                                                        onKeyDown={async (e) => {
+                                                                            if (e.key === 'Enter') {
+                                                                                const input = e.currentTarget;
+                                                                                const seq = input.value.toUpperCase().replace(/[^ACGTU]/g, '');
+                                                                                if (seq.length > 0 && seq.length <= 15) {
+                                                                                    try {
+                                                                                        const seqType = seq.includes('U') ? 'rna' : 'dna';
+                                                                                        const res = await fetch('http://localhost:8000/api/smiles/convert', {
+                                                                                            method: 'POST',
+                                                                                            headers: { 'Content-Type': 'application/json' },
+                                                                                            body: JSON.stringify({ sequence: seq, sequence_type: seqType })
+                                                                                        });
+                                                                                        const data = await res.json();
+                                                                                        if (data.smiles) {
+                                                                                            updateParam(param.name, data.smiles);
+                                                                                            input.value = '';
+                                                                                        }
+                                                                                    } catch (err) { console.error(err); }
+                                                                                }
+                                                                            }
+                                                                        }}
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={async (e) => {
+                                                                            const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                                                                            const seq = input.value.toUpperCase().replace(/[^ACGTU]/g, '');
+                                                                            if (seq.length > 0 && seq.length <= 15) {
+                                                                                try {
+                                                                                    const seqType = seq.includes('U') ? 'rna' : 'dna';
+                                                                                    const res = await fetch('http://localhost:8000/api/smiles/convert', {
+                                                                                        method: 'POST',
+                                                                                        headers: { 'Content-Type': 'application/json' },
+                                                                                        body: JSON.stringify({ sequence: seq, sequence_type: seqType })
+                                                                                    });
+                                                                                    const data = await res.json();
+                                                                                    if (data.smiles) {
+                                                                                        updateParam(param.name, data.smiles);
+                                                                                        input.value = '';
+                                                                                    }
+                                                                                } catch (err) { console.error(err); }
+                                                                            }
+                                                                        }}
+                                                                        className="px-2 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 rounded text-xs transition-colors"
+                                                                    >
+                                                                        Convert
+                                                                    </button>
+                                                                </div>
+                                                                <p className="text-[10px] text-slate-600 mt-1">Max 15 nt. Press Enter or click Convert.</p>
+                                                            </div>
+
+                                                            <input
+                                                                type="text"
+                                                                value={params[param.name] || ''}
+                                                                onChange={(e) => updateParam(param.name, e.target.value)}
+                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
+                                                                placeholder="Or enter custom SMILES string..."
+                                                            />
+                                                        </div>
                                                     ) : (param.type === 'file' || param.type === 'directory') ? (
                                                         <div className="flex gap-2">
                                                             <input
@@ -863,7 +836,7 @@ export function JobSubmission() {
                                                                 value={params[param.name] || ''}
                                                                 onChange={(e) => updateParam(param.name, e.target.value)}
                                                                 className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
-                                                                placeholder={param.type === 'file' ? '/path/to/file.pdb' : '/path/to/directory'}
+                                                                placeholder={param.type === 'file' ? '/path/to/file' : '/path/to/directory'}
                                                             />
                                                             <button
                                                                 onClick={() => setShowFileBrowser(param.name)}
@@ -885,35 +858,49 @@ export function JobSubmission() {
                                         })
                                         }
                                     </div>
-                                )}
+                                )
+                                }
                             </div>
                         </div>
                     </section>
                 )}
 
-                {/* Submit Button */}
-                <div className="flex justify-end gap-3 pt-4 pb-12">
-                    {/* Save as Template Button */}
-                    {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
+                {/* Submit Button - Hide if Mutagenesis Template is active (it has its own) */}
+                {selectedTemplateId !== 'mutagenesis' && (
+                    <div className="flex justify-end gap-3 pt-4 pb-12">
+                        {/* Save as Template Button */}
+                        {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
+                            <button
+                                onClick={() => setShowTemplateManager(true)}
+                                className="px-6 py-4 rounded-xl font-semibold text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 transition-all flex items-center gap-2"
+                            >
+                                📋 Template Manager
+                            </button>
+                        )}
                         <button
-                            onClick={() => setShowTemplateManager(true)}
-                            className="px-6 py-4 rounded-xl font-semibold text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 transition-all flex items-center gap-2"
+                            onClick={handleSubmit}
+                            disabled={!isReady || submitMutation.isPending}
+                            className={`px-8 py-4 rounded-xl font-semibold text-white shadow-xl transition-all ${isReady
+                                ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:scale-[1.02] active:scale-[0.98] shadow-blue-500/25'
+                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                }`}
                         >
-                            📋 Save as Template
+                            {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment 🚀'}
                         </button>
-                    )}
-                    <button
-                        onClick={handleSubmit}
-                        disabled={!isReady || submitMutation.isPending}
-                        className={`px-8 py-4 rounded-xl font-semibold text-white shadow-xl transition-all ${isReady
-                            ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:scale-[1.02] active:scale-[0.98] shadow-blue-500/25'
-                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                            }`}
-                    >
-                        {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment 🚀'}
-                    </button>
-                </div>
+                    </div>
+                )}
             </main>
+
+            {/* Loading Overlay for Batch Submission */}
+            {submitMutation.isPending && selectedTemplateId === 'mutagenesis' && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center">
+                    <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl flex flex-col items-center">
+                        <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-4" />
+                        <h3 className="text-xl font-bold text-white mb-2">Submitting Batch Jobs...</h3>
+                        <p className="text-slate-400">Please wait while we launch your variant library.</p>
+                    </div>
+                </div>
+            )}
 
             {/* File Browser Modal */}
             {showFileBrowser && (
