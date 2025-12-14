@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual } from '../lib/api';
@@ -118,6 +118,9 @@ export function Dashboard() {
                         Total: {gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(1)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0)}W
                     </span>
                 </div>
+
+                {/* GPU Scheduler Settings Panel */}
+                <GPUSchedulerSettings gpus={gpus} />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {gpus.map((gpu) => (
                         <GPUCard
@@ -362,16 +365,27 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending }: {
             {/* Memory Bar */}
             <div className="mb-3">
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
-                    <span>VRAM</span>
+                    <span>VRAM {gpu.reserved_memory_mb > 0 && <span className="text-orange-400 italic">(+{Math.round(gpu.reserved_memory_mb / 1024)}GB Rsrv)</span>}</span>
                     <span>
-                        {(gpu.memory_used_mb / 1024).toFixed(1)} / {(gpu.memory_total_mb / 1024).toFixed(1)} GB
+                        {((gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024).toFixed(1)} / {(gpu.memory_total_mb / 1024).toFixed(1)} GB
                     </span>
                 </div>
-                <div className="w-full bg-slate-700 rounded-full h-2">
+                <div className="w-full bg-slate-700 rounded-full h-2 relative overflow-hidden">
+                    {/* Real Usage */}
                     <div
-                        className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full transition-all duration-500"
+                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-500 z-20"
                         style={{ width: `${memoryPercent}%` }}
                     />
+                    {/* Reserved Usage (Ghost Bar) */}
+                    {gpu.reserved_memory_mb > 0 && (
+                        <div
+                            className="absolute top-0 left-0 h-full bg-orange-500/30 transition-all duration-500 z-10 striped-bar"
+                            style={{
+                                left: `${memoryPercent}%`,
+                                width: `${(gpu.reserved_memory_mb / gpu.memory_total_mb) * 100}%`
+                            }}
+                        />
+                    )}
                 </div>
             </div>
 
@@ -632,3 +646,267 @@ function QueueStatusTable({ gpus, runningJobs }: { gpus: GPUStatus[]; runningJob
 }
 
 
+// GPU Scheduler Settings Panel
+interface SchedulerConfig {
+    global: {
+        busy_threshold: number;
+        cooldown_ms: number;
+        enabled: boolean;
+    };
+    overrides: Record<string, { force_available: boolean; quick_enable: boolean; threshold: number | null }>;
+}
+
+function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
+    const [config, setConfig] = useState<SchedulerConfig | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [localThreshold, setLocalThreshold] = useState(50);
+    const [localCooldown, setLocalCooldown] = useState(10);
+    const [expanded, setExpanded] = useState(false);
+
+    // Fetch config on mount
+    useEffect(() => {
+        fetch('/api/gpu/scheduler-config')
+            .then(res => res.json())
+            .then(data => {
+                setConfig(data);
+                setLocalThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
+                setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
+            })
+            .catch(console.error);
+    }, []);
+
+    const updateGlobal = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch('/api/gpu/scheduler-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    busy_threshold: localThreshold / 100,
+                    cooldown_ms: localCooldown * 1000,
+                    enabled: config?.global?.enabled ?? true
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setConfig({ global: data.global, overrides: data.overrides });
+            }
+        } catch (error) {
+            console.error('Failed to update scheduler config:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const toggleEnabled = async () => {
+        if (!config) return;
+        setLoading(true);
+        try {
+            const res = await fetch('/api/gpu/scheduler-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    busy_threshold: config.global.busy_threshold,
+                    cooldown_ms: config.global.cooldown_ms,
+                    enabled: !config.global.enabled
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setConfig({ global: data.global, overrides: data.overrides });
+            }
+        } catch (error) {
+            console.error('Failed to toggle scheduler:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Quick Enable - toggle: if off, enable one-shot. If on, clear it.
+    const toggleQuickEnable = async (gpuId: string) => {
+        if (!config) return;
+        const current = config.overrides[gpuId]?.quick_enable ?? false;
+        try {
+            const res = await fetch(`/api/gpu/scheduler-config/gpu/${gpuId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    force_available: config.overrides[gpuId]?.force_available ?? false,
+                    quick_enable: !current,  // Toggle
+                    threshold: null
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setConfig(prev => prev ? { ...prev, overrides: data.overrides } : null);
+            }
+        } catch (error) {
+            console.error('Failed to toggle quick enable:', error);
+        }
+    };
+
+    // Debug mode - permanent force available (dangerous!)
+    const toggleForceAvailable = async (gpuId: string) => {
+        if (!config) return;
+        const current = config.overrides[gpuId]?.force_available ?? false;
+        try {
+            const res = await fetch(`/api/gpu/scheduler-config/gpu/${gpuId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    force_available: !current,
+                    quick_enable: false,
+                    threshold: null
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setConfig(prev => prev ? { ...prev, overrides: data.overrides } : null);
+            }
+        } catch (error) {
+            console.error('Failed to toggle force available:', error);
+        }
+    };
+
+    if (!config) return null;
+
+    const isDirty = localThreshold !== Math.round(config.global.busy_threshold * 100) ||
+        localCooldown !== Math.round(config.global.cooldown_ms / 1000);
+
+    return (
+        <div className="bg-slate-800/30 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-4">
+            <div
+                className="flex items-center justify-between cursor-pointer"
+                onClick={() => setExpanded(!expanded)}
+            >
+                <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-slate-200">⚙️ GPU Scheduler</span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${config.global.enabled ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                        {config.global.enabled ? `${Math.round(config.global.busy_threshold * 100)}% Lock` : 'OFF'}
+                    </span>
+                </div>
+                <span className="text-slate-500">{expanded ? '▲' : '▼'}</span>
+            </div>
+
+            {expanded && (
+                <div className="mt-4 space-y-4">
+                    {/* Master Enable Toggle */}
+                    <div className="flex items-center justify-between">
+                        <span className="text-sm text-slate-400">Capacity Lock</span>
+                        <button
+                            onClick={toggleEnabled}
+                            disabled={loading}
+                            className={`relative w-12 h-6 rounded-full transition-colors ${config.global.enabled ? 'bg-green-500' : 'bg-slate-600'}`}
+                        >
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.global.enabled ? 'left-7' : 'left-1'}`} />
+                        </button>
+                    </div>
+
+                    {/* Threshold Slider */}
+                    <div>
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                            <span>VRAM Threshold</span>
+                            <span className="text-cyan-400 font-medium">{localThreshold}%</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="20"
+                            max="90"
+                            value={localThreshold}
+                            onChange={(e) => setLocalThreshold(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                        <div className="flex justify-between text-xs text-slate-500 mt-1">
+                            <span>20%</span>
+                            <span>90%</span>
+                        </div>
+                    </div>
+
+                    {/* Cooldown Slider */}
+                    <div>
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                            <span>Cooldown Time</span>
+                            <span className="text-purple-400 font-medium">{localCooldown}s</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="5"
+                            max="30"
+                            value={localCooldown}
+                            onChange={(e) => setLocalCooldown(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                        />
+                        <div className="flex justify-between text-xs text-slate-500 mt-1">
+                            <span>5s</span>
+                            <span>30s</span>
+                        </div>
+                    </div>
+
+                    {/* Apply Button */}
+                    {isDirty && (
+                        <button
+                            onClick={updateGlobal}
+                            disabled={loading}
+                            className="w-full py-2 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                        >
+                            {loading ? 'Saving...' : 'Apply Changes'}
+                        </button>
+                    )}
+
+                    {/* Per-GPU Controls */}
+                    <div className="border-t border-slate-700 pt-4">
+                        <div className="text-xs text-slate-400 mb-3">Per-GPU Controls</div>
+                        <div className="space-y-2">
+                            {gpus.map(gpu => {
+                                const gpuId = String(gpu.index);
+                                const override = config.overrides[gpuId] || {};
+                                const isForced = override.force_available ?? false;
+                                const isQuickEnabled = override.quick_enable ?? false;
+                                const memoryUsed = ((gpu.memory_used_mb / gpu.memory_total_mb) * 100).toFixed(0);
+
+                                return (
+                                    <div key={gpu.index} className="flex items-center justify-between bg-slate-800/50 rounded-lg px-3 py-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-slate-300">GPU {gpu.index}</span>
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${Number(memoryUsed) > 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+                                                }`}>
+                                                {memoryUsed}%
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {/* Quick Enable Button (one-shot, toggleable) */}
+                                            <button
+                                                onClick={() => toggleQuickEnable(gpuId)}
+                                                className={`px-2 py-1 rounded text-xs font-medium transition-colors ${isQuickEnabled
+                                                    ? 'bg-cyan-500/40 text-cyan-200 hover:bg-red-500/30 hover:text-red-300'
+                                                    : 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30'
+                                                    }`}
+                                            >
+                                                {isQuickEnabled ? '✓ Queued (click to cancel)' : '+ Enable'}
+                                            </button>
+
+                                            {/* Debug Mode Checkbox (permanent) */}
+                                            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isForced}
+                                                    onChange={() => toggleForceAvailable(gpuId)}
+                                                    className="w-3 h-3 accent-red-500"
+                                                />
+                                                <span className={isForced ? 'text-red-400' : ''}>Debug</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-2">
+                            <span className="text-cyan-400">+ Enable</span> = Accept 1 job, then normal rules apply.<br />
+                            <span className="text-red-400">Debug</span> = Permanent override (⚠️ can cause OOM!)
+                        </p>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}

@@ -165,7 +165,7 @@ async def get_design_pdb(
     return FileResponse(
         path=pdb_path,
         filename=f"{design.name}.pdb",
-        media_type="chemical/x-pdb"
+        media_type="text/plain"  # Changed from chemical/x-pdb for Mol* compatibility
     )
 
 

@@ -4,15 +4,29 @@ System monitoring API router - GPU, CPU, RAM statistics.
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from collections import deque
+from pathlib import Path
 import subprocess
+import json
+import time
 
 router = APIRouter()
 
 # Hardware power limits per GPU: (min, default, max, eco_preset)
 # Values from nvidia-smi -q -d POWER
+HARDWARE_LIMITS = {
+    0: {"min": 400, "default": 575, "max": 600, "eco": 500, "name": "RTX 5090"},
+    1: {"min": 150, "default": 180, "max": 200, "eco": 165, "name": "RTX 5060 Ti"},
+    2: {"min": 100, "default": 370, "max": 380, "eco": 300, "name": "RTX 3090"},
+    3: {"min": 100, "default": 390, "max": 480, "eco": 300, "name": "RTX 3090"},
+}
+
+# --- GPU Scheduler Config Endpoints ---
+# Config file path (in project root, read by Nextflow)
+GPU_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_config.json"
+GPU_RESERVATIONS_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_reservations.json"
 HARDWARE_LIMITS = {
     0: {"min": 400, "default": 575, "max": 600, "eco": 500, "name": "RTX 5090"},
     1: {"min": 150, "default": 180, "max": 200, "eco": 165, "name": "RTX 5060 Ti"},
@@ -48,6 +62,7 @@ class GPUStatusEnhanced(BaseModel):
     # Memory
     memory_used_mb: int
     memory_total_mb: int
+    reserved_memory_mb: int = 0  # Virtual usage from scheduler reservations
     # Power
     power_draw_w: float
     power_limit_w: float
@@ -108,6 +123,25 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
         
         device_count = pynvml.nvmlDeviceGetCount()
         gpus = []
+
+        # Load active reservations
+        reservations = {}
+        try:
+            if GPU_RESERVATIONS_PATH.exists():
+                with open(GPU_RESERVATIONS_PATH, "r") as f:
+                    data = json.load(f)
+                    now = time.time() * 1000  # ms
+                    
+                    for gpu_idx, res_list in data.items():
+                        active_vram = 0
+                        for res in res_list:
+                            # Only count if within last 60s (or custom duration)
+                            # The scheduler cleans this up, but we filter here for UI accuracy
+                            if (now - res.get("timestamp", 0)) < 60000:
+                                active_vram += res.get("vram", 0)
+                        reservations[int(gpu_idx)] = active_vram
+        except Exception as e:
+            print(f"Error reading reservations: {e}")
         
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
@@ -179,6 +213,7 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 memory_utilization=utilization.memory,
                 memory_used_mb=memory.used // (1024 * 1024),
                 memory_total_mb=memory.total // (1024 * 1024),
+                reserved_memory_mb=reservations.get(i, 0),
                 power_draw_w=round(power_draw, 1),
                 power_limit_w=round(power_limit, 1),
                 min_power_watts=hw_limits["min"],
@@ -443,3 +478,132 @@ async def set_power_control(request: PowerControlRequest):
         "eco_mode": any_below_default,
         "power_percentage": power_percentage
     }
+
+
+# --- GPU Scheduler Config Endpoints ---
+# Config file path (in project root, read by Nextflow)
+GPU_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_config.json"
+
+# Default scheduler config
+DEFAULT_SCHEDULER_CONFIG = {
+    "global": {
+        "busy_threshold": 0.5,  # 50% = GPU is busy
+        "cooldown_ms": 10000,   # 10 seconds after assignment
+        "enabled": True         # Master switch for capacity lock
+    },
+    "overrides": {}  # Per-GPU: {"0": {"force_available": false, "threshold": null}}
+}
+
+
+class SchedulerGlobalConfig(BaseModel):
+    """Global scheduler settings."""
+    busy_threshold: float = 0.5  # 0.0-1.0
+    cooldown_ms: int = 10000
+    enabled: bool = True
+
+
+class SchedulerGPUOverride(BaseModel):
+    """Per-GPU override settings."""
+    force_available: bool = False      # Permanent override (debug mode)
+    quick_enable: bool = False         # One-shot: accept 1 job, then auto-clear
+    threshold: Optional[float] = None  # null = use global
+
+
+class SchedulerConfigResponse(BaseModel):
+    """Full scheduler config response."""
+    global_config: SchedulerGlobalConfig
+    overrides: Dict[str, SchedulerGPUOverride]
+    config_path: str
+
+
+def read_scheduler_config() -> Dict[str, Any]:
+    """Read scheduler config from file, or return defaults."""
+    if GPU_CONFIG_PATH.exists():
+        try:
+            with open(GPU_CONFIG_PATH, "r") as f:
+                config = json.load(f)
+                # Merge with defaults to ensure all keys exist
+                return {
+                    "global": {**DEFAULT_SCHEDULER_CONFIG["global"], **config.get("global", {})},
+                    "overrides": config.get("overrides", {})
+                }
+        except Exception as e:
+            print(f"Error reading GPU config: {e}")
+    return DEFAULT_SCHEDULER_CONFIG.copy()
+
+
+def write_scheduler_config(config: Dict[str, Any]) -> bool:
+    """Write scheduler config to file."""
+    try:
+        with open(GPU_CONFIG_PATH, "w") as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error writing GPU config: {e}")
+        return False
+
+
+@router.get("/scheduler-config")
+async def get_scheduler_config():
+    """Get current GPU scheduler configuration."""
+    config = read_scheduler_config()
+    return {
+        "global": config["global"],
+        "overrides": config["overrides"],
+        "config_path": str(GPU_CONFIG_PATH)
+    }
+
+
+@router.put("/scheduler-config")
+async def update_scheduler_config(global_config: SchedulerGlobalConfig):
+    """Update global scheduler settings."""
+    config = read_scheduler_config()
+    config["global"] = {
+        "busy_threshold": max(0.0, min(1.0, global_config.busy_threshold)),
+        "cooldown_ms": max(0, min(60000, global_config.cooldown_ms)),
+        "enabled": global_config.enabled
+    }
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "message": f"Updated: threshold={config['global']['busy_threshold']*100:.0f}%, cooldown={config['global']['cooldown_ms']}ms",
+        "global": config["global"],
+        "overrides": config["overrides"]
+    }
+
+
+@router.put("/scheduler-config/gpu/{gpu_id}")
+async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
+    """Set per-GPU override (force_available, quick_enable, or custom threshold)."""
+    config = read_scheduler_config()
+    
+    config["overrides"][gpu_id] = {
+        "force_available": override.force_available,
+        "quick_enable": override.quick_enable,
+        "threshold": override.threshold
+    }
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "message": f"GPU {gpu_id}: force_available={override.force_available}, quick_enable={override.quick_enable}",
+        "overrides": config["overrides"]
+    }
+
+
+@router.delete("/scheduler-config/gpu/{gpu_id}")
+async def clear_gpu_override(gpu_id: str):
+    """Clear per-GPU override, reverting to global settings."""
+    config = read_scheduler_config()
+    
+    if gpu_id in config["overrides"]:
+        del config["overrides"][gpu_id]
+        write_scheduler_config(config)
+        return {"success": True, "message": f"Cleared override for GPU {gpu_id}"}
+    
+    return {"success": True, "message": f"No override existed for GPU {gpu_id}"}
