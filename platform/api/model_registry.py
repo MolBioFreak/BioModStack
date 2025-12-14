@@ -16,7 +16,7 @@ from functools import lru_cache
 class ModelParameter(BaseModel):
     """Definition of a model parameter."""
     name: str
-    type: str  # string, integer, number, boolean, file, directory
+    type: str  # string, integer, number, boolean, file, directory, text
     description: str
     required: bool = False
     default: Optional[Any] = None
@@ -25,6 +25,8 @@ class ModelParameter(BaseModel):
     maximum: Optional[float] = None
     pattern: Optional[str] = None
     hidden: bool = False  # Advanced params hidden by default
+    preset_type: Optional[str] = None  # pdb, sequence, ligand - for enhanced UI
+    file_type: Optional[str] = None  # pdb, sdf, cif - file extension hint
 
 
 class ModelMode(BaseModel):

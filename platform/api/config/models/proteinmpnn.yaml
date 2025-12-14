@@ -25,11 +25,20 @@ modes:
     name: Sequence Design
     description: Design sequences for a given backbone structure
     params:
+      - input_pdb
       - mpnn_temperature
       - mpnn_omitAAs
       - mpnn_checkpoint_type
 
 params:
+  # Input file
+  - name: input_pdb
+    type: file
+    description: Input backbone PDB structure for sequence design
+    required: true
+    file_type: pdb
+    preset_type: pdb
+
   - name: mpnn_temperature
     type: number
     description: Sampling temperature. Higher = more diverse sequences.

@@ -123,7 +123,9 @@ params:
     type: file
     description: Input PDB file (target for binders, template for modifications)
     required: false
-    pattern: ".*\\.pdb$"
+    file_type: pdb
+    preset_type: pdb
+    pattern: \".*\\.pdb$\"
 
   - name: rfd_contigs
     type: string
