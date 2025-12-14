@@ -1,12 +1,16 @@
 process PrepBoltzGenInput {
-    label 'pyrosetta_tools' // Use basic tool container for prep, doesn't need boltzgen
+    label 'pyrosetta_tools'
 
     input:
     val ligand_smiles
     val ntp_type
     val scaffold_length
     val num_designs
-    
+    val binding_site_residues
+    val catalytic_site
+    path input_pdb
+    path ligand_pdb
+
     output:
     path "boltzgen_input.yaml", emit: yaml
 
@@ -21,6 +25,10 @@ process PrepBoltzGenInput {
         ${ntp_type ? "--ntp_type '${ntp_type}'" : ''} \\
         --scaffold_length '${scaffold_length}' \\
         --num_designs ${num_designs} \\
+        ${binding_site_residues ? "--binding_site_residues '${binding_site_residues}'" : ''} \\
+        ${catalytic_site ? "--catalytic_site" : ''} \\
+        ${input_pdb.name != 'NO_FILE' ? "--input_pdb '${input_pdb}'" : ''} \\
+        ${ligand_pdb.name != 'NO_FILE' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
         --output_yaml boltzgen_input.yaml
     """
 }
@@ -29,20 +37,18 @@ process RunBoltzGen {
     label 'BoltzGen'
     label 'gpu'
     publishDir "${params.out_dir}/run/boltzgen", mode: 'copy', pattern: "*.log"
-    // BoltzGen outputs to final_ranked_designs/ and intermediate_designs_inverse_folded/
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/final_ranked_designs/*_predicted*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/final_ranked_designs/*_designed*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    // Wrapper outputs converted PDBs + JSONs to output/designs/
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/final_ranked_designs/*.csv", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/final_ranked_designs/*.pdf", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    // Also capture batch metadata if available
+    publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/**/all_designs_metrics.csv", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    path yaml_configs  // Accepts single config or collection for batch processing
+    path yaml_configs
 
     output:
-    path "output/final_ranked_designs/*_predicted*.cif", emit: pdbs, optional: true
-    path "output/final_ranked_designs/*_designed*.cif", emit: designed, optional: true
-    path "output/designs/*.pdb", emit: converted_pdbs, optional: true
+    path "output/designs/*.pdb", emit: pdbs, optional: true
+    path "output/designs/*.json", emit: jsons, optional: true
     path "*.log"
 
     script:
@@ -81,7 +87,7 @@ process FilterBoltzGen {
     def paramString = Utils.formatFilterParams(
         params,
         "boltzgen",
-        ["min_plddt", "min_conf_score"]
+        ["min_plddt", "min_conf_score"],
     )
 
     """
