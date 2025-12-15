@@ -84,6 +84,9 @@ class DesignResponse(BaseModel):
     rmsd_binder: Optional[float] = None
     conf_score: Optional[float] = None
     mpnn_score: Optional[float] = None
+    ligand_iptm: Optional[float] = None
+    affinity_score: Optional[float] = None
+    binder_probability: Optional[float] = None
     
     # User data
     is_favorite: bool = False

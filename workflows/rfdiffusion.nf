@@ -35,3 +35,4 @@ workflow RFDiffusionWorkflow {
     pdbs = RunRFDiffusion.out.pdbs
     pdbs_jsons = RunRFDiffusion.out.pdbs_jsons
 }
+

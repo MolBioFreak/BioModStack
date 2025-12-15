@@ -198,6 +198,8 @@ async def ingest_loose_files(
                 
                 conf_score = metrics.get('confidence_score')
                 ptm = metrics.get('ptm')
+                ligand_iptm = metrics.get('ligand_iptm')
+                
                 # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
                 pae = metrics.get('complex_pae') or metrics.get('pae')
                 if pae is None:
@@ -206,6 +208,24 @@ async def ingest_loose_files(
                         # PDE (Predicted Distance Error) is similar to PAE but different scale
                         pae = pde  # Store as-is for now
                 
+                # Look for Affinity JSON
+                affinity_score = None
+                binder_probability = None
+                
+                # Try multiple locations for affinity file
+                affinity_file = search_dir / f"affinity_{design_name}.json"
+                if not affinity_file.exists():
+                    affinity_file = output_path / "pdb_files" / "predictions" / f"affinity_{design_name}.json"
+                    
+                if affinity_file.exists():
+                    try:
+                        with open(affinity_file, 'r') as af:
+                            aff_metrics = json.load(af)
+                            affinity_score = aff_metrics.get('affinity_pred_value')
+                            binder_probability = aff_metrics.get('affinity_probability_binary')
+                    except Exception as e:
+                        print(f"[Ingester] Error parsing affinity file {affinity_file}: {e}")
+
                 # Extract per-residue pLDDT from PDB B-factors
                 _, residue_plddt = extract_plddt_from_pdb(pdb_path)
                 
@@ -222,6 +242,9 @@ async def ingest_loose_files(
                     pae_overall=safe_float(pae),
                     ptm=safe_float(ptm),
                     conf_score=safe_float(conf_score),
+                    ligand_iptm=safe_float(ligand_iptm),
+                    affinity_score=safe_float(affinity_score),
+                    binder_probability=safe_float(binder_probability),
                     residue_plddt=residue_plddt,
                     
                     # Defaults for others

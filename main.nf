@@ -30,7 +30,7 @@ workflow {
     try {
         nextflow.preview.topic = true
     }
-    catch (_e: Exception) {
+    catch (Exception _e) {
     }
 
     def outputDirectory = params.out_dir
@@ -260,8 +260,12 @@ workflow {
             params.boltzgen_num_designs,
             params.boltzgen_binding_site_residues ?: '',
             params.boltzgen_catalytic_site ?: false,
-            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_FILE"),
-            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_FILE"),
+            params.boltzgen_protein_sequence ?: '',
+            params.boltzgen_dna_template_seq ?: '',
+            params.boltzgen_dna_primer_seq ?: '',
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_INPUT_PDB"),
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_LIGAND_PDB"),
+            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${projectDir}/lib/NO_DNA_STRUCT"),
         )
 
         // Run generation
