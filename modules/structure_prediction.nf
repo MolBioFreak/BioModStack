@@ -162,6 +162,146 @@ EOF
     """
 }
 
+// Boltz with Complex Definition (Multi-chain + Ligands)
+// Accepts a JSON file defining the complex components
+process BoltzFromComplex {
+    label 'Boltz'
+    label 'gpu'
+    publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+
+    input:
+    tuple val(complex_name), path(complex_json), path(msa_files)
+
+    output:
+    path "predictions/*.pdb", emit: pdbs, optional: true
+    path "predictions/*.cif", emit: cifs, optional: true
+    path "predictions/*.json", emit: jsons, optional: true
+    path "*.log"
+
+    script:
+    def recycling = params.boltz_recycling_steps ?: 3
+    def sampling = params.boltz_sampling_steps ?: 50
+    def numSamples = params.boltz_num_samples ?: 1
+    def use_msa_flag = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true' ? '--use_msa_server' : ''
+    """
+    mkdir -p tmp yamls predictions
+    export NUMBA_CACHE_DIR=tmp
+    export XDG_CONFIG_HOME=tmp
+    export TRITON_CACHE_DIR=tmp
+    export HOME=tmp
+    
+    # Convert JSON complex definition to Boltz-2 YAML format
+    python3 << 'PYEOF'
+import json
+import yaml
+from pathlib import Path
+
+with open("${complex_json}") as f:
+    complex_def = json.load(f)
+
+boltz_yaml = {"version": 1, "sequences": []}
+binder_chain = None
+
+for comp in complex_def.get("components", []):
+    comp_type = comp.get("type", "protein")
+    comp_id = comp.get("id", "A")
+    
+    if comp_type == "protein":
+        entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+        msa_path = comp.get("msa_path")
+        if msa_path and Path(msa_path).exists():
+            entry["protein"]["msa"] = str(Path(msa_path).resolve())
+    elif comp_type == "ligand":
+        entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
+        
+        # Track the first real ligand as the binder for affinity prediction
+        if binder_chain is None:
+            binder_chain = comp_id
+
+        # Common cofactor SMILES to bypass CCD lookup failure
+        cofactor_smiles = {
+            "ATP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
+            "ADP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
+            "GTP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
+            "GDP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
+            "HEM": "CC1=C(CCC(=O)O)C2=CC3=C(C)C(C=C)=C([NH]3)C=C4C(C=C)=C(C)C(=N4)C=C1N2" # Simplified Heme
+        }
+
+        if comp.get("ccd"):
+            ccd_code = comp["ccd"]
+            if ccd_code in cofactor_smiles:
+                 entry["ligand"]["smiles"] = cofactor_smiles[ccd_code]
+            else:
+                 entry["ligand"]["ccd"] = ccd_code
+        elif comp.get("smiles"):
+            entry["ligand"]["smiles"] = comp["smiles"]
+    elif comp_type == "ion":
+        ccd_code = comp.get("ccd", "MG")
+        # Common ion SMILES map to bypass CCD lookup failure
+        ion_smiles = {
+            "MG": "[Mg+2]",
+            "ZN": "[Zn+2]",
+            "CA": "[Ca+2]",
+            "NA": "[Na+]",
+            "CL": "[Cl-]",
+            "K": "[K+]",
+            "MN": "[Mn+2]",
+            "FE": "[Fe+2]", # Default to +2
+            "CO": "[Co+2]",
+            "NI": "[Ni+2]",
+            "CU": "[Cu+2]"
+        }
+        
+        # Prefer SMILES if available (more robust)
+        if ccd_code in ion_smiles:
+            entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "smiles": ion_smiles[ccd_code]}}
+        else:
+            entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "ccd": ccd_code}}
+            
+    elif comp_type == "dna":
+        entry = {"dna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+    elif comp_type == "rna":
+        entry = {"rna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+    else:
+        continue
+    boltz_yaml["sequences"].append(entry)
+
+# Enable binding affinity prediction if a binder was identified
+if binder_chain:
+    boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
+
+with open(f"yamls/${complex_name}.yaml", "w") as f:
+    yaml.dump(boltz_yaml, f, default_flow_style=False)
+print(yaml.dump(boltz_yaml, default_flow_style=False))
+PYEOF
+    
+    boltz predict \\
+        ./yamls/ \\
+        --output_format pdb \\
+        --diffusion_samples ${numSamples} \\
+        --recycling_steps ${recycling} \\
+        --sampling_steps ${sampling} \\
+        --cache /boltzcache \\
+        ${use_msa_flag} \\
+        ${params.boltz_extra_config ?: ''} \\
+        2>&1 | tee boltz_complex_${complex_name}.log
+    
+    for dir in boltz_results_yamls/predictions/*/; do
+        for model_file in \${dir}/*.pdb \${dir}/*.cif; do
+            if [ -f "\${model_file}" ]; then cp "\${model_file}" predictions/; fi
+        done
+        for json_file in \${dir}/*.json; do
+            if [ -f "\${json_file}" ]; then cp "\${json_file}" predictions/; fi
+        done
+        # Copy affinity files if they exist (ignore error if none)
+        cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
+    done
+    """
+}
+
 process RF3FromSequence {
     label 'Foundry'
     label 'gpu'
@@ -338,3 +478,4 @@ workflow structure_prediction_wf {
     emit:
     structures
 }
+

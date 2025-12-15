@@ -80,7 +80,10 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         "mpnn_score": [],
         "conf_score": [],
         "ptm": [],
-        "rog": []
+        "rog": [],
+        "ligand_iptm": [],
+        "affinity_score": [],
+        "binder_probability": []
     }
     
     for d in designs:
@@ -94,6 +97,9 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         if d.conf_score is not None: metrics["conf_score"].append(d.conf_score)
         if d.ptm is not None: metrics["ptm"].append(d.ptm)
         if d.rog is not None: metrics["rog"].append(d.rog)
+        if d.ligand_iptm is not None: metrics["ligand_iptm"].append(d.ligand_iptm)
+        if d.affinity_score is not None: metrics["affinity_score"].append(d.affinity_score)
+        if d.binder_probability is not None: metrics["binder_probability"].append(d.binder_probability)
             
     return metrics
 

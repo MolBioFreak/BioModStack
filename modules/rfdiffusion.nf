@@ -70,3 +70,4 @@ process FilterRFD {
         --ncpus ${num_processes}
     """
 }
+

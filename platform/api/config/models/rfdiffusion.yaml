@@ -170,9 +170,8 @@ params:
   # Advanced parameters
   - name: rfd_ckpt_override
     type: string
-    description: Override the model checkpoint
+    description: Override the model checkpoint for specialized tasks
     required: false
-    hidden: true
     enum:
       - active_site
       - base
@@ -185,9 +184,8 @@ params:
 
   - name: rfd_noise_scale
     type: number
-    description: Noise scale (0-1). Lower = more conservative designs.
+    description: Noise scale (0=conservative, 1=diverse). Lower for binders.
     required: false
-    hidden: true
     minimum: 0
     maximum: 1
 
@@ -196,13 +194,11 @@ params:
     description: Ignore loop regions when applying scaffold constraints
     required: false
     default: true
-    hidden: true
 
   - name: rfd_extra_config
     type: string
-    description: Additional RFdiffusion config parameters
+    description: "Additional RFdiffusion config (e.g., 'contigmap.inpaint_str=[B165-178]')"
     required: false
-    hidden: true
 
 enabled: true
 experimental: false

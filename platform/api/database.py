@@ -76,6 +76,11 @@ class Design(Base):
     # Boltz-2 specific
     conf_score = Column(Float, nullable=True)
     ptm = Column(Float, nullable=True)
+    ligand_iptm = Column(Float, nullable=True)
+    
+    # Binding Affinity (Boltz-2)
+    affinity_score = Column(Float, nullable=True)  # log(IC50)
+    binder_probability = Column(Float, nullable=True)  # 0-1
     
     # Per-residue metrics (stored as JSON arrays)
     residue_plddt = Column(JSON, nullable=True)  # [85.2, 91.3, ...] per residue

@@ -152,6 +152,8 @@ export function ResultsViewer() {
         const plddts = designs.map(d => d.plddt_overall).filter((v): v is number => v != null);
         const paes = designs.map(d => d.pae_overall).filter((v): v is number => v != null);
         const ptms = designs.map(d => d.ptm).filter((v): v is number => v != null);
+        const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
+        const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
 
         return {
             total: designs.length,
@@ -159,6 +161,8 @@ export function ResultsViewer() {
             avgPlddt: plddts.length ? plddts.reduce((a, b) => a + b, 0) / plddts.length : null,
             avgPae: paes.length ? paes.reduce((a, b) => a + b, 0) / paes.length : null,
             avgPtm: ptms.length ? ptms.reduce((a, b) => a + b, 0) / ptms.length : null,
+            avgAffinity: affinities.length ? affinities.reduce((a, b) => a + b, 0) / affinities.length : null,
+            avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
         };
@@ -269,7 +273,8 @@ export function ResultsViewer() {
                                                 <StatCard label="Total Designs" value={stats.total} />
                                                 <StatCard label="Favorites" value={stats.favorites} color="text-yellow-400" />
                                                 <StatCard label="Avg pLDDT" value={formatMetric(stats.avgPlddt, 1)} color="text-blue-400" />
-                                                <StatCard label="Avg PAE" value={formatMetric(stats.avgPae, 1)} color="text-amber-400" />
+                                                <StatCard label="Avg Affinity" value={formatMetric(stats.avgAffinity, 2)} color="text-emerald-400" />
+                                                <StatCard label="Avg Binder %" value={stats.avgBinderProb ? (stats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
                                                 <StatCard label="High Confidence" value={stats.highConfidence} subtitle="pLDDT ≥ 80" color="text-emerald-400" />
                                                 <StatCard label="Low Error" value={stats.lowError} subtitle="PAE ≤ 5" color="text-emerald-400" />
@@ -479,8 +484,8 @@ export function ResultsViewer() {
                                                     <button
                                                         onClick={() => setShowPlddt(!showPlddt)}
                                                         className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors ${showPlddt
-                                                                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                                                                : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
+                                                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                                            : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
                                                             }`}
                                                         title="Toggle pLDDT confidence coloring (AlphaFold style)"
                                                     >
@@ -625,9 +630,12 @@ export function ResultsViewer() {
                                                         <tr className="border-b border-slate-700">
                                                             {[
                                                                 { key: 'name', label: 'Name' },
+                                                                { key: 'affinity_score', label: 'Affinity (-log IC50)' },
+                                                                { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
                                                                 { key: 'pae_overall', label: 'PAE' },
                                                                 { key: 'ptm', label: 'pTM' },
+                                                                { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'RMSD Binder' },
                                                                 { key: 'rog', label: 'RoG' },
@@ -657,6 +665,19 @@ export function ResultsViewer() {
                                                                 }}
                                                             >
                                                                 <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
+
+                                                                {/* Affinity */}
+                                                                <td className={`px-3 py-2 font-mono ${d.affinity_score != null && d.affinity_score > 6 ? 'text-emerald-400' :
+                                                                    d.affinity_score != null && d.affinity_score > 4 ? 'text-white' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.affinity_score, 2)}
+                                                                </td>
+
+                                                                {/* Binder Prob */}
+                                                                <td className={`px-3 py-2 font-mono ${d.binder_probability != null && d.binder_probability > 0.8 ? 'text-emerald-400' :
+                                                                    d.binder_probability != null && d.binder_probability > 0.5 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {d.binder_probability ? (d.binder_probability * 100).toFixed(0) + '%' : '—'}
+                                                                </td>
+
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
@@ -666,6 +687,12 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
                                                                 </td>
+
+                                                                {/* Ligand iPTM */}
+                                                                <td className={`px-3 py-2 font-mono ${d.ligand_iptm != null && d.ligand_iptm > 0.8 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.ligand_iptm, 2)}
+                                                                </td>
+
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('conf_score', d.conf_score)}`}>
                                                                     {formatMetric(d.conf_score, 2)}
                                                                 </td>

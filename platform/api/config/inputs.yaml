@@ -1,10 +1,4 @@
-# Input Presets Configuration
-# Defines standard paths and pre-populated input options
-
-# Base directory for the project (used to resolve relative paths)
 project_root: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform
-
-# Standard directories
 standard_paths:
   benchmarkdata:
     path: benchmarkdata
@@ -18,414 +12,553 @@ standard_paths:
   inputs:
     path: platform/api/inputs
     description: Uploaded input files
-
-# Directory presets for batch processing
 preset_directories:
-  - id: all_polymerases
-    name: All DNA Polymerases (3 PDBs)
-    path: rcsb
-    description: TdT, Klenow, and Taq polymerases for batch validation
-    count: 3
-    
-  - id: all_benchmark
-    name: All Benchmark Targets (6 PDBs)
-    path: benchmarkdata
-    description: TrkA, PD-L1, IL-7Rα, IR, HA - complete benchmark set
-    count: 6
-    
-  - id: receptors_only
-    name: Receptor Targets (4 PDBs)
-    path: benchmarkdata
-    filter_ids: [trka, il7ra, ir, ha]
-    description: Receptor-type targets only
-    count: 4
-    
-  - id: immune_only
-    name: Immune Targets (2 PDBs)
-    path: benchmarkdata
-    filter_ids: [pdl1, pdl1_uncropped]
-    description: Immune checkpoint proteins
-    count: 2
-
-# Preset PDB files for target selection
+- id: all_polymerases
+  name: All DNA Polymerases (3 PDBs)
+  path: rcsb
+  description: TdT, Klenow, and Taq polymerases for batch validation
+  count: 3
+- id: all_benchmark
+  name: All Benchmark Targets (6 PDBs)
+  path: benchmarkdata
+  description: "TrkA, PD-L1, IL-7R\u03B1, IR, HA - complete benchmark set"
+  count: 6
+- id: receptors_only
+  name: Receptor Targets (4 PDBs)
+  path: benchmarkdata
+  filter_ids:
+  - trka
+  - il7ra
+  - ir
+  - ha
+  description: Receptor-type targets only
+  count: 4
+- id: immune_only
+  name: Immune Targets (2 PDBs)
+  path: benchmarkdata
+  filter_ids:
+  - pdl1
+  - pdl1_uncropped
+  description: Immune checkpoint proteins
+  count: 2
 preset_pdbs:
-  - id: trka
-    name: TrkA Receptor (1www)
-    path: benchmarkdata/1www_trka.pdb
-    description: Tropomyosin receptor kinase A - nerve growth factor receptor
-    category: receptor
-    
-  - id: pdl1
-    name: PD-L1 (5o45)
-    path: benchmarkdata/5o45_pd-l1.pdb
-    description: Immune checkpoint protein - cancer immunotherapy target
-    category: immune
-    
-  - id: pdl1_uncropped
-    name: PD-L1 Uncropped (5o45)
-    path: benchmarkdata/5o45_pd-l1_uncropped.pdb
-    description: Full-length PD-L1 structure
-    category: immune
-    
-  - id: il7ra
-    name: IL-7Rα (3di3)
-    path: benchmarkdata/3di3_il7ra.pdb
-    description: Interleukin-7 receptor alpha chain
-    category: receptor
-    
-  - id: ir
-    name: Insulin Receptor (4zxb)
-    path: benchmarkdata/4zxb_ir.pdb
-    description: Insulin receptor - metabolic signaling
-    category: receptor
-
-  - id: tdt
-    name: Human TdT (1KEJ)
-    path: rcsb/1kej.pdb
-    description: Terminal deoxynucleotidyl transferase - template-independent polymerase
-    category: polymerase
-
-  - id: klenow
-    name: E. coli DNA Pol I Klenow (1KLN)
-    path: rcsb/1kln.pdb
-    description: Klenow fragment of E. coli DNA polymerase I
-    category: polymerase
-
-  - id: taq
-    name: Taq DNA Polymerase (1TAQ)
-    path: rcsb/1taq.pdb
-    description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
-    category: polymerase
-    
-  - id: ha
-    name: Hemagglutinin (5vli)
-    path: benchmarkdata/5vli_ha.pdb
-    description: Influenza hemagglutinin - viral entry protein
-    category: viral
-    
-  - id: example_binder
-    name: Example Binder
-    path: lib/examplebinder.pdb
-    description: Example binder-target complex for reference
-    category: example
-
-# Preset sequences for sequence design
+- id: trka
+  name: TrkA Receptor (1www)
+  path: benchmarkdata/1www_trka.pdb
+  description: Tropomyosin receptor kinase A - nerve growth factor receptor
+  category: Receptor
+- id: il7ra
+  name: "IL-7R\u03B1 (3di3)"
+  path: benchmarkdata/3di3_il7ra.pdb
+  description: Interleukin-7 receptor alpha chain
+  category: Receptor
+- id: ir
+  name: Insulin Receptor (4zxb)
+  path: benchmarkdata/4zxb_ir.pdb
+  description: Insulin receptor - metabolic signaling
+  category: Receptor
+- id: egfr
+  name: EGFR Kinase (1m17)
+  path: rcsb/1m17.pdb
+  description: Epidermal growth factor receptor kinase domain
+  category: Receptor
+- id: pdl1
+  name: PD-L1 (5o45)
+  path: benchmarkdata/5o45_pd-l1.pdb
+  description: Immune checkpoint protein - cancer immunotherapy target
+  category: Immune
+- id: pdl1_uncropped
+  name: PD-L1 Uncropped (5o45)
+  path: benchmarkdata/5o45_pd-l1_uncropped.pdb
+  description: Full-length PD-L1 structure
+  category: Immune
+- id: ctla4
+  name: CTLA-4 (1i8l)
+  path: rcsb/1i8l.pdb
+  description: Cytotoxic T-lymphocyte antigen 4 - immune checkpoint
+  category: Immune
+- id: cd47
+  name: CD47 (5ivx)
+  path: rcsb/5ivx.pdb
+  description: Don't eat me signal - macrophage checkpoint
+  category: Immune
+- id: tdt
+  name: Human TdT (1kej)
+  path: rcsb/1kej.pdb
+  description: Terminal deoxynucleotidyl transferase - template-independent polymerase
+  category: Polymerase
+- id: klenow
+  name: E. coli DNA Pol I Klenow (1kln)
+  path: rcsb/1kln.pdb
+  description: Klenow fragment of E. coli DNA polymerase I
+  category: Polymerase
+- id: taq
+  name: Taq DNA Polymerase (1taq)
+  path: rcsb/1taq.pdb
+  description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
+  category: Polymerase
+- id: t7rnap
+  name: T7 RNA Polymerase (1msw)
+  path: rcsb/1msw.pdb
+  description: T7 bacteriophage RNA polymerase - in vitro transcription
+  category: Polymerase
+- id: ha
+  name: Hemagglutinin (5vli)
+  path: benchmarkdata/5vli_ha.pdb
+  description: Influenza hemagglutinin - viral entry protein
+  category: Viral
+- id: spike_rbd
+  name: SARS-CoV-2 Spike RBD (6m0j)
+  path: rcsb/6m0j.pdb
+  description: SARS-CoV-2 spike receptor binding domain with ACE2
+  category: Viral
+- id: hiv_gp120
+  name: HIV-1 gp120 (4nco)
+  path: rcsb/4nco.pdb
+  description: HIV-1 envelope glycoprotein gp120
+  category: Viral
+- id: lysozyme
+  name: Hen Lysozyme (1lyz)
+  path: rcsb/1lyz.pdb
+  description: Classic model protein - antibacterial enzyme
+  category: Enzyme
+- id: trypsin
+  name: Bovine Trypsin (1s0q)
+  path: rcsb/1s0q.pdb
+  description: Serine protease - digestion enzyme
+  category: Enzyme
+- id: cas9
+  name: Cas9 (4oo8)
+  path: rcsb/4oo8.pdb
+  description: CRISPR-associated protein 9 - gene editing
+  category: Enzyme
+- id: fab_fragment
+  name: Fab Fragment (1bbd)
+  path: rcsb/1bbd.pdb
+  description: Antibody Fab fragment - standard scaffold
+  category: Antibody
+- id: nanobody
+  name: Nanobody VHH (1mel)
+  path: rcsb/1mel.pdb
+  description: Camelid single-domain antibody
+  category: Antibody
+- id: example_binder
+  name: Example Binder
+  path: lib/examplebinder.pdb
+  description: Example binder-target complex for reference
+  category: Example
+- id: ATP
+  name: ATP
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ATP.pdb
+  description: Oligonucleotide ATP
+  category: Nucleotides
+- id: CTP
+  name: CTP
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/CTP.pdb
+  description: Oligonucleotide CTP
+  category: Nucleotides
+- id: GTP
+  name: GTP
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/GTP.pdb
+  description: Oligonucleotide GTP
+  category: Nucleotides
+- id: UTP
+  name: UTP
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/UTP.pdb
+  description: Oligonucleotide UTP
+  category: Nucleotides
+- id: dATP
+  name: dATP
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dATP.pdb
+  description: Oligonucleotide dATP
+  category: Nucleotides
+- id: dsDNA_ATAT_ATAT
+  name: dsDNA ATAT ATAT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATAT_ATAT.pdb
+  description: Oligonucleotide dsDNA_ATAT_ATAT
+  category: dsDNA Oligos
+- id: dsDNA_ATCG_CGAT
+  name: dsDNA ATCG CGAT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATCG_CGAT.pdb
+  description: Oligonucleotide dsDNA_ATCG_CGAT
+  category: dsDNA Oligos
+- id: dsDNA_ATG_CAT
+  name: dsDNA ATG CAT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATG_CAT.pdb
+  description: Oligonucleotide dsDNA_ATG_CAT
+  category: dsDNA Oligos
+- id: dsDNA_AT_AT
+  name: dsDNA AT AT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_AT_AT.pdb
+  description: Oligonucleotide dsDNA_AT_AT
+  category: dsDNA Oligos
+- id: dsDNA_CG_CG
+  name: dsDNA CG CG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_CG_CG.pdb
+  description: Oligonucleotide dsDNA_CG_CG
+  category: dsDNA Oligos
+- id: dsDNA_GCA_TGC
+  name: dsDNA GCA TGC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GCA_TGC.pdb
+  description: Oligonucleotide dsDNA_GCA_TGC
+  category: dsDNA Oligos
+- id: dsDNA_GCGC_GCGC
+  name: dsDNA GCGC GCGC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GCGC_GCGC.pdb
+  description: Oligonucleotide dsDNA_GCGC_GCGC
+  category: dsDNA Oligos
+- id: dsDNA_GC_GC
+  name: dsDNA GC GC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GC_GC.pdb
+  description: Oligonucleotide dsDNA_GC_GC
+  category: dsDNA Oligos
+- id: dsDNA_TAC_GTA
+  name: dsDNA TAC GTA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_TAC_GTA.pdb
+  description: Oligonucleotide dsDNA_TAC_GTA
+  category: dsDNA Oligos
+- id: dsDNA_TA_TA
+  name: dsDNA TA TA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_TA_TA.pdb
+  description: Oligonucleotide dsDNA_TA_TA
+  category: dsDNA Oligos
+- id: ssDNA_AA
+  name: ssDNA AA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AA.pdb
+  description: Oligonucleotide ssDNA_AA
+  category: ssDNA Oligos
+- id: ssDNA_AAA
+  name: ssDNA AAA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAA.pdb
+  description: Oligonucleotide ssDNA_AAA
+  category: ssDNA Oligos
+- id: ssDNA_AAAA
+  name: ssDNA AAAA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAAA.pdb
+  description: Oligonucleotide ssDNA_AAAA
+  category: ssDNA Oligos
+- id: ssDNA_AAG
+  name: ssDNA AAG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAG.pdb
+  description: Oligonucleotide ssDNA_AAG
+  category: ssDNA Oligos
+- id: ssDNA_AC
+  name: ssDNA AC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AC.pdb
+  description: Oligonucleotide ssDNA_AC
+  category: ssDNA Oligos
+- id: ssDNA_AG
+  name: ssDNA AG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AG.pdb
+  description: Oligonucleotide ssDNA_AG
+  category: ssDNA Oligos
+- id: ssDNA_AT
+  name: ssDNA AT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AT.pdb
+  description: Oligonucleotide ssDNA_AT
+  category: ssDNA Oligos
+- id: ssDNA_ATAT
+  name: ssDNA ATAT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATAT.pdb
+  description: Oligonucleotide ssDNA_ATAT
+  category: ssDNA Oligos
+- id: ssDNA_ATC
+  name: ssDNA ATC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATC.pdb
+  description: Oligonucleotide ssDNA_ATC
+  category: ssDNA Oligos
+- id: ssDNA_ATCG
+  name: ssDNA ATCG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATCG.pdb
+  description: Oligonucleotide ssDNA_ATCG
+  category: ssDNA Oligos
+- id: ssDNA_ATG
+  name: ssDNA ATG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATG.pdb
+  description: Oligonucleotide ssDNA_ATG
+  category: ssDNA Oligos
+- id: ssDNA_ATT
+  name: ssDNA ATT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATT.pdb
+  description: Oligonucleotide ssDNA_ATT
+  category: ssDNA Oligos
+- id: ssDNA_CA
+  name: ssDNA CA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CA.pdb
+  description: Oligonucleotide ssDNA_CA
+  category: ssDNA Oligos
+- id: ssDNA_CAA
+  name: ssDNA CAA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CAA.pdb
+  description: Oligonucleotide ssDNA_CAA
+  category: ssDNA Oligos
+- id: ssDNA_CAG
+  name: ssDNA CAG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CAG.pdb
+  description: Oligonucleotide ssDNA_CAG
+  category: ssDNA Oligos
+- id: ssDNA_CC
+  name: ssDNA CC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CC.pdb
+  description: Oligonucleotide ssDNA_CC
+  category: ssDNA Oligos
+- id: ssDNA_CCC
+  name: ssDNA CCC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCC.pdb
+  description: Oligonucleotide ssDNA_CCC
+  category: ssDNA Oligos
+- id: ssDNA_CCCC
+  name: ssDNA CCCC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCCC.pdb
+  description: Oligonucleotide ssDNA_CCCC
+  category: ssDNA Oligos
+- id: ssDNA_CCG
+  name: ssDNA CCG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCG.pdb
+  description: Oligonucleotide ssDNA_CCG
+  category: ssDNA Oligos
+- id: ssDNA_CG
+  name: ssDNA CG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CG.pdb
+  description: Oligonucleotide ssDNA_CG
+  category: ssDNA Oligos
+- id: ssDNA_CGAT
+  name: ssDNA CGAT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CGAT.pdb
+  description: Oligonucleotide ssDNA_CGAT
+  category: ssDNA Oligos
+- id: ssDNA_CGCG
+  name: ssDNA CGCG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CGCG.pdb
+  description: Oligonucleotide ssDNA_CGCG
+  category: ssDNA Oligos
+- id: ssDNA_CT
+  name: ssDNA CT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CT.pdb
+  description: Oligonucleotide ssDNA_CT
+  category: ssDNA Oligos
+- id: ssDNA_GA
+  name: ssDNA GA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GA.pdb
+  description: Oligonucleotide ssDNA_GA
+  category: ssDNA Oligos
+- id: ssDNA_GAA
+  name: ssDNA GAA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GAA.pdb
+  description: Oligonucleotide ssDNA_GAA
+  category: ssDNA Oligos
+- id: ssDNA_GAG
+  name: ssDNA GAG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GAG.pdb
+  description: Oligonucleotide ssDNA_GAG
+  category: ssDNA Oligos
+- id: ssDNA_GC
+  name: ssDNA GC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GC.pdb
+  description: Oligonucleotide ssDNA_GC
+  category: ssDNA Oligos
+- id: ssDNA_GCA
+  name: ssDNA GCA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCA.pdb
+  description: Oligonucleotide ssDNA_GCA
+  category: ssDNA Oligos
+- id: ssDNA_GCG
+  name: ssDNA GCG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCG.pdb
+  description: Oligonucleotide ssDNA_GCG
+  category: ssDNA Oligos
+- id: ssDNA_GCGC
+  name: ssDNA GCGC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCGC.pdb
+  description: Oligonucleotide ssDNA_GCGC
+  category: ssDNA Oligos
+- id: ssDNA_GG
+  name: ssDNA GG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GG.pdb
+  description: Oligonucleotide ssDNA_GG
+  category: ssDNA Oligos
+- id: ssDNA_GGC
+  name: ssDNA GGC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGC.pdb
+  description: Oligonucleotide ssDNA_GGC
+  category: ssDNA Oligos
+- id: ssDNA_GGG
+  name: ssDNA GGG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGG.pdb
+  description: Oligonucleotide ssDNA_GGG
+  category: ssDNA Oligos
+- id: ssDNA_GGGG
+  name: ssDNA GGGG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGGG.pdb
+  description: Oligonucleotide ssDNA_GGGG
+  category: ssDNA Oligos
+- id: ssDNA_GT
+  name: ssDNA GT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GT.pdb
+  description: Oligonucleotide ssDNA_GT
+  category: ssDNA Oligos
+- id: ssDNA_TA
+  name: ssDNA TA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TA.pdb
+  description: Oligonucleotide ssDNA_TA
+  category: ssDNA Oligos
+- id: ssDNA_TAA
+  name: ssDNA TAA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TAA.pdb
+  description: Oligonucleotide ssDNA_TAA
+  category: ssDNA Oligos
+- id: ssDNA_TAG
+  name: ssDNA TAG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TAG.pdb
+  description: Oligonucleotide ssDNA_TAG
+  category: ssDNA Oligos
+- id: ssDNA_TATA
+  name: ssDNA TATA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TATA.pdb
+  description: Oligonucleotide ssDNA_TATA
+  category: ssDNA Oligos
+- id: ssDNA_TC
+  name: ssDNA TC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TC.pdb
+  description: Oligonucleotide ssDNA_TC
+  category: ssDNA Oligos
+- id: ssDNA_TG
+  name: ssDNA TG
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TG.pdb
+  description: Oligonucleotide ssDNA_TG
+  category: ssDNA Oligos
+- id: ssDNA_TGA
+  name: ssDNA TGA
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TGA.pdb
+  description: Oligonucleotide ssDNA_TGA
+  category: ssDNA Oligos
+- id: ssDNA_TT
+  name: ssDNA TT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TT.pdb
+  description: Oligonucleotide ssDNA_TT
+  category: ssDNA Oligos
+- id: ssDNA_TTC
+  name: ssDNA TTC
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTC.pdb
+  description: Oligonucleotide ssDNA_TTC
+  category: ssDNA Oligos
+- id: ssDNA_TTT
+  name: ssDNA TTT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTT.pdb
+  description: Oligonucleotide ssDNA_TTT
+  category: ssDNA Oligos
+- id: ssDNA_TTTT
+  name: ssDNA TTTT
+  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTTT.pdb
+  description: Oligonucleotide ssDNA_TTTT
+  category: ssDNA Oligos
 preset_sequences:
-  # Human TdT (P04053) - DNA polymerase
-  - id: tdt_human
-    name: Human TdT
-    uniprot: P04053
-    ncbi_id: "1791"
-    organism: Homo sapiens
-    length: 509
-    sequence: >-
-      MDPPRASHLSPRKKKRPRQTGALMASSPPQDIKFQDLVVFILEKKMGTTRRAFLMELARRKGFRVENELSD
-      SVTHIVAENNSSGSDVLEWLQAQKVQVSSQPELLDVSAWLIECIRAGKPVEMTGKHQLVVRRDYSDWSTNPGP
-      PKTPPIAVQKISQYACQRRTTLNNCNQIFTDAFDILAENCEFRENEDSSCVTFMRAASVLKSLPFTIISMKDT
-      EGIPCLGSKVKGIIEEIIEDGESSEVKAVLNDERYQSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSDDKSL
-      KFTRMQKAGFLYYEDLVSCVTRAEAEAVSVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
-      DEQLLQKVMNLWEKKGLLLYYDLVESTFEKLRLPSRKVDALDHFQKCFLIFKLPRQRVDSDQSSWQEGKTWKAI
-      RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMILDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
-      EPWERNA
-    description: Terminal deoxynucleotidyl transferase - template-independent DNA polymerase
-    
-  # E. coli Klenow Fragment (P00582)
-  - id: klenow_ecoli
-    name: Klenow Fragment
-    uniprot: P00582
-    ncbi_id: "948594"
-    organism: Escherichia coli
-    length: 605
-    sequence: >-
-      MIVSDIEANALLFEHELPSTPAAEGPVVLHGDLISDTSVWLMEHPKANLFVLGTKGVPSVFSGAIPHRSG
-      WPFITTGITKPPFNLVPLPDLKHIISFTTTSDDSRVRFTGLNFDFWCRAQPTPKPFPAIIPKHAIARYTLDQ
-      YLCDLIEAFATSFPKFHDFKKIYAIGPTYEQALGLALCNGQEAEKILTQINAKPGDVVQVLNQFVLHESNSA
-      PTFKPFEGDPAGAGPCAVVFNPRNLKTFVLPRQAYQILEKEFSPVLNFSPLNSLGLVKDWHDAGILFFNQSW
-      VSKQIDGYFSRPFNVEELYKFMPAAGKAFSADPKDHSGAVPMVQYLFVVEKQPQPLSGFQVFYNGTPVPVSH
-      NFGCVTNLPLLKNHQFDDIVLYAHLDPNAKSVDLAAHETLQAFLQKNGHVQLEQELGPPIGEFPDFPEFVAH
-      FTKSIAQEPWFSFQAFAAFYGYLPNSLYKPDVMEMKRFKNKDPEPSFAECERQLARAMKTTLFGKFFASKKF
-      PILEQYFHSMEFSLEGFKKGGCMKVSGEYDLMPSISQFRFEIKYAKMPKGELFALDLVDNRKPHLPKPGRVG
-      VSGVVDWVNLYFRHSHGVNTIFNRLNFK
-    description: 3'-5' exonuclease domain of DNA polymerase I
-
-  # Hen Egg White Lysozyme (P00698)
-  - id: lysozyme_hewl
-    name: Lysozyme (HEWL)
-    uniprot: P00698
-    ncbi_id: NP_990612
-    organism: Gallus gallus
-    length: 147
-    sequence: >-
-      MRSLLILVLCFLPLAALGKVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNTDGSTDYG
-      ILQINSRWWCNDGRTPGSRNLCNIPCSALLSSDITASVNCAKKIVSDGNGMNAWVAWRNRCKGTDVQAWIRG
-      CRL
-    description: Classic model protein for crystallography and folding studies
-
-  # Green Fluorescent Protein (P42212)
-  - id: gfp_avictoria
-    name: GFP (Enhanced)
-    uniprot: P42212
-    ncbi_id: AAA27721
-    organism: Aequorea victoria
-    length: 238
-    sequence: >-
-      MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFS
-      RYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYN
-      YNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRD
-      HMVLLEFVTAAGITLGMDELYK
-    description: Green fluorescent protein for expression testing
-
-  # mCherry Red Fluorescent Protein
-  - id: mcherry
-    name: mCherry
-    uniprot: X5DSL3
-    ncbi_id: AY678264
-    organism: Discosoma sp. (synthetic)
-    length: 236
-    sequence: >-
-      MVSKGEEDNMAIIKEFMRFKVHMEGSVNGHEFEIEGEGEGRPYEGTQTAKLKVTKGGPLPFAWDILSPQFMY
-      GSKAYVKHPADIPDYLKLSFPEGFKWERVMNFEDGGVVTVTQDSSLQDGEFIYKVKLRGTNFPSDGPVMQKK
-      TMGWEASSERMYPEDGALKGEIKQRLKLKDGGHYDAEVKTTYKAKKPVQLPGAYNVNIKLDITSHNEDYTIV
-      EQYERAEGRHSTGGMDELYK
-    description: Red fluorescent protein for dual-color imaging
-
-  # PD-L1 / CD274 (Q9NZQ7)
-  - id: pdl1_human
-    name: Human PD-L1
-    uniprot: Q9NZQ7
-    ncbi_id: "29126"
-    organism: Homo sapiens
-    length: 290
-    sequence: >-
-      MRIFAVFIFMTYWHLLNAFTVTVPKDLYVVEYGSNMTIECKFPVEKQLDLAALIVYWEMEDKNIIQFVHGEE
-      DLKVQHSSYRQRARLLKDQLSLGNAALQITDVKLQDAGVYRCMISYGGADYKRITVKVNAPYNKINQRILV
-      VDPVTSEHELTCQAEGYPKAEVIWTSSDHQVLSGKTTTTNSKREEKLFNVTSTLRINTTTNEIFYCTFRRLD
-      PEENHTAELVIPELPLAHPPNERTHLVILGAILLCLGVALTFIFRLRKGRMMDVKKCGIQDTNSKKQSDTH
-      LEET
-    description: Immune checkpoint protein - cancer immunotherapy target
-
-  # Anti-PD-L1 Antibody (Atezolizumab heavy chain variable region)
-  - id: antipdl1_heavy
-    name: Anti-PD-L1 (VH)
-    organism: Synthetic (therapeutic)
-    length: 118
-    sequence: >-
-      EVQLVESGGGLVQPGGSLRLSCAASGFTFSDSWIHWVRQAPGKGLEWVAWISPYGGSTYYADSVKGRFTIS
-      ADTSKNTAYLQMNSLRAEDTAVYYCARRHWPGGFDYWGQGTLVTVSS
-    description: Atezolizumab-like anti-PD-L1 antibody heavy chain variable region
-
-  # Anti-PD-L1 Antibody (Atezolizumab light chain variable region)
-  - id: antipdl1_light
-    name: Anti-PD-L1 (VL)
-    organism: Synthetic (therapeutic)
-    length: 107
-    sequence: >-
-      DIQMTQSPSSLSASVGDRVTITCRASQDVSTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSGSGTDF
-      TLTISSLQPEDFATYYCQQYLYHPATFGQGTKVEIK
-    description: Atezolizumab-like anti-PD-L1 antibody light chain variable region
-
-  # Taq DNA Polymerase (P19821)
-  - id: taq_ttaq
-    name: Taq Polymerase
-    uniprot: P19821
-    ncbi_id: "1254278"
-    organism: Thermus aquaticus
-    length: 832
-    sequence: >-
-      MRGMLPLFEPKGRVLLVDGHHLAYRTFHALKGLTTSRGEPVQAVYGFAKSLLKALKEDGDAVIVVFDAKAP
-      SFRHEAYGGYKAGRAPTPEDFPRQLALIKELVDLLGLARLEVPGYEADDVLASLAKKAEKEGYEVRILTAD
-      KDLYQLLSDRIHVLHPEGYLITPAWLWEKYGLRPDQWADYRALTGDESDNLPGVKGIGEKTARKLLEEWGS
-      LEALLKNLDRLKPAIREKILAHMDDLKLSWDLAKVRTDLPLEVDFAKRREPDRERLRAFLERLEFGSLLHE
-      FGLLESPKALEEAPWPPPEGAFVGFVLSRKEPMWADLLALAAARGGRVHRAPEPYKALRDLKEARGLLAKD
-      LVLALGEPNFKRLHSVRLRMRVGPAIEAGIKGSPGSMKSTLKSTLKSVNLGLGSLMTSKNVALVVDNDEWR
-      YPQHWDRYFDRIYRLKHPAPDELALLPRWGEAKFVVLTTVGNWVVERQFAKLYGDFTLHKFFTQLVEKAFL
-      ATRPADVNWVWHFGGVLEALLTWLRNTHFNQRLRLGLKGLLDLPIDAIETLDELGIADVLRRMFYNLYTPA
-      ERPGVPQQEYLVHLFPRLLKAALKKWPELLKLMEQFEVGLPKQRDAVQHLEAVLLKLKGEKANPFPNDYEAW
-      RDEDPWVQDLAEFDVGLSNFRSWMRQHLAGYPRLRSLLEEGYLRLVGIVVEGWALLDPCSGYAKDGLAVIGV
-      EKLMPLGHSLTDPYYVKPWTMAMRSRYLPGVTSPGELSVLGSGWGRTMLKKRLFGVPSPFFLSQVEQMLKEL
-      GLALDYSFAALWGPTHKLTYHAARLGMEVVPVLGPALGAQAGGPDPALMAAMAAAAKGR
-    description: Thermostable DNA polymerase used for PCR
-
-  # Human Ubiquitin (P62988)
-  - id: ubiquitin_human
-    name: Human Ubiquitin
-    uniprot: P62988
-    ncbi_id: "7311"
-    organism: Homo sapiens
-    length: 76
-    sequence: >-
-      MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVL
-      RLRGG
-    description: Classic protein degradation signal - highly conserved
-
-
-
-# Preset YAML configs for Boltz-2
+- id: tdt_human
+  name: Human TdT (P04053)
+  uniprot: P04053
+  length: 509
+  sequence: MDPPRASHLSPRKKKRPRQTGALMASSPPQDIKFQDLVVFILEKKMGTTRRAFLMELARRKGFRVENELSD
+    SVTHIVAENNSSGSDVLEWLQAQKVQVSSQPELLDVSAWLIECIRAGKPVEMTGKHQLVVRRDYSDWSTNPGP PKTPPIAVQKISQYACQRRTTLNNCNQIFTDAFDILAENCEFRENEDSSCVTFMRAASVLKSLPFTIISMKDT
+    EGIPCLGSKVKGIIEEIIEDGESSEVKAVLNDERYQSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSDDKSL KFTRMQKAGFLYYEDLVSCVTRAEAEAVSVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
+    DEQLLQKVMNLWEKKGLLLYYDLVESTFEKLRLPSRKVDALDHFQKCFLIFKLPRQRVDSDQSSWQEGKTWKAI RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMILDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
+    EPWERNA
+  description: Terminal deoxynucleotidyl transferase - template-independent DNA polymerase
+- id: klenow_ecoli
+  name: E. coli Klenow Fragment (P00582)
+  uniprot: P00582
+  length: 605
+  sequence: MKRQCLQVLNLIMHKHPGLGPPPLRLDNLTRQDVDSQVAAHFLNFLLGEAHRYHQGQVVIGRDAQIGQYSGL
+    AIRDFLALDWVLGKYLPHSAGLARRNTGGILAFAALGMNSPPDQVMRVCALLQHIGLKQVGVSKITELHARF QMALAALWQKRRGGVLVVAANDVTPQEHFSAMQSLLDAEVKTVVRRDLLDENDIGVVSNNRFQMTLPFLQPD
+    VIAPRAQHALRDAGTGFAAEWLEAVLVLGHAAADKAGAARPRWQTLAALKEGARVLLDTHSTDYGVADGQATR DRQLYRFTLQAAGLLPPLFVQAGMEEYLSADAQAGGLFNRKAARHTGDFGHDFMQALAHRFAQKNAAALEGVL
+    QRALTALDLAKMAGVSDLKTPLMRIYHRMINTHQVHHLLLQPGKPLDTSEARLAAFARQAGVTLLSAPRVLAD AQNAVLAGPVARLKPLYGTVAEIRSRQLHRALAALRGQQQHQILAQVAGTFPGFQGSMQALDAAVACARHQAL
+    LLAAECPKVLGYSVTDANREARDVATALAAHDLQTLTALAGDLARAAVEQFLPELSELGLTLVSGLHLDQVSV PHAGPFDDPMRPYLPPLLFK
+  description: Klenow fragment of E. coli DNA polymerase I - 3'-5' exonuclease
+- id: taq_ttaq
+  name: Taq DNA Polymerase (P19821)
+  uniprot: P19821
+  length: 832
+  sequence: MRGMLPLFEPKGRVLLVDGHHLAYRTFHALKGLTTSRGEPVQAVYGFAKSLLKALKEDGDAVIVVFDAKAPS
+    FRHEAYGGYKAGRAPTPEDFPRQLALIKELVDLLGLARLEVPGYEADDVLASLAKKAEKEGYEVRILTADKD LYQLLSDRIHVLHPEGYLITPAWLWEKYGLRPDQWADYRALTGDESDNLPGVKGIGEKTARKLLEEWGSLEA
+    LLKNLDRLKPAIREKILAHMDDLKLSWDLAKVRTDLPLEVDFAKRREPDRERLRAFLERLEFGSLLHEFGLL ESPKALEEAPWPPPEGAFVGFVLSRKEPMWADLLALAAARGGRVHRAPEPYKALRDLKEARGLLAKDLSVLAL
+    REGLGLPPGDDPMLLAYLLDPSNTTPEGVARRYGGEWTEEAGERAALSERLFANLWGRLEGEERLLWLYREVE RPLSAVLAHMEATGVRLDVAYLRALSLEVAEEIARLEAEVFRLAGHPFNLNSRDQLERVLFDELGLPAIGKT
+    EKTGKRSTSAAVLEALREAHPIVEKILQYRELTKLKSTYIDPLPDLIHPRTGRLHTRFNQTATATGRLSSSDP NLFKPLLLGEGEAVQIPDLAILLMVAHHPFRNPTGPHGPPSREDLLEVYGSQPSEKHLDYAGALEPLPGLEEL
+    RRLAQVLHPLVGEARLHARPELEPALEALVKLTTEQRALRMARGRYLEAVRDLAGVSRPRVERARSQLALPVL HVSSLNPAIFAAGLLAAAVLLARGPNAWSPELTLEAALRALKRAEPAQEAASLGALLPGLGRLLKEG
+  description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
+- id: gfp_avictoria
+  name: Green Fluorescent Protein (P42212)
+  uniprot: P42212
+  length: 238
+  sequence: MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTFSYGVQCFS
+    RYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYN YNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRD
+    HMVLLEFVTAAGITHGMDELYK
+  description: Aequorea victoria green fluorescent protein - common reporter
+- id: lysozyme_gallus
+  name: Chicken Lysozyme (P00698)
+  uniprot: P00698
+  length: 147
+  sequence: MRSLLILVLCFLPLAALGKVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNTDGSTDYG
+    ILQINSRWWCNDGRTPGSRNLCNIPCSALLSSDITASVNCAKKIVSDGNGMNAWVAWRNRCKGTDVQAWIRG CRLH
+  description: Gallus gallus lysozyme C - antibacterial enzyme, crystallography standard
 preset_yamls:
-  - id: boltz_binder_simple
-    name: Simple Binder Config
-    description: Basic Boltz-2 config for binder-target prediction
-    content: |
-      version: 1
-      sequences:
-        - protein:
-            id: A
-            sequence: TARGET_SEQUENCE_HERE
-        - protein:
-            id: B
-            sequence: BINDER_SEQUENCE_HERE
-
-  - id: boltz_monomer
-    name: Monomer Prediction
-    description: Single chain structure prediction
-    content: |
-      version: 1
-      sequences:
-        - protein:
-            id: A
-            sequence: YOUR_SEQUENCE_HERE
-
-# Preset contig specifications for RFdiffusion
+- id: boltz_binder_simple
+  name: Simple Binder Config
+  description: Basic Boltz-2 config for binder-target prediction
+  content: "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: TARGET_SEQUENCE_HERE\n\
+    \  - protein:\n      id: B\n      sequence: BINDER_SEQUENCE_HERE\n"
+- id: boltz_monomer
+  name: Monomer Prediction
+  description: Single chain structure prediction
+  content: "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: YOUR_SEQUENCE_HERE\n"
 preset_contigs:
-  # Generic contigs (for benchmark structures)
-  - id: binder_50_100
-    name: Generic Binder 50-100 residues
-    value: "[A17-145/0 50-100]"
-    description: "For benchmark targets (TrkA, IL7RA). Edit chain/residue numbers for other structures."
-    
-  - id: binder_70_90
-    name: Generic Binder 70-90 residues
-    value: "[A17-145/0 70-90]"
-    description: "For benchmark targets. Medium size binder."
-    
-  - id: monomer_100
-    name: Monomer 100 residues
-    value: "[100-100]"
-    description: Generate 100 residue monomer de novo
-    
-  - id: monomer_variable
-    name: Monomer 50-150 residues
-    value: "[50-150]"
-    description: Generate variable-length monomer
-    
-  # TdT-specific (1KEJ, Chain A, res 148-510 with gaps at 387-389, 421-423)
-  - id: tdt_binder_50_100
-    name: TdT Binder 50-100 residues
-    value: "[A148-386/A390-420/A424-510/0 50-100]"
-    description: "For Human TdT (1KEJ). Chain A with gap residues excluded, design 50-100 residue binder."
-    
-  # Klenow-specific (1KLN, Chain A primary)
-  - id: klenow_binder_50_100
-    name: Klenow Binder 50-100 residues
-    value: "[A324-928/0 50-100]"
-    description: "For E. coli Klenow (1KLN). Keep chain A, design 50-100 residue binder."
-    
-  # Taq-specific (1TAQ, Chain A, res 10-832)
-  - id: taq_binder_50_100
-    name: Taq Binder 50-100 residues
-    value: "[A10-832/0 50-100]"
-    description: "For Taq polymerase (1TAQ). Keep entire chain A, design 50-100 residue binder."
-
-# NTP presets for LigandMPNN
+- id: binder_50_100
+  name: Generic Binder 50-100 residues
+  value: '[A17-145/0 50-100]'
+  description: For benchmark targets (TrkA, IL7RA). Edit chain/residue numbers for
+    other structures.
+- id: binder_70_90
+  name: Generic Binder 70-90 residues
+  value: '[A17-145/0 70-90]'
+  description: For benchmark targets. Medium size binder.
+- id: monomer_100
+  name: Monomer 100 residues
+  value: '[100-100]'
+  description: Generate 100 residue monomer de novo
+- id: monomer_variable
+  name: Monomer 50-150 residues
+  value: '[50-150]'
+  description: Generate variable-length monomer
+- id: tdt_binder_50_100
+  name: TdT Binder 50-100 residues
+  value: '[A148-386/A390-420/A424-510/0 50-100]'
+  description: For Human TdT (1KEJ). Chain A with gap residues excluded, design 50-100
+    residue binder.
+- id: klenow_binder_50_100
+  name: Klenow Binder 50-100 residues
+  value: '[A324-928/0 50-100]'
+  description: For E. coli Klenow (1KLN). Keep chain A, design 50-100 residue binder.
+- id: taq_binder_50_100
+  name: Taq Binder 50-100 residues
+  value: '[A10-832/0 50-100]'
+  description: For Taq polymerase (1TAQ). Keep entire chain A, design 50-100 residue
+    binder.
 preset_ntps:
-  - id: dATP
-    name: dATP (DNA)
-    smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
-    description: Deoxyadenosine triphosphate - pairs with thymine
-    
-  - id: dTTP
-    name: dTTP (DNA)
-    smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
-    description: Deoxythymidine triphosphate - pairs with adenine
-    
-  - id: dGTP
-    name: dGTP (DNA)
-    smiles: "Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1"
-    description: Deoxyguanosine triphosphate - pairs with cytosine
-    
-  - id: dCTP
-    name: dCTP (DNA)
-    smiles: "Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1"
-    description: Deoxycytidine triphosphate - pairs with guanine
-    
-  - id: ATP
-    name: ATP (RNA/Energy)
-    smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
-    description: Adenosine triphosphate - energy currency and RNA nucleotide
-
-# Preset amino acid sequences for structure prediction
-preset_sequences:
-  # Human TdT (P04053) - 509 amino acids
-  - id: tdt_human
-    name: Human TdT (P04053)
-    uniprot: P04053
-    length: 509
-    sequence: >-
-      MDPPRASHLSPRKKKRPRQTGALMASSPPQDIKFQDLVVFILEKKMGTTRRAFLMELARRKGFRVENELSD
-      SVTHIVAENNSSGSDVLEWLQAQKVQVSSQPELLDVSAWLIECIRAGKPVEMTGKHQLVVRRDYSDWSTNPGP
-      PKTPPIAVQKISQYACQRRTTLNNCNQIFTDAFDILAENCEFRENEDSSCVTFMRAASVLKSLPFTIISMKDT
-      EGIPCLGSKVKGIIEEIIEDGESSEVKAVLNDERYQSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSDDKSL
-      KFTRMQKAGFLYYEDLVSCVTRAEAEAVSVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
-      DEQLLQKVMNLWEKKGLLLYYDLVESTFEKLRLPSRKVDALDHFQKCFLIFKLPRQRVDSDQSSWQEGKTWKAI
-      RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMILDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
-      EPWERNA
-    description: Terminal deoxynucleotidyl transferase - template-independent DNA polymerase
-    
-  # E. coli Klenow Fragment (P00582) - residues 324-928 
-  - id: klenow_ecoli
-    name: E. coli Klenow Fragment (P00582)
-    uniprot: P00582
-    length: 605
-    sequence: >-
-      MKRQCLQVLNLIMHKHPGLGPPPLRLDNLTRQDVDSQVAAHFLNFLLGEAHRYHQGQVVIGRDAQIGQYSGL
-      AIRDFLALDWVLGKYLPHSAGLARRNTGGILAFAALGMNSPPDQVMRVCALLQHIGLKQVGVSKITELHARF
-      QMALAALWQKRRGGVLVVAANDVTPQEHFSAMQSLLDAEVKTVVRRDLLDENDIGVVSNNRFQMTLPFLQPD
-      VIAPRAQHALRDAGTGFAAEWLEAVLVLGHAAADKAGAARPRWQTLAALKEGARVLLDTHSTDYGVADGQATR
-      DRQLYRFTLQAAGLLPPLFVQAGMEEYLSADAQAGGLFNRKAARHTGDFGHDFMQALAHRFAQKNAAALEGVL
-      QRALTALDLAKMAGVSDLKTPLMRIYHRMINTHQVHHLLLQPGKPLDTSEARLAAFARQAGVTLLSAPRVLAD
-      AQNAVLAGPVARLKPLYGTVAEIRSRQLHRALAALRGQQQHQILAQVAGTFPGFQGSMQALDAAVACARHQAL
-      LLAAECPKVLGYSVTDANREARDVATALAAHDLQTLTALAGDLARAAVEQFLPELSELGLTLVSGLHLDQVSV
-      PHAGPFDDPMRPYLPPLLFK
-    description: Klenow fragment of E. coli DNA polymerase I - 3'-5' exonuclease
-    
-  # Taq Polymerase (P19821) - 832 amino acids
-  - id: taq_ttaq
-    name: Taq DNA Polymerase (P19821)
-    uniprot: P19821
-    length: 832
-    sequence: >-
-      MRGMLPLFEPKGRVLLVDGHHLAYRTFHALKGLTTSRGEPVQAVYGFAKSLLKALKEDGDAVIVVFDAKAPS
-      FRHEAYGGYKAGRAPTPEDFPRQLALIKELVDLLGLARLEVPGYEADDVLASLAKKAEKEGYEVRILTADKD
-      LYQLLSDRIHVLHPEGYLITPAWLWEKYGLRPDQWADYRALTGDESDNLPGVKGIGEKTARKLLEEWGSLEA
-      LLKNLDRLKPAIREKILAHMDDLKLSWDLAKVRTDLPLEVDFAKRREPDRERLRAFLERLEFGSLLHEFGLL
-      ESPKALEEAPWPPPEGAFVGFVLSRKEPMWADLLALAAARGGRVHRAPEPYKALRDLKEARGLLAKDLSVLAL
-      REGLGLPPGDDPMLLAYLLDPSNTTPEGVARRYGGEWTEEAGERAALSERLFANLWGRLEGEERLLWLYREVE
-      RPLSAVLAHMEATGVRLDVAYLRALSLEVAEEIARLEAEVFRLAGHPFNLNSRDQLERVLFDELGLPAIGKT
-      EKTGKRSTSAAVLEALREAHPIVEKILQYRELTKLKSTYIDPLPDLIHPRTGRLHTRFNQTATATGRLSSSDP
-      NLFKPLLLGEGEAVQIPDLAILLMVAHHPFRNPTGPHGPPSREDLLEVYGSQPSEKHLDYAGALEPLPGLEEL
-      RRLAQVLHPLVGEARLHARPELEPALEALVKLTTEQRALRMARGRYLEAVRDLAGVSRPRVERARSQLALPVL
-      HVSSLNPAIFAAGLLAAAVLLARGPNAWSPELTLEAALRALKRAEPAQEAASLGALLPGLGRLLKEG
-    description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
-
-  # GFP (P42212) - 238 amino acids
-  - id: gfp_avictoria
-    name: Green Fluorescent Protein (P42212)
-    uniprot: P42212
-    length: 238
-    sequence: >-
-      MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTFSYGVQCFS
-      RYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYN
-      YNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRD
-      HMVLLEFVTAAGITHGMDELYK
-    description: Aequorea victoria green fluorescent protein - common reporter
-
-  # Chicken Lysozyme (P00698) - 147 amino acids
-  - id: lysozyme_gallus
-    name: Chicken Lysozyme (P00698)
-    uniprot: P00698
-    length: 147
-    sequence: >-
-      MRSLLILVLCFLPLAALGKVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNTDGSTDYG
-      ILQINSRWWCNDGRTPGSRNLCNIPCSALLSSDITASVNCAKKIVSDGNGMNAWVAWRNRCKGTDVQAWIRG
-      CRLH
-    description: Gallus gallus lysozyme C - antibacterial enzyme, crystallography standard
+- id: dATP
+  name: dATP (DNA)
+  smiles: Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3
+  description: Deoxyadenosine triphosphate - pairs with thymine
+- id: dTTP
+  name: dTTP (DNA)
+  smiles: Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O
+  description: Deoxythymidine triphosphate - pairs with adenine
+- id: dGTP
+  name: dGTP (DNA)
+  smiles: Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1
+  description: Deoxyguanosine triphosphate - pairs with cytosine
+- id: dCTP
+  name: dCTP (DNA)
+  smiles: Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1
+  description: Deoxycytidine triphosphate - pairs with guanine
+- id: ATP
+  name: ATP (RNA/Energy)
+  smiles: Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O
+  description: Adenosine triphosphate - energy currency and RNA nucleotide

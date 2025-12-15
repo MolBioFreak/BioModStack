@@ -7,6 +7,8 @@ import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { PresetSelector } from './PresetSelector';
+import { LigandSelector, type LigandEntry } from './LigandSelector';
+import { StructureInput } from './StructureInput';
 
 interface FileBrowserProps {
     onSelect: (path: string) => void;
@@ -131,6 +133,8 @@ export function JobSubmission() {
     const [showSequenceManager, setShowSequenceManager] = useState(false);
     const [showTemplateManager, setShowTemplateManager] = useState(false);
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name?: string } | null>(null);
+    const [activeSequenceField, setActiveSequenceField] = useState<string>('sequence');
+    const [ligands, setLigands] = useState<LigandEntry[]>([]);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -154,6 +158,14 @@ export function JobSubmission() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
         },
+        onError: (error: any) => {
+            console.error('Job submission failed:', error);
+            const detail = error.response?.data?.detail;
+            const message = typeof detail === 'object'
+                ? JSON.stringify(detail, null, 2)
+                : (detail || error.message || error);
+            window.alert('Job Submission Failed:\n' + message);
+        }
     });
 
     const models = modelsData?.data ?? [];
@@ -250,19 +262,58 @@ export function JobSubmission() {
 
             console.log('Submitting job:', { name: jobName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
 
+            // Add complex_components if ligands are selected
+            const finalParams = ligands.length > 0 ? {
+                ...mergedParams,
+                complex_components: [
+                    { type: 'protein', id: 'A', sequence: mergedParams.sequence || params.sequence },
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+                ]
+            } : mergedParams;
+
             submitMutation.mutate({
                 name: jobName,
                 model_id: effectiveModelId,
                 mode: nextflowProfile,
-                params: mergedParams,
+                params: finalParams,
             });
         } else if (selectedModelId && selectedModeId) {
             // Manual mode
+
+            // Filter params to only include those defined in the selected mode
+            const filteredParams: Record<string, any> = {};
+            if (selectedMode && selectedMode.params) {
+                selectedMode.params.forEach((paramName: string) => {
+                    if (params[paramName] !== undefined && params[paramName] !== '') {
+                        filteredParams[paramName] = params[paramName];
+                    }
+                });
+            } else {
+                // Fallback if no params defined in mode (shouldn't happen for well-defined models)
+                Object.assign(filteredParams, params);
+            }
+
+            // specific check for ntp_type to ensure it's not sent if empty even if in params list
+            if (filteredParams['ntp_type'] === '') {
+                delete filteredParams['ntp_type'];
+            }
+
+            // Add complex_components if ligands are selected (e.g. for Complex Prediction)
+            const proteinSeq = filteredParams.sequence || filteredParams.protein_sequence;
+
+            const finalParams = ligands.length > 0 ? {
+                ...filteredParams,
+                complex_components: [
+                    { type: 'protein', id: 'A', sequence: proteinSeq },
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+                ]
+            } : filteredParams;
+
             submitMutation.mutate({
                 name: jobName,
                 model_id: selectedModelId,
                 mode: selectedModeId,
-                params: params,
+                params: finalParams,
             });
         } else {
             console.error('Submit failed: Template data not loaded or invalid mode', { wizardMode, templateData, selectedTemplateData });
@@ -330,20 +381,35 @@ export function JobSubmission() {
                                     onBack={() => setSelectedTemplateId(null)}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
                                         // Batch submit variants
+                                        console.log('DEBUG: predictorConfig received:', predictorConfig);
+                                        console.log('DEBUG: predictorConfig.ligands:', predictorConfig.ligands);
+                                        console.log('DEBUG: ligands length check:', predictorConfig.ligands?.length);
                                         const promises = variants.map((variant) => {
+                                            const jobParams = {
+                                                sequence: variant.sequence,
+                                                sequence_name: variant.name,
+                                                // Map predictor params
+                                                boltz_recycling_steps: predictorConfig.recycling_steps,
+                                                boltz_num_samples: predictorConfig.diffusion_samples,
+                                                boltz_sampling_steps: predictorConfig.sampling_steps,
+                                                num_parallel_jobs: predictorConfig.num_parallel_jobs,
+                                                boltz_use_msa: predictorConfig.use_msa,
+                                                pred_method: predictorConfig.predictor,
+                                                // Complex mode: include ligands/ions if any
+                                                ...(predictorConfig.ligands?.length ? {
+                                                    complex_components: [
+                                                        { type: 'protein', id: 'A', sequence: variant.sequence },
+                                                        ...predictorConfig.ligands
+                                                    ]
+                                                } : {})
+                                            };
+                                            console.log('DEBUG: Submitting job with params:', jobParams);
+                                            console.log('DEBUG: complex_components in params:', jobParams.complex_components);
                                             return submitMutation.mutateAsync({
                                                 name: `${jobNamePrefix}_${variant.name}`,
                                                 model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
                                                 mode: 'predict',
-                                                params: {
-                                                    sequence: variant.sequence,
-                                                    sequence_name: variant.name,
-                                                    // Map predictor params
-                                                    boltz_recycling_steps: predictorConfig.recycling_steps,
-                                                    boltz_num_samples: predictorConfig.diffusion_samples,
-                                                    boltz_use_msa: predictorConfig.use_msa,
-                                                    pred_method: predictorConfig.predictor
-                                                }
+                                                params: jobParams
                                             });
                                         });
 
@@ -547,7 +613,10 @@ export function JobSubmission() {
                                                         {/* Manage Library Button */}
                                                         <button
                                                             type="button"
-                                                            onClick={() => setShowSequenceManager(true)}
+                                                            onClick={() => {
+                                                                setActiveSequenceField(param.name);
+                                                                setShowSequenceManager(true);
+                                                            }}
                                                             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-sm rounded-lg transition-colors flex items-center gap-2"
                                                         >
                                                             📚 Sequence Library
@@ -562,6 +631,7 @@ export function JobSubmission() {
                                                                 type="button"
                                                                 onClick={() => {
                                                                     setSequenceToSave({ sequence: params[param.name], name: params['sequence_name'] || '' });
+                                                                    setActiveSequenceField(param.name);
                                                                     setShowSequenceManager(true);
                                                                 }}
                                                                 className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-600/30"
@@ -601,6 +671,17 @@ export function JobSubmission() {
                                     );
                                 })}
                             </div>
+
+                            {/* Ligand Selector - Show for structure prediction templates */}
+                            {(selectedTemplateData?.data?.preset_params?.pred_method ||
+                                selectedTemplateId?.includes('structure') ||
+                                selectedTemplateId?.includes('predict')) && (
+                                    <LigandSelector
+                                        ligands={ligands}
+                                        setLigands={setLigands}
+                                        showCustomSmiles={true}
+                                    />
+                                )}
                         </div>
                     </section>
                 )}
@@ -677,7 +758,10 @@ export function JobSubmission() {
                                                             <div className="flex gap-2">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => setShowSequenceManager(true)}
+                                                                    onClick={() => {
+                                                                        setActiveSequenceField(param.name);
+                                                                        setShowSequenceManager(true);
+                                                                    }}
                                                                     className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-sm transition-colors border border-emerald-600/30"
                                                                 >
                                                                     📚 Sequence Library
@@ -697,43 +781,19 @@ export function JobSubmission() {
                                                             />
                                                         </div>
                                                     ) : param.preset_type === 'pdb' ? (
-                                                        /* PDB file with preset dropdown and browse */
-                                                        <div className="space-y-2">
-                                                            <select
-                                                                value=""
-                                                                onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                                            >
-                                                                <option value="">Select preset PDB or browse...</option>
-                                                                <optgroup label="Benchmark Targets">
-                                                                    <option value="benchmarkdata/1www_trka.pdb">TrkA Receptor (1www)</option>
-                                                                    <option value="benchmarkdata/5o45_pd-l1.pdb">PD-L1 (5o45)</option>
-                                                                    <option value="benchmarkdata/3di3_il7ra.pdb">IL-7Rα (3di3)</option>
-                                                                    <option value="benchmarkdata/4zxb_ir.pdb">Insulin Receptor (4zxb)</option>
-                                                                    <option value="benchmarkdata/5vli_ha.pdb">Hemagglutinin (5vli)</option>
-                                                                </optgroup>
-                                                                <optgroup label="DNA Polymerases">
-                                                                    <option value="rcsb/1kej_tdt.pdb">TdT (1kej)</option>
-                                                                    <option value="rcsb/1kln_klenow.pdb">Klenow (1kln)</option>
-                                                                    <option value="rcsb/1taq_taq.pdb">Taq (1taq)</option>
-                                                                </optgroup>
-                                                            </select>
-                                                            <div className="flex gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    value={params[param.name] || ''}
-                                                                    onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
-                                                                    placeholder="/path/to/file.pdb"
-                                                                />
-                                                                <button
-                                                                    onClick={() => setShowFileBrowser(param.name)}
-                                                                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
-                                                                >
-                                                                    Browse
-                                                                </button>
-                                                            </div>
-                                                        </div>
+                                                        /* Enhanced PDB Structure Input */
+                                                        <StructureInput
+                                                            value={params[param.name] || ''}
+                                                            onChange={(v) => updateParam(param.name, v)}
+                                                            onBrowse={() => setShowFileBrowser(param.name)}
+                                                            showChainSelectors={selectedModel?.id === 'fampnn'}
+                                                            designChain={params['design_chain'] || 'A'}
+                                                            targetChain={params['target_chain'] || ''}
+                                                            onDesignChainChange={(c) => updateParam('design_chain', c)}
+                                                            onTargetChainChange={(c) => updateParam('target_chain', c)}
+                                                            enableMultiSelect={false}
+                                                            enableDirectory={false}
+                                                        />
                                                     ) : param.preset_type === 'ligand' ? (
                                                         /* Ligand/SMILES with preset dropdown and nucleotide converter */
                                                         <div className="space-y-3">
@@ -821,13 +881,47 @@ export function JobSubmission() {
                                                                 <p className="text-[10px] text-slate-600 mt-1">Max 15 nt. Press Enter or click Convert.</p>
                                                             </div>
 
-                                                            <input
-                                                                type="text"
-                                                                value={params[param.name] || ''}
-                                                                onChange={(e) => updateParam(param.name, e.target.value)}
-                                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
-                                                                placeholder="Or enter custom SMILES string..."
-                                                            />
+                                                            <div className="flex gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={params[param.name] || ''}
+                                                                    onChange={(e) => updateParam(param.name, e.target.value)}
+                                                                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm outline-none font-mono"
+                                                                    placeholder="Or enter custom SMILES string..."
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={async () => {
+                                                                        const smiles = params[param.name];
+                                                                        if (!smiles) return;
+                                                                        try {
+                                                                            const res = await fetch('http://localhost:8000/api/smiles/generate-3d', {
+                                                                                method: 'POST',
+                                                                                headers: { 'Content-Type': 'application/json' },
+                                                                                body: JSON.stringify({
+                                                                                    smiles,
+                                                                                    name: 'ligand_' + Date.now(),
+                                                                                    energy_minimize: true
+                                                                                })
+                                                                            });
+                                                                            const data = await res.json();
+                                                                            if (data.success && data.file_path) {
+                                                                                updateParam('ligand_pdb', data.file_path);
+                                                                                alert(`✓ 3D coordinates generated!\n${data.num_atoms} atoms, ${data.energy?.toFixed(1)} kcal/mol\nSaved: ${data.file_path}`);
+                                                                            } else {
+                                                                                alert('Error: ' + (data.error || 'Failed to generate 3D'));
+                                                                            }
+                                                                        } catch (err) {
+                                                                            console.error(err);
+                                                                            alert('Failed to generate 3D coordinates');
+                                                                        }
+                                                                    }}
+                                                                    className="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 text-green-300 rounded-lg text-sm transition-colors whitespace-nowrap"
+                                                                    title="Generate 3D coordinates from SMILES using RDKit"
+                                                                >
+                                                                    🧪 Generate 3D
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     ) : (param.type === 'file' || param.type === 'directory') ? (
                                                         <div className="flex gap-2">
@@ -860,6 +954,17 @@ export function JobSubmission() {
                                     </div>
                                 )
                                 }
+
+                                {/* Ligand Selector for Complex Prediction mode in manual/advanced mode */}
+                                {selectedModeId === 'complex' && (
+                                    <div className="pt-6 border-t border-slate-700/50">
+                                        <LigandSelector
+                                            ligands={ligands}
+                                            setLigands={setLigands}
+                                            showCustomSmiles={true}
+                                        />
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </section>
@@ -922,8 +1027,8 @@ export function JobSubmission() {
                 }}
                 onSelect={(seq) => {
                     // Load selected sequence into the current sequence param
-                    updateParam('sequence', seq.sequence);
-                    if (seq.name) updateParam('sequence_name', seq.name);
+                    updateParam(activeSequenceField, seq.sequence);
+                    if (seq.name && activeSequenceField === 'sequence') updateParam('sequence_name', seq.name);
                 }}
                 initialSequence={sequenceToSave?.sequence || ''}
                 initialName={sequenceToSave?.name || ''}
