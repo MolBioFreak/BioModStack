@@ -67,9 +67,8 @@ params:
 
   - name: af2_extra_config
     type: string
-    description: Additional AF2 parameters
+    description: "Additional AF2 CLI arguments (e.g., '-recycle 3')"
     required: false
-    hidden: true
 
 enabled: true
 experimental: false

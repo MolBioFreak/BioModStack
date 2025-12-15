@@ -47,6 +47,9 @@ class DesignResponse(BaseModel):
     # Boltz-2 specific
     conf_score: Optional[float]
     ptm: Optional[float]
+    ligand_iptm: Optional[float]
+    affinity_score: Optional[float]
+    binder_probability: Optional[float]
     
     # Per-residue metrics (for charts)
     residue_plddt: Optional[List[float]] = None

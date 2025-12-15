@@ -5,6 +5,7 @@ interface Props {
     format?: 'cif' | 'pdb';
     alphafoldView?: boolean;  // Enable pLDDT coloring
     showSequencePanel?: boolean;
+    hideControls?: boolean;  // Hide Mol* control panels (for compact view)
     height?: number | string;
     backgroundColor?: string;
 }
@@ -56,6 +57,7 @@ export default function MolstarViewer({
     format = 'pdb',
     alphafoldView = true,  // pLDDT coloring on by default
     showSequencePanel = true,
+    hideControls = true,  // Hide controls by default for compact view
     height = 500,
     backgroundColor = '#0f172a'
 }: Props) {
@@ -132,14 +134,16 @@ export default function MolstarViewer({
                 'bg-color-g': bgColor.g.toString(),
                 'bg-color-b': bgColor.b.toString(),
                 'alphafold-view': alphafoldView ? 'true' : 'false',
-                // Built-in UI panels - enable full Mol* functionality
-                'hide-controls': 'false',
-                'sequence-panel': showSequencePanel ? 'true' : 'false',
-                'left-panel': 'true',   // Control panel on left (collapsed by default)
-                'right-panel': 'true',  // Structure info panel on right
-                'loading-overlay': 'true',  // Show loading indicator
-                'select-interaction': 'true',  // Enable click selection on structure and sequence
-                'granularity': 'residue',  // Selection granularity
+                // Built-in UI panels - controlled by hideControls prop
+                'hide-controls': hideControls ? 'true' : 'false',
+                'sequence-panel': 'false',  // Always hide sequence panel initially
+                'left-panel': 'false',  // Collapse left panel
+                'right-panel': 'false',  // Collapse right panel  
+                'expanded': 'false',  // Start with settings collapsed
+                'landscape': 'true',  // Better fit for wide containers
+                'loading-overlay': 'true',
+                'select-interaction': 'true',
+                'granularity': 'residue',
                 'pdbe-link': 'false',
                 style: { width: '100%', height: '100%', display: 'block' }
             })}

@@ -146,6 +146,9 @@ async def launch_nextflow_job(
                     else:
                         job.status = JobStatus.FAILED.value
                         job.error_message = f"Nextflow exited with code {process.returncode}"
+                        logger.error(f"Nextflow failed for job {job_id} with code {process.returncode}")
+                        if stdout:
+                            logger.error(f"Nextflow output:\n{stdout.decode('utf-8', errors='replace')}")
                 
                 job.completed_at = datetime.utcnow()
                 await session.commit()
@@ -177,6 +180,13 @@ def build_nextflow_command(
     
     Converts all params to --key value flags.
     """
+    # DEBUG: Log all params to trace complex_components
+    logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
+    if 'complex_components' in params:
+        logger.info(f"complex_components found with {len(params['complex_components'])} items")
+    else:
+        logger.warning("complex_components NOT in params - ligands will not be used!")
+    
     # Mode to profile mapping for modes that need translation
     mode_to_profile = {
         # structure_validation and structure_prediction use pred_method
@@ -235,10 +245,22 @@ def build_nextflow_command(
         # BoltzGen param mapping
         'target_pdb': 'boltzgen_target_pdb',
         'ligand_description': 'boltzgen_ligand_smiles',
+        # BoltzGen DNA-Protein Complex params
+        'protein_sequence': 'boltzgen_protein_sequence',
+        'dna_template_seq': 'boltzgen_dna_template_seq',
+        'dna_primer_seq': 'boltzgen_dna_primer_seq',
+        'dna_structure': 'boltzgen_dna_structure',
+        'scaffold_length': 'boltzgen_scaffold_length',
+        'num_designs': 'boltzgen_num_designs',
+        'batch_size': 'boltzgen_batch_size',
+        'ntp_type': 'boltzgen_ntp_type',
+        'binding_site_residues': 'boltzgen_binding_site_residues',
+        'catalytic_site': 'boltzgen_catalytic_site',
         # Boltz-2 structure prediction params
         'boltz_recycling_steps': 'boltz_recycling_steps',
         'boltz_sampling_steps': 'boltz_sampling_steps',
         'boltz_num_samples': 'boltz_num_samples',
+        'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
         'boltz_use_msa': 'boltz_use_msa',
         'boltz_method': 'boltz_method',
         # RF3 structure prediction params
@@ -249,6 +271,20 @@ def build_nextflow_command(
         'sequence': 'sequence_input',
         'sequence_name': 'sequence_name',
     }
+    
+    # Handle complex_components specially - write JSON file for BoltzFromComplex process
+    complex_components = params.pop('complex_components', None)
+    
+    
+    if complex_components:
+        import json
+        complex_json_path = Path(output_dir) / "complex_definition.json"
+        # Ensure output directory exists
+        complex_json_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(complex_json_path, 'w') as f:
+            json.dump({"components": complex_components}, f, indent=2)
+        logger.info(f"Wrote complex definition to {complex_json_path}")
+        cmd.extend(["--complex_json_path", str(complex_json_path)])
     
     # Dynamic parameter passing
     for key, value in params.items():
