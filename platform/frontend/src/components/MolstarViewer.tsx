@@ -4,7 +4,6 @@ interface Props {
     structureUrl?: string;
     format?: 'cif' | 'pdb';
     alphafoldView?: boolean;  // Enable pLDDT coloring
-    showSequencePanel?: boolean;
     hideControls?: boolean;  // Hide Mol* control panels (for compact view)
     height?: number | string;
     backgroundColor?: string;
@@ -31,12 +30,12 @@ function loadScript(callback: () => void) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.type = 'text/css';
-    link.href = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.3.0/build/pdbe-molstar.css';
+    link.href = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar.css';
     document.head.appendChild(link);
 
     // Load JS
     const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.3.0/build/pdbe-molstar-component.js';
+    script.src = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar-component.js';
     script.async = true;
     script.onload = () => {
         console.log('pdbe-molstar web component script loaded');
@@ -56,7 +55,6 @@ export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
     alphafoldView = true,  // pLDDT coloring on by default
-    showSequencePanel = true,
     hideControls = true,  // Hide controls by default for compact view
     height = 500,
     backgroundColor = '#0f172a'

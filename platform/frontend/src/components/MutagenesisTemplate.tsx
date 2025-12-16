@@ -40,7 +40,9 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         diffusion_samples: 1,
         sampling_steps: 50,
         num_parallel_jobs: 1,
-        use_msa: true
+        use_msa: true,
+        use_potentials: false,
+        step_scale: 1.638
     });
 
     // Complex Mode: Ligands & Ions
@@ -430,6 +432,32 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
                             />
                             <label className="text-slate-300">Generate MSA</label>
+                        </div>
+                        <div className="flex items-center gap-2 pt-6">
+                            <input
+                                type="checkbox"
+                                checked={predictorParams.use_potentials}
+                                onChange={(e) => setPredictorParams(p => ({ ...p, use_potentials: e.target.checked }))}
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
+                            />
+                            <label className="text-slate-300" title="Enable physics-based potentials (Boltz-2x). More accurate but slower.">Use Potentials (Boltz-2x)</label>
+                        </div>
+                        <div>
+                            <label className="text-slate-400 block mb-1" title="Step scale for diffusion (lower = more diverse, higher = more conserved). Default: 1.638">Step Scale</label>
+                            <input
+                                type="range"
+                                min={0.5}
+                                max={3.0}
+                                step={0.1}
+                                value={predictorParams.step_scale}
+                                onChange={(e) => setPredictorParams(p => ({ ...p, step_scale: parseFloat(e.target.value) }))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>0.5 (diverse)</span>
+                                <span className="text-slate-300 font-medium">{predictorParams.step_scale.toFixed(1)}</span>
+                                <span>3.0 (conserved)</span>
+                            </div>
                         </div>
                     </div>
                 </section>

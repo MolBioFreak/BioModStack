@@ -174,17 +174,30 @@ async def ingest_loose_files(
                 # Filename format: confidence_DESIGNNAME.json
                 design_name = json_file.stem.replace("confidence_", "")
                 
+                # Skip input templates (no numeric suffix) - these are not actual designs
+                # Actual designs are named like: boltzgen_input_0, boltzgen_input_1, etc.
+                import re
+                if not re.search(r'_\d+$', design_name):
+                    print(f"[Ingester] Skipping input template: {design_name}")
+                    continue
+                
                 if design_name in ingested_names:
                     continue
                 
-                # Look for corresponding PDB
-                pdb_path = search_dir / f"{design_name}.pdb"
-                if not pdb_path.exists():
-                    pdb_path = output_path / "pdb_files" / f"{design_name}.pdb"
-                if not pdb_path.exists():
-                    pdb_path = output_path / "pdb_files" / "predictions" / f"{design_name}.pdb"
+                # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
+                structure_path = search_dir / f"{design_name}.cif"
+                if not structure_path.exists():
+                    structure_path = output_path / "pdb_files" / f"{design_name}.cif"
                 
-                if not pdb_path.exists():
+                if not structure_path.exists():
+                    # Fallback to PDB
+                    structure_path = search_dir / f"{design_name}.pdb"
+                    if not structure_path.exists():
+                        structure_path = output_path / "pdb_files" / f"{design_name}.pdb"
+                    if not structure_path.exists():
+                        structure_path = output_path / "pdb_files" / "predictions" / f"{design_name}.pdb"
+                
+                if not structure_path.exists():
                     continue
                     
                 # Read Boltz2 metrics
@@ -227,14 +240,14 @@ async def ingest_loose_files(
                         print(f"[Ingester] Error parsing affinity file {affinity_file}: {e}")
 
                 # Extract per-residue pLDDT from PDB B-factors
-                _, residue_plddt = extract_plddt_from_pdb(pdb_path)
+                _, residue_plddt = extract_plddt_from_pdb(structure_path)
                 
                 # Create design
                 design = Design(
                     id=str(uuid.uuid4()),
                     job_id=job_id,
                     name=design_name,
-                    pdb_path=str(pdb_path),
+                    pdb_path=str(structure_path),
                     json_path=str(json_file),
                     
                     # Metrics

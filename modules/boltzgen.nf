@@ -44,7 +44,6 @@ process PrepBoltzGenInput {
 process RunBoltzGen {
     label 'BoltzGen'
     label 'gpu'
-    containerOptions "--bind ${projectDir}/patches/confidence.py:/opt/venv/lib/python3.11/site-packages/boltzgen/model/modules/confidence.py"
     publishDir "${params.out_dir}/run/boltzgen", mode: 'copy', pattern: "*.log"
     // Wrapper outputs converted PDBs + JSONs to output/designs/
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }

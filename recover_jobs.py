@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Point to the database
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///platform/api/proteindj.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///platform/api/biomodstack.db"
 
 # Add api to path
 sys.path.append(os.path.join(os.getcwd(), 'platform', 'api'))
