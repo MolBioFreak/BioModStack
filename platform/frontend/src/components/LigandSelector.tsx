@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { OligoBuilderModal } from './OligoBuilderModal';
 
 export interface LigandEntry {
     id: string;
-    type: 'ligand' | 'ion';
+    type: 'ligand' | 'ion' | 'dna' | 'rna' | 'peptide';
     ccd?: string;
     smiles?: string;
+    sequence?: string;  // For DNA/RNA/peptide sequences
     name: string;
 }
 
@@ -35,9 +37,70 @@ const AVAILABLE_LIGANDS = [
     { ccd: 'CL', name: 'Cl⁻ (Chloride Ion)', type: 'ion' as const },
 ];
 
+// Helper function to generate reverse complement
+const reverseComplement = (seq: string, isRna: boolean = false): string => {
+    const complement: Record<string, string> = isRna
+        ? { 'A': 'U', 'U': 'A', 'C': 'G', 'G': 'C' }
+        : { 'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C' };
+    return seq.split('').reverse().map(base => complement[base] || base).join('');
+};
+
 export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }: LigandSelectorProps) {
     const [customSmiles, setCustomSmiles] = useState('');
     const [customName, setCustomName] = useState('');
+    const [dnaSequence, setDnaSequence] = useState('');
+    const [rnaSequence, setRnaSequence] = useState('');
+    const [isDsDna, setIsDsDna] = useState(false);
+    const [isDsRna, setIsDsRna] = useState(false);
+    const [peptideSequence, setPeptideSequence] = useState('');
+    const [showOligoBuilder, setShowOligoBuilder] = useState(false);
+
+    const addNucleicAcid = (type: 'dna' | 'rna', sequence: string, isDoubleStranded: boolean) => {
+        if (sequence.trim()) {
+            const isRna = type === 'rna';
+            const validChars = isRna ? /[^AUCG]/g : /[^ATCG]/g;
+            const validSeq = sequence.toUpperCase().replace(validChars, '');
+            if (validSeq.length > 0) {
+                const baseId = ligands.length;
+                // Add template strand
+                setLigands(prev => {
+                    const newLigands = [...prev, {
+                        id: String.fromCharCode(66 + baseId), // B, C, D...
+                        type: type,
+                        sequence: validSeq,
+                        name: `${type.toUpperCase()} 5'→3' (${validSeq.length}nt)`
+                    }];
+                    // Add complementary strand for double-stranded
+                    if (isDoubleStranded) {
+                        const complement = reverseComplement(validSeq, isRna);
+                        newLigands.push({
+                            id: String.fromCharCode(66 + baseId + 1),
+                            type: type,
+                            sequence: complement,
+                            name: `${type.toUpperCase()} 3'→5' (${complement.length}nt)`
+                        });
+                    }
+                    return newLigands;
+                });
+                if (type === 'dna') setDnaSequence('');
+                else setRnaSequence('');
+            }
+        }
+    };
+
+    const addPeptide = () => {
+        const validSeq = peptideSequence.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, '');
+        if (validSeq.length >= 3 && validSeq.length <= 15) {
+            setLigands(prev => [...prev, {
+                id: String.fromCharCode(66 + prev.length),
+                type: 'peptide',
+                sequence: validSeq,
+                name: `Peptide (${validSeq.length}aa)`
+            }]);
+            setPeptideSequence('');
+        }
+    };
+
 
     const addLigandByCcd = (ccd: string) => {
         const selected = AVAILABLE_LIGANDS.find(l => l.ccd === ccd);
@@ -72,8 +135,8 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
         <section className="pt-6 border-t border-slate-800">
             <div className="flex justify-between items-center mb-4">
                 <div>
-                    <h3 className="text-sm font-semibold text-slate-200">Ligands & Cofactors</h3>
-                    <p className="text-xs text-slate-500">Add small molecules or ions to the prediction (e.g., ATP, Mg²⁺)</p>
+                    <h3 className="text-sm font-semibold text-slate-200">Complex Components</h3>
+                    <p className="text-xs text-slate-500">Add DNA, RNA, ligands, or ions to the prediction</p>
                 </div>
             </div>
 
@@ -133,20 +196,126 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false }
                 )}
             </div>
 
+            {/* DNA/RNA Sequence Input */}
+            <div className="mt-4 space-y-3">
+                {/* DNA Input with SS/DS Toggle */}
+                <div className="flex gap-2 items-center">
+                    <span className="text-xs text-blue-400 w-12">DNA:</span>
+                    <div className="flex items-center gap-1 bg-slate-800 rounded-lg p-0.5">
+                        <button
+                            onClick={() => setIsDsDna(false)}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${!isDsDna ? 'bg-blue-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >SS</button>
+                        <button
+                            onClick={() => setIsDsDna(true)}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${isDsDna ? 'bg-blue-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >DS</button>
+                    </div>
+                    <input
+                        type="text"
+                        value={dnaSequence}
+                        onChange={(e) => setDnaSequence(e.target.value.toUpperCase().replace(/[^ATCG]/g, ''))}
+                        placeholder={isDsDna ? "Template strand 5'→3' (A, T, C, G)..." : "DNA sequence (A, T, C, G)..."}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono"
+                    />
+                    <button
+                        onClick={() => addNucleicAcid('dna', dnaSequence, isDsDna)}
+                        disabled={!dnaSequence.trim()}
+                        className="px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg text-sm hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                    >
+                        + Add {isDsDna ? 'dsDNA' : 'ssDNA'}
+                    </button>
+                </div>
+
+                {/* RNA Input with SS/DS Toggle */}
+                <div className="flex gap-2 items-center">
+                    <span className="text-xs text-purple-400 w-12">RNA:</span>
+                    <div className="flex items-center gap-1 bg-slate-800 rounded-lg p-0.5">
+                        <button
+                            onClick={() => setIsDsRna(false)}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${!isDsRna ? 'bg-purple-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >SS</button>
+                        <button
+                            onClick={() => setIsDsRna(true)}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${isDsRna ? 'bg-purple-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >DS</button>
+                    </div>
+                    <input
+                        type="text"
+                        value={rnaSequence}
+                        onChange={(e) => setRnaSequence(e.target.value.toUpperCase().replace(/[^AUCG]/g, ''))}
+                        placeholder={isDsRna ? "Template strand 5'→3' (A, U, C, G)..." : "RNA sequence (A, U, C, G)..."}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono"
+                    />
+                    <button
+                        onClick={() => addNucleicAcid('rna', rnaSequence, isDsRna)}
+                        disabled={!rnaSequence.trim()}
+                        className="px-3 py-2 bg-purple-500/20 text-purple-400 rounded-lg text-sm hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+                    >
+                        + Add {isDsRna ? 'dsRNA' : 'ssRNA'}
+                    </button>
+                </div>
+
+                {/* Peptide Input */}
+                <div className="flex gap-2 items-center">
+                    <span className="text-xs text-emerald-400 w-12">Peptide:</span>
+                    <input
+                        type="text"
+                        value={peptideSequence}
+                        onChange={(e) => setPeptideSequence(e.target.value.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, ''))}
+                        placeholder="Peptide sequence (3-15 AA)..."
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono"
+                        maxLength={15}
+                    />
+                    <button
+                        onClick={addPeptide}
+                        disabled={peptideSequence.length < 3 || peptideSequence.length > 15}
+                        className="px-3 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm hover:bg-emerald-500/30 transition-colors disabled:opacity-50"
+                    >
+                        + Add Peptide
+                    </button>
+                </div>
+
+                {/* Advanced Oligo Builder Button */}
+                <button
+                    onClick={() => setShowOligoBuilder(true)}
+                    className="w-full py-2 border border-dashed border-slate-600 rounded-lg text-slate-400 hover:text-blue-400 hover:border-blue-500 transition-colors text-sm"
+                >
+                    🧬 Advanced Oligo Builder (custom overhangs, mismatches, gaps)
+                </button>
+            </div>
+
+            {/* Oligo Builder Modal */}
+            <OligoBuilderModal
+                isOpen={showOligoBuilder}
+                onClose={() => setShowOligoBuilder(false)}
+                onSubmit={(entries: LigandEntry[]) => {
+                    setLigands(prev => [...prev, ...entries]);
+                    setShowOligoBuilder(false);
+                }}
+                ligandCount={ligands.length}
+            />
+
+
             {/* Selected Ligands Pills */}
             {ligands.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-3">
                     {ligands.map((lig, idx) => (
                         <div
                             key={idx}
-                            className={`px-3 py-1.5 rounded-full text-sm flex items-center gap-2 ${lig.type === 'ion'
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            className={`px-3 py-1.5 rounded-full text-sm flex items-center gap-2 ${lig.type === 'dna'
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                : lig.type === 'rna'
+                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                    : lig.type === 'ion'
+                                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                 }`}
                         >
                             <span className="font-mono text-xs opacity-60">[{lig.id}]</span>
                             <span>{lig.ccd || lig.name}</span>
                             {lig.smiles && <span className="text-xs opacity-60">(SMILES)</span>}
+                            {lig.sequence && <span className="text-xs opacity-60">({lig.sequence.length}nt)</span>}
                             <button
                                 onClick={() => removeLigand(idx)}
                                 className="hover:text-red-400 transition-colors"

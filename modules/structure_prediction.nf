@@ -52,7 +52,7 @@ process BoltzFromSequence {
     script:
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_num_samples ?: 1
+    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def useMsaServer = params.boltz_use_msa ? '--use_msa_server' : ''
     """
     # Setup temp directories for containerized execution
@@ -78,6 +78,8 @@ EOF
         --diffusion_samples ${numSamples} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
+        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         --cache /boltzcache \\
         ${useMsaServer} \\
         ${params.boltz_extra_config ?: ''} \\
@@ -118,7 +120,7 @@ process BoltzFromSequenceWithMSA {
     script:
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_num_samples ?: 1
+    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     """
     # Setup temp directories for containerized execution
     mkdir -p tmp yamls predictions
@@ -146,6 +148,8 @@ EOF
         --diffusion_samples ${numSamples} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
+        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_seq_${sequence_name}.log
@@ -184,7 +188,7 @@ process BoltzFromComplex {
     script:
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_num_samples ?: 1
+    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def use_msa_flag = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true' ? '--use_msa_server' : ''
     """
     mkdir -p tmp yamls predictions
@@ -262,9 +266,17 @@ for comp in complex_def.get("components", []):
             entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "ccd": ccd_code}}
             
     elif comp_type == "dna":
-        entry = {"dna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+        # Pass DNA sequence as is (standard is uppercase A, T, G, C)
+        dna_seq = comp.get("sequence", "")
+        entry = {"dna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": dna_seq}}
     elif comp_type == "rna":
-        entry = {"rna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": comp.get("sequence", "")}}
+        # Pass RNA sequence as is (standard is uppercase A, U, G, C)
+        rna_seq = comp.get("sequence", "")
+        entry = {"rna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": rna_seq}}
+    elif comp_type == "peptide":
+        # Peptides are treated as short protein chains
+        peptide_seq = comp.get("sequence", "").upper()
+        entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": peptide_seq}}
     else:
         continue
     boltz_yaml["sequences"].append(entry)
@@ -284,6 +296,8 @@ PYEOF
         --diffusion_samples ${numSamples} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
+        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         --cache /boltzcache \\
         ${use_msa_flag} \\
         ${params.boltz_extra_config ?: ''} \\
@@ -478,4 +492,3 @@ workflow structure_prediction_wf {
     emit:
     structures
 }
-

@@ -507,7 +507,7 @@ export function ResultsViewer() {
                                                 {/* Viewer */}
                                                 <div className="flex-1 relative">
                                                     <MolstarViewer
-                                                        key={`${selectedDesignId}-${showPlddt}`}  // Force recreation when design or pLDDT changes
+                                                        key={selectedDesignId}  // Only recreate when design changes, not on pLDDT toggle
                                                         structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
                                                         format={structureFormat}
                                                         alphafoldView={showPlddt}

@@ -80,15 +80,22 @@ workflow {
 
     // If complex_json_path is provided, run complex prediction (multi-chain + ligands)
     if (params.complex_json_path) {
+        def numParallelJobs = params.num_parallel_jobs ?: 1
         println("Running complex-based structure prediction (multi-chain + ligands)")
         println("* Complex definition: ${params.complex_json_path}")
         println("* Predictor: boltz")
+        println("* Number of simulations: ${numParallelJobs}")
         // Complex mode only supports Boltz for now
 
         def complex_name = params.sequence_name ?: 'complex_pred'
         def complex_json = file(params.complex_json_path)
 
-        def complex_ch = Channel.of(tuple(complex_name, complex_json, file("${projectDir}/NO_MSA")))
+        // Create parallel job channels (like structure_prediction workflow)
+        def job_indices = Channel.from(0..<numParallelJobs)
+        def complex_ch = job_indices.map { idx ->
+            def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
+            tuple(jobName, complex_json, file("${projectDir}/NO_MSA"))
+        }
         BoltzFromComplex(complex_ch)
 
         BoltzFromComplex.out.pdbs
