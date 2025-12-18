@@ -69,6 +69,7 @@ async def get_template(template_id: str):
                 "enum_labels": p.enum_labels,
                 "minimum": p.minimum,
                 "maximum": p.maximum,
+                "condition": p.condition,  # Include condition for conditional visibility
             }
             for p in template.user_params
         ],

@@ -57,6 +57,9 @@ class JobResponse(BaseModel):
     output_dir: Optional[str] = None
     error_message: Optional[str] = None
     design_count: int = 0
+    # Batch grouping for job sets
+    batch_id: Optional[str] = None
+    batch_name: Optional[str] = None
     
     class Config:
         from_attributes = True

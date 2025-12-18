@@ -18,6 +18,7 @@ ALLOWED_DIRECTORIES = [
     "pdj_results",
     "benchmarkdata",
     "lib",
+    "rcsb",
 ]
 
 # Project root (parent of platform directory)

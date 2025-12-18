@@ -47,10 +47,10 @@ user_params:
     
   # === Boltz-2 Parameters ===
   - name: boltz_use_msa
-    label: "[Boltz-2] Remote MSA"
+    label: "[Boltz-2] Use MSA"
     type: boolean
     default: true
-    description: Enable remote MSA augmentation (slower, better accuracy)
+    description: Use local MSA database for accuracy (885GB UniRef30)
     condition:
       param: pred_method
       values: [boltz, both]
@@ -71,7 +71,7 @@ user_params:
     type: integer
     default: 50
     minimum: 10
-    maximum: 200
+    maximum: 1000
     description: "Diffusion steps (Default: 50). Higher = potential side-chain precision."
     condition:
       param: pred_method
@@ -82,7 +82,7 @@ user_params:
     type: integer
     default: 1
     minimum: 1
-    maximum: 5
+    maximum: 32
     description: Independent structure predictions to generate
     condition:
       param: pred_method
@@ -120,10 +120,10 @@ user_params:
     
   # === RF3 Parameters ===
   - name: rf3_use_msa
-    label: "[RF3] Remote MSA"
+    label: "[RF3] Use MSA"
     type: boolean
     default: true
-    description: Enable remote MSA augmentation (slower, better accuracy)
+    description: Use local MSA database for accuracy (885GB UniRef30)
     condition:
       param: pred_method
       values: [rf3, both]
@@ -144,7 +144,7 @@ user_params:
     type: integer
     default: 1
     minimum: 1
-    maximum: 5
+    maximum: 32
     description: Independent predictions (Seeds)
     condition:
       param: pred_method
@@ -160,6 +160,71 @@ user_params:
     condition:
       param: pred_method
       values: [rf3, both]
+
+  # === RF3 Filter Thresholds ===
+  - name: rf3_min_plddt
+    label: "[RF3] Min pLDDT Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 100.0
+    description: "Filter results below this pLDDT threshold (0-100)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_min_ptm
+    label: "[RF3] Min pTM Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 1.0
+    description: "Filter results below this pTM threshold (0-1)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_pae
+    label: "[RF3] Max PAE Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 50.0
+    description: "Filter results above this PAE threshold (Ångströms)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_rmsd_overall
+    label: "[RF3] Max RMSD Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 20.0
+    description: "Filter results above this overall RMSD (Ångströms)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_rmsd_binder
+    label: "[RF3] Max Binder RMSD"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 20.0
+    description: "Filter results above this binder RMSD (for complexes)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_extra_config
+    label: "[RF3] Advanced Config"
+    type: string
+    default: ""
+    description: "Hydra overrides for power users (e.g., num_recycles=20)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
     
   # === Parallelization / Stress Test ===
   - name: num_parallel_jobs
@@ -167,17 +232,5 @@ user_params:
     type: integer
     default: 1
     minimum: 1
-    maximum: 4
+    maximum: 500
     description: Concurrent GPU tasks (Limited by VRAM)
-    
-  - name: gpu_priority
-    label: GPU Priority
-    type: enum
-    enum: [auto, force_5090, force_3090, light]
-    enum_labels:
-      auto: Auto (5090 first, then 3090s)
-      force_5090: Force RTX 5090 only
-      force_3090: Force RTX 3090s only
-      light: Light tasks (5060 Ti)
-    default: auto
-    description: GPU selection strategy

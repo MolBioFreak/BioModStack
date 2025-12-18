@@ -7,6 +7,7 @@ interface Props {
     hideControls?: boolean;  // Hide Mol* control panels (for compact view)
     height?: number | string;
     backgroundColor?: string;
+    label?: string;  // Optional label to show on viewer
 }
 
 // Track if script is loaded globally to avoid multiple loads
@@ -54,10 +55,11 @@ function loadScript(callback: () => void) {
 export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
-    alphafoldView = true,  // pLDDT coloring on by default
-    hideControls = true,  // Hide controls by default for compact view
+    alphafoldView = true,
+    hideControls = true,
     height = 500,
-    backgroundColor = '#0f172a'
+    backgroundColor = '#0f172a',
+    label
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -117,14 +119,17 @@ export default function MolstarViewer({
         );
     }
 
-    console.log('Rendering pdbe-molstar with URL:', absoluteUrl, 'format:', format, 'alphafoldView:', alphafoldView);
-
     return (
         <div
             ref={containerRef}
-            className="w-full rounded-lg overflow-hidden"
+            className="w-full rounded-lg overflow-hidden relative"
             style={{ height: heightStyle }}
         >
+            {label && (
+                <div className="absolute top-2 left-2 z-10 px-2 py-1 bg-slate-800/80 text-slate-200 text-xs rounded font-medium">
+                    {label}
+                </div>
+            )}
             {React.createElement('pdbe-molstar', {
                 'custom-data-url': absoluteUrl,
                 'custom-data-format': format,
@@ -132,13 +137,12 @@ export default function MolstarViewer({
                 'bg-color-g': bgColor.g.toString(),
                 'bg-color-b': bgColor.b.toString(),
                 'alphafold-view': alphafoldView ? 'true' : 'false',
-                // Built-in UI panels - controlled by hideControls prop
                 'hide-controls': hideControls ? 'true' : 'false',
-                'sequence-panel': 'false',  // Always hide sequence panel initially
-                'left-panel': 'false',  // Collapse left panel
-                'right-panel': 'false',  // Collapse right panel  
-                'expanded': 'false',  // Start with settings collapsed
-                'landscape': 'true',  // Better fit for wide containers
+                'sequence-panel': 'false',
+                'left-panel': 'false',
+                'right-panel': 'false',
+                'expanded': 'false',
+                'landscape': 'true',
                 'loading-overlay': 'true',
                 'select-interaction': 'true',
                 'granularity': 'residue',
