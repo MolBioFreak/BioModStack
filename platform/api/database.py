@@ -41,6 +41,30 @@ class Job(Base):
     nextflow_run_id = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GPU ORCHESTRATOR: Queue Management
+    # ═══════════════════════════════════════════════════════════════════════════
+    batch_id = Column(String(36), nullable=True, index=True)  # Groups related jobs (UUID)
+    batch_name = Column(String(255), nullable=True)  # Human-readable, auto-generated or user-set
+    queue_status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|failed|paused
+    paused = Column(Boolean, default=False)  # User manually paused this job
+    pinned_gpu = Column(Integer, nullable=True)  # User override: force job to specific GPU (0-3)
+    assigned_gpu = Column(Integer, nullable=True)  # Actual GPU when running
+    priority = Column(Integer, default=0)  # Higher = runs first
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GPU ORCHESTRATOR: VRAM Estimation
+    # ═══════════════════════════════════════════════════════════════════════════
+    vram_estimate_mb = Column(Integer, nullable=True)  # Predicted VRAM need based on model + sequence
+    sequence_length = Column(Integer, nullable=True)  # For VRAM calculation (longest chain)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GPU ORCHESTRATOR: OOM Recovery
+    # ═══════════════════════════════════════════════════════════════════════════
+    retry_count = Column(Integer, default=0)  # How many times this job has been retried
+    max_retries = Column(Integer, default=2)  # User-configurable retry limit
+    oom_tolerance = Column(String(20), default="allow")  # 'allow' = auto-retry, 'approve' = wait for user
+    
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
@@ -78,12 +102,23 @@ class Design(Base):
     ptm = Column(Float, nullable=True)
     ligand_iptm = Column(Float, nullable=True)
     
+    # Interface metrics (critical for complexes)
+    iptm = Column(Float, nullable=True)  # Interface pTM score
+    protein_iptm = Column(Float, nullable=True)  # Protein-protein interface
+    complex_iplddt = Column(Float, nullable=True)  # Interface pLDDT
+    complex_ipde = Column(Float, nullable=True)  # Interface PDE
+    chains_ptm = Column(JSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
+    pair_chains_iptm = Column(JSON, nullable=True)  # NxN chain matrix for heatmap
+    
     # Binding Affinity (Boltz-2)
     affinity_score = Column(Float, nullable=True)  # log(IC50)
     binder_probability = Column(Float, nullable=True)  # 0-1
     
     # Per-residue metrics (stored as JSON arrays)
+    # Analytics
+    chain_metrics = Column(JSON, nullable=True)  # {"A": {"type": "protein", ...}}
     residue_plddt = Column(JSON, nullable=True)  # [85.2, 91.3, ...] per residue
+    pae_matrix = Column(JSON, nullable=True)     # [[0.2, ...], ...]
     
     # User annotations
     is_favorite = Column(Boolean, default=False)

@@ -1,11 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchStructureAnalysis } from '../lib/api';
+import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchChainMetrics, fetchStructureAnalysis } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import FloatingViewer from './FloatingViewer';
 import { Histogram, MetricScatter, ResidueLineChart } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { PAEHeatmap } from './PAEHeatmap';
+import { DesignComparePane } from './DesignComparePane';
+import { ReferenceSelector } from './ReferenceSelector';
+import { MetricOverlay } from './MetricOverlay';
 
 // Tab definitions
 const TABS = [
@@ -13,7 +17,8 @@ const TABS = [
     { id: 'analytics', label: 'Analytics', icon: 'Chart' },
     { id: 'structure', label: 'Structure', icon: '3D' },
     { id: 'table', label: 'Data Table', icon: 'List' },
-    { id: 'compare', label: 'Compare', icon: 'Vs' },
+    { id: 'compare_designs', label: 'Compare Designs', icon: 'Chart' },
+    { id: 'compare', label: 'Compare Jobs', icon: 'Vs' },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
@@ -49,6 +54,9 @@ export function ResultsViewer() {
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
     const [showPlddt, setShowPlddt] = useState(true);  // pLDDT coloring on by default
+    const [showReferencePanel, setShowReferencePanel] = useState(false);
+    const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]); // Array for multi-compare
+    const MAX_COMPARE_VIEWERS = 3;
 
     // Fetch jobs list
     const { data: jobsData } = useQuery({
@@ -102,6 +110,14 @@ export function ResultsViewer() {
         enabled: !!selectedDesignId,
     });
     const residueMetrics = residueMetricsData?.data;
+
+    // Fetch per-chain metrics
+    const { data: chainMetricsData } = useQuery({
+        queryKey: ['chainMetrics', selectedDesignId],
+        queryFn: () => fetchChainMetrics(selectedDesignId),
+        enabled: !!selectedDesignId,
+    });
+    const chainMetrics = chainMetricsData?.data;
 
     // Fetch structure analysis for selected design (Biotite-powered)
     const { data: structureAnalysisData, isLoading: structureAnalysisLoading } = useQuery({
@@ -204,19 +220,58 @@ export function ResultsViewer() {
                                 className="bg-slate-800/80 text-white border border-slate-600 rounded-xl pl-4 pr-10 py-3 min-w-[400px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none cursor-pointer font-medium shadow-lg transition-all hover:border-slate-500"
                             >
                                 <option value="">Select a job...</option>
-                                {jobs
-                                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                                    .map(job => {
+                                {(() => {
+                                    const sortedJobs = [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                                    const batchedJobs = new Map<string, typeof sortedJobs>();
+                                    const standaloneJobs: typeof sortedJobs = [];
+
+                                    // Separate batched and standalone jobs
+                                    sortedJobs.forEach(job => {
+                                        if (job.batch_id && job.batch_name) {
+                                            const existing = batchedJobs.get(job.batch_id) || [];
+                                            existing.push(job);
+                                            batchedJobs.set(job.batch_id, existing);
+                                        } else {
+                                            standaloneJobs.push(job);
+                                        }
+                                    });
+
+                                    const elements: React.ReactNode[] = [];
+
+                                    // Render batch groups first
+                                    batchedJobs.forEach((batchJobs, batchId) => {
+                                        const batchName = batchJobs[0].batch_name;
+                                        elements.push(
+                                            <optgroup key={batchId} label={`📦 ${batchName} (${batchJobs.length} sims)`}>
+                                                {batchJobs.map(job => {
+                                                    const date = new Date(job.created_at);
+                                                    const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                                                    const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
+                                                    return (
+                                                        <option key={job.id} value={job.id}>
+                                                            {statusIcon} {job.name} │ {timeStr} │ {job.design_count} designs
+                                                        </option>
+                                                    );
+                                                })}
+                                            </optgroup>
+                                        );
+                                    });
+
+                                    // Render standalone jobs
+                                    standaloneJobs.forEach(job => {
                                         const date = new Date(job.created_at);
                                         const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                                         const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
                                         const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
-                                        return (
+                                        elements.push(
                                             <option key={job.id} value={job.id}>
                                                 {statusIcon} {job.name} │ {dateStr} {timeStr} │ {job.model_id || job.mode} │ {job.design_count} designs
                                             </option>
                                         );
-                                    })}
+                                    });
+
+                                    return elements;
+                                })()}
                             </select>
                             {/* Custom dropdown arrow */}
                             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -331,7 +386,40 @@ export function ResultsViewer() {
                                                         ))}
                                                     </select>
                                                 </div>
-                                                {residueMetrics ? (
+                                                {chainMetrics && Object.keys(chainMetrics).length > 0 ? (
+                                                    <div className="space-y-4">
+                                                        {Object.entries(chainMetrics)
+                                                            .sort(([idA, a], [idB, b]) => {
+                                                                const order = { protein: 0, dna: 1, rna: 2, ligand: 3 };
+                                                                return (order[a.type as keyof typeof order] ?? 4) - (order[b.type as keyof typeof order] ?? 4) || idA.localeCompare(idB);
+                                                            })
+                                                            .map(([chainId, metric]) => (
+                                                                metric.type !== 'ligand' && (
+                                                                    <div key={chainId} className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/30">
+                                                                        <div className="flex justify-between items-center mb-2">
+                                                                            <h4 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
+                                                                                <span className={`w-2 h-2 rounded-full ${metric.type === 'protein' ? 'bg-blue-400' :
+                                                                                    metric.type === 'dna' ? 'bg-amber-400' :
+                                                                                        metric.type === 'rna' ? 'bg-purple-400' : 'bg-slate-400'
+                                                                                    }`} />
+                                                                                Chain {chainId} <span className="text-slate-500 font-normal">({metric.type}, {metric.length} res)</span>
+                                                                            </h4>
+                                                                            <div className="text-xs font-mono">
+                                                                                <span className="text-slate-500 mr-2">Avg pLDDT:</span>
+                                                                                <span className={getMetricColor('plddt_overall', metric.avg_plddt)}>{metric.avg_plddt?.toFixed(1) ?? '—'}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                        <ResidueLineChart
+                                                                            residueNumbers={metric.residue_numbers ?? Array.from({ length: metric.length }, (_, i) => i + 1)}
+                                                                            plddt={metric.plddt}
+                                                                            designName={`Chain ${chainId}`}
+                                                                            height={180}
+                                                                        />
+                                                                    </div>
+                                                                )
+                                                            ))}
+                                                    </div>
+                                                ) : residueMetrics ? (
                                                     <ResidueLineChart
                                                         residueNumbers={residueMetrics.residue_numbers}
                                                         plddt={residueMetrics.plddt}
@@ -449,164 +537,208 @@ export function ResultsViewer() {
                                         </div>
                                     )}
 
-                                    {/* STRUCTURE TAB */}
+                                    {/* STRUCTURE TAB - TRUE FULLSCREEN (breaks out of container) */}
                                     {activeTab === 'structure' && (
-                                        <div className="flex h-[700px]">
-                                            {/* Left Sidebar - Design List */}
-                                            <div className="w-64 border-r border-slate-800 flex flex-col bg-slate-900/30">
-                                                <div className="p-3 border-b border-slate-800 text-sm font-medium text-slate-300">
-                                                    Designs ({designs.length})
-                                                </div>
-                                                <div className="flex-1 overflow-y-auto">
-                                                    {designs.map(d => (
-                                                        <button
-                                                            key={d.id}
-                                                            onClick={() => setSelectedDesignId(d.id)}
-                                                            className={`w-full text-left px-3 py-2 text-sm border-l-2 transition-colors ${selectedDesignId === d.id
-                                                                ? 'bg-blue-500/10 border-blue-500 text-white'
-                                                                : 'border-transparent hover:bg-slate-800/50 text-slate-400'
-                                                                }`}
-                                                        >
-                                                            <div className="truncate">{d.name}</div>
-                                                            <div className="flex gap-2 mt-1 text-xs">
-                                                                {d.plddt_overall && <span className={getMetricColor('plddt_overall', d.plddt_overall)}>pLDDT: {d.plddt_overall.toFixed(0)}</span>}
-                                                                {d.pae_overall && <span className={getMetricColor('pae_overall', d.pae_overall)}>PAE: {d.pae_overall.toFixed(1)}</span>}
-                                                            </div>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
+                                        <div className="fixed inset-0 top-[64px] bg-slate-950 z-10">
+                                            {/* Compact Toolbar - 40% transparent */}
+                                            <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-3 px-3 py-2 bg-slate-900/40 backdrop-blur-sm border-b border-slate-700/30">
+                                                {/* Back Button - Exit Theater Mode */}
+                                                <button
+                                                    onClick={() => setActiveTab('overview')}
+                                                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-slate-300 bg-slate-700/50 hover:bg-slate-600/50 rounded-lg border border-slate-600/50 transition-colors"
+                                                    title="Exit Theater Mode (go to Overview)"
+                                                >
+                                                    <span className="text-sm">←</span>
+                                                    Back
+                                                </button>
 
-                                            {/* Center - 3D Viewer */}
-                                            <div className="flex-1 bg-slate-950 relative flex flex-col">
-                                                {/* Minimal toolbar with pLDDT toggle */}
-                                                <div className="flex items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/50">
-                                                    <button
-                                                        onClick={() => setShowPlddt(!showPlddt)}
-                                                        className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors ${showPlddt
-                                                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                                                            : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
-                                                            }`}
-                                                        title="Toggle pLDDT confidence coloring (AlphaFold style)"
+                                                <span className="text-slate-600">│</span>
+
+                                                {/* Job Selector */}
+                                                <div className="relative">
+                                                    <select
+                                                        value={selectedJobId ?? ''}
+                                                        onChange={(e) => setSelectedJobId(e.target.value)}
+                                                        className="appearance-none bg-slate-700/50 backdrop-blur-sm border border-slate-600/50 rounded px-2 py-1 pr-6 text-xs text-slate-300 cursor-pointer hover:bg-slate-600/50 transition-colors max-w-[120px]"
+                                                        title="Switch Job"
                                                     >
-                                                        <span className={`w-2 h-2 rounded-full ${showPlddt ? 'bg-blue-400' : 'bg-slate-500'}`} />
-                                                        pLDDT Coloring
-                                                    </button>
-                                                    {showPlddt && (
-                                                        <div className="flex items-center gap-1 text-xs text-slate-500">
-                                                            <span className="text-blue-400">■</span>≥90
-                                                            <span className="text-cyan-400 ml-1">■</span>≥70
-                                                            <span className="text-yellow-400 ml-1">■</span>≥50
-                                                            <span className="text-orange-400 ml-1">■</span>&lt;50
-                                                        </div>
+                                                        {jobs
+                                                            .filter(j => j.status === 'completed' && j.design_count > 0)
+                                                            .slice(0, 50)
+                                                            .map(job => (
+                                                                <option key={job.id} value={job.id}>
+                                                                    {job.name} ({job.design_count})
+                                                                </option>
+                                                            ))}
+                                                    </select>
+                                                    <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 text-[10px]">
+                                                        ▾
+                                                    </div>
+                                                </div>
+
+                                                <span className="text-slate-600">│</span>
+
+                                                {/* Design Selector Dropdown */}
+                                                <div className="relative">
+                                                    <select
+                                                        value={selectedDesignId ?? ''}
+                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                        className="appearance-none bg-slate-800/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700/60 transition-colors min-w-[180px]"
+                                                    >
+                                                        {designs.map(d => (
+                                                            <option key={d.id} value={d.id}>
+                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                                        ▾
+                                                    </div>
+                                                </div>
+
+                                                {/* pLDDT Toggle */}
+                                                <button
+                                                    onClick={() => setShowPlddt(!showPlddt)}
+                                                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors backdrop-blur-sm ${showPlddt
+                                                        ? 'bg-blue-500/30 text-blue-400 border border-blue-500/40'
+                                                        : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
+                                                        }`}
+                                                    title="Toggle pLDDT confidence coloring"
+                                                >
+                                                    <span className={`w-2 h-2 rounded-full ${showPlddt ? 'bg-blue-400' : 'bg-slate-500'}`} />
+                                                    pLDDT
+                                                </button>
+                                                {showPlddt && (
+                                                    <div className="flex items-center gap-1 text-xs text-slate-400">
+                                                        <span className="text-blue-400">■</span>≥90
+                                                        <span className="text-cyan-400 ml-1">■</span>≥70
+                                                        <span className="text-yellow-400 ml-1">■</span>≥50
+                                                        <span className="text-orange-400 ml-1">■</span>&lt;50
+                                                    </div>
+                                                )}
+
+                                                {/* Compare Toggle + Counter */}
+                                                <button
+                                                    onClick={() => setShowReferencePanel(!showReferencePanel)}
+                                                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors backdrop-blur-sm ${showReferencePanel || referenceStructures.length > 0
+                                                        ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
+                                                        : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
+                                                        }`}
+                                                >
+                                                    <span className={`w-2 h-2 rounded-full ${referenceStructures.length > 0 ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                                                    Compare
+                                                    {referenceStructures.length > 0 && (
+                                                        <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                                                            {referenceStructures.length}/{MAX_COMPARE_VIEWERS}
+                                                        </span>
                                                     )}
-                                                    <span className="text-xs text-slate-600 ml-auto">
-                                                        Shift+click sequence for range selection
-                                                    </span>
-                                                </div>
-                                                {/* Viewer */}
-                                                <div className="flex-1 relative">
-                                                    <MolstarViewer
-                                                        key={selectedDesignId}  // Only recreate when design changes, not on pLDDT toggle
-                                                        structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                                                        format={structureFormat}
-                                                        alphafoldView={showPlddt}
-                                                        height={620}
-                                                        backgroundColor="#0f172a"
-                                                    />
-                                                </div>
-                                            </div>
+                                                </button>
+                                                {referenceStructures.length > 0 && (
+                                                    <button
+                                                        onClick={() => setReferenceStructures([])}
+                                                        className="text-xs text-red-400 hover:text-red-300"
+                                                        title="Clear all comparisons"
+                                                    >
+                                                        Clear all
+                                                    </button>
+                                                )}
 
-                                            {/* Right Sidebar - Structure Analysis */}
-                                            <div className="w-72 border-l border-slate-800 bg-slate-900/40 flex flex-col">
-                                                <div className="p-3 border-b border-slate-800 text-sm font-medium text-slate-300">
-                                                    Structure Analysis
-                                                </div>
-                                                {structureAnalysisLoading ? (
-                                                    <div className="flex-1 flex items-center justify-center text-slate-500">
-                                                        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                                                    </div>
-                                                ) : structureAnalysis ? (
-                                                    <div className="p-4 space-y-4 text-sm">
-                                                        {/* Basic Info */}
-                                                        <div className="space-y-2">
-                                                            <div className="flex justify-between">
-                                                                <span className="text-slate-500">Residues</span>
-                                                                <span className="text-white font-mono">{structureAnalysis.residue_count}</span>
-                                                            </div>
-                                                            <div className="flex justify-between">
-                                                                <span className="text-slate-500">Chains</span>
-                                                                <span className="text-cyan-400 font-mono">{structureAnalysis.chain_ids.join(', ')}</span>
-                                                            </div>
-                                                            <div className="flex justify-between">
-                                                                <span className="text-slate-500">Gyration Radius</span>
-                                                                <span className="text-purple-400 font-mono">
-                                                                    {structureAnalysis.gyration_radius?.toFixed(2) ?? '—'} Å
-                                                                </span>
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Secondary Structure */}
-                                                        <div className="pt-2 border-t border-slate-700">
-                                                            <div className="text-xs text-slate-500 uppercase tracking-wider mb-3">Secondary Structure</div>
-                                                            {(() => {
-                                                                const sse = structureAnalysis.secondary_structure;
-                                                                const total = sse.helix + sse.sheet + sse.coil;
-                                                                const pctHelix = total > 0 ? (sse.helix / total * 100) : 0;
-                                                                const pctSheet = total > 0 ? (sse.sheet / total * 100) : 0;
-                                                                const pctCoil = total > 0 ? (sse.coil / total * 100) : 0;
-                                                                return (
-                                                                    <div className="space-y-3">
-                                                                        {/* Helix */}
-                                                                        <div>
-                                                                            <div className="flex justify-between text-xs mb-1">
-                                                                                <span className="text-red-400">α Helix</span>
-                                                                                <span className="text-slate-400">{sse.helix} ({pctHelix.toFixed(0)}%)</span>
-                                                                            </div>
-                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                                                                                <div className="h-full bg-red-500" style={{ width: `${pctHelix}%` }} />
-                                                                            </div>
-                                                                        </div>
-                                                                        {/* Sheet */}
-                                                                        <div>
-                                                                            <div className="flex justify-between text-xs mb-1">
-                                                                                <span className="text-yellow-400">β Sheet</span>
-                                                                                <span className="text-slate-400">{sse.sheet} ({pctSheet.toFixed(0)}%)</span>
-                                                                            </div>
-                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                                                                                <div className="h-full bg-yellow-500" style={{ width: `${pctSheet}%` }} />
-                                                                            </div>
-                                                                        </div>
-                                                                        {/* Coil */}
-                                                                        <div>
-                                                                            <div className="flex justify-between text-xs mb-1">
-                                                                                <span className="text-slate-400">Coil/Loop</span>
-                                                                                <span className="text-slate-400">{sse.coil} ({pctCoil.toFixed(0)}%)</span>
-                                                                            </div>
-                                                                            <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                                                                                <div className="h-full bg-slate-500" style={{ width: `${pctCoil}%` }} />
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            })()}
-                                                        </div>
-
-                                                        {/* PAE Heatmap */}
-                                                        <div className="pt-4 border-t border-slate-700">
-                                                            <PAEHeatmap
-                                                                designId={selectedDesignId}
-                                                                width={240}
-                                                                height={240}
-                                                            />
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex-1 flex items-center justify-center p-4 text-center text-slate-500 text-xs">
-                                                        Select a design to view structure analysis
+                                                {/* Quick metrics badge */}
+                                                {selectedDesign && (
+                                                    <div className="ml-auto flex items-center gap-3 text-xs">
+                                                        {selectedDesign.plddt_overall && (
+                                                            <span className={`font-mono ${getMetricColor('plddt_overall', selectedDesign.plddt_overall)}`}>
+                                                                pLDDT: {selectedDesign.plddt_overall.toFixed(1)}
+                                                            </span>
+                                                        )}
+                                                        {selectedDesign.pae_overall && (
+                                                            <span className={`font-mono ${getMetricColor('pae_overall', selectedDesign.pae_overall)}`}>
+                                                                PAE: {selectedDesign.pae_overall.toFixed(2)}
+                                                            </span>
+                                                        )}
+                                                        {selectedDesign.ptm && (
+                                                            <span className="font-mono text-amber-400">
+                                                                pTM: {selectedDesign.ptm.toFixed(3)}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
+
+                                            {/* Reference Selector Panel - floating overlay */}
+                                            {showReferencePanel && (
+                                                <div className="absolute top-12 left-3 z-30 w-96 bg-slate-900/95 backdrop-blur-sm border border-slate-600 rounded-lg shadow-xl">
+                                                    <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
+                                                        <span className="text-sm font-medium text-slate-200">
+                                                            Add Compare Structure ({referenceStructures.length}/{MAX_COMPARE_VIEWERS})
+                                                        </span>
+                                                        <button
+                                                            onClick={() => setShowReferencePanel(false)}
+                                                            className="text-slate-400 hover:text-white"
+                                                        >
+                                                            ✕
+                                                        </button>
+                                                    </div>
+                                                    <div className="p-3">
+                                                        <ReferenceSelector
+                                                            onSelect={(ref) => {
+                                                                if (ref && referenceStructures.length < MAX_COMPARE_VIEWERS) {
+                                                                    // Check if not already added
+                                                                    const alreadyExists = referenceStructures.some(r => r.url === ref.url);
+                                                                    if (!alreadyExists) {
+                                                                        setReferenceStructures([...referenceStructures, ref]);
+                                                                    }
+                                                                }
+                                                                setShowReferencePanel(false);
+                                                            }}
+                                                            selectedRef={null}
+                                                            currentDesignId={selectedDesignId}
+                                                        />
+                                                    </div>
+                                                    {referenceStructures.length >= MAX_COMPARE_VIEWERS && (
+                                                        <div className="px-3 pb-3 text-xs text-amber-400">
+                                                            ⚠ Maximum {MAX_COMPARE_VIEWERS} compare viewers reached
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Main Viewer - Full Size */}
+                                            <div className="absolute inset-0">
+                                                <MolstarViewer
+                                                    key={selectedDesignId}
+                                                    structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
+                                                    format={structureFormat}
+                                                    alphafoldView={showPlddt}
+                                                    height="100%"
+                                                    backgroundColor="#0f172a"
+                                                />
+                                            </div>
+
+                                            {/* Floating Reference Viewers - Multiple */}
+                                            {referenceStructures.map((ref, index) => (
+                                                <FloatingViewer
+                                                    key={ref.url}
+                                                    structureUrl={ref.url}
+                                                    format={ref.format}
+                                                    label={ref.name}
+                                                    initialPosition={{ x: 20 + (index * 30), y: 60 + (index * 30) }}
+                                                    onClose={() => setReferenceStructures(refs => refs.filter((_, i) => i !== index))}
+                                                />
+                                            ))}
+
+                                            {/* Floating Metric Overlay - Draggable */}
+                                            {selectedDesignId && (
+                                                <MetricOverlay
+                                                    designId={selectedDesignId}
+                                                    initialPosition={{ x: 70, y: 60 }}
+                                                    initialType="structure"
+                                                    structureAnalysis={structureAnalysis ?? undefined}
+                                                    residueData={residueMetricsData?.data}
+                                                    availableTypes={['structure', 'pae', 'plddt', 'iptm']}
+                                                    pairChainsIptm={designs.find(d => d.id === selectedDesignId)?.pair_chains_iptm ?? undefined}
+                                                />
+                                            )}
                                         </div>
                                     )}
 
@@ -711,13 +843,22 @@ export function ResultsViewer() {
                                     {activeTab === 'compare' && (
                                         <BatchComparePane initialJobId={selectedJobId} />
                                     )}
+
+                                    {/* Compare Designs Pane */}
+                                    {activeTab === 'compare_designs' && (
+                                        <DesignComparePane
+                                            designs={designs}
+                                            preSelectedId={selectedDesignId}
+                                        />
+                                    )}
                                 </>
                             )}
                         </div>
                     </>
-                )}
-            </div>
-        </div>
+                )
+                }
+            </div >
+        </div >
     );
 }
 

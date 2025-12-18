@@ -27,6 +27,7 @@ class TemplateParam(BaseModel):
     enum_labels: Optional[dict] = None
     minimum: Optional[float] = None
     maximum: Optional[float] = None
+    condition: Optional[dict] = None  # Conditional visibility: {param: str, values: List[str]}
 
 
 class NTPTemplate(BaseModel):

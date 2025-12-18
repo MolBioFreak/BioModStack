@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled } from '../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 import { QuickViewer } from './QuickViewer';
+import { JobQueuePanel } from './JobQueuePanel';
 
 export function Dashboard() {
     const queryClient = useQueryClient();
@@ -51,6 +52,22 @@ export function Dashboard() {
             queryClient.invalidateQueries({ queryKey: ['system'] });
         },
     });
+
+    // Scheduler config for GPU disable status
+    const { data: schedulerConfigData } = useQuery({
+        queryKey: ['schedulerConfig'],
+        queryFn: fetchSchedulerConfig,
+        refetchInterval: 5000,
+    });
+
+    const toggleDisableMutation = useMutation({
+        mutationFn: (gpuId: number) => toggleGpuDisabled(gpuId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['schedulerConfig'] });
+        },
+    });
+
+    const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
 
     const currentLimits = powerControlData?.data.limits ?? {};
 
@@ -99,18 +116,8 @@ export function Dashboard() {
                 </section>
             )}
 
-            {/* Active Tasks Queue */}
-            <section className="mb-6">
-                <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
-                        <h3 className="text-sm font-semibold text-slate-200">📋 Active Tasks</h3>
-                        <span className="text-xs text-slate-500">
-                            {gpus.reduce((sum, gpu) => sum + gpu.processes.length, 0)} running
-                        </span>
-                    </div>
-                    <QueueStatusTable gpus={gpus} runningJobs={(jobsData?.data?.jobs || []).filter((j: { status: string; model_id?: string; name: string }) => j.status === 'running')} />
-                </div>
-            </section>
+            {/* GPU Orchestrator Job Queue */}
+            <JobQueuePanel />
 
             {/* GPU Status Cards */}
             <section className="mb-8">
@@ -131,6 +138,8 @@ export function Dashboard() {
                             currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
                             onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
                             isPending={manualMutation.isPending}
+                            disabled={gpuOverrides[String(gpu.index)]?.disabled ?? false}
+                            onToggleDisable={() => toggleDisableMutation.mutate(gpu.index)}
                         />
                     ))}
                     {gpus.length === 0 && (
@@ -178,88 +187,201 @@ export function Dashboard() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {jobsData?.data.jobs.map((job) => (
-                                    <React.Fragment key={job.id}>
-                                        <tr
-                                            onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                                            className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
-                                        >
-                                            <td className="py-3 px-4 text-white font-medium">
-                                                <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
-                                                {job.name}
-                                            </td>
-                                            <td className="py-3 px-4">
-                                                <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
-                                                    {job.mode}
-                                                </span>
-                                            </td>
-                                            <td className="py-3 px-4">
-                                                <StatusBadge status={job.status} />
-                                            </td>
-                                            <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
-                                            <td className="py-3 px-4 text-slate-400 text-sm">
-                                                {new Date(job.created_at).toLocaleString()}
-                                            </td>
-                                            <td className="py-3 px-4">
-                                                <div className="flex items-center gap-2">
-                                                    {job.status === 'completed' && (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setQuickViewJobId(job.id);
-                                                            }}
-                                                            className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
-                                                                    ? 'bg-purple-500/30 text-purple-300'
-                                                                    : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-                                                                }`}
-                                                            title="Load in Quick Viewer"
-                                                        >
-                                                            🔬 View
-                                                        </button>
+                                {(() => {
+                                    const jobs = jobsData?.data.jobs || [];
+                                    if (!jobs.length) {
+                                        return (
+                                            <tr>
+                                                <td colSpan={6} className="py-8 text-center text-slate-500">
+                                                    No jobs found
+                                                </td>
+                                            </tr>
+                                        );
+                                    }
+
+                                    // Group jobs by batch
+                                    const batchedJobs = new Map<string, typeof jobs>();
+                                    const standaloneJobs: typeof jobs = [];
+
+                                    jobs.forEach(job => {
+                                        if (job.batch_id && job.batch_name) {
+                                            const existing = batchedJobs.get(job.batch_id) || [];
+                                            existing.push(job);
+                                            batchedJobs.set(job.batch_id, existing);
+                                        } else {
+                                            standaloneJobs.push(job);
+                                        }
+                                    });
+
+                                    const rows: React.ReactNode[] = [];
+
+                                    // Render batched jobs with group headers
+                                    batchedJobs.forEach((batchJobs, batchId) => {
+                                        const batchName = batchJobs[0].batch_name!;
+                                        const totalDesigns = batchJobs.reduce((sum, j) => sum + j.design_count, 0);
+                                        const allCompleted = batchJobs.every(j => j.status === 'completed');
+                                        const anyRunning = batchJobs.some(j => j.status === 'running');
+                                        const anyFailed = batchJobs.some(j => j.status === 'failed');
+
+                                        // Batch header row
+                                        rows.push(
+                                            <tr key={`batch-${batchId}`} className="bg-purple-500/10 border-b border-purple-500/30">
+                                                <td colSpan={6} className="py-2 px-4">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-purple-400">📦</span>
+                                                            <span className="text-white font-medium">{batchName}</span>
+                                                            <span className="text-purple-300 text-sm">({batchJobs.length} sims)</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-4 text-sm">
+                                                            <span className="text-slate-400">{totalDesigns} designs</span>
+                                                            <StatusBadge status={anyFailed ? 'failed' : anyRunning ? 'running' : allCompleted ? 'completed' : 'queued'} />
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+
+                                        // Individual jobs in batch (indented)
+                                        batchJobs.forEach(job => {
+                                            rows.push(
+                                                <React.Fragment key={job.id}>
+                                                    <tr
+                                                        onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                                                        className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
+                                                    >
+                                                        <td className="py-3 px-4 text-white font-medium pl-10">
+                                                            <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
+                                                            {job.name.replace(batchName + '_', '')}
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
+                                                                {job.mode}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            <StatusBadge status={job.status} />
+                                                        </td>
+                                                        <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
+                                                        <td className="py-3 px-4 text-slate-400 text-sm">
+                                                            {new Date(job.created_at).toLocaleTimeString()}
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            <div className="flex items-center gap-2">
+                                                                {job.status === 'completed' && (
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setQuickViewJobId(job.id);
+                                                                        }}
+                                                                        className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
+                                                                            ? 'bg-purple-500/30 text-purple-300'
+                                                                            : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                            }`}
+                                                                        title="Load in Quick Viewer"
+                                                                    >
+                                                                        🔬 View
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                    {expandedJobId === job.id && (
+                                                        <JobDetailsPanel
+                                                            job={job}
+                                                            onClose={() => setExpandedJobId(null)}
+                                                        />
                                                     )}
-                                                    {(job.status === 'running' || job.status === 'queued') && (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleCancel(job.id, job.name);
-                                                            }}
-                                                            disabled={cancelMutation.isPending}
-                                                            className="px-2 py-1 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 rounded transition-colors disabled:opacity-50"
-                                                        >
-                                                            {cancelMutation.isPending ? '...' : 'Cancel'}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                        {expandedJobId === job.id && (
-                                            <JobDetailsPanel
-                                                job={job}
-                                                onClose={() => setExpandedJobId(null)}
-                                            />
-                                        )}
-                                    </React.Fragment>
-                                )) ?? (
-                                        <tr>
-                                            <td colSpan={6} className="py-8 text-center text-slate-500">
-                                                No jobs found
-                                            </td>
-                                        </tr>
-                                    )}
+                                                </React.Fragment>
+                                            );
+                                        });
+                                    });
+
+                                    // Render standalone jobs
+                                    standaloneJobs.forEach(job => {
+                                        rows.push(
+                                            <React.Fragment key={job.id}>
+                                                <tr
+                                                    onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                                                    className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
+                                                >
+                                                    <td className="py-3 px-4 text-white font-medium">
+                                                        <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
+                                                        {job.name}
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
+                                                            {job.mode}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <StatusBadge status={job.status} />
+                                                    </td>
+                                                    <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
+                                                    <td className="py-3 px-4 text-slate-400 text-sm">
+                                                        {new Date(job.created_at).toLocaleString()}
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <div className="flex items-center gap-2">
+                                                            {job.status === 'completed' && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setQuickViewJobId(job.id);
+                                                                    }}
+                                                                    className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
+                                                                        ? 'bg-purple-500/30 text-purple-300'
+                                                                        : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                        }`}
+                                                                    title="Load in Quick Viewer"
+                                                                >
+                                                                    🔬 View
+                                                                </button>
+                                                            )}
+                                                            {(job.status === 'running' || job.status === 'queued') && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleCancel(job.id, job.name);
+                                                                    }}
+                                                                    disabled={cancelMutation.isPending}
+                                                                    className="px-2 py-1 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 rounded transition-colors disabled:opacity-50"
+                                                                >
+                                                                    {cancelMutation.isPending ? '...' : 'Cancel'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                {expandedJobId === job.id && (
+                                                    <JobDetailsPanel
+                                                        job={job}
+                                                        onClose={() => setExpandedJobId(null)}
+                                                    />
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    });
+
+                                    return rows;
+                                })()}
                             </tbody>
                         </table>
                     </div>
-                )}
-            </section>
-        </div>
+                )
+                }
+            </section >
+        </div >
     );
 }
 
-function GPUCard({ gpu, currentLimit, onSetLimit, isPending }: {
+function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleDisable }: {
     gpu: GPUStatus;
     currentLimit: number;
     onSetLimit: (watts: number) => void;
     isPending: boolean;
+    disabled: boolean;
+    onToggleDisable: () => void;
 }) {
     const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
     const memoryPercent = (gpu.memory_used_mb / gpu.memory_total_mb) * 100;
@@ -292,147 +414,114 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending }: {
     const isDirty = parseInt(inputValue, 10) !== currentLimit;
 
     return (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-5 hover:border-purple-500/50 transition-all duration-300">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-3">
-                <span className="text-sm text-slate-400">GPU {gpu.index}</span>
-                <span
-                    className={`px-2 py-1 rounded-full text-xs font-medium ${gpu.utilization > 80
-                        ? 'bg-green-500/20 text-green-400'
-                        : gpu.utilization > 20
-                            ? 'bg-yellow-500/20 text-yellow-400'
-                            : 'bg-slate-500/20 text-slate-400'
-                        }`}
-                >
-                    {gpu.utilization}% GPU
-                </span>
-            </div>
-            <h3 className="text-lg font-semibold text-white truncate mb-4">{gpu.name}</h3>
-
-            {/* Power Control - Full Width */}
-            <div className="bg-slate-900/50 rounded-lg p-3 mb-4">
-                <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs text-slate-400">Power</span>
-                    <span className="text-xs text-slate-500">
-                        Limit: <span className="text-orange-400 font-medium">{currentLimit}W</span>
-                    </span>
+        <div className={`bg-slate-800/50 backdrop-blur-sm border rounded-lg p-3 transition-all duration-300 ${disabled ? 'border-red-500/50 opacity-60' : 'border-slate-700 hover:border-purple-500/50'
+            }`}>
+            {/* Header - compact */}
+            <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-500">GPU {gpu.index}</span>
+                    <span className="text-sm font-medium text-white truncate">{gpu.name}</span>
+                    {disabled && (
+                        <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">
+                            Disabled
+                        </span>
+                    )}
                 </div>
-                <div className="text-sm font-medium text-orange-400 mb-1">
-                    Draw: {gpu.power_draw_w}W
-                </div>
-                <div className="w-full bg-slate-700 rounded-full h-1.5 mb-3">
-                    <div
-                        className={`h-1.5 rounded-full transition-all ${powerPercent > 90 ? 'bg-red-500' : powerPercent > 70 ? 'bg-yellow-500' : 'bg-orange-500'}`}
-                        style={{ width: `${Math.min(powerPercent, 100)}%` }}
-                    />
-                </div>
-                {/* Limit adjuster */}
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={handleDecrement}
-                        className="w-7 h-7 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors text-sm font-bold"
-                        title="Decrease by 25W"
+                        onClick={onToggleDisable}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${disabled
+                            ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                            : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                            }`}
+                        title={disabled ? 'Enable GPU for inference' : 'Disable GPU from inference'}
                     >
-                        ▼
+                        {disabled ? 'Enable' : 'Disable'}
                     </button>
-                    <input
-                        type="number"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        className={`w-16 px-2 py-1 bg-slate-700 border rounded text-white text-sm text-center ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-600'}`}
-                    />
-                    <button
-                        onClick={handleIncrement}
-                        className="w-7 h-7 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors text-sm font-bold"
-                        title="Increase by 25W"
+                    <span
+                        className={`px-1.5 py-0.5 rounded text-xs font-medium ${gpu.utilization > 80
+                            ? 'bg-green-500/20 text-green-400'
+                            : gpu.utilization > 20
+                                ? 'bg-yellow-500/20 text-yellow-400'
+                                : 'bg-slate-500/20 text-slate-400'
+                            }`}
                     >
-                        ▲
-                    </button>
-                    <button
-                        onClick={handleApply}
-                        disabled={isPending || isOutOfRange || !isDirty}
-                        className="px-3 py-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isPending ? '...' : 'Apply'}
-                    </button>
-                </div>
-                <div className="text-xs text-slate-500 mt-2">
-                    Range: {gpu.min_power_watts}W – {gpu.max_power_watts}W
-                </div>
-            </div>
-
-            {/* Stats Grid - 3 columns */}
-            <div className="grid grid-cols-3 gap-3 mb-4">
-                {/* Temperature & Fan */}
-                <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Temp / Fan</div>
-                    <div className="flex items-center gap-1">
-                        <span className={`text-sm font-medium ${gpu.temperature > 80 ? 'text-red-400' : gpu.temperature > 60 ? 'text-yellow-400' : 'text-green-400'}`}>
-                            {gpu.temperature}°C
-                        </span>
-                        <span className="text-slate-500">|</span>
-                        <span className="text-sm font-medium text-blue-400">{gpu.fan_speed}%</span>
-                    </div>
-                </div>
-
-                {/* Clocks */}
-                <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Core</div>
-                    <div className="text-sm font-medium text-purple-400">
-                        {gpu.clock_graphics_mhz} MHz
-                    </div>
-                </div>
-
-                <div className="bg-slate-900/50 rounded-lg p-2">
-                    <div className="text-xs text-slate-400 mb-1">Mem</div>
-                    <div className="text-sm font-medium text-cyan-400">
-                        {gpu.clock_memory_mhz} MHz
-                    </div>
-                </div>
-            </div>
-
-            {/* Memory Bar */}
-            <div className="mb-3">
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
-                    <span>VRAM {gpu.reserved_memory_mb > 0 && <span className="text-orange-400 italic">(+{Math.round(gpu.reserved_memory_mb / 1024)}GB Rsrv)</span>}</span>
-                    <span>
-                        {((gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024).toFixed(1)} / {(gpu.memory_total_mb / 1024).toFixed(1)} GB
+                        {gpu.utilization}%
                     </span>
                 </div>
-                <div className="w-full bg-slate-700 rounded-full h-2 relative overflow-hidden">
-                    {/* Real Usage */}
+            </div>
+
+            {/* Stats Row - inline compact */}
+            <div className="flex items-center gap-3 text-xs mb-2">
+                <span className={`${gpu.temperature > 80 ? 'text-red-400' : gpu.temperature > 60 ? 'text-yellow-400' : 'text-green-400'}`}>
+                    {gpu.temperature}°C
+                </span>
+                <span className="text-blue-400">{gpu.fan_speed}% Fan</span>
+                <span className="text-purple-400">{gpu.clock_graphics_mhz}MHz</span>
+            </div>
+
+            {/* VRAM Bar - compact */}
+            <div className="mb-2">
+                <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                    <span>VRAM</span>
+                    <span>{((gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024).toFixed(1)}/{(gpu.memory_total_mb / 1024).toFixed(0)}GB</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-1.5 relative overflow-hidden">
                     <div
-                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-500 z-20"
+                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all z-20"
                         style={{ width: `${memoryPercent}%` }}
                     />
-                    {/* Reserved Usage (Ghost Bar) */}
                     {gpu.reserved_memory_mb > 0 && (
                         <div
-                            className="absolute top-0 left-0 h-full bg-orange-500/30 transition-all duration-500 z-10 striped-bar"
-                            style={{
-                                left: `${memoryPercent}%`,
-                                width: `${(gpu.reserved_memory_mb / gpu.memory_total_mb) * 100}%`
-                            }}
+                            className="absolute top-0 h-full bg-orange-500/30 z-10"
+                            style={{ left: `${memoryPercent}%`, width: `${(gpu.reserved_memory_mb / gpu.memory_total_mb) * 100}%` }}
                         />
                     )}
                 </div>
             </div>
 
-            {/* Processes */}
-            {gpu.processes.length > 0 && (
-                <div className="border-t border-slate-700 pt-3 mt-3">
-                    <div className="text-xs text-slate-400 mb-2">Running Processes</div>
-                    <div className="space-y-1">
-                        {gpu.processes.slice(0, 3).map((proc) => (
-                            <div key={proc.pid} className="flex justify-between text-xs">
-                                <span className="text-slate-300 truncate max-w-[60%]">{proc.name}</span>
-                                <span className="text-slate-500">{proc.memory_mb} MB</span>
-                            </div>
-                        ))}
-                        {gpu.processes.length > 3 && (
-                            <div className="text-xs text-slate-500">+{gpu.processes.length - 3} more</div>
-                        )}
+            {/* Power Row - inline compact */}
+            <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                    <span className="text-orange-400 font-medium">{gpu.power_draw_w}W</span>
+                    <div className="w-16 bg-slate-700 rounded-full h-1">
+                        <div
+                            className={`h-1 rounded-full ${powerPercent > 90 ? 'bg-red-500' : powerPercent > 70 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+                            style={{ width: `${Math.min(powerPercent, 100)}%` }}
+                        />
                     </div>
+                </div>
+                <div className="flex items-center gap-1">
+                    <button onClick={handleDecrement} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">−</button>
+                    <input
+                        type="number"
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        className={`w-12 px-1 py-0.5 bg-slate-700 border rounded text-white text-xs text-center appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-600'}`}
+                    />
+                    <button onClick={handleIncrement} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">+</button>
+                    {isDirty && (
+                        <button
+                            onClick={handleApply}
+                            disabled={isPending || isOutOfRange}
+                            className="px-2 py-0.5 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded text-xs disabled:opacity-50"
+                        >
+                            ✓
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Processes - minimal */}
+            {gpu.processes.length > 0 && (
+                <div className="border-t border-slate-700/50 pt-1.5 mt-2 text-xs text-slate-400">
+                    {gpu.processes.slice(0, 2).map((proc) => (
+                        <div key={proc.pid} className="flex justify-between truncate">
+                            <span className="truncate max-w-[70%]">{proc.name}</span>
+                            <span className="text-slate-500">{proc.memory_mb}MB</span>
+                        </div>
+                    ))}
+                    {gpu.processes.length > 2 && <span className="text-slate-500">+{gpu.processes.length - 2} more</span>}
                 </div>
             )}
         </div>
@@ -811,7 +900,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 <div className="flex items-center gap-3">
                     <span className="text-sm font-medium text-slate-200">⚙️ GPU Scheduler</span>
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${config.global.enabled ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'}`}>
-                        {config.global.enabled ? `${Math.round(config.global.busy_threshold * 100)}% Lock` : 'OFF'}
+                        {config.global.enabled ? `${Math.round(config.global.busy_threshold * 100)}% Fill` : 'OFF'}
                     </span>
                 </div>
                 <span className="text-slate-500">{expanded ? '▲' : '▼'}</span>
@@ -834,7 +923,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     {/* Threshold Slider */}
                     <div>
                         <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>VRAM Threshold</span>
+                            <span>Target VRAM Fill</span>
                             <span className="text-cyan-400 font-medium">{localThreshold}%</span>
                         </div>
                         <input
