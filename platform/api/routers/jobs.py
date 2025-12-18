@@ -83,7 +83,9 @@ async def list_jobs(
             completed_at=job.completed_at,
             output_dir=job.output_dir,
             error_message=job.error_message,
-            design_count=design_count
+            design_count=design_count,
+            batch_id=job.batch_id,
+            batch_name=job.batch_name,
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -109,57 +111,122 @@ async def create_job(
     import logging
     logger = logging.getLogger(__name__)
     logger.warning(f"DEBUG jobs.py: Received job_data.params keys: {list(job_data.params.keys())}")
+    logger.warning(f"DEBUG jobs.py: num_parallel_jobs = {job_data.params.get('num_parallel_jobs', 'NOT SET')}")
     if 'complex_components' in job_data.params:
         logger.warning(f"DEBUG jobs.py: complex_components found with {len(job_data.params['complex_components'])} items")
     else:
         logger.warning("DEBUG jobs.py: complex_components NOT in job_data.params!")
     
-    job_id = str(uuid.uuid4())
+    # ═══════════════════════════════════════════════════════════════════════════
+    # JOB MULTIPLIER: Create N separate jobs for multi-GPU distribution
+    # ═══════════════════════════════════════════════════════════════════════════
     
-    # Create output directory
+    # Extract num_parallel_jobs (job multiplier) and remove from params passed to Nextflow
+    # This way each individual Nextflow run does 1 simulation, but we create N jobs
+    num_jobs = job_data.params.pop('num_parallel_jobs', 1)
+    if num_jobs is None or num_jobs < 1:
+        num_jobs = 1
+    
+    # Create output directory (base for all jobs in batch)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Use absolute path to ensure API and Nextflow agree on location
-    # API runs in platform/api, Nextflow runs in PROJECT_ROOT
-    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{job_data.name}_{timestamp}")
-    os.makedirs(output_dir, exist_ok=True)
+    base_output_dir = str(PROJECT_ROOT / "pdj_results" / f"{job_data.name}_{timestamp}")
+    os.makedirs(base_output_dir, exist_ok=True)
     
-    # Create job record
-    job = Job(
-        id=job_id,
-        name=job_data.name,
-        model_id=job_data.model_id,
-        mode=job_data.mode,
-        params=job_data.params,
-        output_dir=output_dir,  # Store absolute path
-        status=JobStatus.QUEUED.value
-    )
-    session.add(job)
+    # Extract sequence length for VRAM estimation (same for all jobs in batch)
+    sequence_length = None
+    if 'sequence_input' in job_data.params and job_data.params['sequence_input']:
+        sequence_length = len(job_data.params['sequence_input'])
+    elif 'complex_components' in job_data.params:
+        # For complexes, use the longest chain
+        max_len = 0
+        for comp in job_data.params['complex_components']:
+            if comp.get('type') == 'protein' and comp.get('sequence'):
+                max_len = max(max_len, len(comp['sequence']))
+        if max_len > 0:
+            sequence_length = max_len
+    
+    if sequence_length is None:
+        sequence_length = 300  # Default fallback
+    
+    # Estimate VRAM based on model type
+    from services.gpu_orchestrator import estimate_vram
+    vram_estimate = estimate_vram(job_data.model_id, sequence_length)
+    
+    # Generate batch_id if creating multiple jobs
+    batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
+    batch_name = job_data.name if num_jobs > 1 else None
+    
+    logger.info(f"[QUEUE] Creating {num_jobs} job(s) for '{job_data.name}': model={job_data.model_id}, seq_len={sequence_length}, vram_est={vram_estimate}MB")
+    
+    created_jobs = []
+    first_job = None
+    
+    for i in range(num_jobs):
+        job_id = str(uuid.uuid4())
+        
+        # For multiple jobs: use sim_1, sim_2, etc. subdirectories
+        if num_jobs > 1:
+            job_name = f"{job_data.name}_sim{i+1}"
+            output_dir = str(Path(base_output_dir) / f"sim_{i+1}")
+        else:
+            job_name = job_data.name
+            output_dir = base_output_dir
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create job record with queue fields
+        job = Job(
+            id=job_id,
+            name=job_name,
+            model_id=job_data.model_id,
+            mode=job_data.mode,
+            params=job_data.params,  # num_parallel_jobs already removed
+            output_dir=output_dir,
+            status=JobStatus.QUEUED.value,
+            # Batch grouping for job sets
+            batch_id=batch_id,
+            batch_name=batch_name,
+            # GPU Orchestrator fields
+            queue_status='queued',
+            vram_estimate_mb=vram_estimate,
+            sequence_length=sequence_length,
+            priority=0,  # Default priority
+            paused=False,
+            retry_count=0,
+            max_retries=2,
+            oom_tolerance='allow'
+        )
+        session.add(job)
+        created_jobs.append(job)
+        
+        if first_job is None:
+            first_job = job
+    
     await session.commit()
-    await session.refresh(job)
     
-    # Launch job in background
-    background_tasks.add_task(
-        launch_nextflow_job,
-        job_id=job_id,
-        model_id=job_data.model_id,
-        mode=job_data.mode,
-        params=job_data.params,
-        output_dir=output_dir
-    )
+    # Refresh first job for response
+    await session.refresh(first_job)
     
+    if num_jobs > 1:
+        logger.info(f"[BATCH] Created batch {batch_id[:8]}... with {num_jobs} jobs: {[j.name for j in created_jobs]}")
+    
+    # NOTE: Jobs are now launched by the GPU Orchestrator, not directly here
+    # The orchestrator polls for queued jobs and assigns them to GPUs
+    # based on VRAM availability and bin-packing algorithm.
+    # Each job in the batch gets its own GPU assignment.
     
     return JobResponse(
-        id=job.id,
-        name=job.name,
-        status=job.status,
-        model_id=job.model_id,
-        mode=job.mode,
-        params=job.params,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        output_dir=job.output_dir,
-        error_message=job.error_message,
+        id=first_job.id,
+        name=first_job.name,
+        status=first_job.status,
+        model_id=first_job.model_id,
+        mode=first_job.mode,
+        params=first_job.params,
+        created_at=first_job.created_at,
+        started_at=first_job.started_at,
+        completed_at=first_job.completed_at,
+        output_dir=first_job.output_dir,
+        error_message=first_job.error_message,
         design_count=0
     )
 

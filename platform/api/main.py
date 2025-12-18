@@ -9,16 +9,68 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+import asyncio
+import logging
 
-from database import init_db
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, msa_cache, smiles_converter
+from database import init_db, async_session
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, msa_cache, smiles_converter, queue, rcsb
+from services.gpu_orchestrator import GPUOrchestrator
+from routers.gpu import get_gpu_stats
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Global orchestrator instance
+_orchestrator: GPUOrchestrator = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
+    """Initialize database and GPU orchestrator on startup."""
+    global _orchestrator
+    
+    # Initialize database
     await init_db()
+    
+    # Initialize GPU orchestrator
+    from services.nextflow import launch_nextflow_job
+    
+    # Wrapper to call the real Nextflow launcher with GPU assignment
+    async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
+        """Launch a job via Nextflow with GPU assignment from orchestrator.
+        
+        Uses asyncio.create_task to fire-and-forget, so multiple jobs can launch
+        in parallel without waiting for each to complete.
+        """
+        logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
+        # Fire-and-forget: create a background task for the Nextflow job
+        # This allows the orchestrator to launch multiple jobs in parallel
+        asyncio.create_task(launch_nextflow_job(
+            job_id=job_id,
+            model_id=model_id,
+            mode=mode,
+            params=params,
+            output_dir=output_dir
+        ))
+    
+    _orchestrator = GPUOrchestrator(
+        db_session_factory=async_session,
+        get_gpu_stats_fn=get_gpu_stats,
+        launch_nextflow_job_fn=orchestrator_launch_job,
+        poll_interval=3.0
+    )
+    
+    # Start orchestrator in background
+    await _orchestrator.start()
+    logger.info("[STARTUP] GPU Orchestrator started")
+    
     yield
+    
+    # Cleanup on shutdown
+    if _orchestrator:
+        await _orchestrator.stop()
+        logger.info("[SHUTDOWN] GPU Orchestrator stopped")
 
 
 app = FastAPI(
@@ -50,6 +102,8 @@ app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["u
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(msa_cache.router, prefix="/api/msa-cache", tags=["msa-cache"])
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
+app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*
+app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 
 
 @app.get("/api/health")

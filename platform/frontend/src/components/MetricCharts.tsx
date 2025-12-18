@@ -11,7 +11,10 @@ import {
     AreaChart,
     Area,
     ReferenceLine,
-    ReferenceArea
+    ReferenceArea,
+    LineChart,
+    Line,
+    Legend
 } from 'recharts';
 import type { MetricDistribution } from '../lib/api';
 
@@ -374,6 +377,283 @@ export function ResidueLineChart({ residueNumbers, plddt, designName, height = 3
                     <div className="text-xl font-bold text-purple-400">{plddt.length}</div>
                     <div className="text-[10px] text-purple-400/70 uppercase tracking-wider font-medium">Residues</div>
                 </div>
+            </div>
+        </div>
+    );
+}
+
+interface MultiLineChartProps {
+    data: Array<{
+        residue: number;
+        [key: string]: number; // dynamic keys for each design
+    }>;
+    designNames: string[];
+    colors: string[];
+    height?: number;
+}
+
+export function DesignMultiLineChart({ data, designNames, colors, height = 400 }: MultiLineChartProps) {
+    return (
+        <div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/40 backdrop-blur-sm">
+            <h3 className="text-slate-300 text-sm font-semibold tracking-wide mb-6 flex items-center gap-2">
+                <span className="w-1 h-4 bg-blue-500 rounded-full"></span>
+                pLDDT Comparison Overlay
+            </h3>
+            <div style={{ height }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data} margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} vertical={false} />
+                        <XAxis
+                            dataKey="residue"
+                            stroke="#64748b"
+                            fontSize={11}
+                            tickLine={false}
+                            axisLine={false}
+                            dy={10}
+                            label={{ value: 'Residue Position', position: 'bottom', fill: '#64748b', fontSize: 11, dy: 20 }}
+                        />
+                        <YAxis
+                            domain={[0, 100]}
+                            stroke="#64748b"
+                            fontSize={11}
+                            tickLine={false}
+                            axisLine={false}
+                            ticks={[0, 20, 40, 60, 80, 100]}
+                            label={{ value: 'pLDDT Score', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }}
+                        />
+                        <Tooltip
+                            contentStyle={{
+                                backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                                border: '1px solid rgba(51, 65, 85, 0.5)',
+                                borderRadius: '12px',
+                                color: '#f8fafc',
+                                padding: '12px',
+                                backdropFilter: 'blur(8px)'
+                            }}
+                            cursor={{ stroke: '#818cf8', strokeWidth: 1, strokeDasharray: '4 4' }}
+                        />
+                        <Legend wrapperStyle={{ paddingTop: '20px' }} />
+
+                        {/* Render lines for each design */}
+                        {designNames.map((name, index) => (
+                            <Line
+                                key={name}
+                                type="monotone"
+                                dataKey={name}
+                                stroke={colors[index % colors.length]}
+                                strokeWidth={2}
+                                dot={false}
+                                activeDot={{ r: 6 }}
+                                animationDuration={1000}
+                            />
+                        ))}
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Minimal sparkline chart for compact overlay displays
+ * Just shows the line with basic hover tooltip - no headers, legends, or margins
+ */
+interface SparklineProps {
+    data: number[];
+    width?: number;
+    height?: number;
+    color?: string;
+    thresholds?: { low: number; high: number };
+}
+
+export function SparklineChart({
+    data,
+    width = 200,
+    height = 60,
+    color = '#60a5fa',
+    thresholds = { low: 60, high: 80 }
+}: SparklineProps) {
+    const chartData = data.map((value, index) => ({ index, value }));
+    const avg = data.reduce((a, b) => a + b, 0) / data.length;
+
+    return (
+        <div style={{ width, height }} className="relative">
+            <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                    <defs>
+                        <linearGradient id="sparkGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+                            <stop offset="100%" stopColor={color} stopOpacity={0.05} />
+                        </linearGradient>
+                    </defs>
+
+                    {/* Threshold zone coloring */}
+                    <ReferenceArea y1={thresholds.high} y2={100} fill="#34d399" fillOpacity={0.1} />
+                    <ReferenceArea y1={thresholds.low} y2={thresholds.high} fill="#fbbf24" fillOpacity={0.08} />
+                    <ReferenceArea y1={0} y2={thresholds.low} fill="#f87171" fillOpacity={0.08} />
+
+                    {/* Average line */}
+                    <ReferenceLine y={avg} stroke="#94a3b8" strokeDasharray="2 2" strokeWidth={1} />
+
+                    <YAxis domain={[0, 100]} hide />
+                    <XAxis dataKey="index" hide />
+
+                    <Tooltip
+                        contentStyle={{
+                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                            border: '1px solid rgba(51, 65, 85, 0.6)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            fontSize: '11px',
+                        }}
+                        formatter={(value: number) => [`${value.toFixed(1)}`, 'pLDDT']}
+                        labelFormatter={(idx) => `Residue ${idx + 1}`}
+                    />
+
+                    <Area
+                        type="monotone"
+                        dataKey="value"
+                        stroke={color}
+                        strokeWidth={1.5}
+                        fill="url(#sparkGradient)"
+                        dot={false}
+                        activeDot={{ r: 3, fill: color }}
+                    />
+                </AreaChart>
+            </ResponsiveContainer>
+
+            {/* Compact stats overlay */}
+            <div className="absolute bottom-0 left-0 right-0 flex justify-between text-[9px] text-slate-400 px-1">
+                <span>avg: {avg.toFixed(0)}</span>
+                <span>{data.length} res</span>
+            </div>
+        </div>
+    );
+}
+
+
+/**
+ * IPTMHeatmap - Displays the chain-chain ipTM scores matrix
+ * 
+ * Shows interface pTM scores between all pairs of chains,
+ * using a viridis-like color scale (purple → blue → green → yellow).
+ */
+interface IPTMHeatmapProps {
+    data: Record<string, Record<string, number>>; // {"0": {"0": 0.76, "1": 0.5}, ...}
+    title?: string;
+    width?: number;
+    height?: number;
+}
+
+export function IPTMHeatmap({ data, title = "ipTM Pairs", width = 200, height = 200 }: IPTMHeatmapProps) {
+    if (!data || Object.keys(data).length === 0) {
+        return (
+            <div className="flex items-center justify-center text-slate-500 text-xs h-full">
+                No chain interface data
+            </div>
+        );
+    }
+
+    // Convert chain keys to sorted array
+    const chainIds = Object.keys(data).sort((a, b) => parseInt(a) - parseInt(b));
+    const n = chainIds.length;
+
+    // Viridis-like color scale (blue → teal → yellow)
+    const getColor = (value: number): string => {
+        if (value === undefined || value === null) return '#1e1b4b'; // dark bg for missing
+
+        // Clamp to 0-1
+        const v = Math.max(0, Math.min(1, value));
+
+        // Gradient stops: 0 = deep purple, 0.5 = teal, 1 = yellow
+        if (v < 0.5) {
+            // Purple (68, 1, 84) → Teal (32, 144, 140)
+            const t = v * 2;
+            const r = Math.round(68 + t * (32 - 68));
+            const g = Math.round(1 + t * (144 - 1));
+            const b = Math.round(84 + t * (140 - 84));
+            return `rgb(${r}, ${g}, ${b})`;
+        } else {
+            // Teal (32, 144, 140) → Yellow (253, 231, 37)
+            const t = (v - 0.5) * 2;
+            const r = Math.round(32 + t * (253 - 32));
+            const g = Math.round(144 + t * (231 - 144));
+            const b = Math.round(140 + t * (37 - 140));
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+    };
+
+    const cellSize = Math.min((width - 40) / n, (height - 40) / n, 50);
+
+    return (
+        <div className="flex flex-col" style={{ width, height }}>
+            {title && (
+                <div className="text-xs text-slate-300 font-medium mb-2 text-center">{title}</div>
+            )}
+
+            <div className="flex-1 flex items-center justify-center">
+                <div className="relative">
+                    {/* Y-axis labels */}
+                    <div className="absolute -left-5 top-0 flex flex-col">
+                        {chainIds.map((id) => (
+                            <div
+                                key={`y-${id}`}
+                                className="text-[9px] text-slate-400 text-right pr-1"
+                                style={{ height: cellSize, lineHeight: `${cellSize}px` }}
+                            >
+                                {String.fromCharCode(65 + parseInt(id))}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Matrix */}
+                    <div className="flex flex-col">
+                        {chainIds.map((rowId) => (
+                            <div key={`row-${rowId}`} className="flex">
+                                {chainIds.map((colId) => {
+                                    const value = data[rowId]?.[colId];
+                                    return (
+                                        <div
+                                            key={`cell-${rowId}-${colId}`}
+                                            style={{
+                                                width: cellSize,
+                                                height: cellSize,
+                                                backgroundColor: getColor(value),
+                                            }}
+                                            className="cursor-pointer transition-opacity hover:opacity-80 border border-slate-800/20"
+                                            title={`${String.fromCharCode(65 + parseInt(rowId))} ↔ ${String.fromCharCode(65 + parseInt(colId))}: ${value?.toFixed(2) ?? 'N/A'}`}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* X-axis labels */}
+                    <div className="flex mt-1">
+                        {chainIds.map((id) => (
+                            <div
+                                key={`x-${id}`}
+                                className="text-[9px] text-slate-400 text-center"
+                                style={{ width: cellSize }}
+                            >
+                                {String.fromCharCode(65 + parseInt(id))}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Color legend */}
+            <div className="flex items-center justify-center gap-1 mt-2">
+                <span className="text-[8px] text-slate-500">0</span>
+                <div
+                    className="h-2 w-16 rounded-sm"
+                    style={{
+                        background: 'linear-gradient(to right, rgb(68, 1, 84), rgb(32, 144, 140), rgb(253, 231, 37))'
+                    }}
+                />
+                <span className="text-[8px] text-slate-500">1</span>
             </div>
         </div>
     );

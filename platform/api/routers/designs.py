@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +21,19 @@ router = APIRouter()
 
 
 # --- Pydantic Schemas ---
+
+
+class ChainMetric(BaseModel):
+    type: str
+    length: int
+    avg_plddt: Optional[float]
+    plddt: Optional[List[float]]
+    residue_numbers: Optional[List[int]]
+
+class ChainMetricsResponse(BaseModel):
+    design_id: str
+    chains: Dict[str, ChainMetric]
+
 
 class DesignResponse(BaseModel):
     id: str
@@ -51,8 +64,17 @@ class DesignResponse(BaseModel):
     affinity_score: Optional[float]
     binder_probability: Optional[float]
     
+    # Interface metrics (complexes)
+    iptm: Optional[float] = None
+    protein_iptm: Optional[float] = None
+    complex_iplddt: Optional[float] = None
+    complex_ipde: Optional[float] = None
+    chains_ptm: Optional[dict] = None  # {"0": 0.76, "1": 0.51}
+    pair_chains_iptm: Optional[dict] = None  # NxN chain matrix
+    
     # Per-residue metrics (for charts)
     residue_plddt: Optional[List[float]] = None
+    chain_metrics: Optional[Dict[str, ChainMetric]] = None
     
     # User annotations
     is_favorite: bool
@@ -206,6 +228,30 @@ async def get_residue_metrics(
         plddt=plddt_values,
         length=len(plddt_values)
     )
+
+
+@router.get("/{design_id}/chain-metrics")
+async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_session)):
+    """Return per-chain pLDDT and type information."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+        
+    # Compute on-the-fly if not cached
+    if not design.chain_metrics and design.pdb_path:
+        try:
+            from services.structure_utils import get_per_chain_metrics
+            metrics = get_per_chain_metrics(design.pdb_path)
+            if metrics:
+                design.chain_metrics = metrics
+                await session.commit()
+        except Exception as e:
+            print(f"Failed to compute chain metrics: {e}")
+            # Don't fail the request, just return empty
+    
+    return design.chain_metrics or {}
 
 
 @router.post("/{design_id}/favorite")

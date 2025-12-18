@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+// Use relative path - Vite's proxy handles /api -> localhost:8000
+const API_BASE = '';
 
 export const api = axios.create({
     baseURL: API_BASE,
@@ -18,6 +19,9 @@ export interface Job {
     design_count: number;
     output_dir: string | null;
     error_message?: string | null;
+    // Batch grouping for job sets
+    batch_id?: string | null;
+    batch_name?: string | null;
 }
 
 export interface GPUProcess {
@@ -178,6 +182,13 @@ export interface Design {
     ligand_iptm: number | null;
     affinity_score: number | null;
     binder_probability: number | null;
+    // Interface metrics (complexes)
+    iptm: number | null;
+    protein_iptm: number | null;
+    complex_iplddt: number | null;
+    complex_ipde: number | null;
+    chains_ptm: Record<string, number> | null;
+    pair_chains_iptm: Record<string, Record<string, number>> | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -215,8 +226,21 @@ export interface ResidueMetrics {
     length: number;
 }
 
+// Fetch per-residue metrics for a design
 export const fetchDesignResidueMetrics = (designId: string) =>
     api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
+
+export interface ChainMetric {
+    type: 'protein' | 'dna' | 'rna' | 'ligand';
+    length: number;
+    avg_plddt: number | null;
+    plddt: number[];
+    residue_numbers: number[];
+}
+
+// Fetch per-chain metrics for a design
+export const fetchChainMetrics = (designId: string) =>
+    api.get<Record<string, ChainMetric>>(`/api/designs/${designId}/chain-metrics`);
 
 // Power control (eco mode + manual)
 export const fetchPowerProfile = () =>
@@ -424,3 +448,84 @@ export const generate3DConformer = (data: Generate3DRequest) =>
 
 export const generateNTP3D = (ntpName: string) =>
     api.get<Generate3DResponse>(`/api/smiles/generate-3d/ntp/${ntpName}`);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GPU SCHEDULER CONFIG API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface SchedulerConfig {
+    global: { busy_threshold: number; cooldown_ms: number; enabled: boolean };
+    overrides: Record<string, { disabled?: boolean; force_available?: boolean }>;
+}
+
+export const fetchSchedulerConfig = () =>
+    api.get<SchedulerConfig>('/api/gpu/scheduler-config');
+
+export const toggleGpuDisabled = (gpuId: number) =>
+    api.post(`/api/gpu/scheduler-config/gpu/${gpuId}/toggle-disable`);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JOB QUEUE API (GPU Orchestrator)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface QueuedJob {
+    id: string;
+    name: string;
+    model_id: string;
+    mode: string;
+    queue_status: 'queued' | 'running' | 'paused';
+    paused: boolean;
+    pinned_gpu: number | null;
+    assigned_gpu: number | null;
+    priority: number;
+    vram_estimate_mb: number | null;
+    sequence_length: number | null;
+    batch_id: string | null;
+    batch_name: string | null;
+    retry_count: number;
+    max_retries: number;
+    created_at: string;
+    started_at: string | null;
+}
+
+export interface QueueStats {
+    queued: number;
+    running: number;
+    paused: number;
+    total: number;
+}
+
+export const fetchQueue = (status?: string) =>
+    api.get<QueuedJob[]>('/api/queue', { params: { status } });
+
+export const fetchQueueStats = () =>
+    api.get<QueueStats>('/api/queue/stats');
+
+export const pauseQueueJob = (jobId: string) =>
+    api.post(`/api/queue/${jobId}/pause`);
+
+export const resumeQueueJob = (jobId: string) =>
+    api.post(`/api/queue/${jobId}/resume`);
+
+export const cancelQueueJob = (jobId: string) =>
+    api.delete(`/api/queue/${jobId}`);
+
+export const pinQueueJob = (jobId: string, gpuId: number | null) =>
+    api.post(`/api/queue/${jobId}/pin`, { gpu_id: gpuId });
+
+export const setQueueJobPriority = (jobId: string, priority: number) =>
+    api.post(`/api/queue/${jobId}/priority`, { priority });
+
+export const retryQueueJob = (jobId: string) =>
+    api.post(`/api/queue/${jobId}/retry`);
+
+export const cancelAllQueuedJobs = () =>
+    api.delete('/api/queue/cancel-all');
+
+export const fetchCancelledJobs = (limit: number = 20) =>
+    api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit } });
+
+export const killActiveNextflowJobs = () =>
+    api.post('/api/queue/kill-active');
+
+
