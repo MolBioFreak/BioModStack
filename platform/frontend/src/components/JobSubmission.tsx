@@ -392,19 +392,27 @@ export function JobSubmission() {
                                 <MutagenesisTemplate
                                     onBack={() => setSelectedTemplateId(null)}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
-                                        // Batch submit variants
-                                        console.log('DEBUG: predictorConfig received:', predictorConfig);
-                                        console.log('DEBUG: predictorConfig.ligands:', predictorConfig.ligands);
-                                        console.log('DEBUG: ligands length check:', predictorConfig.ligands?.length);
+                                        // NEW: Single batch submission with all variants
+                                        // This triggers MSA batch job creation in the API
+                                        console.log('DEBUG: Submitting mutagenesis batch with', variants.length, 'variants');
+                                        console.log('DEBUG: predictorConfig:', predictorConfig);
+                                        console.log('DEBUG: msa_reference_sequence:', predictorConfig.msa_reference_sequence);
+
+                                        // For mutagenesis, we need to submit each variant as a separate job
+                                        // BUT with num_parallel_jobs=1 per job and msa_reference_sequence set
+                                        // The API will detect msa_reference_sequence and create an MSA batch job
+
                                         const promises = variants.map((variant) => {
                                             const jobParams = {
                                                 sequence: variant.sequence,
                                                 sequence_name: variant.name,
+                                                // CRITICAL: Pass msa_reference_sequence for MSA sharing
+                                                msa_reference_sequence: predictorConfig.msa_reference_sequence,
                                                 // Map predictor params
                                                 boltz_recycling_steps: predictorConfig.recycling_steps,
                                                 boltz_num_samples: predictorConfig.diffusion_samples,
                                                 boltz_sampling_steps: predictorConfig.sampling_steps,
-                                                num_parallel_jobs: predictorConfig.num_parallel_jobs,
+                                                num_parallel_jobs: 1, // Each variant is 1 job
                                                 boltz_use_msa: predictorConfig.use_msa,
                                                 boltz_use_potentials: predictorConfig.use_potentials,
                                                 boltz_step_scale: predictorConfig.step_scale,
@@ -417,8 +425,7 @@ export function JobSubmission() {
                                                     ]
                                                 } : {})
                                             };
-                                            console.log('DEBUG: Submitting job with params:', jobParams);
-                                            console.log('DEBUG: complex_components in params:', jobParams.complex_components);
+                                            console.log('DEBUG: Submitting job with msa_reference_sequence:', jobParams.msa_reference_sequence?.slice(0, 30) + '...');
                                             return submitMutation.mutateAsync({
                                                 name: `${jobNamePrefix}_${variant.name}`,
                                                 model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
@@ -429,12 +436,10 @@ export function JobSubmission() {
 
                                         try {
                                             await Promise.all(promises);
-                                            // Only navigate after all are done
                                             queryClient.invalidateQueries({ queryKey: ['jobs'] });
                                             navigate('/');
                                         } catch (error) {
                                             console.error("Batch submission failed", error);
-                                            // TODO: Show error toast?
                                         }
                                     }}
                                 />

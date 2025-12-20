@@ -156,6 +156,66 @@ async def create_job(
     batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
     batch_name = job_data.name if num_jobs > 1 else None
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MSA BATCH JOB: For multi-sequence jobs, create MSA job first
+    # ═══════════════════════════════════════════════════════════════════════════
+    msa_job = None
+    needs_msa = False
+    sequences_for_msa = []
+    
+    # DEBUG: Log what we're checking
+    logger.warning(f"[MSA DEBUG] num_jobs={num_jobs}, has_msa_reference={job_data.params.get('msa_reference_sequence') is not None}")
+    logger.warning(f"[MSA DEBUG] params keys: {list(job_data.params.keys())}")
+    
+    # Check if this is a mutagenesis batch (has msa_reference_sequence)
+    # or any batch with multiple unique sequences that need MSA
+    if job_data.params.get('msa_reference_sequence') and num_jobs > 1:
+        # Mutagenesis: all variants use same MSA (reference sequence)
+        needs_msa = True
+        # Only need MSA for the reference sequence
+        sequences_for_msa = [{
+            'name': 'reference_msa',
+            'sequence': job_data.params['msa_reference_sequence']
+        }]
+        logger.info(f"[MSA BATCH] Mutagenesis mode: 1 reference MSA for {num_jobs} variants")
+    elif num_jobs > 1 and 'sequence_input' in job_data.params:
+        # Multiple inference jobs with potentially different sequences
+        # For now, skip MSA batching if all use same sequence (normal parallel runs)
+        pass
+    elif 'boltz_use_msa' in job_data.params and job_data.params.get('boltz_use_msa', True):
+        # Single job that needs MSA - handled by normal flow (no separate MSA job)
+        pass
+    
+    if needs_msa and sequences_for_msa:
+        import json as json_lib
+        msa_job_id = str(uuid.uuid4())
+        msa_output_dir = str(Path(base_output_dir) / "msa_batch")
+        os.makedirs(msa_output_dir, exist_ok=True)
+        
+        msa_job = Job(
+            id=msa_job_id,
+            name=f"{job_data.name}_msa",
+            model_id='msa_batch',
+            mode='msa_generation',
+            params={
+                'sequences': sequences_for_msa,
+                'sequences_json': json_lib.dumps(sequences_for_msa),
+                'reference_sequence': job_data.params.get('msa_reference_sequence'),
+            },
+            output_dir=msa_output_dir,
+            status=JobStatus.QUEUED.value,
+            batch_id=batch_id,
+            batch_name=batch_name,
+            queue_status='queued',
+            vram_estimate_mb=3000,  # MSA uses ~3GB VRAM
+            sequence_length=len(sequences_for_msa[0]['sequence']) if sequences_for_msa else 300,
+            priority=10,  # HIGH priority - unblocks inference jobs
+            job_phase='msa_generation',
+            msa_sequences=sequences_for_msa,
+        )
+        session.add(msa_job)
+        logger.info(f"[MSA BATCH] Created MSA batch job {msa_job_id[:8]}... for {len(sequences_for_msa)} sequences")
+    
     logger.info(f"[QUEUE] Creating {num_jobs} job(s) for '{job_data.name}': model={job_data.model_id}, seq_len={sequence_length}, vram_est={vram_estimate}MB")
     
     created_jobs = []
@@ -174,6 +234,10 @@ async def create_job(
         
         os.makedirs(output_dir, exist_ok=True)
         
+        # Determine queue status: if MSA job exists, this job waits for it
+        initial_queue_status = 'pending_msa' if msa_job else 'queued'
+        parent_msa_id = msa_job.id if msa_job else None
+        
         # Create job record with queue fields
         job = Job(
             id=job_id,
@@ -187,14 +251,17 @@ async def create_job(
             batch_id=batch_id,
             batch_name=batch_name,
             # GPU Orchestrator fields
-            queue_status='queued',
+            queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
             sequence_length=sequence_length,
             priority=0,  # Default priority
             paused=False,
             retry_count=0,
             max_retries=2,
-            oom_tolerance='allow'
+            oom_tolerance='allow',
+            # MSA parent-child linking
+            parent_job_id=parent_msa_id,
+            job_phase='inference',
         )
         session.add(job)
         created_jobs.append(job)
@@ -374,11 +441,13 @@ async def get_docking_results(
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Get docking SDF results for a completed DiffDock job.
+    Get docking results for a completed DiffDock or Uni-Dock job.
     
-    Returns list of SDF files with confidence scores, sorted by rank.
+    Returns list of pose files with scores, sorted by rank.
+    Handles both DiffDock (SDF with confidence) and Uni-Dock (PDB with affinity).
     """
     import re
+    import json
     from pathlib import Path
     
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -390,43 +459,83 @@ async def get_docking_results(
     if not job.output_dir:
         return {"sdfs": [], "message": "No output directory configured"}
     
-    # Look for DiffDock results
-    # Structure: output_dir/run/diffdock/results/complex_name/*.sdf
     from services.nextflow import PROJECT_ROOT
-    results_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
     
-    if not results_dir.exists():
-        return {"sdfs": [], "message": "No docking results found"}
+    # Check both DiffDock and Uni-Dock directories
+    diffdock_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
+    unidock_dir = PROJECT_ROOT / job.output_dir / "run" / "unidock" / "filtered"
     
     sdfs = []
-    for sdf_file in results_dir.rglob("*.sdf"):
-        # Parse confidence from filename like "rank1_confidence-1.92.sdf"
-        confidence = None
-        match = re.search(r'confidence(-?\d+\.?\d*)', sdf_file.name)
-        if match:
-            confidence = float(match.group(1))
-        
-        # Parse rank
-        rank = None
-        rank_match = re.search(r'rank(\d+)', sdf_file.name)
-        if rank_match:
-            rank = int(rank_match.group(1))
-        
-        sdfs.append({
-            "name": sdf_file.name,
-            "path": str(sdf_file.relative_to(PROJECT_ROOT)),
-            "absolute_path": str(sdf_file),
-            "confidence": confidence,
-            "rank": rank,
-            "complex_name": sdf_file.parent.name
-        })
+    engines_used = []
     
-    # Sort by rank (handle None and 0 correctly)
+    # Parse DiffDock results
+    if diffdock_dir.exists():
+        engines_used.append('diffdock')
+        for sdf_file in diffdock_dir.rglob("*.sdf"):
+            # Parse confidence from filename like "rank1_confidence-1.92.sdf"
+            confidence = None
+            match = re.search(r'confidence(-?\d+\.?\d*)', sdf_file.name)
+            if match:
+                confidence = float(match.group(1))
+            
+            # Parse rank
+            rank = None
+            rank_match = re.search(r'rank(\d+)', sdf_file.name)
+            if rank_match:
+                rank = int(rank_match.group(1))
+            
+            sdfs.append({
+                "engine": "diffdock",
+                "name": sdf_file.name,
+                "path": str(sdf_file.relative_to(PROJECT_ROOT)),
+                "absolute_path": str(sdf_file),
+                "confidence": confidence,
+                "affinity": None,
+                "rank": rank,
+                "complex_name": sdf_file.parent.name
+            })
+    
+    # Parse Uni-Dock results
+    if unidock_dir.exists():
+        engines_used.append('unidock')
+        scores_file = unidock_dir / "scores.json"
+        
+        # Load scores if available
+        score_map = {}
+        if scores_file.exists():
+            try:
+                scores_data = json.loads(scores_file.read_text())
+                for entry in scores_data:
+                    score_map[entry['pdb_file']] = entry
+            except Exception as e:
+                print(f"Warning: Failed to parse Uni-Dock scores: {e}")
+        
+        for pdb_file in unidock_dir.glob("*.pdb"):
+            entry = score_map.get(pdb_file.name, {})
+            
+            sdfs.append({
+                "engine": "unidock",
+                "name": pdb_file.name,
+                "path": str(pdb_file.relative_to(PROJECT_ROOT)),
+                "absolute_path": str(pdb_file),
+                "confidence": None,
+                "affinity": entry.get('affinity_kcal_mol'),
+                "rank": entry.get('rank'),
+                "ligand": entry.get('ligand'),
+                "pose": entry.get('pose'),
+            })
+    
+    if not sdfs:
+        return {"sdfs": [], "message": "No docking results found"}
+    
+    # Sort by rank (handle None correctly)
     sdfs = sorted(sdfs, key=lambda x: x.get('rank') if x.get('rank') is not None else 999)
     
     return {
         "sdfs": sdfs,
         "total": len(sdfs),
+        "engines": engines_used,
+        "is_dual_mode": len(engines_used) == 2,
         "job_id": job_id,
         "output_dir": job.output_dir
     }
@@ -439,7 +548,8 @@ async def get_sdf_content(
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Get the content of a specific SDF file for 3D visualization.
+    Get the content of a specific docking result file for 3D visualization.
+    Handles both DiffDock SDF files and Uni-Dock PDB files.
     """
     from pathlib import Path
     from fastapi.responses import PlainTextResponse
@@ -455,15 +565,36 @@ async def get_sdf_content(
         raise HTTPException(status_code=400, detail="Invalid filename")
     
     from services.nextflow import PROJECT_ROOT
-    results_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
     
-    # Find the file (it may be in a subdirectory)
-    sdf_files = list(results_dir.rglob(filename))
-    if not sdf_files:
-        raise HTTPException(status_code=404, detail="SDF file not found")
+    # Search both DiffDock and Uni-Dock directories
+    diffdock_dir = PROJECT_ROOT / job.output_dir / "run" / "diffdock" / "results"
+    unidock_dir = PROJECT_ROOT / job.output_dir / "run" / "unidock" / "filtered"
     
-    content = sdf_files[0].read_text()
-    return PlainTextResponse(content, media_type="chemical/x-mdl-sdfile")
+    found_files = []
+    
+    # Search DiffDock results
+    if diffdock_dir.exists():
+        found_files.extend(list(diffdock_dir.rglob(filename)))
+    
+    # Search Uni-Dock results
+    if unidock_dir.exists():
+        found_files.extend(list(unidock_dir.glob(filename)))
+    
+    if not found_files:
+        raise HTTPException(status_code=404, detail="Docking result file not found")
+    
+    file_path = found_files[0]
+    content = file_path.read_text()
+    
+    # Set appropriate media type based on file extension
+    if file_path.suffix.lower() == ".sdf":
+        media_type = "chemical/x-mdl-sdfile"
+    elif file_path.suffix.lower() == ".pdb":
+        media_type = "chemical/x-pdb"
+    else:
+        media_type = "text/plain"
+    
+    return PlainTextResponse(content, media_type=media_type)
 
 
 @router.get("/{job_id}/protein-pdb")
@@ -517,3 +648,44 @@ async def get_protein_pdb(
         raise HTTPException(status_code=404, detail="Protein PDB not found")
     
     return PlainTextResponse(pdb_content, media_type="chemical/x-pdb")
+
+
+@router.get("/{job_id}/docking-comparison")
+async def get_docking_comparison(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get docking comparison data for a dual-docking job.
+    
+    Returns comparison JSON with RMSD values, agreement status, and consensus poses.
+    """
+    import json
+    from pathlib import Path
+    
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if not job.output_dir:
+        raise HTTPException(status_code=404, detail="No output directory configured")
+    
+    from services.nextflow import PROJECT_ROOT
+    
+    # Look for comparison.json from dual docking
+    comparison_file = PROJECT_ROOT / job.output_dir / "run" / "docking_comparison" / "comparison.json"
+    
+    if not comparison_file.exists():
+        raise HTTPException(status_code=404, detail="No comparison data found for this job")
+    
+    try:
+        comparison_data = json.loads(comparison_file.read_text())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse comparison data: {e}")
+    
+    return {
+        "comparison": comparison_data,
+        "job_id": job_id
+    }
