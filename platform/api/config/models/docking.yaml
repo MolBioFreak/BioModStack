@@ -1,0 +1,153 @@
+# Dual Docking - Parallel DiffDock + Uni-Dock with Comparison
+#
+# Runs both ML-based (DiffDock) and physics-based (Uni-Dock) docking in parallel.
+# Provides orthogonal validation through pose comparison and consensus scoring.
+
+id: docking
+name: Dual Docking
+version: "1.0.0"
+category: docking
+description: >
+  Run both DiffDock (ML) and Uni-Dock (physics) in parallel for orthogonal validation.
+  Compare poses via RMSD and get consensus scoring for higher-confidence predictions.
+container: diffdock.sif
+
+ui_icon: equals
+ui_color: "#8B5CF6"
+
+inputs:
+  - pdb
+  - smiles
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: compare
+    name: Compare Methods
+    description: >
+      Run both docking engines, compare poses side-by-side.
+      See RMSD between top poses and identify agreements/disagreements.
+    params:
+      - protein_pdb
+      - ligand_smiles
+      - ntp_type
+      - num_poses
+      - exhaustiveness
+      - scoring_function
+      - box_size
+      - inference_steps
+      - affinity_threshold
+      - confidence_threshold
+
+  - id: consensus
+    name: Consensus Docking
+    description: >
+      Only keep poses that both methods agree on (RMSD below threshold).
+      Higher confidence predictions with orthogonal validation.
+    params:
+      - protein_pdb
+      - ligand_smiles
+      - ntp_type  
+      - num_poses
+      - exhaustiveness
+      - box_size
+      - rmsd_agreement_threshold
+      - min_engines_agree
+
+params:
+  # Required inputs
+  - name: protein_pdb
+    type: file
+    description: Receptor structure (PDB format)
+    required: true
+    file_type: pdb
+    preset_type: pdb
+
+  - name: ligand_smiles
+    type: string
+    description: Ligand SMILES string
+    preset_type: ligand
+
+  - name: ntp_type
+    type: string
+    description: Pre-configured nucleotide template
+    enum:
+      - dATP
+      - dTTP
+      - dGTP
+      - dCTP
+      - ATP
+      - UTP
+      - GTP
+      - CTP
+
+  # Shared parameters
+  - name: num_poses
+    type: integer
+    description: Number of poses per engine
+    default: 10
+    minimum: 1
+    maximum: 50
+
+  # Uni-Dock specific
+  - name: exhaustiveness
+    type: integer
+    description: Uni-Dock search exhaustiveness
+    default: 32
+    minimum: 1
+    maximum: 256
+
+  - name: scoring_function
+    type: string
+    description: Uni-Dock scoring function
+    default: vina
+    enum: [vina, vinardo, ad4]
+
+  - name: box_size
+    type: integer
+    description: Docking box size (Angstroms)
+    default: 25
+    minimum: 10
+    maximum: 100
+
+  # DiffDock specific
+  - name: inference_steps
+    type: integer
+    description: DiffDock inference steps
+    default: 20
+    minimum: 10
+    maximum: 40
+
+  # Filtering thresholds
+  - name: affinity_threshold
+    type: number
+    description: Uni-Dock affinity cutoff (kcal/mol)
+    default: -7.0
+    minimum: -20.0
+    maximum: 0.0
+
+  - name: confidence_threshold
+    type: number
+    description: DiffDock confidence cutoff
+    default: 0.0
+    minimum: -10.0
+    maximum: 5.0
+
+  # Consensus mode parameters
+  - name: rmsd_agreement_threshold
+    type: number
+    description: Max RMSD (Å) between poses to consider agreement
+    default: 2.0
+    minimum: 0.5
+    maximum: 10.0
+
+  - name: min_engines_agree  
+    type: integer
+    description: Minimum engines that must agree (1 or 2)
+    default: 2
+    minimum: 1
+    maximum: 2
+
+enabled: true
+experimental: false
