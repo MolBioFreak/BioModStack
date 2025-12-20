@@ -473,7 +473,7 @@ export interface QueuedJob {
     name: string;
     model_id: string;
     mode: string;
-    queue_status: 'queued' | 'running' | 'paused';
+    queue_status: 'queued' | 'running' | 'paused' | 'pending_msa';
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;

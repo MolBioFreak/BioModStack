@@ -71,6 +71,7 @@ VRAM_PROFILES = {
     'fampnn': {'base': 2000, 'scale': 8},      # Full-Atom MPNN
     'mpnn': {'base': 1000, 'scale': 3},        # ProteinMPNN (very light)
     'diffdock': {'base': 3000, 'scale': 10},   # DiffDock
+    'msa_batch': {'base': 3000, 'scale': 2},   # MSA Generation (GPU streaming, LOW VRAM)
     'default': {'base': 6000, 'scale': 30},    # Fallback
 }
 
@@ -324,16 +325,40 @@ class GPUOrchestrator:
         
         # 2. Get pending jobs from database
         async with self.db_session_factory() as session:
-            from sqlalchemy import select
+            from sqlalchemy import select, and_, or_, func
             from database import Job
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # CRITICAL: MSA job limiting - only ONE MSA batch at a time
+            # Multiple MSA jobs in parallel cause DRAM OOM (~16GB each)
+            # ═══════════════════════════════════════════════════════════════════
+            running_msa_count_result = await session.execute(
+                select(func.count()).where(
+                    Job.model_id == 'msa_batch',
+                    Job.queue_status == 'running'
+                )
+            )
+            running_msa_count = running_msa_count_result.scalar() or 0
+            
+            # Build the base query for queued jobs
+            base_conditions = [
+                Job.queue_status == "queued",
+                Job.paused == False,
+                Job.vram_estimate_mb.isnot(None),
+                # CRITICAL: Exclude jobs waiting for parent MSA job to complete
+                # Jobs with parent_job_id are linked to an MSA batch job
+                # They get their queue_status changed from pending_msa -> queued only after MSA completes
+                or_(Job.parent_job_id.is_(None), Job.queue_status != "pending_msa")
+            ]
+            
+            # If MSA job is already running, exclude other MSA jobs from scheduling
+            if running_msa_count > 0:
+                base_conditions.append(Job.model_id != 'msa_batch')
+                logger.debug("[ORCHESTRATOR] MSA job running, blocking additional MSA jobs")
             
             result = await session.execute(
                 select(Job).where(
-                    Job.queue_status == "queued",
-                    Job.paused == False,
-                    # CRITICAL: Only pick up jobs that went through the new orchestrator
-                    # (have vram_estimate_mb set during job creation)
-                    Job.vram_estimate_mb.isnot(None)
+                    and_(*base_conditions)
                 ).order_by(
                     Job.priority.desc(),
                     Job.created_at
@@ -431,6 +456,66 @@ class GPUOrchestrator:
         """Handle OOM failures based on job's oom_tolerance setting."""
         # TODO: Implement by parsing Nextflow logs for OOM errors
         pass
+    
+    async def handle_msa_job_completion(self, msa_job_id: str, manifest_path: str):
+        """
+        Handle MSA batch job completion.
+        
+        Updates child inference jobs from 'pending_msa' to 'queued' status,
+        allowing them to enter the normal job queue.
+        """
+        async with self.db_session_factory() as session:
+            from sqlalchemy import select
+            from database import Job
+            import json
+            
+            # Get child jobs waiting for this MSA job
+            result = await session.execute(
+                select(Job).where(
+                    Job.parent_job_id == msa_job_id,
+                    Job.queue_status == "pending_msa"
+                )
+            )
+            child_jobs = result.scalars().all()
+            
+            if not child_jobs:
+                logger.info(f"[MSA COMPLETE] No child jobs for MSA job {msa_job_id}")
+                return
+            
+            # Parse manifest for MSA paths
+            try:
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                
+                # Build sequence hash -> MSA path mapping
+                msa_paths = {}
+                for seq_info in manifest.get("sequences", []):
+                    if seq_info.get("success"):
+                        msa_paths[seq_info["sequence_hash"]] = seq_info["msa_path"]
+            except Exception as e:
+                logger.error(f"[MSA COMPLETE] Failed to parse manifest: {e}")
+                # Still unlock jobs even without MSA paths
+                msa_paths = {}
+            
+            # Update each child job with its MSA path and queue status
+            import hashlib
+            for job in child_jobs:
+                # Find MSA path for this job's sequence
+                sequence = job.params.get("sequence", "")
+                seq_hash = hashlib.sha256(sequence.encode()).hexdigest()
+                msa_path = msa_paths.get(seq_hash)
+                
+                # Update job params with MSA path
+                if msa_path:
+                    job.params = {**job.params, "msa_path": msa_path}
+                
+                # Move to queued - now ready for inference!
+                job.queue_status = "queued"
+                
+                logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference (MSA: {msa_path or 'not found'})")
+            
+            await session.commit()
+            logger.info(f"[MSA COMPLETE] Unlocked {len(child_jobs)} inference jobs")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

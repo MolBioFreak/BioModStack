@@ -1,0 +1,71 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+%labels
+    Author ProteinDJ Pipeline
+    Version 1.0.0
+    Description Uni-Dock GPU-accelerated molecular docking with Meeko flexible receptor support
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # System dependencies
+    apt-get update && apt-get install -y --no-install-recommends \
+        git wget curl ca-certificates \
+        build-essential cmake \
+        libboost-all-dev libopenbabel-dev \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Install Miniforge (community conda, no TOS issues)
+    wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/conda
+    rm /tmp/miniforge.sh
+    
+    export PATH=/opt/conda/bin:$PATH
+    
+    # Initialize conda
+    /opt/conda/bin/conda init bash
+    . /opt/conda/etc/profile.d/conda.sh
+    
+    # Create environment with Uni-Dock from conda-forge
+    conda create -n unidock python=3.10 -y
+    conda activate unidock
+    
+    # Install Uni-Dock from conda-forge (includes GPU support)
+    conda install -c conda-forge unidock -y
+    
+    # Install Python dependencies via pip (faster than conda for these)
+    pip install --no-cache-dir \
+        meeko \
+        rdkit \
+        biopython \
+        pandas \
+        numpy \
+        openbabel-wheel
+    
+    # Clean up
+    conda clean -afy
+    
+    # Make conda env the default
+    echo ". /opt/conda/etc/profile.d/conda.sh && conda activate unidock" >> /etc/bash.bashrc
+
+%environment
+    export PATH=/opt/conda/envs/unidock/bin:/opt/conda/bin:$PATH
+    export CONDA_DEFAULT_ENV=unidock
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate unidock
+    exec "$@"
+
+%test
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate unidock
+    echo "Testing Uni-Dock installation..."
+    which unidock && echo "✓ unidock binary found"
+    python3 -c "from meeko import MoleculePreparation, PDBQTWriterLegacy; print('✓ Meeko imported')"
+    python3 -c "from rdkit import Chem; print('✓ RDKit imported')"
+    python3 -c "from Bio.PDB import PDBParser; print('✓ BioPython imported')"
+    echo "All imports successful!"

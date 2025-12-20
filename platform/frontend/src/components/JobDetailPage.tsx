@@ -15,8 +15,12 @@ interface DockingResult {
     path: string;
     absolute_path: string;
     confidence: number | null;
+    affinity: number | null;
     rank: number | null;
-    complex_name: string;
+    complex_name?: string;
+    engine?: 'diffdock' | 'unidock';
+    ligand?: string;
+    pose?: number;
 }
 
 interface StructureFile {
@@ -47,7 +51,10 @@ export function JobDetailPage() {
         },
     });
 
-    const isDockingJob = job?.model_id === 'diffdock' || job?.mode?.includes('dock');
+    const isDockingJob = job?.model_id === 'diffdock' ||
+        job?.model_id === 'unidock' ||
+        job?.model_id === 'docking' ||
+        job?.mode?.includes('dock');
 
     // Fetch docking results
     const { data: dockingData, isLoading: dockingLoading } = useQuery({
@@ -192,11 +199,17 @@ export function JobDetailPage() {
                                         onChange={(e) => setSelectedPose(Number(e.target.value))}
                                         className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-purple-500"
                                     >
-                                        {poses.map((pose: DockingResult, idx: number) => (
-                                            <option key={idx} value={idx}>
-                                                {pose.name} {pose.confidence !== null ? `(conf: ${pose.confidence.toFixed(2)})` : ''}
-                                            </option>
-                                        ))}
+                                        {poses.map((pose: DockingResult, idx: number) => {
+                                            // Show appropriate score based on engine
+                                            const scoreLabel = pose.engine === 'unidock'
+                                                ? (pose.affinity !== null ? `(${pose.affinity.toFixed(1)} kcal/mol)` : '')
+                                                : (pose.confidence !== null ? `(conf: ${pose.confidence.toFixed(2)})` : '');
+                                            return (
+                                                <option key={idx} value={idx}>
+                                                    {pose.name} {scoreLabel}
+                                                </option>
+                                            );
+                                        })}
                                     </select>
                                     <span className="text-slate-500 text-sm">
                                         {poses.length} poses ranked
@@ -220,14 +233,34 @@ export function JobDetailPage() {
                                     )}
                                 </div>
 
-                                {/* Confidence Score */}
-                                {currentSdf?.confidence !== null && (
+                                {/* Score Display - handles both DiffDock confidence and Uni-Dock affinity */}
+                                {(currentSdf?.confidence !== null || currentSdf?.affinity !== null) && (
                                     <div className="mt-4 text-center">
-                                        <span className="text-slate-400">Confidence Score:</span>
-                                        <span className={`ml-2 font-semibold ${currentSdf.confidence < -2 ? 'text-green-400' :
-                                            currentSdf.confidence < 0 ? 'text-yellow-400' : 'text-red-400'
+                                        {currentSdf?.engine === 'unidock' ? (
+                                            <>
+                                                <span className="text-slate-400">Binding Affinity:</span>
+                                                <span className={`ml-2 font-semibold ${(currentSdf.affinity ?? 0) < -9 ? 'text-green-400' :
+                                                        (currentSdf.affinity ?? 0) < -7 ? 'text-yellow-400' : 'text-red-400'
+                                                    }`}>
+                                                    {currentSdf.affinity?.toFixed(1)} kcal/mol
+                                                </span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span className="text-slate-400">Confidence Score:</span>
+                                                <span className={`ml-2 font-semibold ${(currentSdf?.confidence ?? 0) < -2 ? 'text-green-400' :
+                                                        (currentSdf?.confidence ?? 0) < 0 ? 'text-yellow-400' : 'text-red-400'
+                                                    }`}>
+                                                    {currentSdf?.confidence?.toFixed(2)}
+                                                </span>
+                                            </>
+                                        )}
+                                        {/* Show engine badge */}
+                                        <span className={`ml-3 px-2 py-0.5 text-xs rounded ${currentSdf?.engine === 'unidock'
+                                                ? 'bg-emerald-500/20 text-emerald-400'
+                                                : 'bg-purple-500/20 text-purple-400'
                                             }`}>
-                                            {currentSdf.confidence.toFixed(2)}
+                                            {currentSdf?.engine === 'unidock' ? 'Uni-Dock (Physics)' : 'DiffDock (ML)'}
                                         </span>
                                     </div>
                                 )}

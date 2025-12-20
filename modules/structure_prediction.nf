@@ -1,12 +1,14 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
 
-// Generate MSA using local MMseqs2 database - NO RATE LIMITING!
+// Generate MSA using local MMseqs2 database - GPU ACCELERATED!
 // Uses full ColabFold database at /mnt/BioModStack/colabfold_db
+// Hybrid scheduling: GPU when available, falls back to CPU
 process GenerateLocalMSA {
     label 'CPU'
     // Runs MMseqs2 locally against UniRef30 + ColabFoldDB
     // No internet required, no API rate limits
+    // GPU-accelerated when available (~5-10 sec vs ~2-3 min CPU)
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
 
     input:
@@ -18,15 +20,56 @@ process GenerateLocalMSA {
 
     script:
     def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
+    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
     def threads = params.msa_threads ?: 32
+    def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
+    def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     """
     python3 ${projectDir}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
         --name "${sequence_name}" \\
         --out_dir . \\
         --db_path ${dbPath} \\
+        --cache_dir ${cacheDir} \\
         --threads ${threads} \\
+        ${useGpu} \\
+        ${refSeq} \\
         2>&1 | tee msa_${sequence_name}.log
+    """
+}
+
+// Batch MSA Generation - processes multiple sequences in parallel
+// Used by orchestrator for MSA batch jobs
+process BatchMSAGeneration {
+    label 'GPU'
+    // Uses GPU for MSA generation
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_manifest.json"
+
+    input:
+    val sequences_json
+    // JSON string with array of {name, sequence} objects
+    val reference_sequence
+
+    output:
+    path ("msa_manifest.json"), emit: manifest
+    path ("*.a3m"), emit: msas, optional: true
+    path "*.log"
+
+    script:
+    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
+    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def maxParallel = params.msa_max_parallel ?: 4
+    def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
+    """
+    python3 ${projectDir}/scripts/batch_msa.py \\
+        --sequences '${sequences_json}' \\
+        --output_dir . \\
+        --db_path ${dbPath} \\
+        --cache_dir ${cacheDir} \\
+        --max_parallel ${maxParallel} \\
+        ${refSeqArg} \\
+        2>&1 | tee batch_msa.log
     """
 }
 
@@ -71,15 +114,32 @@ process BoltzFromSequence {
     # Generate MSA locally if enabled (NO API CALLS!)
     MSA_PATH=""
     if [ "${useMsa}" = "true" ]; then
-        echo "Generating MSA locally using ${msaDbPath}..."
-        ${msaDbPath}/mmseqs/bin/colabfold_search \\
-            msa/${sequence_name}.fasta \\
-            ${msaDbPath} \\
-            msa/ \\
-            --threads ${msaThreads} \\
-            2>&1 | tee msa_${sequence_name}.log
-        MSA_PATH=\$(readlink -f msa/${sequence_name}.a3m)
-        echo "Generated local MSA: \${MSA_PATH}"
+        MMSEQS="${msaDbPath}/mmseqs/bin/mmseqs"
+        UNIREF_DB="${msaDbPath}/uniref30_2302_db"
+        
+        echo "Generating MSA locally using mmseqs at ${msaDbPath}..."
+        
+        # Create query database
+        \${MMSEQS} createdb msa/${sequence_name}.fasta msa/query_db
+        
+        # Search against UniRef30 (split memory to avoid OOM with parallel jobs)
+        mkdir -p msa/tmp
+        \${MMSEQS} search msa/query_db \${UNIREF_DB} msa/result_db msa/tmp \\
+            --threads ${msaThreads} -s 8.0 --max-seqs 10000 -e 0.001 --split-memory-limit 32G
+        
+        # Convert to A3M format (use mode 2 = aligned FASTA)
+        \${MMSEQS} result2msa msa/query_db \${UNIREF_DB} msa/result_db msa/${sequence_name}.a3m
+        
+        if [ -f "msa/${sequence_name}.a3m" ]; then
+            # Strip null bytes - mmseqs adds trailing 0x00 that break Boltz parser
+            tr -d '\\0' < msa/${sequence_name}.a3m > msa/${sequence_name}_clean.a3m
+            mv msa/${sequence_name}_clean.a3m msa/${sequence_name}.a3m
+            
+            MSA_PATH=\$(readlink -f msa/${sequence_name}.a3m)
+            echo "Generated local MSA: \${MSA_PATH}"
+        else
+            echo "WARNING: MSA generation failed, running without MSA"
+        fi
     fi
     
     # Write sequence to YAML format expected by Boltz-2
@@ -264,27 +324,56 @@ for comp in complex_def.get("components", []):
         if msa_path and Path(msa_path).exists():
             entry["protein"]["msa"] = str(Path(msa_path).resolve())
         elif use_msa and sequence:
-            # Generate MSA locally for this protein chain
+            # Generate MSA locally for this protein chain using mmseqs directly
             chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
             fasta_file = f"msa/{complex_name}_{chain_id}.fasta"
             with open(fasta_file, "w") as f:
                 f.write(f">{complex_name}_{chain_id}\\n{sequence}\\n")
             
-            print(f"Generating local MSA for chain {chain_id}...")
+            print(f"Generating local MSA for chain {chain_id} using mmseqs...")
+            mmseqs_gpu = f"{msa_db_path}/mmseqs-gpu/bin/mmseqs"
+            mmseqs_cpu = f"{msa_db_path}/mmseqs/bin/mmseqs"
+            # Prefer GPU binary if it exists
+            mmseqs_bin = mmseqs_gpu if Path(mmseqs_gpu).exists() else mmseqs_cpu
+            use_gpu = Path(mmseqs_gpu).exists()
+            uniref_db = f"{msa_db_path}/uniref30_2302_db"
+            query_db = f"msa/query_db_{chain_id}"
+            result_db = f"msa/result_db_{chain_id}"
+            tmp_dir = f"msa/tmp_{chain_id}"
+            msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+            
             try:
-                result = subprocess.run([
-                    f"{msa_db_path}/mmseqs/bin/colabfold_search",
-                    fasta_file,
-                    msa_db_path,
-                    "msa/",
-                    "--threads", str(msa_threads)
-                ], capture_output=True, text=True, timeout=600)
-                print(result.stdout)
-                if result.stderr:
-                    print(result.stderr)
+                os.makedirs(tmp_dir, exist_ok=True)
                 
-                msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+                # Create query database
+                subprocess.run([mmseqs_bin, "createdb", fasta_file, query_db], 
+                               check=True, capture_output=True, timeout=60)
+                
+                # Search against UniRef30 (GPU if available, else CPU with memory limit)
+                search_cmd = [
+                    mmseqs_bin, "search", query_db, uniref_db, result_db, tmp_dir,
+                    "-s", "8.0", "--max-seqs", "10000", "-e", "0.001",
+                    "--split-memory-limit", "16G"  # Cap RAM to prevent OOM
+                ]
+                if use_gpu:
+                    search_cmd.extend(["--gpu", "1"])
+                    print(f"Using GPU-accelerated mmseqs for chain {chain_id}")
+                else:
+                    search_cmd.extend(["--threads", str(msa_threads)])
+                subprocess.run(search_cmd, check=True, capture_output=True, timeout=600)
+                
+                # Convert to A3M (remove invalid mode option)
+                subprocess.run([
+                    mmseqs_bin, "result2msa", query_db, uniref_db, result_db, msa_file
+                ], check=True, capture_output=True, timeout=120)
+                
                 if Path(msa_file).exists():
+                    # Strip null bytes - mmseqs adds trailing 0x00 that break Boltz parser
+                    with open(msa_file, 'rb') as f:
+                        content = f.read().replace(b'\\x00', b'')
+                    with open(msa_file, 'wb') as f:
+                        f.write(content)
+                    
                     entry["protein"]["msa"] = str(Path(msa_file).resolve())
                     print(f"Generated MSA: {msa_file}")
             except Exception as e:
