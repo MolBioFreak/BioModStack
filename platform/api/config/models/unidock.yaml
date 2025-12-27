@@ -11,9 +11,9 @@ name: Uni-Dock
 version: "1.1.0"
 category: docking
 description: >
-  GPU-accelerated AutoDock Vina-compatible molecular docking.
-  2000× faster than CPU Vina with physics-based scoring.
-  Provides binding affinity (ΔG in kcal/mol) and supports flexible receptor sidechains.
+  GPU-accelerated molecular docking with physics-based
+  scoring. 2000× faster than CPU Vina. Outputs binding
+  affinity (ΔG in kcal/mol).
 container: unidock.sif
 
 ui_icon: bullseye
@@ -28,221 +28,165 @@ outputs:
 
 modes:
   - id: dock
-    name: Ligand Docking
+    name: Small Molecule Docking
     description: >
-      GPU-accelerated Vina docking for small molecule ligands.
-      Supports flexible receptor sidechains.
+      Dock small molecules to protein receptors with GPU acceleration.
+      Outputs ranked poses with binding affinities.
     params:
       - protein_pdb
       - ligand_smiles
       - num_poses
       - exhaustiveness
+      - box_size
       - scoring_function
-      - box_size
       - flexible_residues
-      - affinity_threshold
       - search_mode
-      - min_rmsd
-      - energy_range
-      - seed
-
-  - id: ntp_dock
-    name: NTP Docking
-    description: >
-      Dock nucleotide triphosphates to polymerase active sites.
-      Uses pre-configured NTP/dNTP SMILES templates.
-    params:
-      - protein_pdb
-      - ntp_type
-      - num_poses
-      - exhaustiveness
-      - box_size
       - affinity_threshold
-      - search_mode
       - min_rmsd
       - energy_range
       - seed
 
 params:
-  # Required inputs
+  # === INPUTS GROUP ===
   - name: protein_pdb
     type: file
-    description: Receptor structure (PDB format)
+    description: Receptor protein structure
     required: true
     file_type: pdb
     preset_type: pdb
+    ui_group: Inputs
+    ui_order: 1
 
-  # Ligand specification (one of these)
   - name: ligand_smiles
     type: string
-    description: Ligand SMILES string
+    description: Small molecule to dock (SMILES format)
     required: false
     preset_type: ligand
+    ui_group: Inputs
+    ui_order: 2
+    ui_placeholder: "Select a preset or paste SMILES..."
 
+  # Hidden legacy field
   - name: ntp_type
     type: string
     description: Pre-configured nucleotide template
     required: false
-    enum:
-      - dATP
-      - dTTP
-      - dGTP
-      - dCTP
-      - ATP
-      - UTP
-      - GTP
-      - CTP
+    hidden: true
 
-  # Search parameters
+  # === DOCKING SETTINGS GROUP ===
   - name: num_poses
     type: integer
-    description: Number of binding poses to generate per ligand
+    description: Number of docking poses to generate
     default: 9
     minimum: 1
-    maximum: 100
+    maximum: 50
+    ui_group: Docking Settings
+    ui_order: 1
 
   - name: exhaustiveness
     type: integer
     description: >
-      Search exhaustiveness (higher = more thorough but slower).
-      32 = standard, 64-128 = large boxes, 256 = blind docking.
+      Search thoroughness (32=standard, 128=thorough, 256=blind docking)
     default: 32
-    minimum: 1
+    minimum: 8
     maximum: 512
+    ui_group: Docking Settings
+    ui_order: 2
+
+  - name: box_size
+    type: integer
+    description: >
+      Search box size in Angstroms (25=active site, 50=large pocket)
+    default: 25
+    minimum: 15
+    maximum: 80
+    ui_group: Docking Settings
+    ui_order: 3
 
   - name: scoring_function
     type: string
-    description: Scoring function for affinity calculation
+    description: Scoring function
     default: vina
     enum:
       - vina
       - vinardo
       - ad4
+    ui_group: Docking Settings
+    ui_order: 4
 
-  # Box parameters
-  - name: box_size
-    type: integer
-    description: >
-      Docking box edge length in Angstroms.
-      20-25Å = known sites, 30-50Å = peptides, 50-80Å = blind docking.
-    default: 25
-    minimum: 10
-    maximum: 150
-
-  - name: box_center
-    type: string
-    description: >
-      Optional box center coordinates as "x,y,z" (e.g., "12.5,-3.2,45.0").
-      Leave empty to auto-detect from binding site or receptor center.
-    required: false
-    hidden: true
-
-  # Flexible receptor
+  # === ADVANCED GROUP (collapsed by default) ===
   - name: flexible_residues
     type: string
     description: >
-      Flexible receptor sidechains as comma-separated CHAIN:RESID.
-      Example: "A:42,A:89,A:156". Maximum 6 residues recommended.
+      Flexible sidechains as CHAIN:RESID (e.g., "A:42,A:89")
     required: false
-    hidden: false
+    ui_group: Advanced
+    ui_order: 1
+    ui_placeholder: "A:42,A:89,A:156"
 
-  # Filtering
-  - name: affinity_threshold
-    type: number
-    description: >
-      Minimum binding affinity (kcal/mol) for pose filtering.
-      More negative = tighter binding. -7 kcal/mol ≈ µM affinity.
-    default: -7.0
-    minimum: -20.0
-    maximum: 0.0
-
-  # Advanced search parameters
   - name: search_mode
     type: string
-    description: >
-      Search mode preset: 'fast' (quick screen), 'balance' (default), 
-      'detail' (thorough, slower). Overrides exhaustiveness.
+    description: Search mode preset (overrides exhaustiveness)
     required: false
     enum:
       - fast
       - balance
       - detail
+    ui_group: Advanced
+    ui_order: 2
+
+  - name: affinity_threshold
+    type: number
+    description: >
+      Minimum affinity filter (kcal/mol). -7 ≈ µM binding.
+    default: -5.0
+    minimum: -20.0
+    maximum: 0.0
+    ui_group: Advanced
+    ui_order: 3
 
   - name: min_rmsd
     type: number
-    description: >
-      Minimum RMSD (Å) between output poses. Lower = more similar poses.
+    description: Minimum RMSD between output poses (Å)
     default: 1.0
     minimum: 0.5
     maximum: 5.0
+    ui_group: Advanced
+    ui_order: 4
+    hidden: true
 
   - name: energy_range
     type: number
-    description: >
-      Maximum energy difference (kcal/mol) to show from best pose.
-      Lower = only show top poses.
+    description: Max energy diff from best pose (kcal/mol)
     default: 3.0
     minimum: 1.0
     maximum: 10.0
+    ui_group: Advanced
+    ui_order: 5
+    hidden: true
 
   - name: seed
     type: integer
-    description: >
-      Random seed for reproducibility. 0 = random.
+    description: Random seed (0 = random)
     default: 0
     minimum: 0
     maximum: 999999999
+    ui_group: Advanced
+    ui_order: 6
+
+  - name: box_center
+    type: string
+    description: Box center as "x,y,z" (auto if empty)
+    required: false
+    hidden: true
 
   - name: verbosity
     type: integer
-    description: >
-      Output verbosity: 0 = silent, 1 = normal, 2 = verbose.
+    description: Verbosity level
     default: 1
     minimum: 0
     maximum: 2
     hidden: true
-
-# Pre-configured nucleotide triphosphate templates
-ntp_templates:
-  - id: dATP
-    name: Deoxyadenosine Triphosphate
-    smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
-    description: dATP - pairs with thymine in DNA
-
-  - id: dTTP
-    name: Deoxythymidine Triphosphate
-    smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
-    description: dTTP - pairs with adenine in DNA
-
-  - id: dGTP
-    name: Deoxyguanosine Triphosphate
-    smiles: "Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1"
-    description: dGTP - pairs with cytosine in DNA
-
-  - id: dCTP
-    name: Deoxycytidine Triphosphate
-    smiles: "Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1"
-    description: dCTP - pairs with guanine in DNA
-
-  - id: ATP
-    name: Adenosine Triphosphate
-    smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
-    description: ATP - common NTP for RNA
-
-  - id: UTP
-    name: Uridine Triphosphate
-    smiles: "O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1"
-    description: UTP - pairs with adenine in RNA
-
-  - id: GTP
-    name: Guanosine Triphosphate
-    smiles: "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1"
-    description: GTP - pairs with cytosine in RNA
-
-  - id: CTP
-    name: Cytidine Triphosphate
-    smiles: "Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1"
-    description: CTP - pairs with guanine in RNA
 
 enabled: true
 experimental: false

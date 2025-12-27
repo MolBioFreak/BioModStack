@@ -51,6 +51,14 @@ class PresetNTP(BaseModel):
     description: str = ""
 
 
+class PresetLigand(BaseModel):
+    """A preset ligand definition."""
+    id: str
+    name: str
+    smiles: str
+    description: str = ""
+
+
 class PresetDirectory(BaseModel):
     """A preset directory for batch processing."""
     id: str
@@ -85,6 +93,7 @@ class InputRegistry:
         self.preset_yamls: list[PresetYAML] = []
         self.preset_contigs: list[PresetContig] = []
         self.preset_ntps: list[PresetNTP] = []
+        self.preset_ligands: list[PresetLigand] = []
         self._load_config()
     
     @classmethod
@@ -139,6 +148,10 @@ class InputRegistry:
             for ntp in data.get('preset_ntps', []):
                 self.preset_ntps.append(PresetNTP(**ntp))
             
+            # Load preset ligands
+            for lig in data.get('preset_ligands', []):
+                self.preset_ligands.append(PresetLigand(**lig))
+            
             # Load preset directories
             for dir_preset in data.get('preset_directories', []):
                 abs_path = str(Path(self.project_root) / dir_preset['path'])
@@ -161,6 +174,8 @@ class InputRegistry:
             return self.preset_contigs
         elif preset_type == 'ntp':
             return self.preset_ntps
+        elif preset_type == 'ligand':
+            return self.preset_ligands
         elif preset_type == 'directory':
             return self.preset_directories
         else:

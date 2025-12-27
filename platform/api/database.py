@@ -131,7 +131,27 @@ class Design(Base):
     # User annotations
     is_favorite = Column(Boolean, default=False)
     notes = Column(Text, nullable=True)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ANTIBODY / DISCOVERY METRICS
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CDR Sequences (IMGT numbering by default)
+    cdr_h1 = Column(String(100), nullable=True)
+    cdr_h2 = Column(String(100), nullable=True)
+    cdr_h3 = Column(String(100), nullable=True)
+    cdr_l1 = Column(String(100), nullable=True)
+    cdr_l2 = Column(String(100), nullable=True)
+    cdr_l3 = Column(String(100), nullable=True)
+    numbering_scheme = Column(String(20), default="imgt")
     
+    # Antibody Properties
+    humanness_score = Column(Float, nullable=True)  # OAS/ANARCI derived
+    developability_flags = Column(JSON, nullable=True)  # TAP-like warnings
+    
+    # Stability / Inverse Folding Data
+    stability_data = Column(JSON, nullable=True)  # ThermoMPNN ddG matrix
+    antifold_logits_path = Column(String(500), nullable=True)  # Path to probabilities.csv for heatmap
+        
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship to job
@@ -180,6 +200,40 @@ class UserTemplate(Base):
     model_id = Column(String(50), nullable=True)  # Associated model (rfdiffusion, boltz2, etc.)
     mode = Column(String(100), nullable=True)  # Workflow mode (binder_denovo, predict, etc.)
     params = Column(JSON, nullable=False)  # Full parameter snapshot
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+
+
+class NucleotideSequence(Base):
+    """Nucleotide sequence for BioDesigner (DNA/RNA with features)."""
+    __tablename__ = "nucleotide_sequences"
+    
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    
+    # Sequence data
+    sequence = Column(Text, nullable=False)  # Raw nucleotide sequence (ATCG/AUCG)
+    sequence_type = Column(String(10), nullable=False, default="dna")  # dna, rna
+    is_circular = Column(Boolean, default=False)  # Circular (plasmid) or linear
+    length = Column(Integer, nullable=False)
+    
+    # Features/annotations stored as JSON array
+    # Format: [{"id": "f1", "name": "AmpR", "type": "CDS", "start": 0, "end": 100, "strand": 1, "color": "#F00", "notes": {...}}]
+    features = Column(JSON, nullable=True)
+    
+    # Primers associated with this sequence
+    # Format: [{"id": "p1", "name": "Fwd", "sequence": "ATCG...", "start": 0, "end": 20, "tm": 58.5}]
+    primers = Column(JSON, nullable=True)
+    
+    # Metadata
+    organism = Column(String(255), nullable=True)
+    accession = Column(String(100), nullable=True)  # GenBank accession
+    source_file = Column(String(255), nullable=True)  # Original filename if imported
+    
+    # GC content cached
+    gc_content = Column(Float, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 

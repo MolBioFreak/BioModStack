@@ -1,0 +1,28 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%post
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        python3 \
+        python3-pip \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install PyTorch Nightly for Blackwell support (or latest stable compatible with CUDA 12.8 if available)
+    # Since native CUDA 12.8 might not have stable PyTorch wheels yet, we use nightly or latest cu124/cu126 
+    # and hope for forward compatibility, or target PyTorch 2.5+
+    pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+
+    # Install ThermoMPNN
+    git clone https://github.com/Kuhlman-Lab/ThermoMPNN.git /opt/ThermoMPNN
+    cd /opt/ThermoMPNN
+
+    # Install dependencies (ignoring the restrictive environment.yml)
+    pip3 install joblib omegaconf pandas numpy tqdm biopython
+    pip3 install mmseqs2  # If available via pip, otherwise might need conda/binary
+
+%environment
+    export PYTHONPATH="/opt/ThermoMPNN:$PYTHONPATH"
+    export PATH="/opt/ThermoMPNN:$PATH"

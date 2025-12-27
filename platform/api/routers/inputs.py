@@ -44,6 +44,11 @@ async def list_presets(type: str = Query(..., description="Preset type: pdb, seq
             {"id": p.id, "name": p.name, "smiles": p.smiles, "description": p.description}
             for p in presets
         ]
+    elif type == 'ligand':
+        return [
+            {"id": p.id, "name": p.name, "smiles": p.smiles, "description": p.description}
+            for p in presets
+        ]
     else:
         raise HTTPException(status_code=400, detail=f"Invalid preset type: {type}")
 
