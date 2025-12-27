@@ -324,56 +324,41 @@ for comp in complex_def.get("components", []):
         if msa_path and Path(msa_path).exists():
             entry["protein"]["msa"] = str(Path(msa_path).resolve())
         elif use_msa and sequence:
-            # Generate MSA locally for this protein chain using mmseqs directly
+            # Generate MSA using run_local_msa.py with file-based locking to prevent parallel OOM
             chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
-            fasta_file = f"msa/{complex_name}_{chain_id}.fasta"
-            with open(fasta_file, "w") as f:
-                f.write(f">{complex_name}_{chain_id}\\n{sequence}\\n")
-            
-            print(f"Generating local MSA for chain {chain_id} using mmseqs...")
-            mmseqs_gpu = f"{msa_db_path}/mmseqs-gpu/bin/mmseqs"
-            mmseqs_cpu = f"{msa_db_path}/mmseqs/bin/mmseqs"
-            # Prefer GPU binary if it exists
-            mmseqs_bin = mmseqs_gpu if Path(mmseqs_gpu).exists() else mmseqs_cpu
-            use_gpu = Path(mmseqs_gpu).exists()
-            uniref_db = f"{msa_db_path}/uniref30_2302_db"
-            query_db = f"msa/query_db_{chain_id}"
-            result_db = f"msa/result_db_{chain_id}"
-            tmp_dir = f"msa/tmp_{chain_id}"
+            msa_dir = "msa"
             msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+            cache_dir = "/mnt/BioModStack/msa_cache"
             
+            # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
+            ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
+            ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""
+            
+            print(f"Generating local MSA for chain {chain_id} using run_local_msa.py...")
             try:
-                os.makedirs(tmp_dir, exist_ok=True)
-                
-                # Create query database
-                subprocess.run([mmseqs_bin, "createdb", fasta_file, query_db], 
-                               check=True, capture_output=True, timeout=60)
-                
-                # Search against UniRef30 (GPU if available, else CPU with memory limit)
-                search_cmd = [
-                    mmseqs_bin, "search", query_db, uniref_db, result_db, tmp_dir,
-                    "-s", "8.0", "--max-seqs", "10000", "-e", "0.001",
-                    "--split-memory-limit", "16G"  # Cap RAM to prevent OOM
+                # Use run_local_msa.py which has:
+                # 1. File-based locking to serialize parallel jobs
+                # 2. Cache checking to avoid redundant MSA generation
+                # 3. GPU/CPU auto-detection
+                cmd = [
+                    "python3", "${projectDir}/scripts/run_local_msa.py",
+                    "--sequence", sequence,
+                    "--name", f"{complex_name}_{chain_id}",
+                    "--out_dir", msa_dir,
+                    "--db_path", msa_db_path,
+                    "--cache_dir", cache_dir,
+                    "--threads", str(msa_threads)
                 ]
-                if use_gpu:
-                    search_cmd.extend(["--gpu", "1"])
-                    print(f"Using GPU-accelerated mmseqs for chain {chain_id}")
-                else:
-                    search_cmd.extend(["--threads", str(msa_threads)])
-                subprocess.run(search_cmd, check=True, capture_output=True, timeout=600)
+                if ref_seq:
+                    cmd.extend(["--reference-sequence", ref_seq])
                 
-                # Convert to A3M (remove invalid mode option)
-                subprocess.run([
-                    mmseqs_bin, "result2msa", query_db, uniref_db, result_db, msa_file
-                ], check=True, capture_output=True, timeout=120)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                if result.returncode != 0:
+                    print(f"MSA generation stderr: {result.stderr}")
+                    raise RuntimeError(f"MSA script failed with code {result.returncode}")
+                print(result.stdout)
                 
                 if Path(msa_file).exists():
-                    # Strip null bytes - mmseqs adds trailing 0x00 that break Boltz parser
-                    with open(msa_file, 'rb') as f:
-                        content = f.read().replace(b'\\x00', b'')
-                    with open(msa_file, 'wb') as f:
-                        f.write(content)
-                    
                     entry["protein"]["msa"] = str(Path(msa_file).resolve())
                     print(f"Generated MSA: {msa_file}")
             except Exception as e:

@@ -155,7 +155,7 @@ export function JobQueuePanel() {
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] }),
     });
 
-    const priorityMutation = useMutation({
+    const _priorityMutation = useMutation({
         mutationFn: ({ jobId, priority }: { jobId: string; priority: number }) =>
             setQueueJobPriority(jobId, priority),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] }),
@@ -197,7 +197,7 @@ export function JobQueuePanel() {
     // Separate running, queued, and pending_msa jobs
     const runningJobs = queue.filter(j => j.queue_status === 'running');
     const queuedJobs = queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
-    const pendingMsaJobs = queue.filter(j => j.queue_status === 'pending_msa');
+    const _pendingMsaJobs = queue.filter(j => j.queue_status === 'pending_msa');
 
     const handleCancelAll = () => {
         if (queuedJobs.length === 0) return;
