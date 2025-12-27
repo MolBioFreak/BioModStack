@@ -487,9 +487,13 @@ GPU_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / ".gpu_config.json
 # Default scheduler config
 DEFAULT_SCHEDULER_CONFIG = {
     "global": {
-        "busy_threshold": 0.5,  # 50% = GPU is busy
-        "cooldown_ms": 10000,   # 10 seconds after assignment
-        "enabled": True         # Master switch for capacity lock
+        "busy_threshold": 0.5,       # 50% = GPU is busy
+        "cooldown_ms": 10000,        # 10 seconds after assignment
+        "enabled": True,             # Master switch for capacity lock
+        "target_vram_fill": 0.75,    # Target VRAM fill before preferring another GPU
+        "capacity_weight": 3.0,      # Weight for GPU capacity in scoring
+        "emptiness_weight": 5.0,     # Weight for GPU emptiness in scoring
+        "msa_concurrency_limit": 1,  # Max parallel MSA batch jobs
     },
     "overrides": {}  # Per-GPU: {"0": {"force_available": false, "threshold": null}}
 }
@@ -497,17 +501,24 @@ DEFAULT_SCHEDULER_CONFIG = {
 
 class SchedulerGlobalConfig(BaseModel):
     """Global scheduler settings."""
-    busy_threshold: float = 0.5  # 0.0-1.0
+    busy_threshold: float = 0.5           # 0.0-1.0
     cooldown_ms: int = 10000
     enabled: bool = True
+    target_vram_fill: float = 0.75        # Target fill % before preferring another GPU
+    capacity_weight: float = 3.0          # Larger = prefer bigger GPUs more
+    emptiness_weight: float = 5.0         # Larger = prefer emptier GPUs more
+    msa_concurrency_limit: int = 1        # Max parallel MSA jobs
 
 
 class SchedulerGPUOverride(BaseModel):
     """Per-GPU override settings."""
-    force_available: bool = False      # Permanent override (debug mode)
-    quick_enable: bool = False         # One-shot: accept 1 job, then auto-clear
-    threshold: Optional[float] = None  # null = use global
-    disabled: bool = False             # GPU excluded from orchestrator scheduling
+    force_available: bool = False         # Permanent override (debug mode)
+    quick_enable: bool = False            # One-shot: accept 1 job, then auto-clear
+    threshold: Optional[float] = None     # null = use global
+    disabled: bool = False                # GPU excluded from orchestrator scheduling
+    priority_tier: Optional[int] = None   # Manual priority tier (higher = preferred)
+    vram_safety_margin_mb: int = 500      # VRAM buffer to leave free
+    max_concurrent_jobs: Optional[int] = None  # Max jobs on this GPU (null = unlimited)
 
 
 class SchedulerConfigResponse(BaseModel):
@@ -562,7 +573,11 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
     config["global"] = {
         "busy_threshold": max(0.0, min(1.0, global_config.busy_threshold)),
         "cooldown_ms": max(0, min(60000, global_config.cooldown_ms)),
-        "enabled": global_config.enabled
+        "enabled": global_config.enabled,
+        "target_vram_fill": max(0.5, min(0.95, global_config.target_vram_fill)),
+        "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),
+        "emptiness_weight": max(0.0, min(10.0, global_config.emptiness_weight)),
+        "msa_concurrency_limit": max(1, min(4, global_config.msa_concurrency_limit)),
     }
     
     if not write_scheduler_config(config):
@@ -570,7 +585,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
     
     return {
         "success": True,
-        "message": f"Updated: threshold={config['global']['busy_threshold']*100:.0f}%, cooldown={config['global']['cooldown_ms']}ms",
+        "message": f"Updated: capacity_weight={config['global']['capacity_weight']}, emptiness_weight={config['global']['emptiness_weight']}",
         "global": config["global"],
         "overrides": config["overrides"]
     }
@@ -585,7 +600,10 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
         "force_available": override.force_available,
         "quick_enable": override.quick_enable,
         "threshold": override.threshold,
-        "disabled": override.disabled
+        "disabled": override.disabled,
+        "priority_tier": override.priority_tier,
+        "vram_safety_margin_mb": override.vram_safety_margin_mb,
+        "max_concurrent_jobs": override.max_concurrent_jobs,
     }
     
     if not write_scheduler_config(config):

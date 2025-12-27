@@ -90,7 +90,17 @@ class DesignResponse(BaseModel):
     ligand_iptm: Optional[float] = None
     affinity_score: Optional[float] = None
     binder_probability: Optional[float] = None
-    
+
+    # Antibody Specific
+    cdr_h1: Optional[str] = None
+    cdr_h2: Optional[str] = None
+    cdr_h3: Optional[str] = None
+    cdr_l1: Optional[str] = None
+    cdr_l2: Optional[str] = None
+    cdr_l3: Optional[str] = None
+    humanness_score: Optional[float] = None
+    stability_data: Optional[Any] = None  # JSON blob for heatmaps
+        
     # User data
     is_favorite: bool = False
     notes: Optional[str] = None

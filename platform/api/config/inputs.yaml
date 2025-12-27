@@ -214,311 +214,7 @@ preset_pdbs:
   path: lib/examplebinder.pdb
   description: Example binder-target complex for reference
   category: Example
-- id: ATP
-  name: ATP
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ATP.pdb
-  description: Oligonucleotide ATP
-  category: Nucleotides
-- id: CTP
-  name: CTP
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/CTP.pdb
-  description: Oligonucleotide CTP
-  category: Nucleotides
-- id: GTP
-  name: GTP
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/GTP.pdb
-  description: Oligonucleotide GTP
-  category: Nucleotides
-- id: UTP
-  name: UTP
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/UTP.pdb
-  description: Oligonucleotide UTP
-  category: Nucleotides
-- id: dATP
-  name: dATP
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dATP.pdb
-  description: Oligonucleotide dATP
-  category: Nucleotides
-- id: dsDNA_ATAT_ATAT
-  name: dsDNA ATAT ATAT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATAT_ATAT.pdb
-  description: Oligonucleotide dsDNA_ATAT_ATAT
-  category: dsDNA Oligos
-- id: dsDNA_ATCG_CGAT
-  name: dsDNA ATCG CGAT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATCG_CGAT.pdb
-  description: Oligonucleotide dsDNA_ATCG_CGAT
-  category: dsDNA Oligos
-- id: dsDNA_ATG_CAT
-  name: dsDNA ATG CAT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_ATG_CAT.pdb
-  description: Oligonucleotide dsDNA_ATG_CAT
-  category: dsDNA Oligos
-- id: dsDNA_AT_AT
-  name: dsDNA AT AT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_AT_AT.pdb
-  description: Oligonucleotide dsDNA_AT_AT
-  category: dsDNA Oligos
-- id: dsDNA_CG_CG
-  name: dsDNA CG CG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_CG_CG.pdb
-  description: Oligonucleotide dsDNA_CG_CG
-  category: dsDNA Oligos
-- id: dsDNA_GCA_TGC
-  name: dsDNA GCA TGC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GCA_TGC.pdb
-  description: Oligonucleotide dsDNA_GCA_TGC
-  category: dsDNA Oligos
-- id: dsDNA_GCGC_GCGC
-  name: dsDNA GCGC GCGC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GCGC_GCGC.pdb
-  description: Oligonucleotide dsDNA_GCGC_GCGC
-  category: dsDNA Oligos
-- id: dsDNA_GC_GC
-  name: dsDNA GC GC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_GC_GC.pdb
-  description: Oligonucleotide dsDNA_GC_GC
-  category: dsDNA Oligos
-- id: dsDNA_TAC_GTA
-  name: dsDNA TAC GTA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_TAC_GTA.pdb
-  description: Oligonucleotide dsDNA_TAC_GTA
-  category: dsDNA Oligos
-- id: dsDNA_TA_TA
-  name: dsDNA TA TA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/dsDNA_TA_TA.pdb
-  description: Oligonucleotide dsDNA_TA_TA
-  category: dsDNA Oligos
-- id: ssDNA_AA
-  name: ssDNA AA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AA.pdb
-  description: Oligonucleotide ssDNA_AA
-  category: ssDNA Oligos
-- id: ssDNA_AAA
-  name: ssDNA AAA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAA.pdb
-  description: Oligonucleotide ssDNA_AAA
-  category: ssDNA Oligos
-- id: ssDNA_AAAA
-  name: ssDNA AAAA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAAA.pdb
-  description: Oligonucleotide ssDNA_AAAA
-  category: ssDNA Oligos
-- id: ssDNA_AAG
-  name: ssDNA AAG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AAG.pdb
-  description: Oligonucleotide ssDNA_AAG
-  category: ssDNA Oligos
-- id: ssDNA_AC
-  name: ssDNA AC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AC.pdb
-  description: Oligonucleotide ssDNA_AC
-  category: ssDNA Oligos
-- id: ssDNA_AG
-  name: ssDNA AG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AG.pdb
-  description: Oligonucleotide ssDNA_AG
-  category: ssDNA Oligos
-- id: ssDNA_AT
-  name: ssDNA AT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_AT.pdb
-  description: Oligonucleotide ssDNA_AT
-  category: ssDNA Oligos
-- id: ssDNA_ATAT
-  name: ssDNA ATAT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATAT.pdb
-  description: Oligonucleotide ssDNA_ATAT
-  category: ssDNA Oligos
-- id: ssDNA_ATC
-  name: ssDNA ATC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATC.pdb
-  description: Oligonucleotide ssDNA_ATC
-  category: ssDNA Oligos
-- id: ssDNA_ATCG
-  name: ssDNA ATCG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATCG.pdb
-  description: Oligonucleotide ssDNA_ATCG
-  category: ssDNA Oligos
-- id: ssDNA_ATG
-  name: ssDNA ATG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATG.pdb
-  description: Oligonucleotide ssDNA_ATG
-  category: ssDNA Oligos
-- id: ssDNA_ATT
-  name: ssDNA ATT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_ATT.pdb
-  description: Oligonucleotide ssDNA_ATT
-  category: ssDNA Oligos
-- id: ssDNA_CA
-  name: ssDNA CA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CA.pdb
-  description: Oligonucleotide ssDNA_CA
-  category: ssDNA Oligos
-- id: ssDNA_CAA
-  name: ssDNA CAA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CAA.pdb
-  description: Oligonucleotide ssDNA_CAA
-  category: ssDNA Oligos
-- id: ssDNA_CAG
-  name: ssDNA CAG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CAG.pdb
-  description: Oligonucleotide ssDNA_CAG
-  category: ssDNA Oligos
-- id: ssDNA_CC
-  name: ssDNA CC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CC.pdb
-  description: Oligonucleotide ssDNA_CC
-  category: ssDNA Oligos
-- id: ssDNA_CCC
-  name: ssDNA CCC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCC.pdb
-  description: Oligonucleotide ssDNA_CCC
-  category: ssDNA Oligos
-- id: ssDNA_CCCC
-  name: ssDNA CCCC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCCC.pdb
-  description: Oligonucleotide ssDNA_CCCC
-  category: ssDNA Oligos
-- id: ssDNA_CCG
-  name: ssDNA CCG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CCG.pdb
-  description: Oligonucleotide ssDNA_CCG
-  category: ssDNA Oligos
-- id: ssDNA_CG
-  name: ssDNA CG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CG.pdb
-  description: Oligonucleotide ssDNA_CG
-  category: ssDNA Oligos
-- id: ssDNA_CGAT
-  name: ssDNA CGAT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CGAT.pdb
-  description: Oligonucleotide ssDNA_CGAT
-  category: ssDNA Oligos
-- id: ssDNA_CGCG
-  name: ssDNA CGCG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CGCG.pdb
-  description: Oligonucleotide ssDNA_CGCG
-  category: ssDNA Oligos
-- id: ssDNA_CT
-  name: ssDNA CT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_CT.pdb
-  description: Oligonucleotide ssDNA_CT
-  category: ssDNA Oligos
-- id: ssDNA_GA
-  name: ssDNA GA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GA.pdb
-  description: Oligonucleotide ssDNA_GA
-  category: ssDNA Oligos
-- id: ssDNA_GAA
-  name: ssDNA GAA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GAA.pdb
-  description: Oligonucleotide ssDNA_GAA
-  category: ssDNA Oligos
-- id: ssDNA_GAG
-  name: ssDNA GAG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GAG.pdb
-  description: Oligonucleotide ssDNA_GAG
-  category: ssDNA Oligos
-- id: ssDNA_GC
-  name: ssDNA GC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GC.pdb
-  description: Oligonucleotide ssDNA_GC
-  category: ssDNA Oligos
-- id: ssDNA_GCA
-  name: ssDNA GCA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCA.pdb
-  description: Oligonucleotide ssDNA_GCA
-  category: ssDNA Oligos
-- id: ssDNA_GCG
-  name: ssDNA GCG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCG.pdb
-  description: Oligonucleotide ssDNA_GCG
-  category: ssDNA Oligos
-- id: ssDNA_GCGC
-  name: ssDNA GCGC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GCGC.pdb
-  description: Oligonucleotide ssDNA_GCGC
-  category: ssDNA Oligos
-- id: ssDNA_GG
-  name: ssDNA GG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GG.pdb
-  description: Oligonucleotide ssDNA_GG
-  category: ssDNA Oligos
-- id: ssDNA_GGC
-  name: ssDNA GGC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGC.pdb
-  description: Oligonucleotide ssDNA_GGC
-  category: ssDNA Oligos
-- id: ssDNA_GGG
-  name: ssDNA GGG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGG.pdb
-  description: Oligonucleotide ssDNA_GGG
-  category: ssDNA Oligos
-- id: ssDNA_GGGG
-  name: ssDNA GGGG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GGGG.pdb
-  description: Oligonucleotide ssDNA_GGGG
-  category: ssDNA Oligos
-- id: ssDNA_GT
-  name: ssDNA GT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_GT.pdb
-  description: Oligonucleotide ssDNA_GT
-  category: ssDNA Oligos
-- id: ssDNA_TA
-  name: ssDNA TA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TA.pdb
-  description: Oligonucleotide ssDNA_TA
-  category: ssDNA Oligos
-- id: ssDNA_TAA
-  name: ssDNA TAA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TAA.pdb
-  description: Oligonucleotide ssDNA_TAA
-  category: ssDNA Oligos
-- id: ssDNA_TAG
-  name: ssDNA TAG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TAG.pdb
-  description: Oligonucleotide ssDNA_TAG
-  category: ssDNA Oligos
-- id: ssDNA_TATA
-  name: ssDNA TATA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TATA.pdb
-  description: Oligonucleotide ssDNA_TATA
-  category: ssDNA Oligos
-- id: ssDNA_TC
-  name: ssDNA TC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TC.pdb
-  description: Oligonucleotide ssDNA_TC
-  category: ssDNA Oligos
-- id: ssDNA_TG
-  name: ssDNA TG
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TG.pdb
-  description: Oligonucleotide ssDNA_TG
-  category: ssDNA Oligos
-- id: ssDNA_TGA
-  name: ssDNA TGA
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TGA.pdb
-  description: Oligonucleotide ssDNA_TGA
-  category: ssDNA Oligos
-- id: ssDNA_TT
-  name: ssDNA TT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TT.pdb
-  description: Oligonucleotide ssDNA_TT
-  category: ssDNA Oligos
-- id: ssDNA_TTC
-  name: ssDNA TTC
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTC.pdb
-  description: Oligonucleotide ssDNA_TTC
-  category: ssDNA Oligos
-- id: ssDNA_TTT
-  name: ssDNA TTT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTT.pdb
-  description: Oligonucleotide ssDNA_TTT
-  category: ssDNA Oligos
-- id: ssDNA_TTTT
-  name: ssDNA TTTT
-  path: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/inputs/ligands/ssDNA_TTTT.pdb
-  description: Oligonucleotide ssDNA_TTTT
-  category: ssDNA Oligos
+
 preset_sequences:
 - id: tdt_human
   name: Human TdT (P04053)
@@ -642,3 +338,37 @@ preset_ntps:
   name: ATP (RNA/Energy)
   smiles: Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O
   description: Adenosine triphosphate - energy currency and RNA nucleotide
+preset_ligands:
+- id: dATP
+  name: dATP (DNA)
+  smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
+  description: Deoxyadenosine triphosphate - pairs with thymine
+- id: dTTP
+  name: dTTP (DNA)
+  smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
+  description: Deoxythymidine triphosphate - pairs with adenine
+- id: dGTP
+  name: dGTP (DNA)
+  smiles: "Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1"
+  description: Deoxyguanosine triphosphate - pairs with cytosine
+- id: dCTP
+  name: dCTP (DNA)
+  smiles: "Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1"
+  description: Deoxycytidine triphosphate - pairs with guanine
+- id: ATP
+  name: ATP (RNA)
+  smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
+  description: Adenosine triphosphate - RNA nucleotide
+- id: UTP
+  name: UTP (RNA)
+  smiles: "O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1"
+  description: Uridine triphosphate - pairs with adenine in RNA
+- id: GTP
+  name: GTP (RNA)
+  smiles: "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1"
+  description: Guanosine triphosphate - RNA nucleotide
+- id: CTP
+  name: CTP (RNA)
+  smiles: "Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1"
+  description: Cytidine triphosphate - RNA nucleotide
+

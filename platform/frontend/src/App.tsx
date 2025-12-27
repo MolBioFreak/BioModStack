@@ -4,6 +4,7 @@ import { Dashboard } from './components/Dashboard';
 import { JobSubmission } from './components/JobSubmission';
 import { ResultsViewer } from './components/ResultsViewer';
 import { JobDetailPage } from './components/JobDetailPage';
+import { SequenceDesigner } from './components/SequenceDesigner';
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="/designs" element={<ResultsViewer />} />
         <Route path="/designs/:jobId" element={<ResultsViewer />} />
         <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+        <Route path="/designer" element={<SequenceDesigner />} />
       </Routes>
     </Layout>
   );
