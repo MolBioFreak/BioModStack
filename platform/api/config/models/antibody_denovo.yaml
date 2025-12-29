@@ -16,6 +16,13 @@ container: apptainer/antibody_tools.sif
 ui_icon: antibody
 ui_color: "#ec4899"
 
+# Modes available for this workflow
+modes:
+  - id: default
+    name: Full Pipeline
+    description: Run complete de novo antibody design pipeline
+    params: []
+
 inputs:
   - pdb
 

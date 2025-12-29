@@ -57,7 +57,7 @@ export function Layout({ children }: LayoutProps) {
                                     : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
                                     }`}
                             >
-                                BioDesigner
+                                Molecular Biology Toolkit
                             </Link>
                             <Link
                                 to="/designs"
