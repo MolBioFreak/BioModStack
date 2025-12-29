@@ -451,13 +451,13 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
 
     const handleIncrement = () => {
         const current = parseInt(inputValue, 10) || currentLimit;
-        const newVal = Math.min(current + 25, gpu.max_power_watts);
+        const newVal = Math.min(current + 5, gpu.max_power_watts);
         setInputValue(String(newVal));
     };
 
     const handleDecrement = () => {
         const current = parseInt(inputValue, 10) || currentLimit;
-        const newVal = Math.max(current - 25, gpu.min_power_watts);
+        const newVal = Math.max(current - 5, gpu.min_power_watts);
         setInputValue(String(newVal));
     };
 
@@ -549,10 +549,12 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
                 <div className="flex items-center gap-1">
                     <button onClick={handleDecrement} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">−</button>
                     <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        className={`w-12 px-1 py-0.5 bg-slate-700 border rounded text-white text-xs text-center appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-600'}`}
+                        onChange={(e) => setInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                        className={`w-12 px-1 py-0.5 bg-slate-700 border rounded text-white text-xs text-center ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-600'}`}
                     />
                     <button onClick={handleIncrement} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs">+</button>
                     {isDirty && (
@@ -739,84 +741,9 @@ function Sparkline({ data, color, height = 24 }: { data: number[]; color: string
     );
 }
 
-// Queue Status Table - shows running GPU processes
-// Uses running jobs data to show model names instead of generic 'python'
-function _QueueStatusTable({ gpus, runningJobs }: { gpus: GPUStatus[]; runningJobs: Array<{ model_id: string; name: string }> }) {
-    // Flatten all GPU processes into a single list with GPU info
-    const tasks = gpus.flatMap(gpu =>
-        gpu.processes.map(proc => ({
-            gpu: gpu.index,
-            gpuName: gpu.name,
-            pid: proc.pid,
-            name: proc.name,
-            vram: proc.memory_mb
-        }))
-    );
 
-    // Get model type from running jobs when available, fallback to process name detection
-    const getModelType = (name: string, index: number): string => {
-        // If we have running jobs, use their model_id (rotating through jobs for multiple processes)
-        if (runningJobs.length > 0) {
-            const job = runningJobs[index % runningJobs.length];
-            const modelId = job.model_id || '';
-            // Map model_id to display name
-            if (modelId.toLowerCase().includes('rf3') || modelId.toLowerCase().includes('foundry')) return 'RF3';
-            if (modelId.toLowerCase().includes('boltz')) return 'Boltz';
-            if (modelId.toLowerCase().includes('fampnn')) return 'FAMPNN';
-            if (modelId.toLowerCase().includes('mpnn')) return 'MPNN';
-            if (modelId.toLowerCase().includes('rfdiff')) return 'RFdiff';
-            if (modelId) return modelId;
-        }
-        // Fallback: extract from process name
-        const lower = name.toLowerCase();
-        if (lower.includes('boltz')) return 'Boltz';
-        if (lower.includes('rf3') || lower.includes('foundry')) return 'RF3';
-        if (lower.includes('fampnn')) return 'FAMPNN';
-        if (lower.includes('mpnn')) return 'MPNN';
-        if (lower.includes('rfdiff')) return 'RFdiff';
-        if (lower.includes('python')) return 'Python';
-        return name.slice(0, 12);
-    };
 
-    return (
-        <div className="max-h-48 overflow-y-auto">
-            <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-800">
-                    <tr className="border-b border-slate-700/50">
-                        <th className="text-left py-1 px-2 font-medium text-slate-500">Process</th>
-                        <th className="text-left py-1 px-2 font-medium text-slate-500">Model</th>
-                        <th className="text-left py-1 px-2 font-medium text-slate-500">GPU</th>
-                        <th className="text-left py-1 px-2 font-medium text-slate-500">VRAM</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {tasks.length === 0 ? (
-                        <tr>
-                            <td colSpan={4} className="py-4 text-center text-slate-500">
-                                No active tasks
-                            </td>
-                        </tr>
-                    ) : (
-                        tasks.map((task, idx) => (
-                            <tr key={`${task.gpu}-${task.pid}-${idx}`} className="border-b border-slate-700/30 hover:bg-slate-700/20">
-                                <td className="py-1 px-2 text-slate-300 truncate max-w-[100px]" title={task.name}>
-                                    {task.name.slice(0, 15)}
-                                </td>
-                                <td className="py-1 px-2">
-                                    <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
-                                        {getModelType(task.name, idx)}
-                                    </span>
-                                </td>
-                                <td className="py-1 px-2 text-cyan-400">{task.gpu}</td>
-                                <td className="py-1 px-2 text-amber-400">{task.vram}MB</td>
-                            </tr>
-                        ))
-                    )}
-                </tbody>
-            </table>
-        </div>
-    );
-}
+// QueueStatusTable removed - was unused
 
 
 // GPU Scheduler Settings Panel
