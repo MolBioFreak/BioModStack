@@ -7,6 +7,7 @@ import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTe
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
+import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -530,7 +531,7 @@ export function JobSubmission() {
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                 }`}
                         >
-                            🧪 Experiment Templates
+                            🔬 Workflows
                         </button>
                         <button
                             onClick={() => { setWizardMode('manual'); setSelectedTemplateId(null); }}
@@ -597,6 +598,10 @@ export function JobSubmission() {
                                         }
                                     }}
                                 />
+                            ) : selectedTemplateId === 'antibody_denovo' ? (
+                                <AntibodyDenovoTemplate
+                                    onBack={() => setSelectedTemplateId(null)}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
@@ -614,6 +619,20 @@ export function JobSubmission() {
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
+                                                ]
+                                            },
+                                            // De Novo Antibody Design Workflow
+                                            {
+                                                id: 'antibody_denovo',
+                                                name: 'De Novo Antibody Design',
+                                                description: 'Generate novel antibodies targeting an antigen. Uses RFantibody for backbone generation, FAMPNN for sequence design, and Boltz2 for validation.',
+                                                icon: 'flask',
+                                                color: '#10B981', // Emerald
+                                                stages: [
+                                                    { tool: 'RFantibody' },
+                                                    { tool: 'FAMPNN' },
+                                                    { tool: 'Boltz2' },
+                                                    { tool: 'AntiBERTy' }
                                                 ]
                                             }
                                         ].map((template: any) => (
