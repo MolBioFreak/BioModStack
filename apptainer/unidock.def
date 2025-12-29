@@ -1,0 +1,84 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+%labels
+    Author ProteinDJ Pipeline
+    Version 1.2.0
+    Description Uni-Dock GPU-accelerated molecular docking with Meeko flexible receptor support
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # System dependencies
+    apt-get update && apt-get install -y --no-install-recommends \
+        git wget curl ca-certificates \
+        build-essential cmake \
+        libboost-all-dev libopenbabel-dev \
+        python3 python3-pip python3-venv \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Install Miniforge for Uni-Dock (only available via conda-forge)
+    wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/conda
+    rm /tmp/miniforge.sh
+    
+    export PATH=/opt/conda/bin:$PATH
+    
+    # Initialize conda
+    /opt/conda/bin/conda init bash
+    . /opt/conda/etc/profile.d/conda.sh
+    
+    # Create environment with Uni-Dock from conda-forge
+    conda create -n unidock python=3.10 -y
+    conda activate unidock
+    
+    # Install Uni-Dock from conda-forge (only available here)
+    conda install -c conda-forge unidock -y
+    
+    # Install UV package manager for Python deps (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    
+    # Install Python dependencies via UV (faster than conda/pip)
+    uv pip install --python /opt/conda/envs/unidock/bin/python \
+        meeko \
+        rdkit \
+        biopython \
+        pandas \
+        numpy \
+        scipy \
+        openbabel-wheel \
+        gemmi
+    
+    # Clean up
+    conda clean -afy
+    rm -rf /root/.cache/uv
+    
+    # Make conda env the default
+    echo ". /opt/conda/etc/profile.d/conda.sh && conda activate unidock" >> /etc/bash.bashrc
+
+%environment
+    export PATH=/opt/conda/envs/unidock/bin:/opt/conda/bin:$PATH
+    export CONDA_DEFAULT_ENV=unidock
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate unidock
+    exec "$@"
+
+%test
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate unidock
+    echo "Testing Uni-Dock installation..."
+    which unidock && echo "✓ unidock binary found"
+    unidock --version && echo "✓ unidock version check passed"
+    python3 -c "from meeko import MoleculePreparation, PDBQTWriterLegacy; print('✓ Meeko imported')"
+    python3 -c "from rdkit import Chem; print('✓ RDKit imported')"
+    python3 -c "from Bio.PDB import PDBParser; print('✓ BioPython imported')"
+    python3 -c "import gemmi; print('✓ Gemmi imported')"
+    python3 -c "from openbabel import openbabel; print('✓ OpenBabel imported')"
+    python3 -c "import numpy; print('✓ NumPy imported')"
+    python3 -c "import scipy; print('✓ SciPy imported')"
+    echo "All imports successful!"

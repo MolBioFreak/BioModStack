@@ -1,0 +1,500 @@
+INFO:    Starting build...
+Getting image source signatures
+Copying blob sha256:6414378b647780fee8fd903ddb9541d134a1947ce092d08bdeb23a54cb3684ac
+Copying blob sha256:ad69d38804778a7dd78e609a0b3cbeb96542df5c37738a8c398ec31498a1490b
+Copying blob sha256:7d21de8cade150523dfe4c80e31ded729bb70dce5336648c5d0ef4a618ef9e3c
+Copying blob sha256:4b650590013c9e92d469a7b5514dbe45cd755b8d75f0d6ae09e2a3e089b0c82c
+Copying blob sha256:1953a5f9db288f25e73653c276da7baef424fe5ff5196516e2386f0770d9f82e
+Copying blob sha256:2d01ee89ef0b66169d84c496b3175d51ff2a47b2e211d7e4f4fe69868681cd31
+Copying blob sha256:b13e9fc77f2ee4d9c1fccb42560fc8d63303af990508cc7dc027c13167e2ec0a
+Copying blob sha256:b382220814a0bae81e2197c16baf8ccc87b79c9d2d7f121171bb09e125f255a2
+Copying blob sha256:59348e3e6063ef4bb1ece1935244b57289f78338e283acd735de38cfd0cd3a41
+Copying blob sha256:45e1402c720bfad2a6277e9c7d7dd7b854fb04b6004746ff67033d009a487cec
+Copying blob sha256:3403bc95ab984f2262fd77c3b4b4e7344562bc00f811baaccb7e81f477370488
+Copying blob sha256:b930437c33fd32e1c48f37371d6cf7786c7d4fff1854d9aef85c974a52c435d8
+Copying config sha256:dee3a1982a5e2526b60a1c60b3c22e7e319dbeda04acb9cfdc032a0ab363054f
+Writing manifest to image destination
+2025/12/07 18:46:19  info unpack layer: sha256:6414378b647780fee8fd903ddb9541d134a1947ce092d08bdeb23a54cb3684ac
+2025/12/07 18:46:19  info unpack layer: sha256:ad69d38804778a7dd78e609a0b3cbeb96542df5c37738a8c398ec31498a1490b
+2025/12/07 18:46:19  info unpack layer: sha256:2d01ee89ef0b66169d84c496b3175d51ff2a47b2e211d7e4f4fe69868681cd31
+2025/12/07 18:46:20  info unpack layer: sha256:7d21de8cade150523dfe4c80e31ded729bb70dce5336648c5d0ef4a618ef9e3c
+2025/12/07 18:46:20  info unpack layer: sha256:4b650590013c9e92d469a7b5514dbe45cd755b8d75f0d6ae09e2a3e089b0c82c
+2025/12/07 18:46:20  info unpack layer: sha256:1953a5f9db288f25e73653c276da7baef424fe5ff5196516e2386f0770d9f82e
+2025/12/07 18:46:37  info unpack layer: sha256:b13e9fc77f2ee4d9c1fccb42560fc8d63303af990508cc7dc027c13167e2ec0a
+2025/12/07 18:46:37  info unpack layer: sha256:b382220814a0bae81e2197c16baf8ccc87b79c9d2d7f121171bb09e125f255a2
+2025/12/07 18:46:37  info unpack layer: sha256:59348e3e6063ef4bb1ece1935244b57289f78338e283acd735de38cfd0cd3a41
+2025/12/07 18:46:37  info unpack layer: sha256:45e1402c720bfad2a6277e9c7d7dd7b854fb04b6004746ff67033d009a487cec
+2025/12/07 18:47:03  info unpack layer: sha256:3403bc95ab984f2262fd77c3b4b4e7344562bc00f811baaccb7e81f477370488
+2025/12/07 18:47:03  info unpack layer: sha256:b930437c33fd32e1c48f37371d6cf7786c7d4fff1854d9aef85c974a52c435d8
+INFO:    Running post scriptlet
++ apt-get -q update
+Get:1 https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64  InRelease [1581 B]
+Get:2 https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64  Packages [2201 kB]
+Get:3 http://archive.ubuntu.com/ubuntu jammy InRelease [270 kB]
+Get:4 http://security.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
+Get:5 http://security.ubuntu.com/ubuntu jammy-security/multiverse amd64 Packages [60.9 kB]
+Get:6 http://archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
+Get:7 http://security.ubuntu.com/ubuntu jammy-security/restricted amd64 Packages [6081 kB]
+Get:8 http://archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
+Get:9 http://archive.ubuntu.com/ubuntu jammy/universe amd64 Packages [17.5 MB]
+Get:10 http://security.ubuntu.com/ubuntu jammy-security/main amd64 Packages [3571 kB]
+Get:11 http://security.ubuntu.com/ubuntu jammy-security/universe amd64 Packages [1286 kB]
+Get:12 http://archive.ubuntu.com/ubuntu jammy/restricted amd64 Packages [164 kB]
+Get:13 http://archive.ubuntu.com/ubuntu jammy/main amd64 Packages [1792 kB]
+Get:14 http://archive.ubuntu.com/ubuntu jammy/multiverse amd64 Packages [266 kB]
+Get:15 http://archive.ubuntu.com/ubuntu jammy-updates/restricted amd64 Packages [6281 kB]
+Get:16 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1598 kB]
+Get:17 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [3901 kB]
+Get:18 http://archive.ubuntu.com/ubuntu jammy-updates/multiverse amd64 Packages [69.2 kB]
+Get:19 http://archive.ubuntu.com/ubuntu jammy-backports/universe amd64 Packages [35.2 kB]
+Get:20 http://archive.ubuntu.com/ubuntu jammy-backports/main amd64 Packages [83.9 kB]
+Fetched 45.5 MB in 4s (12.6 MB/s)
+Reading package lists...
++ DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y git wget curl python3.10 python3-venv python3-pip build-essential
+Reading package lists...
+Building dependency tree...
+Reading state information...
+build-essential is already the newest version (12.9ubuntu3).
+build-essential set to manually installed.
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls libcurl4 liberror-perl libexpat1
+  libmpdec3 libnghttp2-14 libpsl5 libpython3-stdlib libpython3.10-minimal
+  libpython3.10-stdlib librtmp1 libssh-4 media-types python3 python3-distutils
+  python3-lib2to3 python3-minimal python3-pip-whl python3-pkg-resources
+  python3-setuptools python3-setuptools-whl python3-wheel python3.10-minimal
+  python3.10-venv
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn python3-doc python3-tk
+  python-setuptools-doc python3.10-doc binfmt-support
+Recommended packages:
+  less ssh-client publicsuffix python3-dev
+The following NEW packages will be installed:
+  curl git git-man libbrotli1 libcurl3-gnutls libcurl4 liberror-perl libexpat1
+  libmpdec3 libnghttp2-14 libpsl5 libpython3-stdlib libpython3.10-minimal
+  libpython3.10-stdlib librtmp1 libssh-4 media-types python3 python3-distutils
+  python3-lib2to3 python3-minimal python3-pip python3-pip-whl
+  python3-pkg-resources python3-setuptools python3-setuptools-whl python3-venv
+  python3-wheel python3.10 python3.10-minimal python3.10-venv wget
+0 upgraded, 32 newly installed, 0 to remove and 125 not upgraded.
+Need to get 16.2 MB of archives.
+After this operation, 60.8 MB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpython3.10-minimal amd64 3.10.12-1~22.04.12 [815 kB]
+Get:2 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libexpat1 amd64 2.4.7-1ubuntu0.6 [92.1 kB]
+Get:3 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3.10-minimal amd64 3.10.12-1~22.04.12 [2268 kB]
+Get:4 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3-minimal amd64 3.10.6-1~22.04.1 [24.3 kB]
+Get:5 http://archive.ubuntu.com/ubuntu jammy/main amd64 media-types all 7.0.0 [25.5 kB]
+Get:6 http://archive.ubuntu.com/ubuntu jammy/main amd64 libmpdec3 amd64 2.5.1-2build2 [86.8 kB]
+Get:7 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpython3.10-stdlib amd64 3.10.12-1~22.04.12 [1849 kB]
+Get:8 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3.10 amd64 3.10.12-1~22.04.12 [508 kB]
+Get:9 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpython3-stdlib amd64 3.10.6-1~22.04.1 [6812 B]
+Get:10 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3 amd64 3.10.6-1~22.04.1 [22.8 kB]
+Get:11 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3-pkg-resources all 59.6.0-1.2ubuntu0.22.04.3 [133 kB]
+Get:12 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libnghttp2-14 amd64 1.43.0-1ubuntu0.2 [76.9 kB]
+Get:13 http://archive.ubuntu.com/ubuntu jammy/main amd64 libpsl5 amd64 0.21.0-1.2build2 [58.4 kB]
+Get:14 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 wget amd64 1.21.2-2ubuntu1.1 [339 kB]
+Get:15 http://archive.ubuntu.com/ubuntu jammy/main amd64 libbrotli1 amd64 1.0.9-2build6 [315 kB]
+Get:16 http://archive.ubuntu.com/ubuntu jammy/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2build4 [58.2 kB]
+Get:17 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libssh-4 amd64 0.9.6-2ubuntu0.22.04.5 [187 kB]
+Get:18 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libcurl4 amd64 7.81.0-1ubuntu1.21 [290 kB]
+Get:19 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 curl amd64 7.81.0-1ubuntu1.21 [194 kB]
+Get:20 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libcurl3-gnutls amd64 7.81.0-1ubuntu1.21 [284 kB]
+Get:21 http://archive.ubuntu.com/ubuntu jammy/main amd64 liberror-perl all 0.17029-1 [26.5 kB]
+Get:22 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 git-man all 1:2.34.1-1ubuntu1.15 [955 kB]
+Get:23 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 git amd64 1:2.34.1-1ubuntu1.15 [3166 kB]
+Get:24 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3-lib2to3 all 3.10.8-1~22.04 [77.6 kB]
+Get:25 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3-distutils all 3.10.8-1~22.04 [139 kB]
+Get:26 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 python3-setuptools all 59.6.0-1.2ubuntu0.22.04.3 [340 kB]
+Get:27 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-wheel all 0.37.1-2ubuntu0.22.04.1 [32.0 kB]
+Get:28 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-pip all 22.0.2+dfsg-1ubuntu0.7 [1306 kB]
+Get:29 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-pip-whl all 22.0.2+dfsg-1ubuntu0.7 [1683 kB]
+Get:30 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-setuptools-whl all 59.6.0-1.2ubuntu0.22.04.3 [789 kB]
+Get:31 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3.10-venv amd64 3.10.12-1~22.04.12 [5722 B]
+Get:32 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-venv amd64 3.10.6-1~22.04.1 [1042 B]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 16.2 MB in 7s (2379 kB/s)
+Selecting previously unselected package libpython3.10-minimal:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 14957 files and directories currently installed.)
+Preparing to unpack .../libpython3.10-minimal_3.10.12-1~22.04.12_amd64.deb ...
+Unpacking libpython3.10-minimal:amd64 (3.10.12-1~22.04.12) ...
+Selecting previously unselected package libexpat1:amd64.
+Preparing to unpack .../libexpat1_2.4.7-1ubuntu0.6_amd64.deb ...
+Unpacking libexpat1:amd64 (2.4.7-1ubuntu0.6) ...
+Selecting previously unselected package python3.10-minimal.
+Preparing to unpack .../python3.10-minimal_3.10.12-1~22.04.12_amd64.deb ...
+Unpacking python3.10-minimal (3.10.12-1~22.04.12) ...
+Setting up libpython3.10-minimal:amd64 (3.10.12-1~22.04.12) ...
+Setting up libexpat1:amd64 (2.4.7-1ubuntu0.6) ...
+Setting up python3.10-minimal (3.10.12-1~22.04.12) ...
+Selecting previously unselected package python3-minimal.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 15261 files and directories currently installed.)
+Preparing to unpack .../0-python3-minimal_3.10.6-1~22.04.1_amd64.deb ...
+Unpacking python3-minimal (3.10.6-1~22.04.1) ...
+Selecting previously unselected package media-types.
+Preparing to unpack .../1-media-types_7.0.0_all.deb ...
+Unpacking media-types (7.0.0) ...
+Selecting previously unselected package libmpdec3:amd64.
+Preparing to unpack .../2-libmpdec3_2.5.1-2build2_amd64.deb ...
+Unpacking libmpdec3:amd64 (2.5.1-2build2) ...
+Selecting previously unselected package libpython3.10-stdlib:amd64.
+Preparing to unpack .../3-libpython3.10-stdlib_3.10.12-1~22.04.12_amd64.deb ...
+Unpacking libpython3.10-stdlib:amd64 (3.10.12-1~22.04.12) ...
+Selecting previously unselected package python3.10.
+Preparing to unpack .../4-python3.10_3.10.12-1~22.04.12_amd64.deb ...
+Unpacking python3.10 (3.10.12-1~22.04.12) ...
+Selecting previously unselected package libpython3-stdlib:amd64.
+Preparing to unpack .../5-libpython3-stdlib_3.10.6-1~22.04.1_amd64.deb ...
+Unpacking libpython3-stdlib:amd64 (3.10.6-1~22.04.1) ...
+Setting up python3-minimal (3.10.6-1~22.04.1) ...
+Selecting previously unselected package python3.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 15662 files and directories currently installed.)
+Preparing to unpack .../00-python3_3.10.6-1~22.04.1_amd64.deb ...
+Unpacking python3 (3.10.6-1~22.04.1) ...
+Selecting previously unselected package python3-pkg-resources.
+Preparing to unpack .../01-python3-pkg-resources_59.6.0-1.2ubuntu0.22.04.3_all.deb ...
+Unpacking python3-pkg-resources (59.6.0-1.2ubuntu0.22.04.3) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../02-libnghttp2-14_1.43.0-1ubuntu0.2_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.43.0-1ubuntu0.2) ...
+Selecting previously unselected package libpsl5:amd64.
+Preparing to unpack .../03-libpsl5_0.21.0-1.2build2_amd64.deb ...
+Unpacking libpsl5:amd64 (0.21.0-1.2build2) ...
+Selecting previously unselected package wget.
+Preparing to unpack .../04-wget_1.21.2-2ubuntu1.1_amd64.deb ...
+Unpacking wget (1.21.2-2ubuntu1.1) ...
+Selecting previously unselected package libbrotli1:amd64.
+Preparing to unpack .../05-libbrotli1_1.0.9-2build6_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.0.9-2build6) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../06-librtmp1_2.4+20151223.gitfa8646d.1-2build4_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2build4) ...
+Selecting previously unselected package libssh-4:amd64.
+Preparing to unpack .../07-libssh-4_0.9.6-2ubuntu0.22.04.5_amd64.deb ...
+Unpacking libssh-4:amd64 (0.9.6-2ubuntu0.22.04.5) ...
+Selecting previously unselected package libcurl4:amd64.
+Preparing to unpack .../08-libcurl4_7.81.0-1ubuntu1.21_amd64.deb ...
+Unpacking libcurl4:amd64 (7.81.0-1ubuntu1.21) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../09-curl_7.81.0-1ubuntu1.21_amd64.deb ...
+Unpacking curl (7.81.0-1ubuntu1.21) ...
+Selecting previously unselected package libcurl3-gnutls:amd64.
+Preparing to unpack .../10-libcurl3-gnutls_7.81.0-1ubuntu1.21_amd64.deb ...
+Unpacking libcurl3-gnutls:amd64 (7.81.0-1ubuntu1.21) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../11-liberror-perl_0.17029-1_all.deb ...
+Unpacking liberror-perl (0.17029-1) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../12-git-man_1%3a2.34.1-1ubuntu1.15_all.deb ...
+Unpacking git-man (1:2.34.1-1ubuntu1.15) ...
+Selecting previously unselected package git.
+Preparing to unpack .../13-git_1%3a2.34.1-1ubuntu1.15_amd64.deb ...
+Unpacking git (1:2.34.1-1ubuntu1.15) ...
+Selecting previously unselected package python3-lib2to3.
+Preparing to unpack .../14-python3-lib2to3_3.10.8-1~22.04_all.deb ...
+Unpacking python3-lib2to3 (3.10.8-1~22.04) ...
+Selecting previously unselected package python3-distutils.
+Preparing to unpack .../15-python3-distutils_3.10.8-1~22.04_all.deb ...
+Unpacking python3-distutils (3.10.8-1~22.04) ...
+Selecting previously unselected package python3-setuptools.
+Preparing to unpack .../16-python3-setuptools_59.6.0-1.2ubuntu0.22.04.3_all.deb ...
+Unpacking python3-setuptools (59.6.0-1.2ubuntu0.22.04.3) ...
+Selecting previously unselected package python3-wheel.
+Preparing to unpack .../17-python3-wheel_0.37.1-2ubuntu0.22.04.1_all.deb ...
+Unpacking python3-wheel (0.37.1-2ubuntu0.22.04.1) ...
+Selecting previously unselected package python3-pip.
+Preparing to unpack .../18-python3-pip_22.0.2+dfsg-1ubuntu0.7_all.deb ...
+Unpacking python3-pip (22.0.2+dfsg-1ubuntu0.7) ...
+Selecting previously unselected package python3-pip-whl.
+Preparing to unpack .../19-python3-pip-whl_22.0.2+dfsg-1ubuntu0.7_all.deb ...
+Unpacking python3-pip-whl (22.0.2+dfsg-1ubuntu0.7) ...
+Selecting previously unselected package python3-setuptools-whl.
+Preparing to unpack .../20-python3-setuptools-whl_59.6.0-1.2ubuntu0.22.04.3_all.deb ...
+Unpacking python3-setuptools-whl (59.6.0-1.2ubuntu0.22.04.3) ...
+Selecting previously unselected package python3.10-venv.
+Preparing to unpack .../21-python3.10-venv_3.10.12-1~22.04.12_amd64.deb ...
+Unpacking python3.10-venv (3.10.12-1~22.04.12) ...
+Selecting previously unselected package python3-venv.
+Preparing to unpack .../22-python3-venv_3.10.6-1~22.04.1_amd64.deb ...
+Unpacking python3-venv (3.10.6-1~22.04.1) ...
+Setting up media-types (7.0.0) ...
+Setting up python3-setuptools-whl (59.6.0-1.2ubuntu0.22.04.3) ...
+Setting up libpsl5:amd64 (0.21.0-1.2build2) ...
+Setting up wget (1.21.2-2ubuntu1.1) ...
+Setting up python3-pip-whl (22.0.2+dfsg-1ubuntu0.7) ...
+Setting up libbrotli1:amd64 (1.0.9-2build6) ...
+Setting up libnghttp2-14:amd64 (1.43.0-1ubuntu0.2) ...
+Setting up liberror-perl (0.17029-1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2build4) ...
+Setting up libssh-4:amd64 (0.9.6-2ubuntu0.22.04.5) ...
+Setting up libmpdec3:amd64 (2.5.1-2build2) ...
+Setting up libcurl4:amd64 (7.81.0-1ubuntu1.21) ...
+Setting up git-man (1:2.34.1-1ubuntu1.15) ...
+Setting up curl (7.81.0-1ubuntu1.21) ...
+Setting up libcurl3-gnutls:amd64 (7.81.0-1ubuntu1.21) ...
+Setting up libpython3.10-stdlib:amd64 (3.10.12-1~22.04.12) ...
+Setting up git (1:2.34.1-1ubuntu1.15) ...
+Setting up libpython3-stdlib:amd64 (3.10.6-1~22.04.1) ...
+Setting up python3.10 (3.10.12-1~22.04.12) ...
+Setting up python3 (3.10.6-1~22.04.1) ...
+Setting up python3-lib2to3 (3.10.8-1~22.04) ...
+Setting up python3-pkg-resources (59.6.0-1.2ubuntu0.22.04.3) ...
+Setting up python3-distutils (3.10.8-1~22.04) ...
+Setting up python3.10-venv (3.10.12-1~22.04.12) ...
+Setting up python3-setuptools (59.6.0-1.2ubuntu0.22.04.3) ...
+Setting up python3-wheel (0.37.1-2ubuntu0.22.04.1) ...
+Setting up python3-venv (3.10.6-1~22.04.1) ...
+Setting up python3-pip (22.0.2+dfsg-1ubuntu0.7) ...
+Processing triggers for libc-bin (2.35-0ubuntu3.8) ...
++ curl -LsSf https://astral.sh/uv/install.sh
++ sh
+downloading uv 0.9.16 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
++ export PATH=/root/.local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
++ python3.10 -m venv /opt/venv
++ . /opt/venv/bin/activate
++ deactivate nondestructive
++ [ -n  ]
++ [ -n  ]
++ [ -n  -o -n  ]
++ [ -n  ]
++ unset VIRTUAL_ENV
++ unset VIRTUAL_ENV_PROMPT
++ [ ! nondestructive = nondestructive ]
++ VIRTUAL_ENV=/opt/venv
++ export VIRTUAL_ENV
++ _OLD_VIRTUAL_PATH=/root/.local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
++ PATH=/opt/venv/bin:/root/.local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
++ export PATH
++ [ -n  ]
++ [ -z  ]
++ _OLD_VIRTUAL_PS1=Apptainer> 
++ PS1=(venv) Apptainer> 
++ export PS1
++ VIRTUAL_ENV_PROMPT=(venv) 
++ export VIRTUAL_ENV_PROMPT
++ [ -n  -o -n  ]
++ git clone https://github.com/PapenfussLab/fampnn.git /app/fampnn
+Cloning into '/app/fampnn'...
++ cd /app/fampnn
++ git checkout 18363df
+Note: switching to '18363df'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+HEAD is now at 18363df Merge pull request #1 from joshhardywehi/main
++ uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+Using Python 3.10.12 environment at: /opt/venv
+Resolved 31 packages in 2.06s
+Downloading nvidia-curand-cu12 (60.7MiB)
+Downloading pytorch-triton (179.5MiB)
+Downloading nvidia-cuda-nvrtc-cu12 (84.0MiB)
+Downloading networkx (1.6MiB)
+Downloading sympy (6.0MiB)
+Downloading numpy (16.0MiB)
+Downloading pillow (6.7MiB)
+Downloading torch (873.6MiB)
+Downloading torchvision (7.8MiB)
+Downloading torchaudio (1.8MiB)
+Downloading cuda-bindings (11.6MiB)
+Downloading nvidia-nccl-cu12 (307.4MiB)
+ Downloaded torchaudio
+ Downloaded torchvision
+ Downloaded networkx
+ Downloaded cuda-bindings
+ Downloaded sympy
+ Downloaded pillow
+ Downloaded numpy
+Downloading nvidia-cublas-cu12 (566.8MiB)
+Downloading nvidia-cufile-cu12 (1.1MiB)
+Downloading nvidia-cusparse-cu12 (274.9MiB)
+Downloading nvidia-cusparselt-cu12 (273.9MiB)
+ Downloaded nvidia-cufile-cu12
+ Downloaded pytorch-triton
+Downloading nvidia-nvjitlink-cu12 (37.4MiB)
+Downloading nvidia-cudnn-cu12 (674.0MiB)
+Downloading nvidia-cufft-cu12 (184.2MiB)
+ Downloaded nvidia-curand-cu12
+Downloading nvidia-nvshmem-cu12 (132.7MiB)
+Downloading nvidia-cuda-cupti-cu12 (9.8MiB)
+Downloading nvidia-cusolver-cu12 (255.1MiB)
+ Downloaded nvidia-cuda-nvrtc-cu12
+ Downloaded torch
+ Downloaded nvidia-nvjitlink-cu12
+ Downloaded nvidia-cuda-cupti-cu12
+ Downloaded nvidia-nccl-cu12
+ Downloaded nvidia-cusparse-cu12
+ Downloaded nvidia-cublas-cu12
+ Downloaded nvidia-cusparselt-cu12
+ Downloaded nvidia-cufft-cu12
+ Downloaded nvidia-nvshmem-cu12
+ Downloaded nvidia-cusolver-cu12
+ Downloaded nvidia-cudnn-cu12
+Prepared 31 packages in 2m 12s
+Installed 31 packages in 65ms
+ + cuda-bindings==12.9.4
+ + cuda-pathfinder==1.2.2
+ + filelock==3.20.0
+ + fsspec==2025.12.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.2
+ + mpmath==1.3.0
+ + networkx==3.4.2
+ + numpy==2.2.6
+ + nvidia-cublas-cu12==12.8.4.1
+ + nvidia-cuda-cupti-cu12==12.8.90
+ + nvidia-cuda-nvrtc-cu12==12.8.93
+ + nvidia-cuda-runtime-cu12==12.8.90
+ + nvidia-cudnn-cu12==9.10.2.21
+ + nvidia-cufft-cu12==11.3.3.83
+ + nvidia-cufile-cu12==1.13.1.3
+ + nvidia-curand-cu12==10.3.9.90
+ + nvidia-cusolver-cu12==11.7.3.90
+ + nvidia-cusparse-cu12==12.5.8.93
+ + nvidia-cusparselt-cu12==0.7.1
+ + nvidia-nccl-cu12==2.27.5
+ + nvidia-nvjitlink-cu12==12.8.93
+ + nvidia-nvshmem-cu12==3.4.5
+ + nvidia-nvtx-cu12==12.8.90
+ + pillow==12.0.0
+ + pytorch-triton==3.6.0+git5261b273
+ + sympy==1.14.0
+ + torch==2.10.0.dev20251207+cu128
+ + torchaudio==2.10.0.dev20251207+cu128
+ + torchvision==0.25.0.dev20251207+cu128
+ + typing-extensions==4.15.0
++ uv pip install scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
+Using Python 3.10.12 environment at: /opt/venv
+Resolved 85 packages in 991ms
+   Building antlr4-python3-runtime==4.9.3
+Downloading gemmi (2.5MiB)
+Downloading scipy (35.9MiB)
+Downloading biopython (3.1MiB)
+Downloading rdkit (34.7MiB)
+Downloading torch-geometric (1.2MiB)
+Downloading timm (2.4MiB)
+Downloading hf-xet (3.2MiB)
+Downloading aiohttp (1.6MiB)
+Downloading pandas (12.2MiB)
+      Built antlr4-python3-runtime==4.9.3
+ Downloaded torch-geometric
+ Downloaded aiohttp
+ Downloaded gemmi
+ Downloaded timm
+ Downloaded biopython
+ Downloaded hf-xet
+ Downloaded pandas
+ Downloaded scipy
+ Downloaded rdkit
+Prepared 55 packages in 3.53s
+Installed 55 packages in 15ms
+ + absl-py==2.3.1
+ + aiohappyeyeballs==2.6.1
+ + aiohttp==3.13.2
+ + aiosignal==1.4.0
+ + antlr4-python3-runtime==4.9.3
+ + anyio==4.12.0
+ + async-timeout==5.0.1
+ + attrs==25.4.0
+ + biopython==1.86
+ + certifi==2025.11.12
+ + charset-normalizer==3.4.4
+ + click==8.3.1
+ + dm-tree==0.1.9
+ + einops==0.8.1
+ + exceptiongroup==1.3.1
+ + frozenlist==1.8.0
+ + gemmi==0.7.4
+ + h11==0.16.0
+ + hf-xet==1.2.0
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + huggingface-hub==1.2.1
+ + hydra-core==1.3.2
+ + idna==3.11
+ + jaxtyping==0.3.3
+ + joblib==1.5.2
+ + multidict==6.7.0
+ + natsort==8.4.0
+ + omegaconf==2.3.0
+ + packaging==25.0
+ + pandas==2.3.3
+ + propcache==0.4.1
+ + psutil==7.1.3
+ + pyparsing==3.2.5
+ + python-dateutil==2.9.0.post0
+ + pytz==2025.2
+ + pyyaml==6.0.3
+ + rdkit==2025.9.3
+ + requests==2.32.5
+ + safetensors==0.7.0
+ + scipy==1.15.3
+ + shellingham==1.5.4
+ + six==1.17.0
+ + timm==1.0.22
+ + torch-geometric==2.7.0
+ + torchtyping==0.1.5
+ + tqdm==4.67.1
+ + typeguard==2.13.3
+ + typer-slim==0.20.0
+ + tzdata==2025.2
+ + urllib3==2.6.0
+ + wadler-lindig==0.1.7
+ + wrapt==2.0.1
+ + xxhash==3.6.0
+ + yarl==1.22.0
++ uv pip install --no-deps -e .
+Using Python 3.10.12 environment at: /opt/venv
+Resolved 1 package in 247ms
+   Building fampnn @ file:///app/fampnn
+      Built fampnn @ file:///app/fampnn
+Prepared 1 package in 100ms
+Installed 1 package in 0.34ms
+ + fampnn==0.1 (from file:///app/fampnn)
++ rm -rf /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-backports_InRelease /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-backports_main_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-backports_universe_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-updates_InRelease /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-updates_main_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-updates_multiverse_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-updates_restricted_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy-updates_universe_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy_InRelease /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy_multiverse_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy_restricted_binary-amd64_Packages.lz4 /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_jammy_universe_binary-amd64_Packages.lz4 /var/lib/apt/lists/auxfiles /var/lib/apt/lists/developer.download.nvidia.com_compute_cuda_repos_ubuntu2204_x86%5f64_InRelease /var/lib/apt/lists/developer.download.nvidia.com_compute_cuda_repos_ubuntu2204_x86%5f64_Packages.lz4 /var/lib/apt/lists/lock /var/lib/apt/lists/partial /var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_InRelease /var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_main_binary-amd64_Packages.lz4 /var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_multiverse_binary-amd64_Packages.lz4 /var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_restricted_binary-amd64_Packages.lz4 /var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_universe_binary-amd64_Packages.lz4
++ apt-get autoremove -y
+Reading package lists...
+Building dependency tree...
+Reading state information...
+0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
++ apt-get clean
++ echo . /opt/venv/bin/activate
+INFO:    Adding help info
+INFO:    Adding labels
+INFO:    Adding environment to container
+INFO:    Adding runscript
+INFO:    Adding testscript
+INFO:    Running testscript
+Name: fampnn
+Version: 0.1
+Summary: 
+Home-page: 
+Author: 
+Author-email: 
+License: 
+Location: /app/fampnn
+Requires: 
+Required-by: 
+INFO:    Creating SIF file...
+INFO:    Build complete: ../containers/fampnn.sif

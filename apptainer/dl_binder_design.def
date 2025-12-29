@@ -21,7 +21,10 @@ From: mambaorg/micromamba:1.5.8
     # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
     eval "$(micromamba shell hook --shell bash)"
     micromamba activate mpnn
-    pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    
+    # Install UV package manager within conda env (10-100x faster than pip)
+    pip install uv
+    uv pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
     micromamba deactivate
 
     cd ../mpnn_fr

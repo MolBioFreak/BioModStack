@@ -13,6 +13,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     apt-get install --no-install-recommends -y \
         git \
         wget \
+        curl \
         software-properties-common \
         build-essential \
         ca-certificates
@@ -31,8 +32,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
     update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
     # Upgrade pip
-    python3.11 -m pip install -q -U --no-cache-dir pip setuptools wheel
+    uv pip install -q -U --no-cache-dir pip setuptools wheel --system
 
     # Uninstall any existing JAX to prevent conflicts
     pip uninstall -y jax jaxlib 2>/dev/null || true
@@ -40,26 +45,25 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Install JAX 0.6.0+ with CUDA 12 support for Blackwell (sm_120)
     # JAX 0.8.x includes native support for RTX 5090 and other Blackwell GPUs
     # Note: JAX 0.8+ requires NumPy 2.0+
-    pip install --upgrade "jax[cuda12]>=0.6.0"
+    uv pip install --upgrade "jax[cuda12]>=0.6.0" --system
     
     # Install dm-haiku 0.0.15 (latest version, compatible with JAX 0.8.x)
     # dm-haiku is in maintenance mode but keeps compatibility with latest JAX
-    pip install -q --no-cache-dir \
+    uv pip install -q --no-cache-dir \
         "dm-haiku==0.0.15" \
         dm-tree \
         biopython==1.81 \
         ml-collections \
         mock \
-        absl-py
+        absl-py --system
 
     # Install TensorFlow 2.18+ (required by dl_binder_design's AlphaFold model imports)
     # TensorFlow 2.18+ is compatible with NumPy 2.0
-    pip install -q --no-cache-dir "tensorflow>=2.18"
+    uv pip install -q --no-cache-dir "tensorflow>=2.18" --system
 
     # Install PyRosetta (required for AF2 Initial-Guess)
-    # Set pip timeout for large PyRosetta wheel (1.7GB)
-    pip install -q --no-cache-dir pyrosetta-installer
-    pip config set global.timeout 600
+    # Note: UV handles large packages well, no need for extended timeout
+    uv pip install -q --no-cache-dir pyrosetta-installer --system
     python3.11 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
     # Clone PapenfussLab fork of dl_binder_design (contains AF2 Initial-Guess modifications)

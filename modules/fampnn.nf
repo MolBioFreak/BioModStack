@@ -28,7 +28,8 @@ process PrepFAMPNN {
 
 process RunFAMPNN {
     label 'FAMPNN'
-    label 'gpu'
+    label 'gpu_light'
+    // FAMPNN is lightweight, prefer 5060 Ti
 
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
 
@@ -46,7 +47,7 @@ process RunFAMPNN {
     mkdir -p results
 
     python /app/fampnn/fampnn/inference/seq_design.py \
-        batch_size=16 \
+        batch_size=${params.fampnn_batch_size ?: 16} \
         checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \
         exclude_cys=${params.fampnn_exclude_cys} \
         fixed_pos_csv=${csv} \
@@ -55,12 +56,15 @@ process RunFAMPNN {
         presort_by_length=true \
         psce_threshold=${params.fampnn_psce_threshold}  \
         temperature=${params.fampnn_temperature} \
+        seq_only=${params.fampnn_seq_only ?: false} \
+        repack_last=${params.fampnn_repack_last ?: true} \
+        timestep_schedule.num_steps=${params.fampnn_num_steps ?: 100} \
         out_dir="fampnn_output" \
         ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \
         2>&1 | tee fampnn_${task.index}.log
 
     # Rename output files from fold_X_sampleY.pdb to fold_X_seq_Y.pdb
-    for file in fampnn_output/samples/fold_*_sample*.pdb; do
+    for file in fampnn_output/samples/*_sample*.pdb; do
         # Extract the base filename
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
@@ -105,3 +109,4 @@ process FilterFAMPNN {
         2>&1 | tee filter_fampnn_${task.index}.log
     """
 }
+

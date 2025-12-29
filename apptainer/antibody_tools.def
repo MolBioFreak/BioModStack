@@ -1,0 +1,61 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%post
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        curl \
+        python3 \
+        python3-pip \
+        python3-venv \
+        hmmer \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch with CUDA 12.4 support
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+    # Install ANARCII (deep learning antibody numbering - IMGT scheme)
+    # Superior to ANARCI: Seq2Seq model, faster, Python 3.9-3.13 compatible
+    git clone https://github.com/oxpig/ANARCII.git /opt/ANARCII
+    cd /opt/ANARCII
+    uv pip install -e .
+    cd /
+
+    # Install AntiFold
+    git clone https://github.com/oxpig/AntiFold.git /opt/AntiFold
+    cd /opt/AntiFold
+    uv pip install .
+    cd /
+
+    # Install OpenMM and pdbfixer for structure refinement
+    # OpenMM: molecular dynamics for energy minimization
+    # black-pdbfixer: pip-installable fork of pdbfixer (original requires conda)
+    uv pip install openmm black-pdbfixer
+
+    # Install ImmuneBuilder (structure prediction from sequence)
+    # Requires OpenMM/pdbfixer for structure relaxation step
+    uv pip install ImmuneBuilder
+
+    # Install AntiBERTy for immunogenicity scoring
+    # Uses pseudo-log-likelihood to score sequence "naturalness"
+    uv pip install antiberty
+
+    # Cleanup
+    rm -rf /root/.cache/uv
+
+%environment
+    export PATH="/opt/venv/bin:/opt/AntiFold:/opt/ANARCII:$PATH"
+    export PYTHONPATH="/opt/AntiFold:/opt/ANARCII:$PYTHONPATH"
+    export VIRTUAL_ENV=/opt/venv
