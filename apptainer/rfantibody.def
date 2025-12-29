@@ -1,34 +1,60 @@
 Bootstrap: docker
 From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
+%labels
+    Author BioModStack
+    Description RFantibody - De novo antibody backbone design with fine-tuned RFdiffusion
+    Version 1.0.0
+
 %post
     apt-get update && apt-get install -y \
         wget \
         git \
+        curl \
         python3 \
         python3-pip \
+        python3-venv \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install PyTorch
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch with CUDA 12.4 support
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
     # Clone RFantibody
     git clone https://github.com/RosettaCommons/RFantibody.git /opt/RFantibody
     cd /opt/RFantibody
 
-    # Install dependencies
-    pip3 install -r requirements.txt || true  # Continue even if some fail, we fix below
+    # Install dependencies using UV
+    uv pip install -r requirements.txt || true  # Continue even if some fail
     
-    # Specific adjustments for Blackwell/Ampere if needed
-    pip3 install "hydra-core>=1.3.2" "omegaconf>=2.3.0"
+    # Specific adjustments for Blackwell/Ampere
+    uv pip install "hydra-core>=1.3.2" "omegaconf>=2.3.0"
 
-    # Install RFdiffusion and ProteinMPNN if they are submodules or required
-    # Assuming RFantibody acts as a wrapper, we ensure the env is set
-    
     # Install SE3-Transformer (often required for RF tools)
-    pip3 install dgl -f https://data.dgl.ai/wheels/cu124/repo.html
-    
+    uv pip install dgl -f https://data.dgl.ai/wheels/cu124/repo.html
+
+    # Cleanup
+    rm -rf /root/.cache/uv
+
+    # Create weights directory - weights should be mounted at runtime
+    mkdir -p /opt/RFantibody/weights
+
 %environment
     export PYTHONPATH="/opt/RFantibody:$PYTHONPATH"
-    export PATH="/opt/RFantibody:$PATH"
+    export PATH="/opt/venv/bin:/opt/RFantibody:$PATH"
+    export VIRTUAL_ENV=/opt/venv
+    # Weights path - should be mounted from host at /opt/RFantibody/weights
+    export RFANTIBODY_WEIGHTS="/opt/RFantibody/weights"
+
+%runscript
+    cd /opt/RFantibody
+    python3 "$@"
