@@ -104,24 +104,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // Format selected residues for backend
             const epitopeString = Array.from(selectedResidues).sort().join(',');
 
+            // Determine pipeline steps
+            const pipelineSteps = ['rfantibody', seqDesigner];
+            if (useAntiberty) pipelineSteps.push('antiberty');
+            if (useThermoMPNN) pipelineSteps.push('thermompnn');
+            pipelineSteps.push('boltz2'); // Boltz2 is always run last for structure validation
+
             // Step 2: Submit job with uploaded file path
-            await submitMutation.mutateAsync({
+            const jobData = {
                 name: jobName,
                 model_id: 'antibody_denovo',
-                mode: 'default',
+                mode: 'antibody_denovo_pipeline', // Matches main.nf logic
                 params: {
                     target_pdb: pdbPath,
+                    pdb_source: 'upload',
                     epitope_residues: epitopeString,
-                    antigen_chain: selectedChain || 'A',
+                    antigen_chains: selectedChain || undefined, // Send selected chain
+                    // Pipeline configuration
+                    rfd_mode: 'antibody_denovo_pipeline', // Explicitly set for backend mapping
+                    antibody_pipeline_steps: pipelineSteps,
                     rfantibody_num_designs: numDesigns,
                     seq_design_fampnn: seqDesigner === 'fampnn',
                     seq_design_antifold: seqDesigner === 'antifold',
                     seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
-                    run_structure_validation: true,
+                    run_structure_validation: true, // Boltz2 is always run
                 }
-            });
+            };
+
+            await submitMutation.mutateAsync(jobData);
         } catch (error) {
             console.error('[ANTIBODY_DENOVO] Submission failed', error);
         }
