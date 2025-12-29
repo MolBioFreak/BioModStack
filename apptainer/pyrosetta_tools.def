@@ -7,6 +7,7 @@ From: mambaorg/micromamba:1.5.8
         wget \
         unzip \
         git \
+        curl \
         procps \
         coreutils \
         grep \
@@ -17,14 +18,17 @@ From: mambaorg/micromamba:1.5.8
     eval "$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
 
-    pip install pyrosetta-installer
+    # Install UV package manager (10-100x faster than pip)
+    pip install uv
+    
+    uv pip install pyrosetta-installer
     python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
     # Install PyTorch 2.4.1 with CUDA 12.1
     # WARNING: RTX 5090 (sm_120) not officially supported but DOES work (tested)
-    pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    uv pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    pip install biopython pandas matplotlib
+    uv pip install biopython pandas matplotlib
 
     apt-get autoremove -y
     apt-get clean

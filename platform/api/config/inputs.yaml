@@ -1,0 +1,374 @@
+project_root: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform
+standard_paths:
+  benchmarkdata:
+    path: benchmarkdata
+    description: Benchmark target proteins for testing
+  outputs:
+    path: pdj_results
+    description: Pipeline output directory
+  lib:
+    path: lib
+    description: Library files and examples
+  inputs:
+    path: platform/api/inputs
+    description: Uploaded input files
+preset_directories:
+- id: all_polymerases
+  name: All DNA Polymerases (3 PDBs)
+  path: rcsb
+  description: TdT, Klenow, and Taq polymerases for batch validation
+  count: 3
+- id: all_benchmark
+  name: All Benchmark Targets (6 PDBs)
+  path: benchmarkdata
+  description: "TrkA, PD-L1, IL-7R\u03B1, IR, HA - complete benchmark set"
+  count: 6
+- id: receptors_only
+  name: Receptor Targets (4 PDBs)
+  path: benchmarkdata
+  filter_ids:
+  - trka
+  - il7ra
+  - ir
+  - ha
+  description: Receptor-type targets only
+  count: 4
+- id: immune_only
+  name: Immune Targets (2 PDBs)
+  path: benchmarkdata
+  filter_ids:
+  - pdl1
+  - pdl1_uncropped
+  description: Immune checkpoint proteins
+  count: 2
+preset_pdbs:
+- id: trka
+  name: TrkA Receptor (1www)
+  path: benchmarkdata/1www_trka.pdb
+  description: Tropomyosin receptor kinase A - nerve growth factor receptor
+  category: Receptor
+- id: il7ra
+  name: "IL-7R\u03B1 (3di3)"
+  path: benchmarkdata/3di3_il7ra.pdb
+  description: Interleukin-7 receptor alpha chain
+  category: Receptor
+- id: ir
+  name: Insulin Receptor (4zxb)
+  path: benchmarkdata/4zxb_ir.pdb
+  description: Insulin receptor - metabolic signaling
+  category: Receptor
+- id: egfr
+  name: EGFR Kinase (1m17)
+  path: rcsb/1m17.pdb
+  description: Epidermal growth factor receptor kinase domain
+  category: Receptor
+- id: pdl1
+  name: PD-L1 (5o45)
+  path: benchmarkdata/5o45_pd-l1.pdb
+  description: Immune checkpoint protein - cancer immunotherapy target
+  category: Immune
+- id: pdl1_uncropped
+  name: PD-L1 Uncropped (5o45)
+  path: benchmarkdata/5o45_pd-l1_uncropped.pdb
+  description: Full-length PD-L1 structure
+  category: Immune
+- id: ctla4
+  name: CTLA-4 (1i8l)
+  path: rcsb/1i8l.pdb
+  description: Cytotoxic T-lymphocyte antigen 4 - immune checkpoint
+  category: Immune
+- id: cd47
+  name: CD47 (5ivx)
+  path: rcsb/5ivx.pdb
+  description: Don't eat me signal - macrophage checkpoint
+  category: Immune
+- id: tdt_mouse_1kej
+  name: Mouse TdT + ddATP (1kej)
+  path: rcsb/1kej.pdb
+  description: Murine TdT catalytic core with ddATP (2.35Å)
+  category: TdT
+- id: tdt_mouse_1jms
+  name: Mouse TdT Native (1jms)
+  path: rcsb/1jms.pdb
+  description: Murine TdT native catalytic core
+  category: TdT
+- id: tdt_mouse_4i27
+  name: Mouse TdT Ternary (4i27)
+  path: rcsb/4i27.pdb
+  description: Murine TdT + ssDNA + nucleotide (2.4Å)
+  category: TdT
+- id: tdt_mouse_4i28
+  name: Mouse TdT Binary (4i28)
+  path: rcsb/4i28.pdb
+  description: Murine TdT + ssDNA + Zn++ (2.2Å)
+  category: TdT
+- id: tdt_mouse_5d4b
+  name: Mouse TdT Templated (5d4b)
+  path: rcsb/5d4b.pdb
+  description: Murine TdT templated activity complex
+  category: TdT
+- id: tdt_mouse_6go6
+  name: TdT Chimera Ternary (6go6)
+  path: rcsb/6go6.pdb
+  description: TdT-PolMu chimera ternary complex
+  category: TdT
+- id: klenow
+  name: E. coli DNA Pol I Klenow (1kln)
+  path: rcsb/1kln.pdb
+  description: Klenow fragment of E. coli DNA polymerase I
+  category: Polymerase
+- id: taq
+  name: Taq DNA Polymerase (1taq)
+  path: rcsb/1taq.pdb
+  description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
+  category: Polymerase
+- id: t7rnap
+  name: T7 RNA Polymerase (1msw)
+  path: rcsb/1msw.pdb
+  description: T7 bacteriophage RNA polymerase - in vitro transcription
+  category: Polymerase
+- id: ha
+  name: Hemagglutinin (5vli)
+  path: benchmarkdata/5vli_ha.pdb
+  description: Influenza hemagglutinin - viral entry protein
+  category: Viral
+- id: spike_rbd
+  name: SARS-CoV-2 Spike RBD (6m0j)
+  path: rcsb/6m0j.pdb
+  description: SARS-CoV-2 spike receptor binding domain with ACE2
+  category: Viral
+- id: hiv_gp120
+  name: HIV-1 gp120 (4nco)
+  path: rcsb/4nco.pdb
+  description: HIV-1 envelope glycoprotein gp120
+  category: Viral
+- id: lysozyme
+  name: Hen Lysozyme (1lyz)
+  path: rcsb/1lyz.pdb
+  description: Classic model protein - antibacterial enzyme
+  category: Enzyme
+- id: trypsin
+  name: Bovine Trypsin (1s0q)
+  path: rcsb/1s0q.pdb
+  description: Serine protease - digestion enzyme
+  category: Enzyme
+- id: cas9
+  name: Cas9 (4oo8)
+  path: rcsb/4oo8.pdb
+  description: CRISPR-associated protein 9 - gene editing
+  category: Enzyme
+# DNA Polymerases (additional)
+- id: polbeta_1bpx
+  name: Human Pol β (1bpx)
+  path: rcsb/1bpx.pdb
+  description: Human DNA polymerase beta (2.2Å)
+  category: Polymerase
+- id: t7pol_2hhq
+  name: T7 DNA Pol Ternary (2hhq)
+  path: rcsb/2hhq.pdb
+  description: T7 DNA polymerase ternary complex (1.85Å)
+  category: Polymerase
+- id: poldelta_3ktq
+  name: Yeast Pol δ (3ktq)
+  path: rcsb/3ktq.pdb
+  description: Yeast DNA polymerase delta (2.0Å)
+  category: Polymerase
+# Myosins
+- id: myosin_x_5i0h
+  name: Myosin X (5i0h)
+  path: rcsb/5i0h.pdb
+  description: Myosin X motor domain pre-powerstroke (1.80Å)
+  category: Myosin
+- id: myosin_iic_5i4e
+  name: Human NM-IIC (5i4e)
+  path: rcsb/5i4e.pdb
+  description: Human nonmuscle myosin-2C pre-powerstroke (2.25Å)
+  category: Myosin
+- id: myosin_v_1w8j
+  name: Myosin V (1w8j)
+  path: rcsb/1w8j.pdb
+  description: Myosin V motor nucleotide-free (2.70Å)
+  category: Myosin
+- id: myosin_iib_4pd3
+  name: Human NM-IIB (4pd3)
+  path: rcsb/4pd3.pdb
+  description: Human nonmuscle myosin-2B rigor-like (2.84Å)
+  category: Myosin
+- id: myosin_smooth_1br4
+  name: Smooth Muscle Myosin (1br4)
+  path: rcsb/1br4.pdb
+  description: Vertebrate smooth muscle myosin pre-powerstroke
+  category: Myosin
+- id: fab_fragment
+  name: Fab Fragment (1bbd)
+  path: rcsb/1bbd.pdb
+  description: Antibody Fab fragment - standard scaffold
+  category: Antibody
+- id: nanobody
+  name: Nanobody VHH (1mel)
+  path: rcsb/1mel.pdb
+  description: Camelid single-domain antibody
+  category: Antibody
+- id: example_binder
+  name: Example Binder
+  path: lib/examplebinder.pdb
+  description: Example binder-target complex for reference
+  category: Example
+
+preset_sequences:
+- id: tdt_human
+  name: Human TdT (P04053)
+  uniprot: P04053
+  length: 509
+  sequence: MDPPRASHLSPRKKKRPRQTGALMASSPPQDIKFQDLVVFILEKKMGTTRRAFLMELARRKGFRVENELSD
+    SVTHIVAENNSSGSDVLEWLQAQKVQVSSQPELLDVSAWLIECIRAGKPVEMTGKHQLVVRRDYSDWSTNPGP PKTPPIAVQKISQYACQRRTTLNNCNQIFTDAFDILAENCEFRENEDSSCVTFMRAASVLKSLPFTIISMKDT
+    EGIPCLGSKVKGIIEEIIEDGESSEVKAVLNDERYQSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSDDKSL KFTRMQKAGFLYYEDLVSCVTRAEAEAVSVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
+    DEQLLQKVMNLWEKKGLLLYYDLVESTFEKLRLPSRKVDALDHFQKCFLIFKLPRQRVDSDQSSWQEGKTWKAI RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMILDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
+    EPWERNA
+  description: Terminal deoxynucleotidyl transferase - template-independent DNA polymerase
+- id: tdt_mouse
+  name: Mouse TdT (P09838)
+  uniprot: P09838
+  length: 510
+  sequence: MDPPRVSHLSPRKKKHPRQTGALMASSPPRDIKFQDLVVFILEKKMGTSRRAFLMELARRTGFQVENELSD
+    SVTHIVAENNTSGSGDVLEWLQAQKVQVSSRSELLDVRSWLIECIRAGRPMEMTGKHQLVVRRDFSDWSTNPGP
+    PKTSTNVQKISQYACQRRTTLNNCNQIFTDAFDILAENSGFRENEDSSCVTFMRVASVLKSLPFTIISMKDT
+    EGIPCLGSKVKGIIEEIIKDGESNEVKAVLNDERYRSFKLFTSVFGVGLKTSEKWFRMGFRTLSKVRSEDKSL
+    RFTRMQKAGFLYYEDLVSCVTRAEAETISVLVKEAVWAFLPDAFVTMTGGFRRGKKMMGHDVDFLITSPGSTTE
+    DEQLFQKVMNLWEKKGLLLYYDHVESTFEKLRLPSNVDALDHFQKCFLILKLPRQRVDSDQSSWQEGKTWKAI
+    RVDLVLCPYERRAFALLGWTGSRQFERDLRRYATHERKMMLDNHALYDKTKRIFFLKAESEEEIFAHLGLDYI
+    EPWERNA
+  description: Murine terminal deoxynucleotidyl transferase (mouse)
+- id: klenow_ecoli
+  name: E. coli Klenow Fragment (P00582)
+  uniprot: P00582
+  length: 605
+  sequence: MKRQCLQVLNLIMHKHPGLGPPPLRLDNLTRQDVDSQVAAHFLNFLLGEAHRYHQGQVVIGRDAQIGQYSGL
+    AIRDFLALDWVLGKYLPHSAGLARRNTGGILAFAALGMNSPPDQVMRVCALLQHIGLKQVGVSKITELHARF QMALAALWQKRRGGVLVVAANDVTPQEHFSAMQSLLDAEVKTVVRRDLLDENDIGVVSNNRFQMTLPFLQPD
+    VIAPRAQHALRDAGTGFAAEWLEAVLVLGHAAADKAGAARPRWQTLAALKEGARVLLDTHSTDYGVADGQATR DRQLYRFTLQAAGLLPPLFVQAGMEEYLSADAQAGGLFNRKAARHTGDFGHDFMQALAHRFAQKNAAALEGVL
+    QRALTALDLAKMAGVSDLKTPLMRIYHRMINTHQVHHLLLQPGKPLDTSEARLAAFARQAGVTLLSAPRVLAD AQNAVLAGPVARLKPLYGTVAEIRSRQLHRALAALRGQQQHQILAQVAGTFPGFQGSMQALDAAVACARHQAL
+    LLAAECPKVLGYSVTDANREARDVATALAAHDLQTLTALAGDLARAAVEQFLPELSELGLTLVSGLHLDQVSV PHAGPFDDPMRPYLPPLLFK
+  description: Klenow fragment of E. coli DNA polymerase I - 3'-5' exonuclease
+- id: taq_ttaq
+  name: Taq DNA Polymerase (P19821)
+  uniprot: P19821
+  length: 832
+  sequence: MRGMLPLFEPKGRVLLVDGHHLAYRTFHALKGLTTSRGEPVQAVYGFAKSLLKALKEDGDAVIVVFDAKAPS
+    FRHEAYGGYKAGRAPTPEDFPRQLALIKELVDLLGLARLEVPGYEADDVLASLAKKAEKEGYEVRILTADKD LYQLLSDRIHVLHPEGYLITPAWLWEKYGLRPDQWADYRALTGDESDNLPGVKGIGEKTARKLLEEWGSLEA
+    LLKNLDRLKPAIREKILAHMDDLKLSWDLAKVRTDLPLEVDFAKRREPDRERLRAFLERLEFGSLLHEFGLL ESPKALEEAPWPPPEGAFVGFVLSRKEPMWADLLALAAARGGRVHRAPEPYKALRDLKEARGLLAKDLSVLAL
+    REGLGLPPGDDPMLLAYLLDPSNTTPEGVARRYGGEWTEEAGERAALSERLFANLWGRLEGEERLLWLYREVE RPLSAVLAHMEATGVRLDVAYLRALSLEVAEEIARLEAEVFRLAGHPFNLNSRDQLERVLFDELGLPAIGKT
+    EKTGKRSTSAAVLEALREAHPIVEKILQYRELTKLKSTYIDPLPDLIHPRTGRLHTRFNQTATATGRLSSSDP NLFKPLLLGEGEAVQIPDLAILLMVAHHPFRNPTGPHGPPSREDLLEVYGSQPSEKHLDYAGALEPLPGLEEL
+    RRLAQVLHPLVGEARLHARPELEPALEALVKLTTEQRALRMARGRYLEAVRDLAGVSRPRVERARSQLALPVL HVSSLNPAIFAAGLLAAAVLLARGPNAWSPELTLEAALRALKRAEPAQEAASLGALLPGLGRLLKEG
+  description: Thermus aquaticus DNA polymerase - thermostable enzyme for PCR
+- id: gfp_avictoria
+  name: Green Fluorescent Protein (P42212)
+  uniprot: P42212
+  length: 238
+  sequence: MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTFSYGVQCFS
+    RYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYN YNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRD
+    HMVLLEFVTAAGITHGMDELYK
+  description: Aequorea victoria green fluorescent protein - common reporter
+- id: lysozyme_gallus
+  name: Chicken Lysozyme (P00698)
+  uniprot: P00698
+  length: 147
+  sequence: MRSLLILVLCFLPLAALGKVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNTDGSTDYG
+    ILQINSRWWCNDGRTPGSRNLCNIPCSALLSSDITASVNCAKKIVSDGNGMNAWVAWRNRCKGTDVQAWIRG CRLH
+  description: Gallus gallus lysozyme C - antibacterial enzyme, crystallography standard
+preset_yamls:
+- id: boltz_binder_simple
+  name: Simple Binder Config
+  description: Basic Boltz-2 config for binder-target prediction
+  content: "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: TARGET_SEQUENCE_HERE\n\
+    \  - protein:\n      id: B\n      sequence: BINDER_SEQUENCE_HERE\n"
+- id: boltz_monomer
+  name: Monomer Prediction
+  description: Single chain structure prediction
+  content: "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: YOUR_SEQUENCE_HERE\n"
+preset_contigs:
+- id: binder_50_100
+  name: Generic Binder 50-100 residues
+  value: '[A17-145/0 50-100]'
+  description: For benchmark targets (TrkA, IL7RA). Edit chain/residue numbers for
+    other structures.
+- id: binder_70_90
+  name: Generic Binder 70-90 residues
+  value: '[A17-145/0 70-90]'
+  description: For benchmark targets. Medium size binder.
+- id: monomer_100
+  name: Monomer 100 residues
+  value: '[100-100]'
+  description: Generate 100 residue monomer de novo
+- id: monomer_variable
+  name: Monomer 50-150 residues
+  value: '[50-150]'
+  description: Generate variable-length monomer
+- id: tdt_binder_50_100
+  name: TdT Binder 50-100 residues
+  value: '[A148-386/A390-420/A424-510/0 50-100]'
+  description: For Human TdT (1KEJ). Chain A with gap residues excluded, design 50-100
+    residue binder.
+- id: klenow_binder_50_100
+  name: Klenow Binder 50-100 residues
+  value: '[A324-928/0 50-100]'
+  description: For E. coli Klenow (1KLN). Keep chain A, design 50-100 residue binder.
+- id: taq_binder_50_100
+  name: Taq Binder 50-100 residues
+  value: '[A10-832/0 50-100]'
+  description: For Taq polymerase (1TAQ). Keep entire chain A, design 50-100 residue
+    binder.
+preset_ntps:
+- id: dATP
+  name: dATP (DNA)
+  smiles: Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3
+  description: Deoxyadenosine triphosphate - pairs with thymine
+- id: dTTP
+  name: dTTP (DNA)
+  smiles: Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O
+  description: Deoxythymidine triphosphate - pairs with adenine
+- id: dGTP
+  name: dGTP (DNA)
+  smiles: Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1
+  description: Deoxyguanosine triphosphate - pairs with cytosine
+- id: dCTP
+  name: dCTP (DNA)
+  smiles: Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1
+  description: Deoxycytidine triphosphate - pairs with guanine
+- id: ATP
+  name: ATP (RNA/Energy)
+  smiles: Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O
+  description: Adenosine triphosphate - energy currency and RNA nucleotide
+preset_ligands:
+- id: dATP
+  name: dATP (DNA)
+  smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
+  description: Deoxyadenosine triphosphate - pairs with thymine
+- id: dTTP
+  name: dTTP (DNA)
+  smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
+  description: Deoxythymidine triphosphate - pairs with adenine
+- id: dGTP
+  name: dGTP (DNA)
+  smiles: "Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1"
+  description: Deoxyguanosine triphosphate - pairs with cytosine
+- id: dCTP
+  name: dCTP (DNA)
+  smiles: "Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1"
+  description: Deoxycytidine triphosphate - pairs with guanine
+- id: ATP
+  name: ATP (RNA)
+  smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
+  description: Adenosine triphosphate - RNA nucleotide
+- id: UTP
+  name: UTP (RNA)
+  smiles: "O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1"
+  description: Uridine triphosphate - pairs with adenine in RNA
+- id: GTP
+  name: GTP (RNA)
+  smiles: "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1"
+  description: Guanosine triphosphate - RNA nucleotide
+- id: CTP
+  name: CTP (RNA)
+  smiles: "Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1"
+  description: Cytidine triphosphate - RNA nucleotide
+
