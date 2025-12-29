@@ -16,8 +16,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Using stable release compatible with CUDA 12
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-    # Install ANARCI (Discngine fork for better license/maintenance)
-    pip3 install git+https://github.com/Discngine/anarci.git
+    # Note: ANARCI can be installed separately if needed for IMGT numbering
+    # pip3 install git+https://github.com/oxpig/ANARCI.git (requires Python 2 setup.py fix)
 
     # Install AntiFold
     # Cloning from repo to get latest
@@ -26,9 +26,13 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     pip3 install .
 
     # Install ImmuneBuilder
-    # Requires OpenMM and pdbfixer
-    pip3 install openmm pdbfixer
+    # Note: pdbfixer requires conda. OpenMM optional for relaxation.
+    # Using lightweight install without relaxation support
     pip3 install ImmuneBuilder
+
+    # Install AntiBERTy for immunogenicity scoring
+    # Uses pseudo-log-likelihood to score sequence "naturalness"
+    pip3 install antiberty
 
     # Cleanup
     rm -rf /root/.cache/pip

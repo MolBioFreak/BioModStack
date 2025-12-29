@@ -20,18 +20,17 @@ include { Compress as CompressMPNN } from './modules/compress'
 include { Compress as CompressFAMPNN } from './modules/compress'
 include { Compress as CompressAF2 } from './modules/compress'
 include { Compress as CompressBoltz } from './modules/compress'
-// include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
-// include { BoltzFromSequence } from './modules/structure_prediction.nf'
-// include { BoltzFromComplex } from './modules/structure_prediction.nf'
-// include { RF3FromSequence } from './modules/structure_prediction.nf'
-// include { structure_prediction_wf } from './modules/structure_prediction.nf'
+include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
+include { BoltzFromSequence } from './modules/structure_prediction.nf'
+include { BoltzFromComplex } from './modules/structure_prediction.nf'
+include { RF3FromSequence } from './modules/structure_prediction.nf'
+include { structure_prediction_wf } from './modules/structure_prediction.nf'
 
-// Antibody Stack Modules
-// include { ANARCI } from './modules/utils/anarci.nf'
-// include { RFANTIBODY } from './modules/rfantibody.nf'
-// include { ANTIFOLD } from './modules/antifold.nf'
-// include { IMMUNEBUILDER } from './modules/immunebuilder.nf'
-// include { THERMOMPNN } from './modules/thermompnn.nf'
+// Antibody Design Subworkflow
+include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
+
+// De Novo Antibody Pipeline (RFantibody → FAMPNN/AntiFold → Boltz2 → AntiBERTy → ThermoMPNN → IgGM)
+include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
 workflow {
     // Permit use of topic channels in Nextflow v24 by enabling preview features
@@ -55,21 +54,11 @@ workflow {
     def batch_size = Math.ceil(params.rfd_num_designs / num_batches).intValue()
     def num_designs = num_batches * batch_size
 
-    println("***********************************************************************")
-    println("██████╗ ██████╗  ██████╗ ████████╗███████╗██╗███╗   ██╗██████╗      ██╗")
-    println("██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝██╔════╝██║████╗  ██║██╔══██╗     ██║")
-    println("██████╔╝██████╔╝██║   ██║   ██║   █████╗  ██║██╔██╗ ██║██║  ██║     ██║")
-    println("██╔═══╝ ██╔══██╗██║   ██║   ██║   ██╔══╝  ██║██║╚██╗██║██║  ██║██   ██║")
-    println("██║     ██║  ██║╚██████╔╝   ██║   ███████╗██║██║ ╚████║██████╔╝╚█████╔╝")
-    println("╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝╚═════╝  ╚════╝ ")
-    println("                   ProteinDJ Protein Design Pipeline                   ")
-    println("          Developers: Dylan Silke, Josh Hardy, Julie Iskander          ")
-    println("***********************************************************************")
-    println("* Pipeline Mode: ${params.rfd_mode}")
-    println("* Number of RFdiffusion designs: ${num_designs}")
-    println("* Number of sequences for each design: ${params.seqs_per_design}")
-    println("* Output Directory: ${outputDirectory}")
-    println("***********************************************************************\n")
+    println("Pipeline Mode: ${params.rfd_mode}")
+    println("Number of RFdiffusion designs: ${num_designs}")
+    println("Number of sequences for each design: ${params.seqs_per_design}")
+    println("Output Directory: ${outputDirectory}")
+
 
     // Create output directory for copy of config files used in run
     def configDir = file("${outputDirectory}/configs")
@@ -85,23 +74,22 @@ workflow {
     /////////////////////////////
     // ANTIBODY DESIGN STACK   //
     /////////////////////////////
-    if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo']) {
-        println("Running Antibody Design Stack")
+    if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo', 'antibody_denovo_pipeline']) {
+        println("Running Antibody Design Toolkit")
         println("* Mode: ${params.rfd_mode}")
 
         def jobName = params.sequence_name ?: 'antibody_job'
         def meta = [id: jobName]
+        def input_ch
 
-        // 1. STRUCTURE PREDICTION (ImmuneBuilder)
+        // Mode-specific input preparation
         if (params.rfd_mode == 'structure_prediction') {
             def h_seq = params.heavy_sequence ?: ''
             def l_seq = params.light_sequence ?: ''
-
             if (!h_seq && !l_seq) {
                 error("Must provide heavy or light sequence")
             }
 
-            // Create FASTA
             def fastaContent = ""
             if (h_seq) {
                 fastaContent += ">H\n${h_seq}\n"
@@ -110,53 +98,46 @@ workflow {
                 fastaContent += ">L\n${l_seq}\n"
             }
 
-            channel.of(fastaContent)
+            input_ch = channel.of(fastaContent)
                 .collectFile(name: 'input.fasta')
                 .map { tuple(meta, it) }
-                .set { ib_input }
-
-            IMMUNEBUILDER(ib_input)
-        }
-        else if (params.rfd_mode == 'inverse_folding') {
-            if (!params.target_pdb) {
-                error("Target PDB required for inverse folding")
-            }
-            def pdbFile = file(params.target_pdb)
-
-            channel.of(tuple(meta, pdbFile)).set { anarci_input }
-
-            ANARCI(anarci_input)
-            ANTIFOLD(ANARCI.out.pdb_imgt)
-            IMMUNEBUILDER(ANTIFOLD.out.sequences)
-            THERMOMPNN(IMMUNEBUILDER.out.structure)
-        }
-        else if (params.rfd_mode == 'stability_prediction') {
-            if (!params.target_pdb) {
-                error("Target PDB required for stability prediction")
-            }
-            def pdbFile = file(params.target_pdb)
-
-            // Standardize with ANARCI first
-            channel.of(tuple(meta, pdbFile)).set { anarci_input }
-            ANARCI(anarci_input)
-            THERMOMPNN(ANARCI.out.pdb_imgt)
         }
         else if (params.rfd_mode == 'de_novo') {
             if (!params.target_pdb) {
                 error("Antigen PDB required for de novo design")
             }
-            def pdbFile = file(params.target_pdb)
             def antigenChains = params.antigen_chains ?: "A"
-
-            channel.of(tuple(meta, pdbFile, antigenChains)).set { rf_input }
-
-            RFANTIBODY(rf_input)
-
-            // Optional: Refine with ImmuneBuilder? 
-            // RFantibody produces PDBs.
-            // We can run ThermoMPNN on them.
-            THERMOMPNN(RFANTIBODY.out.designs)
+            input_ch = channel.of(tuple(meta, file(params.target_pdb), antigenChains))
         }
+        else if (params.rfd_mode == 'antibody_denovo_pipeline') {
+            // Full de novo antibody design pipeline 
+            // RFantibody → FAMPNN/AntiFold → Boltz2 → AntiBERTy → IgGM
+            if (!params.target_pdb) {
+                error("Antigen PDB required for antibody_denovo_pipeline")
+            }
+            def epitope = params.epitope_residues ?: ""
+            input_ch = channel.of(tuple(meta, file(params.target_pdb)))
+
+            // Framework is optional
+            def framework_ch = params.framework_pdb
+                ? channel.of(tuple(meta, file(params.framework_pdb)))
+                : channel.empty()
+
+            // Call de novo antibody workflow
+            ANTIBODY_DENOVO(input_ch, epitope, framework_ch)
+
+            return null
+        }
+        else {
+            // inverse_folding, stability_prediction
+            if (!params.target_pdb) {
+                error("Target PDB required for ${params.rfd_mode}")
+            }
+            input_ch = channel.of(tuple(meta, file(params.target_pdb)))
+        }
+
+        // Call unified subworkflow (for non-pipeline modes)
+        ANTIBODY_DESIGN(input_ch, params.rfd_mode)
 
         return null
     }
