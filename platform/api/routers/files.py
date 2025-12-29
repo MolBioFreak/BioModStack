@@ -19,6 +19,7 @@ ALLOWED_DIRECTORIES = [
     "benchmarkdata",
     "lib",
     "rcsb",
+    "inputs",  # For antibody and other input file uploads
 ]
 
 # Project root (parent of platform directory)
