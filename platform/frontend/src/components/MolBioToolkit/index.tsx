@@ -8,7 +8,10 @@
 import { useState, useCallback, useMemo } from 'react';
 
 // Import OVE from ESM bundle (aliased via vite.config.ts)
-import { BioDesigner } from '@biomodstack/bms-plugin';
+// Import OVE directly from workspace package
+import { Editor } from '@biomodstack/ove';
+// Import styles directly
+import '@biomodstack/ove/style.css';
 // Note: OVE CSS is loaded via link tag in index.html from /ove/ove.css
 
 // Types for sequence data
@@ -46,7 +49,7 @@ const SAMPLE_SEQUENCE: SequenceData = {
 // OVE Wrapper Component using ESM import
 interface OVEWrapperProps {
     sequenceData: SequenceData;
-    onSave?: (data: unknown) => void;
+    onSave?: (data: any) => void;
 }
 
 // OVE Wrapper now uses the ESM-bundled BioDesigner component
@@ -69,9 +72,10 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
 
     return (
         <div className="ove-editor-container w-full h-full">
-            <BioDesigner
+            <Editor
                 sequenceData={oveSequenceData}
                 onSave={onSave}
+                editorName="MolBioToolkitEditor"
             />
         </div>
     );
