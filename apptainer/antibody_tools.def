@@ -6,37 +6,51 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     apt-get update && apt-get install -y \
         wget \
         git \
+        curl \
         python3 \
         python3-pip \
+        python3-venv \
         hmmer \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install PyTorch with CUDA 12.4 support
-    # Using stable release compatible with CUDA 12
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
 
-    # Note: ANARCI can be installed separately if needed for IMGT numbering
-    # pip3 install git+https://github.com/oxpig/ANARCI.git (requires Python 2 setup.py fix)
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch with CUDA 12.4 support
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+    # Install ANARCII (deep learning antibody numbering - IMGT scheme)
+    # Superior to ANARCI: Seq2Seq model, faster, Python 3.9-3.13 compatible
+    git clone https://github.com/oxpig/ANARCII.git /opt/ANARCII
+    cd /opt/ANARCII
+    uv pip install -e .
+    cd /
 
     # Install AntiFold
-    # Cloning from repo to get latest
     git clone https://github.com/oxpig/AntiFold.git /opt/AntiFold
     cd /opt/AntiFold
-    pip3 install .
+    uv pip install .
+    cd /
 
-    # Install ImmuneBuilder
-    # Note: pdbfixer requires conda. OpenMM optional for relaxation.
-    # Using lightweight install without relaxation support
-    pip3 install ImmuneBuilder
+    # Install ImmuneBuilder (structure prediction from sequence)
+    # Note: OpenMM/pdbfixer optional - relaxation not required for basic usage
+    uv pip install ImmuneBuilder
 
     # Install AntiBERTy for immunogenicity scoring
     # Uses pseudo-log-likelihood to score sequence "naturalness"
-    pip3 install antiberty
+    uv pip install antiberty
 
     # Cleanup
-    rm -rf /root/.cache/pip
+    rm -rf /root/.cache/uv
 
 %environment
-    export PATH="/opt/AntiFold:$PATH"
-    export PYTHONPATH="/opt/AntiFold:$PYTHONPATH"
+    export PATH="/opt/venv/bin:/opt/AntiFold:/opt/ANARCII:$PATH"
+    export PYTHONPATH="/opt/AntiFold:/opt/ANARCII:$PYTHONPATH"
+    export VIRTUAL_ENV=/opt/venv
