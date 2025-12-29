@@ -9,12 +9,18 @@ import path from 'path'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   optimizeDeps: {
+    include: [
+      '@blueprintjs/icons',
+      '@blueprintjs/icons/lib/esm/paths/16px',
+      '@blueprintjs/icons/lib/esm/paths/20px',
+    ],
     esbuildOptions: {
       loader: {
         '.js': 'jsx',
       },
     },
   },
+
   resolve: {
     dedupe: ['react', 'react-dom'],
     alias: {
