@@ -1,0 +1,86 @@
+# RosettaFold3 Model Configuration
+# Structure prediction via Foundry container
+
+id: rf3
+name: RosettaFold3
+version: "3.0.0"
+category: structure_prediction
+description: >
+  RosettaFold3 structure prediction using the Foundry container.
+container: foundry.sif
+
+ui_icon: atom
+ui_color: "#E11D48"
+
+inputs:
+  - pdb
+  - json
+outputs:
+  - cif
+  - json
+
+modes:
+  - id: predict
+    name: Structure Prediction
+    description: Predict structure from amino acid sequence
+    params:
+      - sequence
+      - sequence_name
+      - rf3_min_plddt
+      - rf3_min_ptm
+      - rf3_max_pae
+
+params:
+  # Input sequence
+  - name: sequence
+    type: text
+    description: Amino acid sequence to predict structure for
+    required: true
+    preset_type: sequence
+
+  - name: sequence_name
+    type: string
+    description: Name for output structure files
+    required: false
+    default: predicted
+
+  # Filtering parameters matching main.nf
+  - name: rf3_min_plddt
+    type: number
+    description: Minimum pLDDT score
+    required: false
+    minimum: 0
+    maximum: 100
+
+  - name: rf3_min_ptm
+    type: number
+    description: Minimum pTM score
+    required: false
+    minimum: 0
+    maximum: 1
+
+  - name: rf3_max_pae
+    type: number
+    description: Maximum PAE error
+    required: false
+    minimum: 0
+
+  - name: rf3_max_rmsd_overall
+    type: number
+    description: Maximum overall RMSD
+    required: false
+    minimum: 0
+
+  - name: rf3_max_rmsd_binder
+    type: number
+    description: Maximum binder RMSD
+    required: false
+    minimum: 0
+    
+  - name: rf3_extra_config
+    type: string
+    description: "Additional RF3 config overrides (e.g., 'seed=42')"
+    required: false
+
+enabled: true
+experimental: true

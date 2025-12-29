@@ -28,7 +28,7 @@ process RunBoltz {
     tuple val(batch_id), path(yamls)
 
     output:
-    tuple path ("predictions/*.pdb"), path ("predictions/*.json"), emit: pdbs_jsons
+    tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons
     path ("*.log"), emit: logs
 
     script:
@@ -52,13 +52,14 @@ process RunBoltz {
             --recycling_steps ${params.boltz_recycling_steps} \
             --sampling_steps ${params.boltz_sampling_steps} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \
+            ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \
             --cache /boltzcache \
             ${params.boltz_extra_config ? params.boltz_extra_config : ''} \
             2>&1 | tee boltz_${batch_id}.log
  
-        # Move output files out of nested directories and rename to fold_X_seq_X_boltzpred.pdb|json
+        # Move output files out of nested directories and rename to {inputname}_boltzpred.pdb|json
         mkdir -p predictions
-        for dir in boltz_results_yamls/predictions/fold_*_seq_*; do
+        for dir in boltz_results_yamls/predictions/*/; do
             # Extract input name from directory path
             inputname=\$(basename "\$dir")
             # Process PDB file

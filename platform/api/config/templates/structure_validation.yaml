@@ -1,0 +1,45 @@
+# Structure Validation Only Template
+# Predict/validate existing designs
+
+id: structure_validation
+name: Structure Validation
+icon: microscope
+color: "#6366F1"
+description: >
+  Validate existing protein designs by predicting their 3D structures.
+  Use this to check if designed sequences fold correctly before synthesis.
+
+stages:
+  - name: Structure Prediction
+    tool: AlphaFold2 / Boltz-2 / RF3
+    description: Predict 3D structure and confidence metrics for your designs.
+
+preset_params:
+  skip_rfd_seq: true
+
+user_params:
+  - name: skip_input_dir
+    label: Input PDB File or Directory
+    type: file
+    required: true
+    description: >
+      PDB file or directory containing PDB files to validate.
+      Supports both single file (e.g., /path/to/protein.pdb) 
+      or directory with multiple PDBs.
+    
+  - name: pred_method
+    label: Prediction Method
+    type: enum
+    required: true
+    default: af2
+    enum:
+      - af2
+      - boltz
+      - rf3
+    enum_labels:
+      af2: AlphaFold2 (Most accurate)
+      boltz: Boltz-2 (Fast, good for complexes)
+      rf3: RosettaFold3 (Alternative)
+    description: Choose your structure prediction tool.
+
+enabled: true

@@ -1,0 +1,251 @@
+# De Novo Antibody Design Workflow Configuration
+# Two-phase pipeline: Generation → Validation & Scoring
+
+id: antibody_denovo
+name: De Novo Antibody Design
+version: 1.0.0
+category: antibody_design
+description: >
+  End-to-end pipeline for designing novel antibodies targeting a specified epitope.
+  Phase 1 generates CDR backbones and sequences. Phase 2 validates structure,
+  scores immunogenicity, stability, and optionally runs affinity maturation.
+
+workflow_type: pipeline
+container: apptainer/antibody_tools.sif
+
+ui_icon: antibody
+ui_color: "#ec4899"
+
+# Modes available for this workflow
+modes:
+  - id: default
+    name: Full Pipeline
+    description: Run complete de novo antibody design pipeline
+    params: []
+
+inputs:
+  - pdb
+
+outputs:
+  - pdb
+  - json
+  - csv
+  - fasta
+
+# Pipeline steps (for UI step-by-step configuration)
+steps:
+  - id: backbone
+    name: CDR Backbone Generation
+    model: rfantibody
+    description: Generate antibody CDR loop backbones using fine-tuned RFdiffusion
+    required: true
+
+  - id: sequence
+    name: CDR Sequence Design
+    models:
+      - fampnn
+      - antifold
+      - proteinmpnn
+    description: Design amino acid sequences for CDR loops
+    default: fampnn
+    allow_multiple: true
+
+  - id: validation
+    name: Structure Validation
+    model: boltz2
+    description: Validate designed antibody-antigen complex structure
+    required: true
+
+  - id: immunogenicity
+    name: Immunogenicity Scoring
+    model: antiberty
+    description: Score sequence naturalness to predict immunogenicity risk
+    required: true
+
+  - id: stability
+    name: Stability Scoring
+    model: thermompnn
+    description: Predict thermodynamic stability (ddG)
+    required: true
+
+  - id: maturation
+    name: Affinity Maturation
+    model: iggm
+    description: Suggest beneficial mutations for improved binding
+    required: false
+
+params:
+  # ===== TARGET CONFIGURATION =====
+  - name: target_pdb
+    type: file
+    description: Antigen structure (PDB format)
+    file_type: pdb
+    preset_type: pdb
+    required: true
+
+  - name: epitope_residues
+    type: string
+    description: Target epitope residues (e.g., "A45,A46,A52")
+    placeholder: "A45,A46,A52"
+    required: true
+
+  - name: antigen_chain
+    type: string
+    description: Chain ID of the antigen in the PDB
+    default: "A"
+    required: false
+
+  # ===== ANTIBODY CONFIGURATION =====
+  - name: antibody_format
+    type: string
+    description: Type of antibody to design
+    required: false
+    default: "fab"
+    enum:
+      - fab
+      - vhh
+      - scfv
+
+  - name: framework_pdb
+    type: file
+    description: Custom antibody framework template (optional)
+    file_type: pdb
+    preset_type: pdb
+    required: false
+
+  # ===== STEP 1: RFANTIBODY PARAMS =====
+  - name: rfantibody_num_designs
+    type: integer
+    description: Number of backbone designs to generate
+    default: 10
+    minimum: 1
+    maximum: 100
+    step: 1
+
+  - name: cdr_lengths
+    type: string
+    description: CDR length ranges (e.g., "H1:8-13,H2:7,H3:5-13")
+    placeholder: "H1:8-13,H2:7,H3:5-13,L1:7-10,L2:7,L3:9-11"
+    required: false
+
+  # ===== STEP 2: SEQUENCE DESIGN PARAMS =====
+  - name: seq_design_fampnn
+    type: boolean
+    description: Run FAMPNN for sequence design
+    default: true
+
+  - name: seq_design_antifold
+    type: boolean
+    description: Run AntiFold for sequence design
+    default: true
+
+  - name: seq_design_proteinmpnn
+    type: boolean
+    description: Run ProteinMPNN for sequence design
+    default: false
+
+  - name: seqs_per_design
+    type: integer
+    description: Sequences to generate per backbone design
+    default: 8
+    minimum: 1
+    maximum: 100
+
+  - name: fampnn_temperature
+    type: number
+    description: FAMPNN sampling temperature
+    default: 0.1
+    minimum: 0.01
+    maximum: 2.0
+    step: 0.1
+
+  - name: antifold_temperature
+    type: number
+    description: AntiFold sampling temperature
+    default: 0.2
+    minimum: 0.1
+    maximum: 1.0
+    step: 0.1
+
+  # ===== STEP 3: VALIDATION PARAMS =====
+  - name: run_structure_validation
+    type: boolean
+    description: Validate structures with Boltz2
+    default: true
+
+  - name: boltz_iptm_threshold
+    type: number
+    description: Minimum ipTM score for filtering
+    default: 0.6
+    minimum: 0.0
+    maximum: 1.0
+    step: 0.1
+
+  - name: boltz_plddt_threshold
+    type: number
+    description: Minimum pLDDT score for filtering
+    default: 70
+    minimum: 0
+    maximum: 100
+    step: 5
+
+  # ===== STEP 4: IMMUNOGENICITY PARAMS =====
+  - name: run_immunogenicity_scoring
+    type: boolean
+    description: Score immunogenicity with AntiBERTy
+    default: true
+
+  - name: antiberty_pll_threshold
+    type: number
+    description: Minimum pseudo-log-likelihood (lower = more unusual)
+    default: -10
+    minimum: -50
+    maximum: 0
+    step: 1
+
+  - name: filter_immunogenic
+    type: boolean
+    description: Filter out high-risk sequences automatically
+    default: true
+
+  - name: antiberty_extract_embeddings
+    type: boolean
+    description: Extract per-residue embeddings for analysis
+    default: false
+
+  # ===== STEP 5: STABILITY PARAMS =====
+  - name: run_stability_scoring
+    type: boolean
+    description: Score stability with ThermoMPNN
+    default: true
+
+  - name: thermompnn_ddg_threshold
+    type: number
+    description: Maximum ddG for stability filtering (kcal/mol)
+    default: 2.0
+    minimum: -10.0
+    maximum: 10.0
+    step: 0.5
+
+  # ===== STEP 6: AFFINITY MATURATION PARAMS =====
+  - name: run_affinity_maturation
+    type: boolean
+    description: Run IgGM affinity maturation (optional)
+    default: false
+
+  - name: iggm_num_variants
+    type: integer
+    description: Number of maturation variants to generate
+    default: 10
+    minimum: 1
+    maximum: 50
+
+  - name: iggm_maturation_cycles
+    type: integer
+    description: Number of maturation optimization cycles
+    default: 1
+    minimum: 1
+    maximum: 5
+
+enabled: true
+experimental: true
