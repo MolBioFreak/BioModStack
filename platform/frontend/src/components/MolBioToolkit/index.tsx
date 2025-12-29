@@ -5,7 +5,7 @@
  * Compatible with React 19
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 
 // Import OVE from ESM bundle (aliased via vite.config.ts)
 // Import OVE directly from workspace package
@@ -54,6 +54,11 @@ interface OVEWrapperProps {
     onSave?: (data: any) => void;
 }
 
+// Import updateEditor from OVE package
+import { updateEditor } from '@biomodstack/ove';
+
+const EDITOR_NAME = 'MolBioToolkitEditor';
+
 // OVE Wrapper now uses the ESM-bundled BioDesigner component
 function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
     // Transform sequence data for OVE format
@@ -72,13 +77,19 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
         }))
     }), [sequenceData]);
 
+    // Use updateEditor to push sequence data into Redux store
+    useEffect(() => {
+        updateEditor(store, EDITOR_NAME, {
+            sequenceData: oveSequenceData
+        });
+    }, [oveSequenceData]);
+
     return (
         <div className="ove-editor-container w-full h-full">
             <Provider store={store}>
                 <Editor
-                    sequenceData={oveSequenceData}
                     onSave={onSave}
-                    editorName="MolBioToolkitEditor"
+                    editorName={EDITOR_NAME}
                 />
             </Provider>
         </div>
