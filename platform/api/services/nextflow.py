@@ -426,20 +426,9 @@ def build_nextflow_command(
         'min_rmsd': 'unidock_min_rmsd',  # Alias from YAML
         'energy_range': 'unidock_energy_range',  # Alias from YAML
         'seed': 'unidock_seed',  # Alias from YAML
-        # BoltzGen param mapping
-        'target_pdb': 'boltzgen_target_pdb',
-        'ligand_description': 'boltzgen_ligand_smiles',
-        # BoltzGen DNA-Protein Complex params
-        'protein_sequence': 'boltzgen_protein_sequence',
-        'dna_template_seq': 'boltzgen_dna_template_seq',
-        'dna_primer_seq': 'boltzgen_dna_primer_seq',
-        'dna_structure': 'boltzgen_dna_structure',
-        'scaffold_length': 'boltzgen_scaffold_length',
-        'num_designs': 'boltzgen_num_designs',
-        'batch_size': 'boltzgen_batch_size',
-        'ntp_type': 'boltzgen_ntp_type',
-        'binding_site_residues': 'boltzgen_binding_site_residues',
-        'catalytic_site': 'boltzgen_catalytic_site',
+        # NOTE: BoltzGen-specific mappings (target_pdb, ligand_description, etc.)
+        # are applied conditionally below for model_id == 'boltzgen' only.
+        # They were previously here and broke other workflows!
         # Boltz-2 structure prediction params
         'boltz_recycling_steps': 'boltz_recycling_steps',
         'boltz_sampling_steps': 'boltz_sampling_steps',
@@ -475,9 +464,25 @@ def build_nextflow_command(
         if 'ntp_type' in params:
             params['diffdock_ntp_type'] = params.pop('ntp_type')
     elif model_id == 'boltzgen':
-        # For BoltzGen: ntp_type -> boltzgen_ntp_type
-        if 'ntp_type' in params:
-            params['boltzgen_ntp_type'] = params.pop('ntp_type')
+        # For BoltzGen: Apply all BoltzGen-specific parameter mappings
+        # These were previously in global param_mapping and broke other workflows!
+        boltzgen_mappings = {
+            'target_pdb': 'boltzgen_target_pdb',
+            'ligand_description': 'boltzgen_ligand_smiles',
+            'protein_sequence': 'boltzgen_protein_sequence',
+            'dna_template_seq': 'boltzgen_dna_template_seq',
+            'dna_primer_seq': 'boltzgen_dna_primer_seq',
+            'dna_structure': 'boltzgen_dna_structure',
+            'scaffold_length': 'boltzgen_scaffold_length',
+            'num_designs': 'boltzgen_num_designs',
+            'batch_size': 'boltzgen_batch_size',
+            'ntp_type': 'boltzgen_ntp_type',
+            'binding_site_residues': 'boltzgen_binding_site_residues',
+            'catalytic_site': 'boltzgen_catalytic_site',
+        }
+        for src_key, dest_key in boltzgen_mappings.items():
+            if src_key in params:
+                params[dest_key] = params.pop(src_key)
     
     if complex_components:
         import json

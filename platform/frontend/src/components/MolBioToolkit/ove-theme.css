@@ -75,7 +75,7 @@
     background-color: var(--ove-bg-panel) !important;
 }
 
-.ove-editor-container .bp5-tabs > .bp5-tab-list {
+.ove-editor-container .bp5-tabs>.bp5-tab-list {
     background-color: var(--ove-bg-secondary) !important;
 }
 
@@ -175,4 +175,245 @@
     --ove-bg-primary: #F5F0E6 !important;
     --ove-bg-secondary: #EDE6DA !important;
     background-color: var(--ove-bg-primary) !important;
+}
+
+/* ========================================
+   TEXT COLOR OVERRIDES - Fix white text
+   ======================================== */
+
+/* Global text color overrides */
+.ove-editor-container,
+.ove-editor-container * {
+    color: var(--ove-text-primary);
+}
+
+/* Restriction enzyme / cutsite labels */
+.ove-editor-container .veCutsite,
+.ove-editor-container .cutsiteLabel,
+.ove-editor-container .cutsite-label,
+.ove-editor-container .veCutsiteLabelText,
+.ove-editor-container .cutsiteLabelText,
+.ove-editor-container [class*="cutsite"] text,
+.ove-editor-container [class*="Cutsite"] text {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* SVG text elements (annotations, labels) */
+.ove-editor-container svg text,
+.ove-editor-container svg tspan {
+    fill: var(--ove-text-primary) !important;
+}
+
+/* Specifically white-filled text should be dark */
+.ove-editor-container svg text[fill="white"],
+.ove-editor-container svg text[fill="#fff"],
+.ove-editor-container svg text[fill="#ffffff"],
+.ove-editor-container svg tspan[fill="white"],
+.ove-editor-container svg tspan[fill="#fff"],
+.ove-editor-container svg tspan[fill="#ffffff"] {
+    fill: var(--ove-text-primary) !important;
+}
+
+/* Feature labels */
+.ove-editor-container .veFeatureLabel,
+.ove-editor-container .feature-label,
+.ove-editor-container .featureLabel,
+.ove-editor-container [class*="feature"] text,
+.ove-editor-container [class*="Feature"] text {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* Annotation labels on circular/linear views */
+.ove-editor-container .veAnnotationLabel,
+.ove-editor-container .annotationLabel,
+.ove-editor-container .ve-label,
+.ove-editor-container .veLabel {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* Primer labels */
+.ove-editor-container .vePrimerLabel,
+.ove-editor-container .primerLabel,
+.ove-editor-container [class*="primer"] text,
+.ove-editor-container [class*="Primer"] text {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* ORF labels */
+.ove-editor-container .veOrfLabel,
+.ove-editor-container .orfLabel,
+.ove-editor-container [class*="orf"] text,
+.ove-editor-container [class*="Orf"] text {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* Part labels */
+.ove-editor-container .vePartLabel,
+.ove-editor-container .partLabel,
+.ove-editor-container [class*="part"] text,
+.ove-editor-container [class*="Part"] text {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+/* Sequence position/index labels */
+.ove-editor-container .veAxisLabel,
+.ove-editor-container .axisLabel,
+.ove-editor-container .axis-label,
+.ove-editor-container .tick-label,
+.ove-editor-container .veTick text {
+    fill: var(--ove-text-secondary) !important;
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Properties panel text */
+.ove-editor-container .vePropertiesPanel,
+.ove-editor-container .vePropertiesPanel * {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Table text */
+.ove-editor-container table,
+.ove-editor-container td,
+.ove-editor-container th,
+.ove-editor-container .rt-td,
+.ove-editor-container .rt-th {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Headers and titles */
+.ove-editor-container h1,
+.ove-editor-container h2,
+.ove-editor-container h3,
+.ove-editor-container h4,
+.ove-editor-container h5,
+.ove-editor-container h6,
+.ove-editor-container .bp5-heading {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Labels and spans */
+.ove-editor-container label,
+.ove-editor-container .bp5-label,
+.ove-editor-container .bp5-form-group-label {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Status bar text */
+.ove-editor-container .veStatusBar,
+.ove-editor-container .veStatusBar * {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Popover/tooltip text */
+.ove-editor-container .bp5-popover-content,
+.ove-editor-container .bp5-tooltip-content {
+    color: var(--ove-text-primary) !important;
+    background-color: var(--ove-bg-panel) !important;
+}
+
+/* Dropdown menu items */
+.ove-editor-container .bp5-menu-item,
+.ove-editor-container .bp5-menu-item-label {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Tree/list items */
+.ove-editor-container .bp5-tree-node-label,
+.ove-editor-container .bp5-tree-node-content {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Sequence letters - keep contrasting */
+.ove-editor-container .veRowViewSequenceContainer,
+.ove-editor-container .sequenceContainer {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Icon colors */
+.ove-editor-container .bp5-icon,
+.ove-editor-container .bp5-icon svg {
+    fill: var(--ove-text-secondary) !important;
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Ensure plasmid center name is visible */
+.ove-editor-container .vePlasmidName,
+.ove-editor-container .plasmidName,
+.ove-editor-container .veSequenceName {
+    fill: var(--ove-text-primary) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+.ove-editor-container .veCutsiteInfo,
+.ove-editor-container .cutsiteInfo,
+.ove-editor-container .enzymeInfo {
+    color: var(--ove-text-primary) !important;
+}
+
+/* ========================================
+   PROPERTIES PANEL - Additional Fixes
+   ======================================== */
+
+/* Form field labels in Properties */
+.ove-editor-container .bp5-form-group>label,
+.ove-editor-container .bp5-form-content,
+.ove-editor-container .bp5-form-content * {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Read-only text displays */
+.ove-editor-container .bp5-text-muted {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Properties form text */
+.ove-editor-container .vePropertiesPanel label,
+.ove-editor-container .vePropertiesPanel span,
+.ove-editor-container .vePropertiesPanel p,
+.ove-editor-container .vePropertiesPanel div {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Input display values */
+.ove-editor-container .bp5-input-group,
+.ove-editor-container .bp5-control {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Numeric input */
+.ove-editor-container .bp5-numeric-input .bp5-input {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Select dropdown text */
+.ove-editor-container .bp5-select select,
+.ove-editor-container .bp5-html-select select {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Tag text */
+.ove-editor-container .bp5-tag {
+    color: var(--ove-text-primary) !important;
+}
+
+/* React table overrides */
+.ove-editor-container .ReactTable,
+.ove-editor-container .ReactTable .rt-table,
+.ove-editor-container .ReactTable .rt-tbody,
+.ove-editor-container .ReactTable .rt-tr,
+.ove-editor-container .ReactTable .rt-td {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Data table header */
+.ove-editor-container .ReactTable .rt-thead,
+.ove-editor-container .ReactTable .rt-th {
+    color: var(--ove-text-primary) !important;
+    background-color: var(--ove-bg-secondary) !important;
 }
