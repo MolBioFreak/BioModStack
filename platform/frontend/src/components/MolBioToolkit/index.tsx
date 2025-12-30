@@ -105,8 +105,7 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                             'editTool',
                             'findTool',
                             'alignmentTool',
-                            'visibilityTool',
-                            'printTool'
+                            'visibilityTool'
                         ]
                     }}
                 />
