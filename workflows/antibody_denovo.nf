@@ -21,7 +21,7 @@ nextflow.enable.dsl = 2
 include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
 include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
-include { ProteinMPNN } from '../modules/proteinmpnn'
+include { RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
@@ -98,8 +98,8 @@ workflow ANTIBODY_DENOVO {
     // ProteinMPNN branch
     if (run_proteinmpnn) {
         log.info("  Running ProteinMPNN...")
-        ProteinMPNN(backbone_designs)
-        proteinmpnn_seqs = ProteinMPNN.out.sequences
+        ProteinMPNNSeq(backbone_designs.map { meta, pdbs -> pdbs })
+        proteinmpnn_seqs = ProteinMPNNSeq.out.pdbs_jsons
     }
 
     // Collect all designed sequences for downstream

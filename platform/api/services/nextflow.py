@@ -501,6 +501,12 @@ def build_nextflow_command(
             
             if isinstance(value, bool):
                 cmd.extend([f"--{nf_key}", str(value).lower()])
+            elif isinstance(value, list):
+                # Convert list to comma-separated string for Nextflow
+                cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
+            elif isinstance(value, dict):
+                # Skip dict parameters for now (handled specially like complex_components)
+                logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
             
