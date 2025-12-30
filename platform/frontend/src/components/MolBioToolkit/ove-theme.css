@@ -1,0 +1,178 @@
+/**
+ * Desert Tan Theme for OVE Editor
+ * 
+ * Warm, neutral tan/beige color scheme
+ * Applied only to .ove-editor-container
+ */
+
+/* CSS Custom Properties for theming */
+.ove-editor-container {
+    --ove-bg-primary: #F5F0E6;
+    --ove-bg-secondary: #EDE6DA;
+    --ove-bg-toolbar: #E8E2D4;
+    --ove-bg-panel: #FAF7F2;
+    --ove-border: #D4C9B8;
+    --ove-border-light: #E5DDD0;
+    --ove-text-primary: #3C3C3C;
+    --ove-text-secondary: #666666;
+    --ove-text-muted: #999999;
+    --ove-accent: #B8860B;
+    --ove-accent-hover: #DAA520;
+    --ove-success: #6B8E23;
+    --ove-info: #4682B4;
+    --ove-shadow: rgba(0, 0, 0, 0.08);
+}
+
+/* Main Editor Container */
+.ove-editor-container {
+    background-color: var(--ove-bg-primary) !important;
+}
+
+.ove-editor-container .veEditor {
+    background-color: var(--ove-bg-primary) !important;
+}
+
+/* Toolbar styling */
+.ove-editor-container .ve-toolbar,
+.ove-editor-container .veToolbar {
+    background-color: var(--ove-bg-toolbar) !important;
+    border-bottom: 1px solid var(--ove-border) !important;
+}
+
+.ove-editor-container .veToolbar .bp5-button,
+.ove-editor-container .ve-toolbar .bp5-button,
+.ove-editor-container .bp5-button-group .bp5-button {
+    background-color: var(--ove-bg-panel) !important;
+    color: var(--ove-text-primary) !important;
+}
+
+.ove-editor-container .bp5-button:hover {
+    background-color: var(--ove-border-light) !important;
+}
+
+/* Menu Bar */
+.ove-editor-container .veMenuBar,
+.ove-editor-container .tg-menu-bar {
+    background-color: var(--ove-bg-toolbar) !important;
+    border-bottom: 1px solid var(--ove-border) !important;
+}
+
+.ove-editor-container .veMenuBar .bp5-button,
+.ove-editor-container .tg-menu-bar .bp5-button {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Side Panel / Properties Panel */
+.ove-editor-container .veSidePanel,
+.ove-editor-container .vePropertiesPanel {
+    background-color: var(--ove-bg-secondary) !important;
+    border-left: 1px solid var(--ove-border) !important;
+}
+
+/* Tab Panels */
+.ove-editor-container .veTabPanel,
+.ove-editor-container .bp5-tab-panel {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+.ove-editor-container .bp5-tabs > .bp5-tab-list {
+    background-color: var(--ove-bg-secondary) !important;
+}
+
+.ove-editor-container .bp5-tab {
+    color: var(--ove-text-secondary) !important;
+}
+
+.ove-editor-container .bp5-tab[aria-selected="true"] {
+    color: var(--ove-accent) !important;
+    box-shadow: inset 0 -3px 0 var(--ove-accent) !important;
+}
+
+/* Circular View */
+.ove-editor-container .veCircularView,
+.ove-editor-container .circularView {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+/* Sequence View */
+.ove-editor-container .veRowView,
+.ove-editor-container .sequenceView {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+/* Linear / Rail View */
+.ove-editor-container .veLinearView,
+.ove-editor-container .railView {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+/* Splitters */
+.ove-editor-container .reflex-splitter {
+    background-color: var(--ove-border) !important;
+    border: none !important;
+}
+
+.ove-editor-container .reflex-splitter:hover {
+    background-color: var(--ove-accent) !important;
+}
+
+/* Status Bar */
+.ove-editor-container .veStatusBar {
+    background-color: var(--ove-bg-toolbar) !important;
+    border-top: 1px solid var(--ove-border) !important;
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Dialogs */
+.ove-editor-container .bp5-dialog {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+.ove-editor-container .bp5-dialog-header {
+    background-color: var(--ove-bg-secondary) !important;
+}
+
+/* Cards */
+.ove-editor-container .bp5-card {
+    background-color: var(--ove-bg-panel) !important;
+    border: 1px solid var(--ove-border-light) !important;
+}
+
+/* Input Fields */
+.ove-editor-container .bp5-input,
+.ove-editor-container .bp5-input-group input {
+    background-color: white !important;
+    border: 1px solid var(--ove-border) !important;
+}
+
+.ove-editor-container .bp5-input:focus {
+    border-color: var(--ove-accent) !important;
+    box-shadow: 0 0 0 1px var(--ove-accent) !important;
+}
+
+/* Scroll bars */
+.ove-editor-container ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.ove-editor-container ::-webkit-scrollbar-track {
+    background: var(--ove-bg-secondary);
+}
+
+.ove-editor-container ::-webkit-scrollbar-thumb {
+    background: var(--ove-border);
+    border-radius: 4px;
+}
+
+.ove-editor-container ::-webkit-scrollbar-thumb:hover {
+    background: var(--ove-text-muted);
+}
+
+/* Override dark mode if applied */
+.ove-editor-container .bp5-dark,
+.ove-editor-container.bp5-dark {
+    --ove-bg-primary: #F5F0E6 !important;
+    --ove-bg-secondary: #EDE6DA !important;
+    background-color: var(--ove-bg-primary) !important;
+}
