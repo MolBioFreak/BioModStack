@@ -13,6 +13,9 @@ export default defineConfig({
       '@blueprintjs/icons',
       '@blueprintjs/icons/lib/esm/paths/16px',
       '@blueprintjs/icons/lib/esm/paths/20px',
+      'buffer',
+      'string_decoder',
+      'events',
     ],
     esbuildOptions: {
       loader: {
