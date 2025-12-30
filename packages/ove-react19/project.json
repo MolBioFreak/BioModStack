@@ -1,0 +1,52 @@
+{
+  "name": "ove",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/ove/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "start": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd packages/ove && yarn vite"]
+      },
+      "configurations": {
+        "ci": {
+          "readyWhen": "ready in"
+        }
+      }
+    },
+    "publish": {},
+    "publish-beta": {},
+    "build_umd": {
+      "command": "nx run ove:build --mode=umd"
+    },
+    "build": {
+      "configurations": {
+        "umd": {
+          "mode": "umd"
+        },
+        "demo": {
+          "mode": "demo"
+        },
+        "production": {
+          "mode": "production"
+        }
+      }
+    },
+    "pushToGhPages": {
+      //tnw: waiting for https://github.com/nrwl/nx/issues/15064 to be able to work with "build:demo", until then just run build:demo manually first
+      // "dependsOn": ["build:demo"],
+      "command": "yarn gh-pages -a -d demo-dist"
+    },
+    "launch-e2e": {},
+    "e2e": {
+      "options": {
+        "key": "373658d4-4931-4ffd-9263-8eb78a838ab9"
+      }
+    },
+    "lint": {},
+    "test": {},
+    "version": {}
+  }
+}

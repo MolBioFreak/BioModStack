@@ -1,0 +1,9 @@
+{
+  "name": "@teselagen/range-utils",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "dependencies": {
+    "lodash-es": "^4.17.21"
+  }
+}
