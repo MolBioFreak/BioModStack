@@ -417,3 +417,88 @@
     color: var(--ove-text-primary) !important;
     background-color: var(--ove-bg-secondary) !important;
 }
+
+/* ========================================
+   OVE-SPECIFIC PROPERTIES PANEL CLASSES
+   ======================================== */
+
+/* Main form row container */
+.ove-editor-container .ve-flex-row,
+.ove-editor-container .veFlexRow {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Left column labels (Name, Length, etc) */
+.ove-editor-container .ve-column-left,
+.ove-editor-container .veColumnLeft {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Right column values */
+.ove-editor-container .ve-column-right,
+.ove-editor-container .veColumnRight {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Blueprint 3 labels (older class) */
+.ove-editor-container .bp3-label {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Blueprint 3 text */
+.ove-editor-container .bp3-text-muted {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Blueprint 3 form group */
+.ove-editor-container .bp3-form-group label,
+.ove-editor-container .bp3-form-content {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Input fields with bp3 */
+.ove-editor-container .bp3-input,
+.ove-editor-container .bp3-input-group input {
+    color: var(--ove-text-primary) !important;
+    background-color: white !important;
+}
+
+/* Textarea */
+.ove-editor-container textarea,
+.ove-editor-container .bp3-input[type="textarea"],
+.ove-editor-container .bp5-input[type="textarea"] {
+    color: var(--ove-text-primary) !important;
+    background-color: white !important;
+}
+
+/* Description text */
+.ove-editor-container .ve-description,
+.ove-editor-container .description {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Dropdown selects with bp3 */
+.ove-editor-container .bp3-select select,
+.ove-editor-container .bp3-html-select select {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Dropdown buttons */
+.ove-editor-container .bp3-button-text,
+.ove-editor-container .bp5-button-text {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Circular/Linear select */
+.ove-editor-container .circularLinearSelect {
+    color: var(--ove-text-primary) !important;
+}
+
+/* All direct text in properties container */
+.ove-editor-container [class*="PropertiesDialog"] {
+    color: var(--ove-text-primary) !important;
+}
+
+.ove-editor-container [class*="PropertiesDialog"] * {
+    color: var(--ove-text-primary) !important;
+}
