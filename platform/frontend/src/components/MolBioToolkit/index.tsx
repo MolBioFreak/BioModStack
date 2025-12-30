@@ -88,8 +88,27 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
         <div className="ove-editor-container w-full h-full">
             <Provider store={store}>
                 <Editor
-                    onSave={onSave}
                     editorName={EDITOR_NAME}
+                    showMenuBar={true}
+                    onSave={onSave}
+                    ToolBarProps={{
+                        toolList: [
+                            'saveTool',
+                            'downloadTool',
+                            'importTool',
+                            'undoTool',
+                            'redoTool',
+                            'cutsiteTool',
+                            'featureTool',
+                            'oligoTool',
+                            'orfTool',
+                            'editTool',
+                            'findTool',
+                            'alignmentTool',
+                            'visibilityTool',
+                            'printTool'
+                        ]
+                    }}
                 />
             </Provider>
         </div>
