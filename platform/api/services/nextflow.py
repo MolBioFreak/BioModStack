@@ -355,6 +355,9 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
+        # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
+        ('antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
+        ('antibody_denovo', 'default'): 'boltz',
     }
     
     # Determine profile based on model and mode
