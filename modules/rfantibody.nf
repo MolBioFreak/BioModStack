@@ -37,8 +37,16 @@ process RFANTIBODY {
     // Number of designs
     def num_designs = params.rfantibody_num_designs ?: 10
     
-    // Framework - use provided or default bundled framework
-    def framework = framework_pdb.name != 'NO_FRAMEWORK' ? framework_pdb : '/opt/RFantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb'
+    // Framework selection based on framework_type param
+    // Options: 'standard-fv', 'nanobody', 'custom'
+    def frameworkType = params.framework_type ?: 'standard-fv'
+    def presetFrameworks = [
+        'standard-fv': '/opt/RFantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb',
+        'nanobody': '/opt/RFantibody/scripts/examples/example_inputs/h-NbBCII10.pdb'
+    ]
+    def framework = framework_pdb.name != 'NO_FRAMEWORK' 
+        ? framework_pdb 
+        : presetFrameworks[frameworkType] ?: presetFrameworks['standard-fv']
     
     """
     set -euo pipefail
