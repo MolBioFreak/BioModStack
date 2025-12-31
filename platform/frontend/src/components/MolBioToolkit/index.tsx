@@ -83,10 +83,12 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
     useEffect(() => {
         updateEditor(store, EDITOR_NAME, {
             sequenceData: oveSequenceData,
-            // Panel layout configuration
+            // Panel layout configuration - include all tools
             panelsShown: [
                 [
-                    { active: true, id: "circular", name: "Circular Map" }
+                    { active: true, id: "circular", name: "Circular Map" },
+                    { id: "digestTool", name: "Digest" },
+                    { id: "pcrTool", name: "PCR" }
                 ],
                 [
                     { id: "sequence", name: "Sequence Map", active: true },
@@ -101,9 +103,12 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                 parts: true,
                 orfs: true,
                 cutsites: true,
-                primers: true
+                primers: true,
+                warnings: true,
+                lineageAnnotations: true,
+                assemblyPieces: true
             },
-            // Initial visibility settings
+            // Initial visibility settings - show cutsites by default for digest
             annotationVisibility: {
                 features: true,
                 parts: true,
@@ -111,7 +116,13 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                 cutsites: true,
                 orfs: false,
                 orfTranslations: false,
-                translations: true
+                translations: true,
+                axis: true,
+                axisNumbers: true,
+                reverseSequence: true,
+                dnaColors: false,
+                sequence: true,
+                caret: true
             }
         });
     }, [oveSequenceData]);
@@ -144,13 +155,15 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                             "redoTool",
                             "cutsiteTool",
                             "featureTool",
+                            "partTool",
                             "oligoTool",
                             "orfTool",
                             "editTool",
                             "findTool",
                             "alignmentTool",
                             "versionHistoryTool",
-                            "visibilityTool"
+                            "visibilityTool",
+                            "printTool"
                         ]
                     }}
                 />
