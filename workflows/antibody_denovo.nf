@@ -44,13 +44,19 @@ workflow ANTIBODY_DENOVO {
     log.info("Step 1: Generating CDR backbones with RFantibody...")
 
     // Prepare input for RFantibody
-    // Format: [meta, target_pdb, antigen_chains]
+    // New interface: tuple(meta, target_pdb, hotspot_residues), framework_pdb
     rfantibody_input = target_pdb_ch.map { meta, pdb ->
-        def antigen_chain = params.antigen_chain ?: "A"
-        [meta, pdb, antigen_chain]
+        // epitope_residues comes from workflow input (e.g., "A45,A46,A52")
+        def hotspots = epitope_residues ?: ""
+        [meta, pdb, hotspots]
     }
+    
+    // Framework PDB - use provided or provide placeholder for default
+    framework_for_rfantibody = framework_pdb_ch
+        .map { meta, pdb -> pdb }
+        .ifEmpty(file('NO_FRAMEWORK'))
 
-    RFANTIBODY(rfantibody_input)
+    RFANTIBODY(rfantibody_input, framework_for_rfantibody)
     backbone_designs = RFANTIBODY.out.designs
 
     // Step 2: CDR Sequence Design (Cross-Validation Mode)
