@@ -16,6 +16,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(true);
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
+
+    // Framework selection - preset or custom
+    const [frameworkType, setFrameworkType] = useState<'standard-fv' | 'nanobody' | 'custom'>('standard-fv');
+    const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
+    const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
+
     const [isUploading, setIsUploading] = useState(false);
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
 
@@ -110,7 +116,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (useThermoMPNN) pipelineSteps.push('thermompnn');
             pipelineSteps.push('boltz2'); // Boltz2 is always run last for structure validation
 
-            // Step 2: Submit job with uploaded file path
+            // Step 2: Upload custom framework if provided
+            let frameworkPath = customFrameworkPath;
+            if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) {
+                const response = await uploadFile('inputs/antibody', customFrameworkFile);
+                frameworkPath = `inputs/antibody/${customFrameworkFile.name}`;
+                setCustomFrameworkPath(frameworkPath);
+                console.log('[ANTIBODY_DENOVO] Custom framework uploaded:', frameworkPath, response);
+            }
+
+            // Step 3: Submit job with uploaded file path
             const jobData = {
                 name: jobName,
                 model_id: 'antibody_denovo',
@@ -120,6 +135,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     pdb_source: 'upload',
                     epitope_residues: epitopeString,
                     antigen_chains: selectedChain || undefined, // Send selected chain
+                    // Framework configuration
+                    framework_type: frameworkType,
+                    framework_pdb: frameworkPath || undefined, // Only if custom
                     // Pipeline configuration
                     rfd_mode: 'antibody_denovo_pipeline', // Explicitly set for backend mapping
                     antibody_pipeline_steps: pipelineSteps,
@@ -225,6 +243,66 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         )}
                     </div>
                     <p className="mt-1 text-xs text-slate-500">Upload the antigen structure you want to design antibodies against</p>
+                </div>
+
+                {/* Framework Selection */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                        <button
+                            onClick={() => setFrameworkType('standard-fv')}
+                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'standard-fv'
+                                ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                }`}
+                        >
+                            <div className="text-sm font-medium">Standard Fv</div>
+                            <div className="text-xs opacity-75">hu-4D5-8 (Herceptin)</div>
+                        </button>
+                        <button
+                            onClick={() => setFrameworkType('nanobody')}
+                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'nanobody'
+                                ? 'bg-purple-600/20 border-purple-500 text-purple-400'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                }`}
+                        >
+                            <div className="text-sm font-medium">Nanobody</div>
+                            <div className="text-xs opacity-75">VHH single-domain</div>
+                        </button>
+                        <button
+                            onClick={() => setFrameworkType('custom')}
+                            className={`p-3 rounded-lg border transition-all ${frameworkType === 'custom'
+                                ? 'bg-amber-600/20 border-amber-500 text-amber-400'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                }`}
+                        >
+                            <div className="text-sm font-medium">Custom</div>
+                            <div className="text-xs opacity-75">Upload HLT format</div>
+                        </button>
+                    </div>
+
+                    {/* Custom framework upload */}
+                    {frameworkType === 'custom' && (
+                        <div className="mt-3">
+                            <input
+                                type="file"
+                                accept=".pdb"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0] || null;
+                                    setCustomFrameworkFile(file);
+                                    setCustomFrameworkPath(null);
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer"
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Upload HLT-formatted framework PDB with chain H (Heavy) and L (Light)</p>
+                        </div>
+                    )}
+
+                    <p className="mt-1 text-xs text-slate-500">
+                        {frameworkType === 'standard-fv' && 'Standard humanized Fv framework - good for most applications'}
+                        {frameworkType === 'nanobody' && 'Single-domain VHH antibody - smaller, better tissue penetration'}
+                        {frameworkType === 'custom' && 'Use your own HLT-formatted antibody framework'}
+                    </p>
                 </div>
 
                 {/* Chain Selector (when PDB is parsed) */}
