@@ -50,30 +50,35 @@ def main():
             # inference_engine config merges to global root, so inputs is at top level
             cfg.inputs = inputs_str
             
-            # WORKAROUND for broken RF3 package (expects source layout)
-            # 1. Fake rootutils
+            # Set PROJECT_ROOT to the expected path for RF3
+            # RF3's inference.py expects: os.environ["PROJECT_ROOT"]/models/rf3/configs
+            # Container should have this set up via FOUNDRY_PROJECT_ROOT or similar
+            project_root = os.environ.get("PROJECT_ROOT") or os.environ.get("FOUNDRY_PROJECT_ROOT")
+            
+            if not project_root:
+                # Use foundry's install location as project root if not set
+                # The rc-foundry package IS the project when pip-installed
+                project_root = "/usr/local/lib/python3.12/dist-packages"
+                os.environ["PROJECT_ROOT"] = project_root
+                
+                # Ensure the expected directory structure exists
+                # RF3 looks for PROJECT_ROOT/models/rf3/configs
+                rf3_models_path = Path(project_root) / "models" / "rf3"
+                rf3_models_path.mkdir(parents=True, exist_ok=True)
+                
+                # Symlink configs if not already present
+                configs_symlink = rf3_models_path / "configs"
+                if not configs_symlink.exists():
+                    real_configs = Path("/usr/local/lib/python3.12/dist-packages/rf3/configs")
+                    if real_configs.exists():
+                        os.symlink(real_configs, configs_symlink)
+            
+            # Mock rootutils to prevent it from interfering
             try:
                 import rootutils
                 rootutils.setup_root = lambda *args, **kwargs: None
             except ImportError:
                 pass
-                
-            # 2. Reconstruct expected directory structure in /tmp
-            # inference.py lines: _config_path = os.path.join(os.environ["PROJECT_ROOT"], "models/rf3/configs")
-            fake_root = Path("/tmp/fake_project_root")
-            fake_root.mkdir(parents=True, exist_ok=True)
-            
-            fake_models_dir = fake_root / "models/rf3"
-            fake_models_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Symlink real configs to fake location
-            real_configs = Path("/usr/local/lib/python3.12/dist-packages/rf3/configs")
-            fake_configs = fake_models_dir / "configs"
-            if not fake_configs.exists():
-                os.symlink(real_configs, fake_configs)
-            
-            # Set environment variable
-            os.environ["PROJECT_ROOT"] = str(fake_root)
 
             # Run inference
             from rf3.inference import run_inference
