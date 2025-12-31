@@ -502,3 +502,109 @@
 .ove-editor-container [class*="PropertiesDialog"] * {
     color: var(--ove-text-primary) !important;
 }
+
+/* ========================================
+   Z-INDEX FIXES - Menu dropdowns over sliders
+   ======================================== */
+
+/* Ensure menu dropdowns appear above everything */
+.ove-editor-container .bp5-popover-content,
+.ove-editor-container .bp5-overlay,
+.ove-editor-container .bp5-menu,
+.ove-editor-container .bp3-popover-content,
+.ove-editor-container .bp3-overlay,
+.ove-editor-container .bp3-menu {
+    z-index: 9999 !important;
+}
+
+/* Popover wrapper */
+.bp5-popover,
+.bp3-popover {
+    z-index: 9999 !important;
+}
+
+/* Portal container for popovers */
+.bp5-portal,
+.bp3-portal {
+    z-index: 9999 !important;
+}
+
+/* Menu items background */
+.ove-editor-container .bp5-menu,
+.ove-editor-container .bp3-menu {
+    background-color: var(--ove-bg-panel) !important;
+}
+
+/* Zoom slider should be behind menus */
+.ove-editor-container .veZoomSlider,
+.ove-editor-container [class*="ZoomSlider"],
+.ove-editor-container [class*="zoom-slider"] {
+    z-index: 1 !important;
+    position: relative;
+}
+
+/* Toolbar zoom controls - low z-index */
+.ove-editor-container .veZoomInput,
+.ove-editor-container [class*="ZoomInput"] {
+    z-index: 1 !important;
+}
+
+/* Blueprint sliders in OVE - force low z-index */
+.ove-editor-container .bp5-slider,
+.ove-editor-container .bp3-slider,
+.ove-editor-container .bp5-slider-handle,
+.ove-editor-container .bp3-slider-handle {
+    z-index: 1 !important;
+}
+
+/* Ensure the menu bar is above the zoom slider */
+.ove-editor-container .veMenuBar,
+.ove-editor-container .tg-menu-bar {
+    z-index: 100 !important;
+    position: relative;
+}
+
+/* Menu dropdown panels */
+.ove-editor-container .veMenuBar .bp5-popover-wrapper,
+.ove-editor-container .veMenuBar .bp3-popover-wrapper {
+    z-index: 9999 !important;
+}
+
+/* ========================================
+   GLOBAL Z-INDEX - Blueprint Portals
+   (These render outside .ove-editor-container)
+   ======================================== */
+
+/* Force all Blueprint popovers/menus above everything */
+.bp5-overlay,
+.bp3-overlay {
+    z-index: 20000 !important;
+}
+
+.bp5-overlay-content,
+.bp3-overlay-content {
+    z-index: 20001 !important;
+}
+
+.bp5-popover,
+.bp3-popover {
+    z-index: 20002 !important;
+}
+
+.bp5-menu,
+.bp3-menu {
+    z-index: 20003 !important;
+    background-color: #FAF7F2 !important;
+}
+
+/* Portal containers - highest z-index */
+.bp5-portal,
+.bp3-portal {
+    z-index: 20000 !important;
+}
+
+/* Backdrop for dialogs/overlays */
+.bp5-overlay-backdrop,
+.bp3-overlay-backdrop {
+    z-index: 19999 !important;
+}
