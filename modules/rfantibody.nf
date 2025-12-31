@@ -12,6 +12,9 @@ process RFANTIBODY {
     label 'process_gpu'
     container 'apptainer/rfantibody.sif'
     
+    // Mount weights and example frameworks from host
+    containerOptions "--nv --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo/weights:/opt/RFantibody/weights --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo/scripts:/opt/RFantibody/scripts"
+    
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
 
