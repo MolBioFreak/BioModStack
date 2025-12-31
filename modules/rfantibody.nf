@@ -63,7 +63,10 @@ process RFANTIBODY {
     
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
+    # Need to set PYTHONPATH so rfantibody module can be found
     cd /opt/RFantibody
+    export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/include:\$PYTHONPATH"
+    
     python3 scripts/rfdiffusion_inference.py \\
         --config-name antibody \\
         antibody.target_pdb=${target_pdb} \\
