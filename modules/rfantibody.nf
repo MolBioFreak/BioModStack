@@ -63,12 +63,8 @@ process RFANTIBODY {
     
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
-    # Need to set PYTHONPATH so rfantibody module can be found
+    # PYTHONPATH is set in container environment to include src/ and include/
     cd /opt/RFantibody
-    export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/include:\$PYTHONPATH"
-    
-    # Install missing dependencies if not present
-    pip install --quiet icecream hydra-core omegaconf 2>/dev/null || true
     
     python3 scripts/rfdiffusion_inference.py \\
         --config-name antibody \\
