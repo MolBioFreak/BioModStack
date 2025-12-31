@@ -33,8 +33,10 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     git clone https://github.com/RosettaCommons/RFantibody.git /opt/RFantibody
     cd /opt/RFantibody
 
-    # Install dependencies using UV
-    uv pip install -r requirements.txt || true  # Continue even if some fail
+    # Install dependencies using poetry (RFantibody uses pyproject.toml, not requirements.txt)
+    pip install poetry
+    poetry config virtualenvs.create false
+    poetry install --no-interaction 2>/dev/null || pip install . 2>/dev/null || true
     
     # Add biopython for PDB preprocessing in workflow
     uv pip install biopython
