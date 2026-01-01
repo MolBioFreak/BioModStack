@@ -14,7 +14,8 @@ process RFANTIBODY {
     
     // Mount entire RFantibody repo from host (includes src, scripts, weights, examples)
     // Also bind workdir as writable
-    containerOptions "--nv --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
+    // CUDA_VISIBLE_DEVICES=2 forces RTX 3090 (DGL 2.0.0 doesn't support Blackwell GPUs)
+    containerOptions "--nv --env CUDA_VISIBLE_DEVICES=2 --bind /mnt/BioModStack/weights/rfantibody/rfantibody_repo:/opt/RFantibody --writable-tmpfs"
     
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/rfantibody", mode: 'copy', pattern: "output/*.pdb"
