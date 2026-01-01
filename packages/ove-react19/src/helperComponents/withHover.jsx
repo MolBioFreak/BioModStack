@@ -12,10 +12,13 @@ export const HoveredIdContext = React.createContext({
 });
 
 export function withHoveredIdFromContext(Component) {
+  // In React 19, extracting key from props returns undefined
+  // We only need to extract it to prevent the "key is being spread into JSX" error
+  // We do NOT forward it to the child - key is for parent-level reconciliation only
   return function HoveredIdComponent({ key: _key, ...props }) {
     return (
       <HoveredIdContext.Consumer>
-        {contexts => <Component key={_key} {...props} {...contexts} />}
+        {contexts => <Component {...props} {...contexts} />}
       </HoveredIdContext.Consumer>
     );
   };
