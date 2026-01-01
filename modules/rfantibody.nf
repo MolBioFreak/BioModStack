@@ -68,9 +68,11 @@ process RFANTIBODY {
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     # PYTHONPATH is set in container environment to include src/ and include/
+    # Config is at src/rfantibody/rfdiffusion/config/inference, not scripts/config
     cd /opt/RFantibody
     
     python3 scripts/rfdiffusion_inference.py \\
+        --config-path /opt/RFantibody/src/rfantibody/rfdiffusion/config/inference \\
         --config-name antibody \\
         antibody.target_pdb=${target_pdb} \\
         antibody.framework_pdb=${framework} \\
