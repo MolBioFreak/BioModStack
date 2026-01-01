@@ -65,6 +65,9 @@ process RFANTIBODY {
     
     mkdir -p output
     
+    # Save work directory path for absolute file references
+    WORK_DIR=\$(pwd)
+    
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     # PYTHONPATH is set in container environment to include src/ and include/
@@ -74,13 +77,13 @@ process RFANTIBODY {
     python3 scripts/rfdiffusion_inference.py \\
         --config-path /opt/RFantibody/src/rfantibody/rfdiffusion/config/inference \\
         --config-name antibody \\
-        antibody.target_pdb=${target_pdb} \\
+        antibody.target_pdb=\${WORK_DIR}/${target_pdb} \\
         antibody.framework_pdb=${framework} \\
         inference.ckpt_override_path=/opt/RFantibody/weights/RFdiffusion_Ab.pt \\
         'ppi.hotspot_res=${hotspots}' \\
         'antibody.design_loops=${design_loops}' \\
         inference.num_designs=${num_designs} \\
-        inference.output_prefix=output/${meta.id} \\
+        inference.output_prefix=\${WORK_DIR}/output/${meta.id} \\
         2>&1 | tee -a rfantibody_${meta.id}.log
     
     echo "RFantibody complete" | tee -a rfantibody_${meta.id}.log
