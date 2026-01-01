@@ -146,6 +146,7 @@ function drawAnnotations(props) {
         totalAngle,
         centerAngle,
         locationAngles,
+        key: _annotationKey, // Extract key to avoid React 19 spread error
         ...rest
       } = annotation;
 
@@ -270,31 +271,35 @@ function drawAnnotations(props) {
           : annotation.color || "#ac68cc";
         DrawAnnotation.displayName = annotationType + "--- DrawAnnotation";
         const CompToUse = noHover ? DrawAnnotationInner : DrawAnnotation;
+        // Create spread props without 'key' to avoid React 19 "key is being spread into JSX" error
+        const spreadProps = {
+          ...props,
+          ...rest,
+          ...annotation,
+          angleAdjust,
+          ellipsizedName,
+          name,
+          annotationHeight,
+          annotationRadius,
+          annotationType,
+          isProtein,
+          noTitle,
+          titleText,
+          classNames,
+          onClick: _onClick,
+          onDoubleClick: _onDoubleClick,
+          onContextMenu,
+          annotation,
+          annotationColor,
+          totalAngle,
+          centerAngle,
+          annotationProps: _annotationProps
+        };
+        // Remove key from spread props - key is passed explicitly below
+        delete spreadProps.key;
         svgGroup.push(
           <CompToUse
-            {...{
-              ...props,
-              ...rest,
-              ...annotation,
-              angleAdjust,
-              ellipsizedName,
-              name,
-              annotationHeight,
-              annotationRadius,
-              annotationType,
-              isProtein,
-              noTitle,
-              titleText,
-              classNames,
-              onClick: _onClick,
-              onDoubleClick: _onDoubleClick,
-              onContextMenu,
-              annotation,
-              annotationColor,
-              totalAngle,
-              centerAngle,
-              annotationProps: _annotationProps
-            }}
+            {...spreadProps}
             id={annotation.id}
             key={"veAnnotation-" + annotationType + index}
           />
