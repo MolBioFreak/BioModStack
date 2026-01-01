@@ -41,6 +41,9 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Install RFantibody as editable package from src/
     uv pip install -e /opt/RFantibody 2>/dev/null || true
     
+    # Pin torchdata to version with datapipes API (required by DGL)
+    uv pip install "torchdata==0.8.0"
+    
     # SE3-Transformer / DGL (required for RF tools)
     uv pip install dgl -f https://data.dgl.ai/wheels/cu124/repo.html
 
