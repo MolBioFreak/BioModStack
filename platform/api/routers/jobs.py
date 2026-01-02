@@ -48,30 +48,34 @@ async def list_jobs(
     session: AsyncSession = Depends(get_session)
 ):
     """List all jobs with optional status filter."""
-    query = select(Job).order_by(Job.created_at.desc())
+    # Optimized query: fetch jobs and design counts in one go
+    # This replaces the N+1 query loop with a single GROUP BY query
+    query = (
+        select(Job, func.count(Design.id).label("design_count"))
+        .outerjoin(Design, Design.job_id == Job.id)
+        .group_by(Job.id)
+        .order_by(Job.created_at.desc())
+    )
     
     if status:
         query = query.where(Job.status == status.value)
     
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
-    jobs = result.scalars().all()
+    rows = result.all()
     
-    # Get total count
+    # Get total count (for pagination)
     count_query = select(func.count(Job.id))
     if status:
         count_query = count_query.where(Job.status == status.value)
     total = (await session.execute(count_query)).scalar()
     
-    # Get design counts for each job
     job_responses = []
-    for job in jobs:
-        design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
-        design_count = (await session.execute(design_count_query)).scalar() or 0
-        
-        # For structure prediction jobs (or any job with 0 designs but completed status),
-        # fall back to counting structure files in the output directory
+    for job, design_count in rows:
+        # Fallback for structure/PDB jobs that don't have Design entries
         if design_count == 0 and job.status == JobStatus.COMPLETED.value and job.output_dir:
+            # Note: This file system check is still "slow" per job, but only runs for 
+            # jobs with 0 designs in DB. For pure design jobs, it's skipped.
             design_count = count_structure_files(job.output_dir)
         
         job_responses.append(JobResponse(
@@ -86,7 +90,7 @@ async def list_jobs(
             completed_at=job.completed_at,
             output_dir=job.output_dir,
             error_message=job.error_message,
-            design_count=design_count,
+            design_count=design_count,  # Now joined from DB
             batch_id=job.batch_id,
             batch_name=job.batch_name,
         ))
@@ -110,15 +114,9 @@ async def create_job(
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
     
-    # DEBUG: Trace complex_components in incoming request
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.warning(f"DEBUG jobs.py: Received job_data.params keys: {list(job_data.params.keys())}")
-    logger.warning(f"DEBUG jobs.py: num_parallel_jobs = {job_data.params.get('num_parallel_jobs', 'NOT SET')}")
+    # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
-        logger.warning(f"DEBUG jobs.py: complex_components found with {len(job_data.params['complex_components'])} items")
-    else:
-        logger.warning("DEBUG jobs.py: complex_components NOT in job_data.params!")
+        logger.info(f"Job contains {len(job_data.params['complex_components'])} complex components")
     
     # ═══════════════════════════════════════════════════════════════════════════
     # JOB MULTIPLIER: Create N separate jobs for multi-GPU distribution
@@ -174,9 +172,8 @@ async def create_job(
     needs_msa = False
     sequences_for_msa = []
     
-    # DEBUG: Log what we're checking
-    logger.warning(f"[MSA DEBUG] num_jobs={num_jobs}, has_msa_reference={job_data.params.get('msa_reference_sequence') is not None}")
-    logger.warning(f"[MSA DEBUG] params keys: {list(job_data.params.keys())}")
+    # Logging MSA batch intent
+
     
     # Check if this is a mutagenesis batch (has msa_reference_sequence)
     # or any batch with multiple unique sequences that need MSA
