@@ -10,6 +10,7 @@ from collections import deque
 from pathlib import Path
 import subprocess
 import json
+import asyncio
 import time
 
 router = APIRouter()
@@ -299,15 +300,17 @@ def get_ram_stats() -> RAMStatus:
 @router.get("/status")
 async def get_system_status():
     """Get complete system status including GPUs, CPU, and RAM."""
-    cpu = get_cpu_stats()
-    ram = get_ram_stats()
+    # Run blocking hardware checks in thread pool to avoid blocking event loop
+    cpu = await asyncio.to_thread(get_cpu_stats)
+    ram = await asyncio.to_thread(get_ram_stats)
+    gpus = await asyncio.to_thread(get_gpu_stats)
     
     # Append to history for sparkline graphs
     _cpu_history.append(cpu.utilization)
     _ram_history.append(ram.utilization)
     
     return SystemStatusResponse(
-        gpus=get_gpu_stats(),
+        gpus=gpus,
         cpu=cpu,
         ram=ram,
         timestamp=datetime.utcnow(),
@@ -319,19 +322,22 @@ async def get_system_status():
 @router.get("/gpus")
 async def get_gpus_only():
     """Get GPU status only (for lighter polling)."""
-    return {"gpus": get_gpu_stats(), "timestamp": datetime.utcnow()}
+    gpus = await asyncio.to_thread(get_gpu_stats)
+    return {"gpus": gpus, "timestamp": datetime.utcnow()}
 
 
 @router.get("/cpu")
 async def get_cpu_only():
     """Get CPU status only."""
-    return {"cpu": get_cpu_stats(), "timestamp": datetime.utcnow()}
+    cpu = await asyncio.to_thread(get_cpu_stats)
+    return {"cpu": cpu, "timestamp": datetime.utcnow()}
 
 
 @router.get("/ram")
 async def get_ram_only():
     """Get RAM status only."""
-    return {"ram": get_ram_stats(), "timestamp": datetime.utcnow()}
+    ram = await asyncio.to_thread(get_ram_stats)
+    return {"ram": ram, "timestamp": datetime.utcnow()}
 
 
 # --- Power Profile Endpoints ---

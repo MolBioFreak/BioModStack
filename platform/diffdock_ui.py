@@ -119,7 +119,7 @@ with gr.Blocks(title="DiffDock - Protein-Ligand Docking") as demo:
     
     Upload a protein structure and enter a ligand SMILES to predict binding poses.
     
-    **Part of [BioModStack](http://localhost:5173) | Running on RTX 3090**
+    **Part of BioModStack | Running on RTX 3090**
     """)
     
     with gr.Row():
