@@ -303,7 +303,7 @@ export function Dashboard() {
                                                                 </span>
                                                             </td>
                                                             <td className="py-3 px-4">
-                                                                <StatusBadge status={job.status} />
+                                                                <StatusBadge status={job.status} errorMessage={job.error_message} />
                                                             </td>
                                                             <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
                                                             <td className="py-3 px-4 text-slate-400 text-sm">
@@ -357,7 +357,7 @@ export function Dashboard() {
                                                             </span>
                                                         </td>
                                                         <td className="py-3 px-4">
-                                                            <StatusBadge status={job.status} />
+                                                            <StatusBadge status={job.status} errorMessage={job.error_message} />
                                                         </td>
                                                         <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
                                                         <td className="py-3 px-4 text-slate-400 text-sm">
@@ -692,7 +692,7 @@ function RAMCard({ ram, history }: { ram: RAMStatus; history: number[] }) {
     );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: string | null }) {
     const styles: Record<string, string> = {
         queued: 'bg-slate-500/20 text-slate-400',
         running: 'bg-blue-500/20 text-blue-400 animate-pulse',
@@ -701,10 +701,31 @@ function StatusBadge({ status }: { status: string }) {
         cancelled: 'bg-orange-500/20 text-orange-400',
     };
 
+    // Show tooltip only for failed/cancelled status with error message
+    const showTooltip = (status === 'failed' || status === 'cancelled') && errorMessage;
+
+    // Truncate error message for tooltip (first line, max 100 chars)
+    const truncatedError = errorMessage
+        ? errorMessage.split('\n')[0].substring(0, 100) + (errorMessage.length > 100 ? '...' : '')
+        : null;
+
     return (
-        <span className={`px-2 py-1 rounded text-xs font-medium ${styles[status] ?? styles.queued}`}>
-            {status}
-        </span>
+        <div className="relative group inline-block">
+            <span className={`px-2 py-1 rounded text-xs font-medium cursor-default ${styles[status] ?? styles.queued}`}>
+                {status}
+            </span>
+            {showTooltip && (
+                <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 
+                    bg-slate-800 border border-slate-600 rounded-lg shadow-xl
+                    text-xs text-slate-200 whitespace-nowrap max-w-xs
+                    opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                    <div className="font-medium text-red-400 mb-1">Error:</div>
+                    <div className="text-slate-300 break-words whitespace-normal">{truncatedError}</div>
+                    {/* Tooltip arrow */}
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-600" />
+                </div>
+            )}
+        </div>
     );
 }
 
