@@ -57,6 +57,21 @@ workflow ANTIBODY_DENOVO {
         .ifEmpty(file('NO_FRAMEWORK'))
 
     RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+    
+    // REPORT STAGE: rfantibody
+    RFANTIBODY.out.designs.subscribe { meta, files ->
+        try {
+            def file_list = files instanceof List ? files : [files]
+            // Limit number of files reported to avoid command line length limits
+            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
+            def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+            proc.waitFor()
+        } catch (Exception e) {
+            println "Warning: Failed to report stage rfantibody: ${e.message}"
+        }
+    }
+
     backbone_designs = RFANTIBODY.out.designs
 
     // Step 2: CDR Sequence Design (Cross-Validation Mode)
@@ -89,6 +104,20 @@ workflow ANTIBODY_DENOVO {
             .map { pdbs, csv -> [1, pdbs, csv] }
 
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "H")
+
+        // REPORT STAGE: fampnn
+        RunFAMPNN.out.pdbs_jsons.subscribe { pdbs, jsons ->
+            try {
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage fampnn: ${e.message}"
+            }
+        }
+
         fampnn_seqs = RunFAMPNN.out.pdbs_jsons
     }
 
@@ -138,6 +167,19 @@ workflow ANTIBODY_DENOVO {
             .map { yamls -> [1, yamls] }  // batch_id, yamls
         
         RunBoltz(boltz_batched)
+
+        // REPORT STAGE: boltz2
+        RunBoltz.out.pdbs_jsons.subscribe { pdbs, jsons ->
+            try {
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "boltz2", "complete"] + report_files.collect { it.toString() }
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage boltz2: ${e.message}"
+            }
+        }
         
         // RunBoltz emits pdbs_jsons as tuple(path(pdbs), path(jsons))
         // Need to transform to tuple(meta, pdb) with metrics from JSON

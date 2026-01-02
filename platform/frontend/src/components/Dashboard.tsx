@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchSystemStatus, cancelJob, resubmitJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled, fetchJobLogs } from '../lib/api';
-import type { GPUStatus, CPUStatus, RAMStatus, JobLogs } from '../lib/api';
+import { fetchJobs, fetchSystemStatus, cancelJob, resubmitJob, fetchPowerControl, setPowerControlManual, fetchSchedulerConfig, toggleGpuDisabled, fetchJobLogs, resumeJob } from '../lib/api';
+import type { GPUStatus, CPUStatus, RAMStatus, JobLogs, Job } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
 import { QuickViewer } from './QuickViewer';
 import { JobQueuePanel } from './JobQueuePanel';
@@ -62,6 +62,29 @@ export function Dashboard() {
             setLogsData(null);
         } finally {
             setLogsLoading(false);
+        }
+    };
+
+    const resumeMutation = useMutation({
+        mutationFn: ({ jobId, fromStage }: { jobId: string; fromStage?: string }) =>
+            resumeJob(jobId, fromStage),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            alert(`Job resumed! New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}`);
+        },
+        onError: (error: any) => {
+            alert(`Resume failed: ${error.response?.data?.detail || error.message}`);
+        }
+    });
+
+    const handleResume = (job: Job) => {
+        const completed = job.completed_stages || [];
+        if (completed.length === 0) {
+            alert('No completed stages to resume from. Use Retry instead.');
+            return;
+        }
+        if (confirm(`Resume job "${job.name}" from after ${completed[completed.length - 1]}?`)) {
+            resumeMutation.mutate({ jobId: job.id });
         }
     };
 
@@ -377,8 +400,13 @@ export function Dashboard() {
                                                         className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
                                                     >
                                                         <td className="py-3 px-4 text-white font-medium">
-                                                            <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
-                                                            {job.name}
+                                                            <div className="flex flex-col">
+                                                                <div className="flex items-center">
+                                                                    <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
+                                                                    {job.name}
+                                                                </div>
+                                                                <StageProgress job={job} />
+                                                            </div>
                                                         </td>
                                                         <td className="py-3 px-4">
                                                             <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
@@ -432,6 +460,17 @@ export function Dashboard() {
                                                                         >
                                                                             📋 Logs
                                                                         </button>
+                                                                        {job.completed_stages && job.completed_stages.length > 0 && (
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleResume(job);
+                                                                                }}
+                                                                                className="px-2 py-1 text-xs bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 hover:text-emerald-300 rounded transition-colors"
+                                                                            >
+                                                                                ⏯ Resume
+                                                                            </button>
+                                                                        )}
                                                                         <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
@@ -812,8 +851,8 @@ function LogsModal({
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={`px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab.id
-                                    ? 'text-blue-400 border-b-2 border-blue-400 -mb-px'
-                                    : 'text-slate-400 hover:text-slate-200'
+                                ? 'text-blue-400 border-b-2 border-blue-400 -mb-px'
+                                : 'text-slate-400 hover:text-slate-200'
                                 }`}
                         >
                             {tab.label}
@@ -890,6 +929,48 @@ function Sparkline({ data, color, height = 24 }: { data: number[]; color: string
                 points={points}
             />
         </svg>
+    );
+}
+
+function StageProgress({ job }: { job: Job }) {
+    // Define job stages based on mode
+    const getStages = (mode: string) => {
+        if (mode.includes('antibody')) return ['rfantibody', 'fampnn', 'boltz2'];
+        if (mode.includes('binder')) return ['rfdiffusion', 'proteinmpnn', 'boltz2'];
+        if (mode.includes('monomer')) return ['rfdiffusion', 'proteinmpnn', 'af2'];
+        return [];
+    };
+
+    const stages = getStages(job.mode);
+    if (stages.length === 0) return null;
+
+    const completed = job.completed_stages || [];
+    const current = job.current_stage;
+
+    return (
+        <div className="flex items-center space-x-1 mt-1">
+            {stages.map((stage, idx) => {
+                const isCompleted = completed.includes(stage);
+                const isCurrent = stage === current;
+                const isPending = !isCompleted && !isCurrent;
+
+                return (
+                    <div key={stage} className="flex items-center">
+                        <div className={`
+                            px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded-[3px] border
+                            ${isCompleted ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : ''}
+                            ${isCurrent ? 'bg-blue-500/20 border-blue-500/30 text-blue-400 animate-pulse' : ''}
+                            ${isPending ? 'bg-slate-800/50 border-slate-700 text-slate-600' : ''}
+                        `}>
+                            {stage}
+                        </div>
+                        {idx < stages.length - 1 && (
+                            <div className={`w-1 h-px mx-0.5 ${isCompleted ? 'bg-emerald-500/30' : 'bg-slate-700'}`} />
+                        )}
+                    </div>
+                );
+            })}
+        </div>
     );
 }
 
