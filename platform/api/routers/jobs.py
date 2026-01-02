@@ -8,8 +8,11 @@ from sqlalchemy import select, func
 from typing import Optional
 import uuid
 import os
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from database import get_session, Job, Design
 from schemas import JobCreate, JobResponse, JobList, JobStatus
@@ -512,28 +515,162 @@ async def list_structure_files(
 @router.get("/{job_id}/logs")
 async def get_job_logs(
     job_id: str,
-    tail: int = 100,
+    tail: int = 200,
     session: AsyncSession = Depends(get_session)
 ):
-    """Get log output for a job."""
+    """
+    Get log output for a job.
+    
+    Searches for Nextflow work directory logs (.command.log, .command.err)
+    and returns structured log data with error extraction.
+    """
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # TODO: Read from Nextflow log file
-    log_path = f"{job.output_dir}/.nextflow.log" if job.output_dir else None
+    logs_data = {
+        "job_id": job_id,
+        "job_name": job.name,
+        "status": job.status,
+        "command_log": None,
+        "command_err": None,
+        "nextflow_log": None,
+        "exit_code": None,
+        "parsed_error": None,
+    }
     
-    if log_path:
+    # Try to find work directory logs
+    # Work dirs are under PROJECT_ROOT/work/ with hash-based paths
+    work_dir = PROJECT_ROOT / "work"
+    
+    if work_dir.exists():
+        # Find most recent .command.log files (search by modification time)
+        import subprocess
         try:
-            with open(log_path, 'r') as f:
-                lines = f.readlines()
-                return {"logs": "".join(lines[-tail:])}
-        except FileNotFoundError:
-            return {"logs": "Log file not yet available"}
+            # Find command logs modified in last hour, sorted by time
+            result = subprocess.run(
+                ["find", str(work_dir), "-name", ".command.log", "-mmin", "-60", 
+                 "-exec", "stat", "--format=%Y %n", "{}", ";"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Parse output and get most recent log
+                logs_with_time = []
+                for line in result.stdout.strip().split('\n'):
+                    parts = line.split(' ', 1)
+                    if len(parts) == 2:
+                        try:
+                            mtime = int(parts[0])
+                            path = parts[1]
+                            logs_with_time.append((mtime, path))
+                        except ValueError:
+                            continue
+                
+                # Sort by time descending (most recent first)
+                logs_with_time.sort(reverse=True)
+                
+                # Read most recent log that might belong to this job
+                # For now, just take most recent - could match by job name in future
+                if logs_with_time:
+                    log_path = Path(logs_with_time[0][1])
+                    log_dir = log_path.parent
+                    
+                    # Read .command.log
+                    if log_path.exists():
+                        with open(log_path, 'r') as f:
+                            lines = f.readlines()
+                            logs_data["command_log"] = "".join(lines[-tail:])
+                    
+                    # Read .command.err if exists
+                    err_path = log_dir / ".command.err"
+                    if err_path.exists():
+                        with open(err_path, 'r') as f:
+                            logs_data["command_err"] = f.read()
+                    
+                    # Read exit code
+                    exit_path = log_dir / ".exitcode"
+                    if exit_path.exists():
+                        with open(exit_path, 'r') as f:
+                            try:
+                                logs_data["exit_code"] = int(f.read().strip())
+                            except ValueError:
+                                pass
+                    
+                    # Parse error from logs
+                    logs_data["parsed_error"] = extract_error_from_logs(
+                        logs_data["command_log"], 
+                        logs_data["command_err"]
+                    )
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            logger.warning(f"Error searching work dir: {e}")
     
-    return {"logs": "No log file path configured"}
+    # Fallback: Read .nextflow.log from output_dir
+    if job.output_dir:
+        nf_log_path = Path(job.output_dir) / ".nextflow.log"
+        if not nf_log_path.exists():
+            nf_log_path = PROJECT_ROOT / ".nextflow.log"
+        
+        if nf_log_path.exists():
+            try:
+                with open(nf_log_path, 'r') as f:
+                    lines = f.readlines()
+                    logs_data["nextflow_log"] = "".join(lines[-50:])
+            except Exception:
+                pass
+    
+    return logs_data
+
+
+def extract_error_from_logs(command_log: str = None, command_err: str = None) -> str:
+    """
+    Extract meaningful error message from log files.
+    
+    Looks for common error patterns:
+    - Python tracebacks
+    - CUDA errors
+    - OOM messages
+    - Permission errors
+    """
+    if not command_log and not command_err:
+        return None
+    
+    combined = (command_log or "") + "\n" + (command_err or "")
+    lines = combined.split('\n')
+    
+    # Priority patterns to search for
+    error_patterns = [
+        "CUDA out of memory",
+        "CUDA error:",
+        "RuntimeError:",
+        "OSError:",
+        "FileNotFoundError:",
+        "ModuleNotFoundError:",
+        "OOM",
+        "Killed",
+        "Traceback (most recent call last):",
+        "Error:",
+        "bad substitution",
+    ]
+    
+    # Find the most relevant error
+    for pattern in error_patterns:
+        for i, line in enumerate(lines):
+            if pattern in line:
+                # Return context around the error (5 lines before, 10 after)
+                start = max(0, i - 2)
+                end = min(len(lines), i + 8)
+                return "\n".join(lines[start:end]).strip()
+    
+    # Fallback: return last 5 non-empty lines
+    non_empty = [l for l in lines if l.strip()]
+    if non_empty:
+        return "\n".join(non_empty[-5:]).strip()
+    
+    return None
 
 
 @router.get("/{job_id}/docking-results")
