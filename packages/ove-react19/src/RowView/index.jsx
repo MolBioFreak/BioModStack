@@ -165,11 +165,12 @@ class _RowView extends React.Component {
     });
   };
 
-  UNSAFE_componentWillReceiveProps(props) {
+  // React 19 compatible: use componentDidUpdate instead of UNSAFE_componentWillReceiveProps
+  componentDidUpdate(prevProps) {
     //we haven't yet called this function yet, so to make sure it jumps to the selected bps we just set a variable on the class
     this.updateScrollPosition(
-      this.calledUpdateScrollOnce ? this.props : {},
-      props
+      this.calledUpdateScrollOnce ? prevProps : {},
+      this.props
     );
   }
   updateScrollPosition = (oldProps, newProps) => {
