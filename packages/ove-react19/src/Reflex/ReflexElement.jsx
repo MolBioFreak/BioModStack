@@ -62,13 +62,14 @@ export default class ReflexElement extends React.Component {
   //
   //
   /////////////////////////////////////////////////////////
-  async UNSAFE_componentWillReceiveProps(props) {
-    if (props.size !== this.props.size) {
-      const directions = this.toArray(props.direction);
+  // React 19 compatible: use componentDidUpdate instead of UNSAFE_componentWillReceiveProps
+  async componentDidUpdate(prevProps) {
+    if (this.props.size !== prevProps.size) {
+      const directions = this.toArray(this.props.direction);
 
       for (const dir of directions) {
         await this.props.events.emit("element.size", {
-          size: props.size,
+          size: this.props.size,
           direction: dir,
           element: this
         });
