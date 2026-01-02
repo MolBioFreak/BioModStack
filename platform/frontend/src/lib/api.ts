@@ -27,6 +27,10 @@ export interface Job {
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
+    // Stage tracking for multi-stage pipelines
+    current_stage?: string | null;
+    completed_stages?: string[] | null;
+    stage_outputs?: Record<string, string[]> | null;
 }
 
 // Log data for View Logs modal
@@ -160,6 +164,31 @@ export const submitJob = (jobData: Partial<Job>) => {
 // Get job logs with parsed errors
 export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
     return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
+};
+
+// Get job stages for progress display
+export const fetchJobStages = (jobId: string) => {
+    return api.get<{
+        job_id: string;
+        mode: string;
+        all_stages: string[];
+        current_stage: string | null;
+        completed_stages: string[];
+        stage_outputs: Record<string, string[]>;
+        can_resume: boolean;
+    }>(`/api/jobs/${jobId}/stages`);
+};
+
+// Resume a failed job from checkpoint
+export const resumeJob = (jobId: string, fromStage?: string) => {
+    return api.post<{
+        message: string;
+        original_job_id: string;
+        new_job_id: string;
+        new_job_name: string;
+        resume_from_stage: string;
+        preserved_stages: string[];
+    }>(`/api/jobs/${jobId}/resume`, null, { params: { from_stage: fromStage } });
 };
 
 // Models API

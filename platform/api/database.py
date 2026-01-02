@@ -73,6 +73,13 @@ class Job(Base):
     msa_sequences = Column(JSON, nullable=True)  # For MSA batch jobs: list of sequences to process
     msa_manifest_path = Column(String(500), nullable=True)  # Path to MSA outputs manifest
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STAGE CHECKPOINTING: Multi-stage pipeline tracking
+    # ═══════════════════════════════════════════════════════════════════════════
+    current_stage = Column(String(50), nullable=True)  # Currently running stage: 'rfantibody', 'fampnn', etc.
+    completed_stages = Column(JSON, default=list)  # List of completed stages: ['rfantibody', 'fampnn']
+    stage_outputs = Column(JSON, default=dict)  # Stage output paths: {'rfantibody': ['path/to/design_0.pdb', ...]}
+    
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
