@@ -52,17 +52,17 @@ process RunMPNN {
     python /dl_binder_design/mpnn_fr/dl_interface_design_multi.py \
         -pdbdir "./" \
         -outpdbdir "./results" \
-        -augment_eps ${params.mpnn_backbone_noise} \
-        -checkpoint_path "/dl_binder_design/mpnn_fr/ProteinMPNN/${params.mpnn_checkpoint_type}_model_weights/${params.mpnn_checkpoint_model}.pt" \
-        -omit_AAs ${params.mpnn_omitAAs} \
-        -relax_max_cycles ${params.mpnn_relax_max_cycles} \
+        -augment_eps ${params.mpnn_backbone_noise ?: 0.0} \
+        -checkpoint_path "/dl_binder_design/mpnn_fr/ProteinMPNN/${params.mpnn_checkpoint_type ?: 'soluble'}_model_weights/${params.mpnn_checkpoint_model ?: 'v_48_020'}.pt" \
+        -omit_AAs ${params.mpnn_omitAAs ?: 'CX'} \
+        -relax_max_cycles ${params.mpnn_relax_max_cycles ?: 0} \
         ${params.mpnn_relax_output ? '-relax_output' : ''} \
-        -relax_seqs_per_cycle  ${params.mpnn_relax_seqs_per_cycle} \
-        -relax_convergence_rmsd ${params.mpnn_relax_convergence_rmsd} \
-        -relax_convergence_score ${params.mpnn_relax_convergence_score} \
-        -relax_convergence_max_cycles ${params.mpnn_relax_convergence_max_cycles}\
-        -seqs_per_struct ${params.seqs_per_design} \
-        -temperature ${params.mpnn_temperature} \
+        -relax_seqs_per_cycle  ${params.mpnn_relax_seqs_per_cycle ?: 1} \
+        -relax_convergence_rmsd ${params.mpnn_relax_convergence_rmsd ?: 0.2} \
+        -relax_convergence_score ${params.mpnn_relax_convergence_score ?: 0.1} \
+        -relax_convergence_max_cycles ${params.mpnn_relax_convergence_max_cycles ?: 1}\
+        -seqs_per_struct ${params.seqs_per_design ?: 8} \
+        -temperature ${params.mpnn_temperature ?: 0.1} \
         -debug \
         ${params.mpnn_extra_config ? params.mpnn_extra_config : ''} \
         2>&1 | tee mpnn_${task.index}.log

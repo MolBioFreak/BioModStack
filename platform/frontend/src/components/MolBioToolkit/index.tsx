@@ -12,6 +12,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { Editor } from '@biomodstack/ove';
 import { Provider } from 'react-redux';
 import { store } from './store';
+import { anyToJson, jsonToGenbank } from '@teselagen/bio-parsers';
 // Import styles directly
 import '@biomodstack/ove/style.css';
 // Desert tan theme for OVE
@@ -34,6 +35,7 @@ interface SequenceData {
     circular: boolean;
     sequence: string;
     features: SequenceFeature[];
+    primers?: SequenceFeature[]; // Support primers
 }
 
 // Sample sequence for demo - pUC19 plasmid backbone snippet
@@ -47,7 +49,8 @@ const SAMPLE_SEQUENCE: SequenceData = {
         { id: "f3", name: "lacZ alpha", type: "CDS", start: 101, end: 400, strand: 1, color: "#EF6500" },
         { id: "f4", name: "ori", type: "rep_origin", start: 800, end: 1200, strand: 1, color: "#FFCC00" },
         { id: "f5", name: "AmpR", type: "CDS", start: 1500, end: 2200, strand: -1, color: "#F74F4F" },
-    ]
+    ],
+    primers: []
 };
 
 // OVE Wrapper Component using ESM import
@@ -76,6 +79,15 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
             end: f.end,
             strand: f.strand || 1,
             forward: (f.strand || 1) === 1
+        })),
+        primers: (sequenceData.primers || []).map(p => ({
+            id: p.id,
+            name: p.name,
+            type: p.type || 'primer_bind',
+            start: p.start,
+            end: p.end,
+            strand: p.strand || 1,
+            forward: (p.strand || 1) === 1
         }))
     }), [sequenceData]);
 
@@ -180,19 +192,57 @@ export function MolBioToolkit() {
         setIsLoading(true);
         try {
             const text = await file.text();
-            // Basic sequence extraction - TODO: add proper GenBank/FASTA parsing
-            const cleanedSeq = text.replace(/[^ATCGNatcgn]/g, '').toUpperCase();
-            if (cleanedSeq.length > 0) {
+            // Use bio-parsers to correctly parse GenBank, FASTA, etc.
+            const results = await anyToJson(text, {
+                fileName: file.name,
+                parseOptions: {
+                    inclusive1BasedStart: false, // OVE uses 0-based exclusive
+                    // Map generic types to OVE-compatible versions
+                    jsonType: 'json',
+                }
+            });
+
+            // anyToJson returns an array of results or a single object. Take the first valid one.
+            const parsedSeq = Array.isArray(results) ? results[0] : results;
+
+            if (parsedSeq && parsedSeq.parsedSequence) {
+                const seq = parsedSeq.parsedSequence;
+
+                // Map to our local SequenceData format
                 setSequenceData({
-                    name: file.name.replace(/\.[^/.]+$/, ''),
-                    circular: true,
-                    sequence: cleanedSeq,
-                    features: []
+                    name: seq.name || file.name.replace(/\.[^/.]+$/, ''),
+                    circular: seq.circular ?? true,
+                    sequence: (seq.sequence || '').toUpperCase(),
+                    features: (seq.features || []).map((f: any) => ({
+                        id: f.id || Math.random().toString(36).substr(2, 9),
+                        name: f.name || 'Untitled Feature',
+                        type: f.type || 'misc_feature',
+                        start: f.start,
+                        end: f.end,
+                        strand: f.strand,
+                        color: f.color
+                    })),
+                    primers: (seq.primers || []).map((p: any) => ({
+                        id: p.id || Math.random().toString(36).substr(2, 9),
+                        name: p.name || 'Untitled Primer',
+                        type: p.type || 'primer_bind',
+                        start: p.start,
+                        end: p.end,
+                        strand: p.strand,
+                        color: p.color
+                    }))
                 });
+
+                // Also load any primers if present
+                // Note: SequenceData interface might need 'primers' field update to fully support this locally
+                // But OVEWrapper transforms it anyway.
+            } else {
+                alert('Could not parse sequence from file.');
             }
             setShowImportModal(false);
         } catch (error) {
             console.error('Failed to import file:', error);
+            alert('Error parsing file. See console for details.');
         } finally {
             setIsLoading(false);
         }
@@ -260,9 +310,38 @@ export function MolBioToolkit() {
                             Import
                         </button>
                         <button
+                            onClick={() => {
+                                // Get the current editor state from Redux store
+                                const state = store.getState() as any;
+                                const editorState = state.VectorEditor[EDITOR_NAME];
+                                if (!editorState || !editorState.sequenceData) {
+                                    alert('No sequence data to save');
+                                    return;
+                                }
+
+                                try {
+                                    // Convert sequence data to GenBank format
+                                    // OVE sequence data matches the format expected by jsonToGenBank
+                                    const genbankString = jsonToGenbank(editorState.sequenceData);
+
+                                    // Trigger file download
+                                    const blob = new Blob([genbankString], { type: 'text/plain' });
+                                    const url = URL.createObjectURL(blob);
+                                    const link = document.createElement('a');
+                                    link.href = url;
+                                    link.download = `${editorState.sequenceData.name || 'sequence'}.gb`;
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    URL.revokeObjectURL(url);
+                                } catch (e) {
+                                    console.error('Failed to generate GenBank file:', e);
+                                    alert('Failed to save file');
+                                }
+                            }}
                             className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-emerald-600/20"
                         >
-                            Save
+                            Save .gb
                         </button>
                     </div>
                 </div>

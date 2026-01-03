@@ -30,6 +30,7 @@ export interface Job {
     // Stage tracking for multi-stage pipelines
     current_stage?: string | null;
     completed_stages?: string[] | null;
+    all_stages?: string[] | null;
     stage_outputs?: Record<string, string[]> | null;
 }
 
