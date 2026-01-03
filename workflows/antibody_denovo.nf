@@ -100,9 +100,15 @@ workflow ANTIBODY_DENOVO {
         PrepFAMPNN(fampnn_prep_input)
 
         // RunFAMPNN expects [batch_id, pdbs, csv], analysis_chain_id
+        // PrepFAMPNN.out.pdbs may emit multiple files from glob - collect them first
         fampnn_run_input = PrepFAMPNN.out.pdbs
-            .combine(PrepFAMPNN.out.csv)
-            .map { pdbs, csv -> [1, pdbs, csv] }
+            .collect()
+            .combine(PrepFAMPNN.out.csv.collect())
+            .map { pdbs, csv -> 
+                // pdbs is a list, csv is a list with single element
+                def csv_file = csv instanceof List ? csv[0] : csv
+                [1, pdbs, csv_file] 
+            }
 
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "all_chains")
 
