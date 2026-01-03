@@ -274,8 +274,8 @@ function drawAnnotations(props) {
         // Create spread props without 'key' to avoid React 19 "key is being spread into JSX" error
         const spreadProps = {
           ...props,
-          ...rest,
-          ...annotation,
+          ...rest, // 'rest' already has key extracted at line 149
+          // Note: Do NOT spread 'annotation' again here - it still contains 'key'
           angleAdjust,
           ellipsizedName,
           name,

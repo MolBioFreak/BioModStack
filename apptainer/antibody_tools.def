@@ -23,11 +23,15 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
-    # Install PyTorch with CUDA 12.4 support
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install PyTorch with CUDA 12.4 support (pinned to compatible versions)
+    # torch.library.register_fake requires torch 2.4+, torchvision 0.20+ requires torch 2.5
+    uv pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
 
-    # Install original ANARCI and Biopython (required by anarci.nf)
-    uv pip install anarci biopython
+    # Install biopython (required by antibody tools)
+    uv pip install biopython
+
+    # Note: We use ANARCII (deep learning), not legacy ANARCI (HMM-based)
+    # ANARCI's setup.py runs hmmpress which can hang for hours
 
     # Install ANARCII (deep learning antibody numbering - IMGT scheme)
     # Superior to ANARCI: Seq2Seq model, faster, Python 3.9-3.13 compatible
@@ -54,6 +58,10 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Install AntiBERTy for immunogenicity scoring
     # Uses pseudo-log-likelihood to score sequence "naturalness"
     uv pip install antiberty
+
+    # CRITICAL: Force reinstall torch 2.6+ to satisfy transformers CVE-2025-32434 security check
+    # Also reinstall numpy<2 to avoid NumPy 2.x compatibility issues with torch
+    uv pip install --force-reinstall torch==2.6.0 torchvision==0.21.0 numpy==1.26.4 --index-url https://download.pytorch.org/whl/cu124
 
     # Cleanup
     rm -rf /root/.cache/uv

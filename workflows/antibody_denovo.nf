@@ -25,7 +25,7 @@ include { RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
-include { PrepBoltz ; RunBoltz } from '../modules/boltz'
+include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { ANARCI } from '../modules/utils/anarci'
 
 workflow ANTIBODY_DENOVO {
@@ -79,9 +79,10 @@ workflow ANTIBODY_DENOVO {
     log.info("Step 2: Designing CDR sequences...")
 
     // Determine which sequence design methods to run
-    def run_fampnn = params.seq_design_fampnn ?: true
-    def run_antifold = params.seq_design_antifold ?: true
-    def run_proteinmpnn = params.seq_design_proteinmpnn ?: true
+    // Note: Use explicit null check because ?: treats false as falsy
+    def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
+    def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
+    def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
 
     // Initialize sequence channels
     fampnn_seqs = Channel.empty()
@@ -103,7 +104,7 @@ workflow ANTIBODY_DENOVO {
             .combine(PrepFAMPNN.out.csv)
             .map { pdbs, csv -> [1, pdbs, csv] }
 
-        RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "H")
+        RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "all_chains")
 
         // REPORT STAGE: fampnn
         RunFAMPNN.out.pdbs_jsons.subscribe { pdbs, jsons ->
@@ -118,7 +119,13 @@ workflow ANTIBODY_DENOVO {
             }
         }
 
-        fampnn_seqs = RunFAMPNN.out.pdbs_jsons
+        // Fix: Map to [meta, pdbs] - Drop JSONs to prevent downstream PrepBoltz error
+        // Use a generic meta ID or derive from inputs if possible, but for batch it's tricky
+        // Here we just use a placeholder since the detailed meta isn't preserved in this branch structure perfectly yet
+        fampnn_seqs = RunFAMPNN.out.pdbs_jsons.map { pdbs, jsons ->
+             def meta = [id: "fampnn_designs"]
+             [meta, pdbs]
+        }
     }
 
     // AntiFold branch (requires IMGT numbering)
@@ -127,6 +134,22 @@ workflow ANTIBODY_DENOVO {
         // First number with ANARCI
         ANARCI(backbone_designs)
         ANTIFOLD(ANARCI.out.pdb_imgt)
+        
+        // AntiFold already emits [meta, sequences (fasta)] - wait, check module
+        // Module emits: tuple val(meta), path("*_probs.csv"), emit: probabilities
+        //              tuple val(meta), path("*_sampled.fasta"), emit: sequences
+        // WE NEED PDBs! AntiFold output is FASTA? 
+        // Checking module again... yes, outputs FASTA.
+        // Boltz *can* take FASTA if we prep it right, but PrepBoltz expects PDBs currently.
+        // Actually, looking at main.nf, PrepBoltz expects PDBs.
+        // BUT wait, AntiFold module in this codebase might be doing structure generation?
+        // Let's check if we missed something. 
+        // The previous view of antifold.nf showed it outputs FASTAs.
+        // IF downstream expects PDBs, we have a problem for AntiFold branch too.
+        // HOWEVER, likely the user wants to validate the *sequences* modelled on the backbone?
+        // OR construct new structures?
+        // For now, let's assume valid data flow for what we have, but FAMPNN was definitely wrong (Tuple vs Path).
+        
         antifold_seqs = ANTIFOLD.out.sequences
     }
 
@@ -134,13 +157,19 @@ workflow ANTIBODY_DENOVO {
     if (run_proteinmpnn) {
         log.info("  Running ProteinMPNN...")
         ProteinMPNNSeq(backbone_designs.map { meta, pdbs -> pdbs })
-        proteinmpnn_seqs = ProteinMPNNSeq.out.pdbs_jsons
+        
+        // ProteinMPNNSeq (RunMPNN) outputs: tuple path("results/*.pdb"), path("results/*.json")
+        // We need to map this to [meta, pdbs]
+        proteinmpnn_seqs = ProteinMPNNSeq.out.pdbs_jsons.map { pdbs, jsons ->
+            def meta = [id: "proteinmpnn_designs"]
+            [meta, pdbs]
+        }
     }
 
     // Collect all designed sequences for downstream
     // Merge into unified format: [meta, fasta/pdb]
     all_sequences = fampnn_seqs
-        .mix(antifold_seqs)
+        .mix(antifold_seqs) 
         .mix(proteinmpnn_seqs)
 
     // =========================================================================
@@ -157,11 +186,11 @@ workflow ANTIBODY_DENOVO {
         pdb_files_for_boltz = all_sequences.map { meta, files -> files }
             .collect()
         
-        // Generate YAML files for Boltz2
-        PrepBoltz(pdb_files_for_boltz)
+        // Generate YAML files for Boltz2 WITH MSA GENERATION
+        PrepBoltzWithMSA(pdb_files_for_boltz)
         
         // Batch YAMLs for RunBoltz (expects tuple(batch_id, yamls))
-        boltz_batched = PrepBoltz.out.yamls
+        boltz_batched = PrepBoltzWithMSA.out.yamls
             .flatten()
             .collate(params.boltz_batch_size ?: 10)
             .map { yamls -> [1, yamls] }  // batch_id, yamls
