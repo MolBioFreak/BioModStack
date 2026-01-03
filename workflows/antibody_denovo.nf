@@ -224,58 +224,45 @@ workflow ANTIBODY_DENOVO {
 
     if (params.run_structure_validation != false) {
         // =========================================================================
-        // NEW PATTERN: Follow structure_prediction_wf for proper GPU scheduling
-        // 1. Extract sequences from PDBs
-        // 2. Generate MSA once using host-side GPU MMseqs2
-        // 3. Run BoltzFromSequenceWithMSA per-design (sequential, prevents OOM)
+        // FULL IMPLEMENTATION: GenerateLocalMSA + BoltzFromSequenceWithMSA
+        // Following structure_prediction_wf pattern exactly
         // =========================================================================
         
         // Step 1: Extract sequences from FAMPNN PDB outputs
-        // all_sequences is Channel of [meta, pdbs] where pdbs is list of PDB files
         design_sequences = all_sequences
             .flatMap { meta, files ->
                 def pdbs = files instanceof List ? files : [files]
                 pdbs.collect { pdb ->
-                    // Extract sequence from PDB using BioPython (via scripts)
-                    tuple(meta.id, pdb.baseName, pdb)
+                    def sequence = extractSequenceFromPDB(pdb)
+                    tuple(sequence, pdb.baseName, pdb)
                 }
             }
         
-        // Step 2: Generate MSA ONCE for representative sequence
-        // For antibodies, we generate MSA from one representative design
-        // (all designs share same framework, only CDRs differ)
-        representative_for_msa = design_sequences
+        // Step 2: Generate MSA ONCE using first design's sequence
+        // For antibodies, all designs share same framework (only CDRs differ)
+        // so one MSA is sufficient for all
+        first_design_for_msa = design_sequences
             .first()
-            .map { meta_id, name, pdb ->
-                // Read sequence from PDB using simple shell command
-                tuple(pdb, name)
+            .map { sequence, name, pdb ->
+                tuple(sequence, "antibody_representative")
             }
         
-        // Extract sequence from representative PDB and generate MSA
-        // Use process that reads PDB and generates MSA
-        seq_for_msa = representative_for_msa.map { pdb, name ->
-            // Simple sequence extraction - antibodies are typically ~450aa total
-            // For now, use placeholder that will be extracted in GenerateLocalMSA
-            def sequence = "PLACEHOLDER_SEQUENCE"  // Will be replaced by actual extraction
-            tuple(sequence, "antibody_msa")
-        }
+        // Call GenerateLocalMSA - uses GPU MMseqs2 with local ColabFold DB
+        GenerateLocalMSA(first_design_for_msa)
         
-        // Actually, we need to extract the sequence first. Let's use a simpler approach:
-        // Run GenerateLocalMSA with the actual sequence extracted from PDB
+        // Step 3: Combine the MSA with ALL design sequences
+        // GenerateLocalMSA.out.msa emits: [sequence, sequence_name, path(msa_file)]
+        msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
         
-        // For now, skip MSA if we can't extract sequence cleanly
-        // BoltzFromSequenceWithMSA can handle missing MSA gracefully
+        // Combine each design with the shared MSA file
+        boltz_inputs = design_sequences
+            .combine(msa_file_ch)
+            .map { sequence, name, pdb, msa_file ->
+                // BoltzFromSequenceWithMSA expects: (sequence, sequence_name, msa_file)
+                tuple(sequence, name, msa_file)
+            }
         
-        // Step 3: Run Boltz per-design (sequential via channel structure)
-        // Convert PDB files to sequence + name + dummy MSA for validation
-        boltz_inputs = design_sequences.map { meta_id, name, pdb ->
-            // Read sequence from PDB file using BioPython
-            // For antibodies, extract both H and L chains
-            def sequence = extractSequenceFromPDB(pdb)
-            tuple(sequence, name, file("${projectDir}/lib/NO_MSA"))  // Use empty MSA for now
-        }
-        
-        // Run BoltzFromSequenceWithMSA - this process handles one at a time via label
+        // Step 4: Run Boltz per-design (sequential, prevents OOM)
         BoltzFromSequenceWithMSA(boltz_inputs)
         
         // REPORT STAGE: boltz2
