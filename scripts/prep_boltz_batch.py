@@ -59,7 +59,7 @@ def file_to_list(file_string):
 
 def main():
     parser = argparse.ArgumentParser(description='Prepare Boltz batch YAMLs')
-    parser.add_argument('--pdb_files', required=True, help='List of PDB files (space or comma separated)')
+    parser.add_argument('--pdb_files', required=True, nargs='+', help='List of PDB files (space or comma separated)')
     parser.add_argument('--msa_path', required=True, help='Path to shared MSA file')
     parser.add_argument('--out_dir', required=True, help='Output directory for YAMLs')
     
@@ -67,7 +67,14 @@ def main():
     
     os.makedirs(args.out_dir, exist_ok=True)
     
-    pdb_files = file_to_list(args.pdb_files)
+    # helper to flatten if needed
+    raw_input = args.pdb_files
+    if len(raw_input) == 1:
+        # Check if it's a single string containing spaces or commas or brackets
+        pdb_files = file_to_list(raw_input[0])
+    else:
+        # Already a list of files
+        pdb_files = raw_input
     msa_abs_path = os.path.abspath(args.msa_path)
     
     print(f"Generating YAMLs for {len(pdb_files)} PDBs using shared MSA: {args.msa_path}")

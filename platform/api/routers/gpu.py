@@ -125,8 +125,9 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
         device_count = pynvml.nvmlDeviceGetCount()
         gpus = []
 
-        # Load active reservations
-        reservations = {}
+        # Load active reservations and extract job info for process naming
+        reservations = {}  # gpu_idx -> total_vram
+        gpu_job_info = {}  # gpu_idx -> list of (job_name, model_type) for active reservations
         try:
             if GPU_RESERVATIONS_PATH.exists():
                 with open(GPU_RESERVATIONS_PATH, "r") as f:
@@ -135,12 +136,19 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                     
                     for gpu_idx, res_list in data.items():
                         active_vram = 0
+                        job_infos = []
                         for res in res_list:
                             # Only count if within last 60s (or custom duration)
                             # The scheduler cleans this up, but we filter here for UI accuracy
                             if (now - res.get("timestamp", 0)) < 60000:
                                 active_vram += res.get("vram", 0)
+                                job_name = res.get("job_name")
+                                model_type = res.get("model_type")
+                                if model_type:
+                                    job_infos.append((job_name, model_type))
                         reservations[int(gpu_idx)] = active_vram
+                        if job_infos:
+                            gpu_job_info[int(gpu_idx)] = job_infos
         except Exception as e:
             print(f"Error reading reservations: {e}")
         
@@ -203,6 +211,37 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                     ))
             except pynvml.NVMLError:
                 pass
+
+            # Post-process: Rename "python" / "python3" with better labels
+            # Use model_type from active reservations if available
+            if i in reservations and reservations[i] > 0:
+                # Get model type(s) for this GPU
+                model_types = []
+                if i in gpu_job_info:
+                    for job_name, model_type in gpu_job_info[i]:
+                        model_types.append(model_type)
+                
+                # Create display name
+                if model_types:
+                    # Map model types to display names
+                    MODEL_DISPLAY = {
+                        'boltz': 'Boltz-2', 'boltz_batch': 'Boltz-2 Batch',
+                        'rf3': 'RoseTTAFold3', 'af2': 'AlphaFold2',
+                        'rfdiffusion': 'RFdiffusion', 'rfantibody': 'RFantibody',
+                        'fampnn': 'FAMPNN', 'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
+                        'diffdock': 'DiffDock', 'unidock': 'Uni-Dock',
+                        'boltzgen': 'BoltzGen', 'antibody_child': 'Antibody Validation',
+                    }
+                    display_names = [MODEL_DISPLAY.get(m, m) for m in model_types]
+                    process_label = ", ".join(display_names[:2])  # Max 2 labels
+                    if len(display_names) > 2:
+                        process_label += f" +{len(display_names) - 2}"
+                else:
+                    process_label = "Job (Allocated)"
+                
+                for p in processes:
+                    if p.name in ["python", "python3"]:
+                        p.name = process_label
             
             # Get hardware limits for this GPU (fallback to defaults if not defined)
             hw_limits = HARDWARE_LIMITS.get(i, {"min": 100, "default": 300, "max": 400})

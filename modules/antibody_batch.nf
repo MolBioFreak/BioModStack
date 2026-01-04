@@ -26,7 +26,10 @@ process BatchBoltzValidation {
     # This loads the model ONCE and processes all sequences
     # Using specific cache directory to avoid conflicts
     export BOLTZ_CACHE_DIR="\$(pwd)/.boltz_cache"
-    mkdir -p \$BOLTZ_CACHE_DIR
+    export NUMBA_CACHE_DIR="\$(pwd)/.numba_cache"
+    export XDG_CACHE_HOME="\$(pwd)/.cache_home"
+    export HOME="\$(pwd)/.fake_home"
+    mkdir -p \$BOLTZ_CACHE_DIR \$NUMBA_CACHE_DIR \$XDG_CACHE_HOME \$HOME
     
     boltz predict yamls/ \\
         --output_format pdb \\
