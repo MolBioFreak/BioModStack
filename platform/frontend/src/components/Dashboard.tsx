@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, cancelJob, resubmitJob, fetchJobLogs, resumeJob } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
@@ -91,6 +91,20 @@ export function Dashboard() {
         }
     };
 
+    const navigate = useNavigate();
+
+    const handleClone = (job: Job) => {
+        // Store job params in localStorage for the submit form to pick up
+        const cloneData = {
+            name: `${job.name}_clone`,
+            model_id: job.model_id,
+            mode: job.mode,
+            params: job.params || {}
+        };
+        localStorage.setItem('clonedJobData', JSON.stringify(cloneData));
+        // Navigate to submit page
+        navigate('/submit');
+    };
 
 
 
@@ -178,6 +192,7 @@ export function Dashboard() {
                     onResume={handleResume}
                     onViewLogs={handleViewLogs}
                     onViewQuick={setQuickViewJobId}
+                    onClone={handleClone}
                     quickViewJobId={quickViewJobId}
                 />
             </section>

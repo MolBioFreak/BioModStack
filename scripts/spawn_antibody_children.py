@@ -107,10 +107,11 @@ def spawn_children(
                 "model_id": "antibody_child",
                 "mode": "validation_batch", # Just label, workflow uses defaults
                 "params": {
-                    "pdb_paths": str(pdb_paths), # Pass as string representation of list
+                    "pdb_paths": ",".join(pdb_paths), # Pass as comma-separated string
                     "msa_path": msa_path or "",
                     "backbone_id": backbone_id,
-                    "design_count": len(group_pdbs)
+                    "design_count": len(group_pdbs),
+                    "rfd_mode": "antibody_child"
                 },
                 "batch_id": parent_job_id,
                 "batch_name": batch_name,
