@@ -78,14 +78,26 @@ workflow {
     // ANTIBODY CHILD JOB      //
     /////////////////////////////
     // Single design validation job spawned by parent in exploration mode
+    // Single or Batch design validation job spawned by parent
     if (params.rfd_mode == 'antibody_child') {
         println("Running Antibody Child Validation Job")
-        println("* PDB: ${params.pdb_path}")
-        println("* Sequence length: ${params.sequence?.length() ?: 'unknown'}")
         
+        def pdb_list = []
+        if (params.pdb_paths) {
+            // Parse batch list (comes as string "[path1, path2]")
+            def clean = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
+            pdb_list = clean.collect { it.strip() }.findAll { it }.collect { file(it) }
+            println("* Mode: Batch (${pdb_list.size()} designs)")
+        } else if (params.pdb_path) {
+            // Legacy single mode
+            pdb_list = [file(params.pdb_path)]
+            println("* Mode: Single (${params.pdb_path})")
+        } else {
+             error("No PDB inputs provided for antibody_child mode")
+        }
+
         ANTIBODY_CHILD(
-            params.pdb_path,
-            params.sequence,
+            pdb_list,
             params.msa_path ?: ""
         )
         

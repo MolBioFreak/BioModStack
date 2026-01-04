@@ -9,63 +9,74 @@ nextflow.enable.dsl = 2
 // Each child job is independently scheduled by GPU orchestrator.
 // =============================================================================
 
-include { BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
-include { ANTIBERTY_SCORE } from '../modules/antiberty'
-include { THERMOMPNN } from '../modules/thermompnn'
+// =============================================================================
+// Antibody Child Workflow - BATCH Validation
+// =============================================================================
+// Runs structure validation and scoring for a BATCH of antibody designs
+// sharing the same backbone.
+// Spawned by parent antibody_denovo workflow in exploration mode.
+// =============================================================================
+
+include { BatchBoltzValidation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
 
 workflow ANTIBODY_CHILD {
     take:
-    pdb_path      // Path to design PDB
-    sequence      // Amino acid sequence
-    msa_path      // Path to MSA file (or empty string)
+    pdb_paths   // List of PDB files (stage them all)
+    msa_path    // Path to shared MSA file (or empty string)
     
     main:
-    // =========================================================================
-    // Step 1: Structure Validation with Boltz2
-    // =========================================================================
-    
     // Prepare MSA file (use provided or generate if needed)
     def msa_file = msa_path ? file(msa_path) : file("${projectDir}/lib/NO_MSA")
-    def design_name = file(pdb_path).baseName
     
-    // Create input channel for BoltzFromSequenceWithMSA
-    boltz_input = Channel.of(tuple(sequence, design_name, msa_file))
-    
-    BoltzFromSequenceWithMSA(boltz_input)
+    // Convert input paths to file objects if they aren't already
+    def pdb_files = pdb_paths.collect { file(it) }
     
     // =========================================================================
-    // Step 2: Immunogenicity Scoring with AntiBERTy
+    // Step 1: Batch Structure Validation with Boltz2
     // =========================================================================
-    
-    input_pdb = file(pdb_path)
-    antiberty_input = Channel.of(tuple([id: design_name], input_pdb))
-    
-    ANTIBERTY_SCORE(antiberty_input)
+    // Processes all sequences in one Boltz execution (highly efficient)
+    BatchBoltzValidation(pdb_files, msa_file)
     
     // =========================================================================
-    // Step 3: Stability Scoring with ThermoMPNN
+    // Step 2: Batch Scoring (Parallel)
     // =========================================================================
+    // Use the *validated* structures from Boltz (folded) for downstream scoring
+    // Or prefer the designed sequences? Usually we score the predicted structure.
+    // BatchBoltzValidation outputs a directory of PDBs.
     
-    THERMOMPNN(input_pdb)
+    // Note: BatchBoltzValidation.out.pdbs is a list of files.
+    BatchImmunogenicity(BatchBoltzValidation.out.pdbs)
+    BatchStability(BatchBoltzValidation.out.pdbs)
     
     // =========================================================================
     // Aggregate Results
     // =========================================================================
     
-    // Emit all results for aggregation
     emit:
-    boltz_pdbs = BoltzFromSequenceWithMSA.out.pdbs
-    boltz_jsons = BoltzFromSequenceWithMSA.out.jsons
-    antiberty_scores = ANTIBERTY_SCORE.out.scores
-    thermompnn_scores = THERMOMPNN.out.scores
+    boltz_pdbs = BatchBoltzValidation.out.pdbs
+    boltz_scores = BatchBoltzValidation.out.scores
+    antiberty_scores = BatchImmunogenicity.out.scores
+    thermompnn_scores = BatchStability.out.scores
 }
 
 // Entry point when run as standalone workflow
 workflow {
     // Read params from job submission
-    def pdb_path = params.pdb_path
-    def sequence = params.sequence
-    def msa_path = params.msa_path ?: ""
+    // Support both single pdb_path (legacy) and pdb_paths (batch list)
     
-    ANTIBODY_CHILD(pdb_path, sequence, msa_path)
+    def msa_path = params.msa_path ?: ""
+    def pdbs_to_process = []
+    
+    if (params.pdb_paths) {
+        // Parse list from string "[path1, path2]" or JSON
+        def clean_paths = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
+        pdbs_to_process = clean_paths.collect { it.strip() }.findAll { it }
+    } else if (params.pdb_path) {
+        // Legacy single mode
+        pdbs_to_process = [params.pdb_path]
+    } else {
+        error "No input PDBs provided. Use --pdb_paths or --pdb_path"
+    }
+    
+    ANTIBODY_CHILD(pdbs_to_process, msa_path)
 }
