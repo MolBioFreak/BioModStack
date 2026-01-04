@@ -84,9 +84,9 @@ workflow {
         
         def pdb_list = []
         if (params.pdb_paths) {
-            // Parse batch list (comes as string "[path1, path2]")
+            // Parse batch list (comes as string "[path1, path2]" or "path1,path2")
             def clean = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
-            pdb_list = clean.collect { it.strip() }.findAll { it }.collect { file(it) }
+            pdb_list = clean.collect { it.strip().replaceAll(/['"]/, '') }.findAll { it }.collect { file(it) }
             println("* Mode: Batch (${pdb_list.size()} designs)")
         } else if (params.pdb_path) {
             // Legacy single mode

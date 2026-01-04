@@ -245,7 +245,7 @@ async def launch_nextflow_job(
             return
         
         try:
-            # Run Nextflow
+            # Run Nextflow with stdout piped for real-time monitoring
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(PROJECT_ROOT),
@@ -261,16 +261,76 @@ async def launch_nextflow_job(
             job.nextflow_run_id = str(process.pid)
             await session.commit()
             
-            # Wait for completion
-            stdout, _ = await process.communicate()
+            # ═══════════════════════════════════════════════════════════════════
+            # STREAM OUTPUT & MONITOR PROGRESS
+            # ═══════════════════════════════════════════════════════════════════
+            full_log = []
+            import re
+            # Regex to capture process name: "[... ] process > PROCESS_NAME (tag) [ 10%]"
+            # We want "PROCESS_NAME"
+            process_regex = re.compile(r"process >\s+([^(\[]+)")
+            
+            last_stage = None
+            
+            # Read line by line
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                    
+                line_str = line.decode('utf-8', errors='replace')
+                full_log.append(line_str)
+                
+                # Check for stage update
+                # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
+                match = process_regex.search(line_str)
+                if match:
+                    # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
+                    raw_stage = match.group(1).strip()
+                    # Clean up: Remove workflow prefix if present
+                    stage_clean = raw_stage.split(':')[-1].lower()
+                    
+                    # Map to frontend stage IDs
+                    stage = stage_clean
+                    if 'fampnn' in stage_clean:
+                        stage = 'fampnn'
+                    elif 'rfantibody' in stage_clean:
+                        stage = 'rfantibody'
+                    elif 'boltz' in stage_clean:
+                        stage = 'boltz2' # Frontend uses boltz2
+                    elif 'rf3' in stage_clean:
+                        stage = 'rf3'
+                    elif 'proteinmpnn' in stage_clean or 'mpnn' in stage_clean:
+                        stage = 'proteinmpnn'
+                    elif 'af2' in stage_clean:
+                        stage = 'af2'
+                    elif 'rfdiffusion' in stage_clean:
+                        stage = 'rfdiffusion'
+                    
+                    if stage != last_stage:
+                        logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
+                        last_stage = stage
+                        
+                        # Update DB (separate session to avoid long-held locks)
+                        try:
+                            async with async_session() as update_session:
+                                j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                j = j_stats.scalar_one_or_none()
+                                if j:
+                                    j.current_stage = stage
+                                    await update_session.commit()
+                        except Exception as db_err:
+                            logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+
+            # Wait for process to fully exit
+            exit_code = await process.wait()
             
             # Save Nextflow execution log to output directory
             try:
                 log_path = Path(output_dir) / "nextflow.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(log_path, "wb") as f:
-                    if stdout:
-                        f.write(stdout)
+                with open(log_path, "w") as f:
+                    f.writelines(full_log)
             except Exception as log_err:
                 logger.warning(f"Failed to save nextflow.log: {log_err}")
             
@@ -289,8 +349,9 @@ async def launch_nextflow_job(
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
                     
                 elif job.status == JobStatus.RUNNING.value:
-                    if process.returncode == 0:
+                    if exit_code == 0:
                         job.status = JobStatus.COMPLETED.value
+                        job.current_stage = "Complete" # Clear stage
                         
                         # Ingest results into Design table
                         try:
@@ -301,17 +362,18 @@ async def launch_nextflow_job(
                             logger.warning(f"Result ingestion failed: {ingest_err}")
                             
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
-                    elif process.returncode in (-15, -9, 143, 137):
+                    elif exit_code in (-15, -9, 143, 137):
                         job.status = JobStatus.CANCELLED.value
                         job.error_message = "Job cancelled by user"
-                        logger.info(f"Job {job_id} exit code {process.returncode} interpreted as CANCELLED")
+                        logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
                         
                     else:
                         job.status = JobStatus.FAILED.value
-                        job.error_message = f"Nextflow exited with code {process.returncode}"
-                        logger.error(f"Nextflow failed for job {job_id} with code {process.returncode}")
-                        if stdout:
-                            logger.error(f"Nextflow output:\n{stdout.decode('utf-8', errors='replace')}")
+                        job.error_message = f"Nextflow exited with code {exit_code}"
+                        logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
+                        
+                        # Log last few lines
+                        logger.error(f"Tail of log:\n{''.join(full_log[-20:])}")
                 
                 job.completed_at = datetime.utcnow()
                 await session.commit()
