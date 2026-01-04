@@ -441,8 +441,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     <p className="text-xs text-slate-500 mt-2">
                         {explorationMode
-                            ? "Parallel: Distribute jobs across 4 GPUs (~1 hour for 100 designs)"
-                            : "Serial: Sequential validation on one GPU (thorough analysis)"}
+                            ? "Parallel: Jobs queue through scheduler for multi-GPU distribution"
+                            : "Serial: Run each validation one-by-one on assigned GPU"}
                     </p>
                 </div>
             </div>
