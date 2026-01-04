@@ -32,6 +32,9 @@ include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 // De Novo Antibody Pipeline (RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> ThermoMPNN -> IgGM)
 include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
+// Antibody Child Workflow (single design validation - spawned by parent in exploration mode)
+include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
+
 workflow {
     // Permit use of topic channels in Nextflow v24 by enabling preview features
     try {
@@ -70,6 +73,24 @@ workflow {
     // Create output directory for copy of input files used in run
     def inputsDir = file("${outputDirectory}/inputs")
     inputsDir.mkdirs()
+
+    /////////////////////////////
+    // ANTIBODY CHILD JOB      //
+    /////////////////////////////
+    // Single design validation job spawned by parent in exploration mode
+    if (params.rfd_mode == 'antibody_child') {
+        println("Running Antibody Child Validation Job")
+        println("* PDB: ${params.pdb_path}")
+        println("* Sequence length: ${params.sequence?.length() ?: 'unknown'}")
+        
+        ANTIBODY_CHILD(
+            params.pdb_path,
+            params.sequence,
+            params.msa_path ?: ""
+        )
+        
+        return null
+    }
 
     /////////////////////////////
     // ANTIBODY DESIGN STACK   //

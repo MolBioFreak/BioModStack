@@ -224,8 +224,9 @@ workflow ANTIBODY_DENOVO {
 
     if (params.run_structure_validation != false) {
         // =========================================================================
-        // FULL IMPLEMENTATION: GenerateLocalMSA + BoltzFromSequenceWithMSA
-        // Following structure_prediction_wf pattern exactly
+        // EXPLORATION vs REFINEMENT MODE
+        // Parallel: Spawn child jobs for GPU distribution (fast screening)
+        // Serial: Run BoltzFromSequenceWithMSA in-process (thorough analysis)
         // =========================================================================
         
         // Step 1: Extract sequences from FAMPNN PDB outputs
@@ -239,53 +240,98 @@ workflow ANTIBODY_DENOVO {
             }
         
         // Step 2: Generate MSA ONCE using first design's sequence
-        // For antibodies, all designs share same framework (only CDRs differ)
-        // so one MSA is sufficient for all
         first_design_for_msa = design_sequences
             .first()
             .map { sequence, name, pdb ->
                 tuple(sequence, "antibody_representative")
             }
         
-        // Call GenerateLocalMSA - uses GPU MMseqs2 with local ColabFold DB
         GenerateLocalMSA(first_design_for_msa)
-        
-        // Step 3: Combine the MSA with ALL design sequences
-        // GenerateLocalMSA.out.msa emits: [sequence, sequence_name, path(msa_file)]
         msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
         
-        // Combine each design with the shared MSA file
-        boltz_inputs = design_sequences
-            .combine(msa_file_ch)
-            .map { sequence, name, pdb, msa_file ->
-                // BoltzFromSequenceWithMSA expects: (sequence, sequence_name, msa_file)
-                tuple(sequence, name, msa_file)
-            }
-        
-        // Step 4: Run Boltz per-design (sequential, prevents OOM)
-        BoltzFromSequenceWithMSA(boltz_inputs)
-        
-        // REPORT STAGE: boltz2
-        BoltzFromSequenceWithMSA.out.pdbs.subscribe { pdbs ->
-            try {
-                def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                def args = [params.job_id, "boltz2", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+        if (params.exploration_mode == true) {
+            // ═══════════════════════════════════════════════════════════════════
+            // PARALLEL MODE: Spawn child jobs via API for GPU orchestrator
+            // Each child job enters queue and gets assigned to available GPU
+            // ═══════════════════════════════════════════════════════════════════
+            log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
+            
+            // Collect all PDB paths and MSA, then spawn children
+            fampnn_pdbs_collected = all_sequences
+                .flatMap { meta, files -> files instanceof List ? files : [files] }
+                .collect()
+            
+            // Wait for MSA, then spawn children
+            spawn_input = fampnn_pdbs_collected.combine(msa_file_ch)
+            
+            spawn_input.subscribe { pdbs, msa ->
+                // Create temp directory with PDBs for spawner
+                def pdb_dir = "${params.out_dir}/fampnn_pdbs"
+                new File(pdb_dir).mkdirs()
+                pdbs.each { pdb ->
+                    def dest = new File(pdb_dir, pdb.name)
+                    dest.text = pdb.text
+                }
+                
+                // Spawn child jobs via Python script
+                def proc = [
+                    "python3", "${projectDir}/scripts/spawn_antibody_children.py",
+                    "--parent_job_id", params.job_id ?: "unknown",
+                    "--pdb_dir", pdb_dir,
+                    "--batch_name", params.job_name ?: "antibody_batch",
+                    "--msa_path", msa.toString(),
+                    "--api_url", "http://localhost:8000"
+                ].execute()
+                
                 proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage boltz2: ${e.message}"
+                def exitCode = proc.exitValue()
+                if (exitCode == 0) {
+                    log.info("Successfully spawned child jobs for parallel validation")
+                } else {
+                    log.warn("Child job spawning failed with exit code ${exitCode}")
+                    log.warn(proc.err.text)
+                }
             }
+            
+            // Parent job completes here - children run independently via orchestrator
+            validated_structures = channel.empty()
+            log.info("Parent job complete. ${design_sequences.count().val} child jobs queued for validation.")
         }
-        
-        // Transform outputs to match expected format [meta, pdb]
-        validated_structures = BoltzFromSequenceWithMSA.out.pdbs
-            .flatten()
-            .map { pdb ->
-                def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-                def meta = [id: name]
-                [meta, pdb]
+        else {
+            // ═══════════════════════════════════════════════════════════════════
+            // SERIAL MODE: Run Boltz in-process (sequential, thorough)
+            // ═══════════════════════════════════════════════════════════════════
+            log.info("Refinement Mode: Running Boltz validation sequentially...")
+            
+            boltz_inputs = design_sequences
+                .combine(msa_file_ch)
+                .map { sequence, name, pdb, msa_file ->
+                    tuple(sequence, name, msa_file)
+                }
+            
+            BoltzFromSequenceWithMSA(boltz_inputs)
+            
+            // REPORT STAGE: boltz2
+            BoltzFromSequenceWithMSA.out.pdbs.subscribe { pdbs ->
+                try {
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "boltz2", "complete"] + report_files.collect { it.toString() }
+                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage boltz2: ${e.message}"
+                }
             }
+            
+            validated_structures = BoltzFromSequenceWithMSA.out.pdbs
+                .flatten()
+                .map { pdb ->
+                    def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                    def meta = [id: name]
+                    [meta, pdb]
+                }
+        }
     }
     else {
         validated_structures = all_sequences
