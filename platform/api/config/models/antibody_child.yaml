@@ -1,0 +1,37 @@
+# Antibody Child Validation Workflow
+# Spawned by antibody_denovo in parallel exploration mode
+# Handles batch validation of multiple sequences from the same backbone
+
+id: antibody_child
+name: Antibody Design Validation (Child)
+version: 1.0.0
+category: antibody_design
+description: >
+  Batch validation of antibody designs (Structure/Immunogenicity/Stability).
+  Internal workflow spawned by the orchestrator.
+
+workflow_type: pipeline
+container: apptainer/antibody_tools.sif
+
+ui_icon: antibody
+ui_color: "#ec4899"
+hidden: true  # Hide from main menu, only spawned via API
+
+modes:
+  - id: validation
+    name: Validation
+    description: Validate a single design (Legacy)
+    params: []
+  - id: validation_batch
+    name: Batch Validation
+    description: Validate a batch of designs sharing a backbone
+    params: []
+
+inputs:
+  - pdb_paths
+  - backbone_id
+
+outputs:
+  - pdb
+  - json
+  - csv
