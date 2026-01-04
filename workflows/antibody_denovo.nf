@@ -89,10 +89,11 @@ workflow ANTIBODY_DENOVO {
         [meta, pdb, hotspots]
     }
     
-    // Framework PDB - use provided or provide placeholder for default
-    framework_for_rfantibody = framework_pdb_ch
-        .map { meta, pdb -> pdb }
-        .ifEmpty(file('NO_FRAMEWORK'))
+    // Framework PDB - if user provided custom framework, use it; otherwise use placeholder
+    // The placeholder triggers preset selection in the process script
+    framework_for_rfantibody = params.framework_pdb 
+        ? Channel.value(file(params.framework_pdb))
+        : Channel.value(file('NO_FRAMEWORK'))
 
     RFANTIBODY(rfantibody_input, framework_for_rfantibody)
     
