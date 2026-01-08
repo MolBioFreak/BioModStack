@@ -2,10 +2,18 @@
 Pydantic schemas for API request/response validation.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Any
 from datetime import datetime
 from enum import Enum
+
+
+def serialize_datetime(dt: datetime) -> str:
+    """Serialize datetime to ISO format with Z suffix for UTC."""
+    if dt is None:
+        return None
+    # Ensure UTC times have Z suffix so JavaScript parses correctly
+    return dt.isoformat() + 'Z'
 
 
 class JobStatus(str, Enum):
@@ -68,8 +76,17 @@ class JobResponse(BaseModel):
     completed_stages: Optional[List[str]] = None
     stage_outputs: Optional[dict] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+    
+    from pydantic import field_serializer
+    
+    @field_serializer('created_at', 'started_at', 'completed_at')
+    @classmethod
+    def serialize_datetime(cls, dt: Optional[datetime]) -> Optional[str]:
+        """Serialize datetime with Z suffix for UTC."""
+        if dt is None:
+            return None
+        return dt.isoformat() + 'Z'
 
 
 class JobList(BaseModel):

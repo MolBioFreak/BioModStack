@@ -64,7 +64,7 @@ temp/
 
 # Large Data & Models
 models/
-containers/
+apptainer/
 *.sif
 *.pt
 *.ckpt

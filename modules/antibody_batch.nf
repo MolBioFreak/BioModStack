@@ -74,14 +74,23 @@ process BatchStability {
     
     script:
     """
+    # ThermoMPNN custom_inference.py expects ../local.yaml relative to the analysis/ folder
+    # Copy config to make relative path work
+    mkdir -p analysis_run
+    cp /opt/ThermoMPNN/local.yaml ./local.yaml
+    
     # Loop over PDBs (ThermoMPNN is fast, loop is fine)
     echo "file,score" > stability_scores.csv
     
     for pdb in ${pdbs}; do
+        cd analysis_run
         python3 /opt/ThermoMPNN/analysis/custom_inference.py \\
-            --pdb "\$pdb" \\
+            --pdb "../\$pdb" \\
             --model_path /opt/ThermoMPNN/models/thermoMPNN_default.pt \\
-            >> stability_scores.csv
+            --out_dir ../ \\
+            >> ../stability_scores.csv 2>&1 || echo "\$pdb,error" >> ../stability_scores.csv
+        cd ..
     done
     """
 }
+
