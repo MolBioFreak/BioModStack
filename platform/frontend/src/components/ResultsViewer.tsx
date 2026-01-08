@@ -7,7 +7,7 @@ import MolstarViewer from './MolstarViewer';
 import FloatingViewer from './FloatingViewer';
 import { Histogram, MetricScatter, ResidueLineChart, StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
-import { PAEHeatmap as _PAEHeatmap } from './PAEHeatmap';
+import { PAEHeatmap } from './PAEHeatmap';
 import { DesignComparePane } from './DesignComparePane';
 import { ReferenceSelector } from './ReferenceSelector';
 import { MetricOverlay } from './MetricOverlay';
@@ -400,14 +400,17 @@ export function ResultsViewer() {
                                                     <select
                                                         value={selectedDesignId}
                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 max-w-xs"
+                                                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[280px]"
                                                     >
                                                         <option value="">Select a design...</option>
-                                                        {designs.slice(0, 50).map(d => (
-                                                            <option key={d.id} value={d.id}>
-                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                                            </option>
-                                                        ))}
+                                                        {[...designs]
+                                                            .sort((a, b) => (b.conf_score ?? b.plddt_overall ?? 0) - (a.conf_score ?? a.plddt_overall ?? 0))
+                                                            .slice(0, 100)
+                                                            .map(d => (
+                                                                <option key={d.id} value={d.id}>
+                                                                    {d.name} • {d.conf_score ? `Conf: ${(d.conf_score * 100).toFixed(0)}%` : d.plddt_overall ? `pLDDT: ${d.plddt_overall.toFixed(0)}` : ''}
+                                                                </option>
+                                                            ))}
                                                     </select>
                                                 </div>
                                                 {chainMetrics && Object.keys(chainMetrics).length > 0 ? (
@@ -478,6 +481,28 @@ export function ResultsViewer() {
                                                         xLabel="pLDDT"
                                                         yLabel="PAE"
                                                     />
+                                                )}
+                                                {/* PAE Heatmap for Selected Design - Full Width */}
+                                                {selectedDesignId && (
+                                                    <div className="lg:col-span-2 bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl p-6 border border-slate-700/50 shadow-xl">
+                                                        <div className="flex items-center justify-between mb-4">
+                                                            <h3 className="text-white text-base font-semibold flex items-center gap-2">
+                                                                <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z" />
+                                                                </svg>
+                                                                PAE Heatmap
+                                                            </h3>
+                                                            <span className="text-xs text-slate-400">
+                                                                {selectedDesign?.name}
+                                                            </span>
+                                                        </div>
+                                                        <PAEHeatmap
+                                                            designId={selectedDesignId}
+                                                            chainMetrics={chainMetrics ?? undefined}
+                                                            width={450}
+                                                            height={400}
+                                                        />
+                                                    </div>
                                                 )}
                                             </div>
 

@@ -21,8 +21,7 @@ nextflow.enable.dsl = 2
 // HELPER FUNCTION: Extract sequence from PDB file
 // ═══════════════════════════════════════════════════════════════════════════════
 def extractSequenceFromPDB(pdb_file) {
-    // Simple sequence extraction from PDB file using residue names
-    // For full implementation, use BioPython script
+    // Extract sequences from PDB file, separating chains with ':' for Boltz multi-chain input
     def aa_codes = [
         'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
         'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
@@ -30,19 +29,26 @@ def extractSequenceFromPDB(pdb_file) {
         'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
     ]
     
-    def sequence = []
-    def seen_residues = [] as Set
+    // Track sequences per chain
+    def chain_sequences = [:] as LinkedHashMap  // Preserve chain order
+    def seen_residues = [:] as Map  // Per-chain residue tracking
     
     try {
         pdb_file.eachLine { line ->
-            if (line.startsWith('ATOM') && line.substring(12, 16).trim() == 'CA') {
+            if (line.startsWith('ATOM') && line.length() >= 26 && line.substring(12, 16).trim() == 'CA') {
                 def resName = line.substring(17, 20).trim()
                 def resNum = line.substring(22, 26).trim()
                 def chain = line.substring(21, 22)
                 def key = "${chain}_${resNum}"
-                if (!seen_residues.contains(key) && aa_codes.containsKey(resName)) {
-                    seen_residues.add(key)
-                    sequence << aa_codes[resName]
+                
+                if (!seen_residues.containsKey(chain)) {
+                    seen_residues[chain] = [] as Set
+                    chain_sequences[chain] = []
+                }
+                
+                if (!seen_residues[chain].contains(key) && aa_codes.containsKey(resName)) {
+                    seen_residues[chain].add(key)
+                    chain_sequences[chain] << aa_codes[resName]
                 }
             }
         }
@@ -51,7 +57,9 @@ def extractSequenceFromPDB(pdb_file) {
         return "AAAA"
     }
     
-    return sequence.join('') ?: "AAAA"
+    // Join chain sequences with ':' separator for Boltz multi-chain input
+    def result = chain_sequences.values().collect { it.join('') }.join(':')
+    return result ?: "AAAA"
 }
 
 // Import modules
@@ -147,7 +155,7 @@ if (!params.containsKey('framework_pdb')) params.framework_pdb = null
 if (!params.containsKey('analysis_chain_id')) params.analysis_chain_id = 'all_chains'
 if (!params.containsKey('filter_immunogenic')) params.filter_immunogenic = true
 if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturation = false
-if (!params.containsKey('exploration_mode')) params.exploration_mode = false
+if (!params.containsKey('exploration_mode') || params.exploration_mode == null) params.exploration_mode = false
 if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
 if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
 

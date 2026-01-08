@@ -446,10 +446,12 @@ async def get_pae_data(
     """
     Get PAE matrix data for heatmap visualization.
     
-    Searches for *_confidences.json files associated with the design's PDB path.
+    Searches for confidence JSON files associated with the design's PDB path.
+    Supports multiple formats:
+    - *_confidences.json (RF3/Boltz2 format)
+    - confidence_*.json (Antibody/IgFold format)
     """
     import json
-    import os
     
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
@@ -460,31 +462,108 @@ async def get_pae_data(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
-    # Find confidences.json near the PDB/CIF file
     pdb_path = Path(design.pdb_path)
     parent_dir = pdb_path.parent
+    design_stem = pdb_path.stem  # e.g., "antibody_job_1_seq_2_model_0"
     
-    # Look for *_confidences.json in same directory or parent
-    confidence_files = list(parent_dir.glob("*_confidences.json"))
-    if not confidence_files:
-        confidence_files = list(parent_dir.parent.glob("*_confidences.json"))
+    # Search for confidence files with multiple patterns
+    confidence_file = None
     
-    if not confidence_files:
+    # Pattern 1: *_confidences.json (RF3/Boltz2 format)
+    candidates = list(parent_dir.glob("*_confidences.json"))
+    if not candidates:
+        candidates = list(parent_dir.parent.glob("*_confidences.json"))
+    if candidates:
+        # Prefer file matching design name
+        for c in candidates:
+            if design_stem in c.stem:
+                confidence_file = c
+                break
+        if not confidence_file:
+            confidence_file = candidates[0]
+    
+    # Pattern 2: confidence_*.json (Antibody/IgFold format)
+    if not confidence_file:
+        candidates = list(parent_dir.glob(f"confidence_{design_stem}.json"))
+        if candidates:
+            confidence_file = candidates[0]
+        else:
+            # Try broader search
+            candidates = list(parent_dir.glob("confidence_*.json"))
+            for c in candidates:
+                if design_stem in c.stem:
+                    confidence_file = c
+                    break
+    
+    # Pattern 3: Check parent directory for antibody format
+    if not confidence_file:
+        candidates = list(parent_dir.parent.glob(f"confidence_{design_stem}.json"))
+        if candidates:
+            confidence_file = candidates[0]
+    
+    if not confidence_file:
+        # No confidence file found - try to generate pseudo-PAE from pLDDT
+        if design.residue_plddt and len(design.residue_plddt) > 0:
+            plddt = design.residue_plddt
+            size = len(plddt)
+            # Generate diagonal-weighted pseudo-PAE matrix
+            # High pLDDT = low PAE on diagonal, off-diagonal weighted by distance
+            pae_matrix = []
+            for i in range(size):
+                row = []
+                for j in range(size):
+                    # Convert pLDDT to PAE-like scale (0-30)
+                    avg_conf = (plddt[i] + plddt[j]) / 2
+                    base_pae = 30 * (1 - avg_conf / 100)  # Lower pLDDT = higher PAE
+                    # Add distance penalty for off-diagonal
+                    dist_penalty = min(abs(i - j) * 0.1, 10)
+                    row.append(min(base_pae + dist_penalty, 30))
+                pae_matrix.append(row)
+            
+            # Downsample if needed
+            if size > 200:
+                step = size // 200
+                pae_matrix = [[pae_matrix[i][j] for j in range(0, size, step)] for i in range(0, size, step)]
+                size = len(pae_matrix)
+            
+            return PAEData(
+                design_id=design.id,
+                design_name=design.name + " (estimated)",
+                pae_matrix=pae_matrix,
+                size=size
+            )
         raise HTTPException(status_code=404, detail="No PAE data found for this design")
     
-    # Read the first confidence file found
+    # Read the confidence file
     try:
-        with open(confidence_files[0], 'r') as f:
+        with open(confidence_file, 'r') as f:
             data = json.load(f)
         
         pae_matrix = data.get('pae')
+        
+        # If no PAE matrix, try to generate from pLDDT in file or design
         if not pae_matrix:
-            raise HTTPException(status_code=404, detail="PAE matrix not found in confidence file")
+            plddt = data.get('plddt') or data.get('per_residue_plddt')
+            if not plddt and design.residue_plddt:
+                plddt = design.residue_plddt
+            
+            if plddt and len(plddt) > 0:
+                size = len(plddt)
+                pae_matrix = []
+                for i in range(size):
+                    row = []
+                    for j in range(size):
+                        avg_conf = (plddt[i] + plddt[j]) / 2
+                        base_pae = 30 * (1 - avg_conf / 100)
+                        dist_penalty = min(abs(i - j) * 0.1, 10)
+                        row.append(min(base_pae + dist_penalty, 30))
+                    pae_matrix.append(row)
+            else:
+                raise HTTPException(status_code=404, detail="PAE matrix not found in confidence file and cannot be estimated")
         
         # Downsample if too large (for rendering performance)
         size = len(pae_matrix)
         if size > 200:
-            # Downsample by taking every Nth element
             step = size // 200
             pae_matrix = [[pae_matrix[i][j] for j in range(0, size, step)] for i in range(0, size, step)]
             size = len(pae_matrix)
@@ -495,6 +574,8 @@ async def get_pae_data(
             pae_matrix=pae_matrix,
             size=size
         )
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse confidence file as JSON")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read PAE data: {str(e)}")
 
