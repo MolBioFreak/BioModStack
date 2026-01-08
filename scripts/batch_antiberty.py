@@ -6,12 +6,17 @@ Extracts sequences from a list of PDB files and computes AntiBERTy
 pseudo-log-likelihood (PLL) scores in a single batch inference pass.
 """
 
-import os
+
 import sys
 import argparse
 import csv
 import torch
-import antiberty
+from antiberty import AntiBERTyRunner
+from pathlib import Path
+import argparse
+import csv
+import torch
+from antiberty import AntiBERTyRunner
 from pathlib import Path
 
 # Try BioPython import, fallback to simple parser
@@ -89,13 +94,13 @@ def load_sequences(pdb_files):
 
 def main():
     parser = argparse.ArgumentParser(description='Batch AntiBERTy Scoring')
-    parser.add_argument('--pdb_files', required=True, help='List of PDB files')
+    parser.add_argument('--pdb_files', nargs='+', required=True, help='List of PDB files')
     parser.add_argument('--out_csv', required=True, help='Output CSV file')
     
     args = parser.parse_args()
     
-    # 1. Load Data
-    pdb_files = file_to_list(args.pdb_files)
+    # 1. Load Data - pdb_files is now a list directly from argparse
+    pdb_files = args.pdb_files
     print(f"Loading sequences from {len(pdb_files)} PDBs...")
     
     records = load_sequences(pdb_files)
@@ -110,9 +115,25 @@ def main():
     # 2. Run Inference
     print(f"Running AntiBERTy on {len(sequences)} sequences...")
     try:
-        # Load model manually to control device? or rely on library
-        # antiberty.pseudo_log_likelihood handles batching
-        scores = antiberty.pseudo_log_likelihood(sequences, batch_size=32)
+        # Use AntiBERTyRunner class
+        runner = AntiBERTyRunner()
+        
+        # Check if model is on CUDA
+        model_device = next(runner.model.parameters()).device
+        print(f"AntiBERTy model device: {model_device}")
+        
+        if model_device.type == 'cuda':
+            # Attempt to ensure new tensors (like inputs created internally) are on CUDA
+            # This handles the case where the library creates CPU tensors but expects GPU
+            print("Enabling CUDA default tensor type for inference...")
+            torch.set_default_tensor_type('torch.cuda.FloatTensor')
+            try:
+                scores = runner.pseudo_log_likelihood(sequences, batch_size=32)
+            finally:
+                # Revert to default
+                torch.set_default_tensor_type('torch.FloatTensor')
+        else:
+             scores = runner.pseudo_log_likelihood(sequences, batch_size=32)
         
         # 3. Write Results
         with open(args.out_csv, 'w') as f:

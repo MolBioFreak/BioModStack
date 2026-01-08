@@ -44,7 +44,7 @@ def count_structure_files(output_dir: str) -> int:
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 500,
     offset: int = 0,
     session: AsyncSession = Depends(get_session)
 ):
@@ -116,8 +116,10 @@ async def create_job(
     """Create and queue a new pipeline job."""
     registry = get_registry()
     
-    # Skip validation for template jobs (they have pre-validated params)
-    if not job_data.model_id.startswith('template_'):
+    # Skip validation for template jobs and mutagenesis batches
+    # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
+    is_mutagenesis = 'mutagenesis_variants' in job_data.params
+    if not job_data.model_id.startswith('template_') and not is_mutagenesis:
         # Validate model and mode
         errors = registry.validate_job_params(job_data.model_id, job_data.mode, job_data.params)
         if errors:

@@ -245,13 +245,27 @@ async def launch_nextflow_job(
             return
         
         try:
+            # ═══════════════════════════════════════════════════════════════
+            # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
+            # ═══════════════════════════════════════════════════════════════
+            # Extract gpu_id from params (set by orchestrator)
+            gpu_id = params.get('gpu_id')
+            
+            # Build environment with GPU pinning
+            env = {**os.environ, "NXF_ANSI_LOG": "false"}
+            if gpu_id is not None:
+                env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+                logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id} via CUDA_VISIBLE_DEVICES")
+            else:
+                logger.warning(f"[GPU] Job {job_id} has no gpu_id - using default GPU selection")
+            
             # Run Nextflow with stdout piped for real-time monitoring
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(PROJECT_ROOT),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env={**os.environ, "NXF_ANSI_LOG": "false"}
+                env=env
             )
             
             # Store process reference for potential cancellation
@@ -427,6 +441,8 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
+        # Mutagenesis batch workflow - routes to boltz for structure prediction
+        ('mutagenesis', 'batch_predict'): 'boltz',
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
         ('antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
         ('antibody_denovo', 'default'): 'boltz',

@@ -19,6 +19,7 @@ export function Dashboard() {
     const [logsLoading, setLogsLoading] = useState(false);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [visibleCount, setVisibleCount] = useState(25); // Start with 25 jobs visible
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -178,23 +179,75 @@ export function Dashboard() {
                     onStatusChange={setStatusFilter}
                 />
 
-                <JobQueueTable
-                    jobs={(jobsData?.data.jobs || []).filter(job => {
+                {(() => {
+                    const filteredJobs = (jobsData?.data.jobs || []).filter((job: Job) => {
                         const matchesSearch = search === '' ||
                             job.name.toLowerCase().includes(search.toLowerCase()) ||
                             job.id.includes(search);
                         const matchesStatus = statusFilter === 'all' || job.status === statusFilter;
                         return matchesSearch && matchesStatus;
-                    })}
-                    loading={jobsLoading}
-                    onCancel={handleCancel}
-                    onResubmit={handleResubmit}
-                    onResume={handleResume}
-                    onViewLogs={handleViewLogs}
-                    onViewQuick={setQuickViewJobId}
-                    onClone={handleClone}
-                    quickViewJobId={quickViewJobId}
-                />
+                    });
+                    const displayedJobs = filteredJobs.slice(0, visibleCount);
+                    const hasMore = filteredJobs.length > visibleCount;
+
+                    return (
+                        <>
+                            <JobQueueTable
+                                jobs={displayedJobs}
+                                loading={jobsLoading}
+                                onCancel={handleCancel}
+                                onResubmit={handleResubmit}
+                                onResume={handleResume}
+                                onViewLogs={handleViewLogs}
+                                onViewQuick={setQuickViewJobId}
+                                onClone={handleClone}
+                                quickViewJobId={quickViewJobId}
+                            />
+
+                            {/* Pagination Controls */}
+                            <div className="flex items-center justify-between mt-4 px-2">
+                                <span className="text-sm text-slate-400">
+                                    Showing {displayedJobs.length} of {filteredJobs.length} jobs
+                                </span>
+                                <div className="flex items-center gap-3">
+                                    {/* Quick page size buttons */}
+                                    <div className="flex gap-1">
+                                        {[25, 50, 100].map(n => (
+                                            <button
+                                                key={n}
+                                                onClick={() => setVisibleCount(n)}
+                                                className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount === n
+                                                        ? 'bg-purple-500/30 text-purple-300'
+                                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                                    }`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                        <button
+                                            onClick={() => setVisibleCount(filteredJobs.length)}
+                                            className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount >= filteredJobs.length
+                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                                }`}
+                                        >
+                                            All
+                                        </button>
+                                    </div>
+
+                                    {hasMore && (
+                                        <button
+                                            onClick={() => setVisibleCount(prev => prev + 25)}
+                                            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm rounded-lg transition-all hover:scale-105"
+                                        >
+                                            Load More (+25)
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </>
+                    );
+                })()}
             </section>
         </div >
     );
