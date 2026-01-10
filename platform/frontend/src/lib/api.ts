@@ -253,6 +253,10 @@ export interface Design {
     complex_ipde: number | null;
     chains_ptm: Record<string, number> | null;
     pair_chains_iptm: Record<string, Record<string, number>> | null;
+    // Backbone grouping & epitope analysis
+    backbone_id: number | null;
+    epitope_contact_count: number | null;
+    epitope_min_distance: number | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -265,15 +269,34 @@ export interface DesignListResponse {
 
 export interface DesignFilters {
     job_id?: string;
+    backbone_id?: number;
     plddt_min?: number;
     pae_max?: number;
+    iptm_min?: number;
     favorites_only?: boolean;
+    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'backbone';
+    sort_desc?: boolean;
     limit?: number;
     offset?: number;
 }
 
+export interface BackboneSummary {
+    job_id: string;
+    total: number;
+    backbones: Record<number, {
+        count: number;
+        avg_plddt: number | null;
+        avg_iptm: number | null;
+        avg_ptm: number | null;
+        min_pae: number | null;
+    }>;
+}
+
 export const fetchDesigns = (filters: DesignFilters = {}) =>
     api.get<DesignListResponse>('/api/designs', { params: filters });
+
+export const fetchBackboneSummary = (jobId: string) =>
+    api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`);
 
 export const toggleDesignFavorite = (designId: string, isFavorite: boolean) =>
     api.post(`/api/designs/${designId}/favorite`, { is_favorite: isFavorite });

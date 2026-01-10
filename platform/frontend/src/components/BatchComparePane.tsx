@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchJobs, fetchBatchAnalytics } from '../lib/api';
+import type { Job } from '../lib/api';
 // Remove unused DistributionChart import
 // import { DistributionChart } from './MetricCharts'; 
 
@@ -14,7 +15,7 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     // Fetch all jobs for the selector
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
     });
     const jobs = jobsData?.data.jobs ?? [];
 
@@ -37,7 +38,7 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
 
     // Transform BatchAnalytics data to row format for table
     const tableRows = comparison ? comparison.job_ids.map(jobId => {
-        const job = jobs.find(j => j.id === jobId);
+        const job = jobs.find((j: Job) => j.id === jobId);
         return {
             job_id: jobId,
             job_name: job?.name || jobId.substring(0, 8),
@@ -59,13 +60,13 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
                     <p className="text-xs text-slate-500 mt-1">Select multiple jobs to compare</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    {jobs.map(job => (
+                    {jobs.map((job: Job) => (
                         <div
                             key={job.id}
                             onClick={() => toggleJob(job.id)}
                             className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border ${selectedJobIds.includes(job.id)
-                                    ? 'bg-blue-500/10 border-blue-500/50'
-                                    : 'bg-transparent border-transparent hover:bg-slate-800'
+                                ? 'bg-blue-500/10 border-blue-500/50'
+                                : 'bg-transparent border-transparent hover:bg-slate-800'
                                 }`}
                         >
                             <div className="flex items-start justify-between">

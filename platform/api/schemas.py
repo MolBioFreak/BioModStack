@@ -122,6 +122,17 @@ class DesignResponse(BaseModel):
     cdr_l1: Optional[str] = None
     cdr_l2: Optional[str] = None
     cdr_l3: Optional[str] = None
+    
+    # CDR Loop Lengths (for sorting/filtering)
+    binder_length: Optional[int] = None
+    cdr_h1_length: Optional[int] = None
+    cdr_h2_length: Optional[int] = None
+    cdr_h3_length: Optional[int] = None
+    cdr_l1_length: Optional[int] = None  # NULL for VHH/nanobodies
+    cdr_l2_length: Optional[int] = None
+    cdr_l3_length: Optional[int] = None
+    antibody_type: Optional[str] = None  # vhh, fab, scfv
+    
     humanness_score: Optional[float] = None
     stability_data: Optional[Any] = None  # JSON blob for heatmaps
         

@@ -66,13 +66,14 @@ def extractSequenceFromPDB(pdb_file) {
 include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
 include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
-include { RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
+include { PrepMPNN ; RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
 include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
 include { ANARCI } from '../modules/utils/anarci'
+include { PredictTargetComplex } from '../modules/predict_target_complex'
 
 // =============================================================================
 // Process to spawn child validation jobs via API
@@ -293,7 +294,15 @@ workflow ANTIBODY_DENOVO {
     // ProteinMPNN branch
     if (run_proteinmpnn) {
         log.info("  Running ProteinMPNN...")
-        ProteinMPNNSeq(backbone_designs.map { meta, pdbs -> pdbs })
+        // FIRST run PrepMPNN to generate PDBs with FIXED labels in B-factors
+        // Map backbones to [pdbs, dummy_json] input for PrepMPNN
+        mpnn_prep_input = backbone_designs.map { meta, pdbs ->
+             [pdbs, file("${projectDir}/lib/NO_JSON")]
+        }
+        PrepMPNN(mpnn_prep_input)
+
+        // Then run ProteinMPNN - it will auto-detect FIXED labels in B-factor column
+        ProteinMPNNSeq(PrepMPNN.out.pdbs)
         
         // ProteinMPNNSeq (RunMPNN) outputs: tuple path("results/*.pdb"), path("results/*.json")
         // We need to map this to [meta, pdbs]
@@ -516,19 +525,44 @@ workflow ANTIBODY_DENOVO {
 // STANDALONE WORKFLOW ENTRY
 // =============================================================================
 workflow {
-    // Parse inputs
-    if (!params.target_pdb) {
-        error("Please provide --target_pdb (antigen structure)")
+    // =========================================================================
+    // TARGET STRUCTURE RESOLUTION
+    // Either use provided PDB OR predict from sequence
+    // =========================================================================
+    
+    // Option 1: User provides target PDB (existing workflow - unchanged)
+    if (params.target_pdb) {
+        target_pdb = file(params.target_pdb)
+        if (!target_pdb.exists()) {
+            error("Target PDB not found: ${params.target_pdb}")
+        }
+        meta = [id: params.run_id ?: target_pdb.baseName]
+        target_ch = Channel.of([meta, target_pdb])
     }
-
-    target_pdb = file(params.target_pdb)
-    if (!target_pdb.exists()) {
-        error("Target PDB not found: ${params.target_pdb}")
+    // Option 2: User provides protein sequence (+optional DNA) - predict complex first
+    else if (params.target_protein_seq) {
+        log.info("No target_pdb provided - will predict target structure from sequence")
+        
+        meta = [id: params.run_id ?: 'target_complex']
+        def protein_seq = params.target_protein_seq
+        def dna_seq = params.target_dna_seq ?: null
+        
+        if (dna_seq) {
+            log.info("DNA sequence provided - will predict protein-DNA complex")
+        }
+        
+        // Create input channel for complex prediction
+        complex_input = Channel.of([meta, protein_seq, dna_seq])
+        
+        // Run Boltz-2 complex prediction
+        PredictTargetComplex(complex_input)
+        
+        // Use predicted complex as target
+        target_ch = PredictTargetComplex.out.complex
     }
-
-    // Create input channel
-    meta = [id: params.run_id ?: target_pdb.baseName]
-    target_ch = Channel.of([meta, target_pdb])
+    else {
+        error("Please provide either --target_pdb (antigen structure) or --target_protein_seq (sequence to predict)")
+    }
 
     // Epitope residues
     epitope = params.epitope_residues ?: ""

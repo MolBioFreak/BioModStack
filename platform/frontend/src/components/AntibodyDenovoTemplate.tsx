@@ -37,6 +37,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
 
+    // Optional DNA/RNA sequence for complex prediction (when protein binds nucleic acid)
+    const [targetDnaSeq, setTargetDnaSeq] = useState<string>('');
+    const [showDnaInput, setShowDnaInput] = useState(false);
+
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
@@ -244,6 +248,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_structure_validation: true, // Boltz2 is always run
                     exploration_mode: explorationMode, // Parallel vs serial GPU processing
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
+                    // Optional DNA sequence for complex prediction
+                    target_dna_seq: targetDnaSeq.trim() || undefined,
                 }
             };
 
@@ -451,6 +457,46 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ⚠️ Could not parse PDB file. Please ensure it's a valid PDB format.
                     </div>
                 )}
+
+                {/* Optional DNA/RNA Sequence for Complex Prediction */}
+                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <div>
+                            <h4 className="text-sm font-medium text-slate-300">DNA/RNA Binding Partner (Optional)</h4>
+                            <p className="text-xs text-slate-500">For proteins that form optimal structures when bound to nucleic acid</p>
+                        </div>
+                        <button
+                            onClick={() => setShowDnaInput(!showDnaInput)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showDnaInput
+                                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                }`}
+                        >
+                            {showDnaInput ? '🧬 Enabled' : '+ Add DNA/RNA'}
+                        </button>
+                    </div>
+                    {showDnaInput && (
+                        <div className="mt-3">
+                            <textarea
+                                value={targetDnaSeq}
+                                onChange={(e) => setTargetDnaSeq(e.target.value.toUpperCase().replace(/[^ATGCU\s]/gi, ''))}
+                                placeholder="Enter DNA (ATGC) or RNA (AUGC) sequence..."
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:ring-2 focus:ring-cyan-500 outline-none h-24 resize-none"
+                            />
+                            <div className="flex items-center justify-between mt-2">
+                                <p className="text-xs text-slate-500">
+                                    {targetDnaSeq.replace(/\s/g, '').length > 0
+                                        ? `${targetDnaSeq.replace(/\s/g, '').length} nucleotides`
+                                        : 'DNA sequence for protein-DNA complex prediction'
+                                    }
+                                </p>
+                                {targetDnaSeq && (
+                                    <span className="text-xs text-cyan-400">Complex prediction will precede antibody design</span>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
 
                 {/* Number of Backbones */}
                 <div>

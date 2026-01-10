@@ -41,7 +41,16 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
     const [selectedJob, setSelectedJob] = useState<Job | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [designsPage, setDesignsPage] = useState(0);
+    const [sortBy, setSortBy] = useState<'plddt' | 'iptm' | 'created_at'>('plddt');
+    const [sortDesc, setSortDesc] = useState(true);
+    const DESIGNS_PER_PAGE = 50;
     const queryClient = useQueryClient();
+
+    // Reset page when job changes
+    useEffect(() => {
+        setDesignsPage(0);
+    }, [selectedJob]);
 
     // Debounce search input
     useEffect(() => {
@@ -75,11 +84,20 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
 
     // Fetch designs for selected job
     const { data: designsData, isLoading: designsLoading } = useQuery({
-        queryKey: ['designs', selectedJob?.id],
-        queryFn: () => fetchDesigns({ job_id: selectedJob?.id }),
+        queryKey: ['designs', selectedJob?.id, designsPage, sortBy, sortDesc],
+        queryFn: () => fetchDesigns({
+            job_id: selectedJob?.id,
+            limit: DESIGNS_PER_PAGE,
+            offset: designsPage * DESIGNS_PER_PAGE,
+            sort_by: sortBy === 'created_at' ? undefined : sortBy,
+            sort_desc: sortDesc
+        }),
         enabled: !!selectedJob,
     });
-    const designs = (designsData as any)?.data?.designs ?? (designsData as any)?.designs ?? [];
+    const designsResponse = (designsData as any)?.data;
+    const designs = designsResponse?.designs ?? (designsData as any)?.designs ?? [];
+    const totalDesigns = designsResponse?.total ?? 0;
+    const totalPages = Math.ceil(totalDesigns / DESIGNS_PER_PAGE);
 
     // Fetch preset PDBs
     const { data: presetsData } = useQuery({
@@ -240,8 +258,26 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
                                 </button>
 
                                 <div className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white">
-                                    Selected Job: <span className="font-semibold text-blue-300">{selectedJob.name}</span>
                                     <span className="ml-2 text-slate-400 text-xs">({selectedJob.design_count} designs)</span>
+                                </div>
+
+                                {/* Sort Controls */}
+                                <div className="flex gap-2 text-xs">
+                                    <select
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value as any)}
+                                        className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-300 outline-none focus:border-blue-500"
+                                    >
+                                        <option value="plddt">Sort by pLDDT</option>
+                                        <option value="iptm">Sort by iPTM</option>
+                                        <option value="created_at">Sort by Date</option>
+                                    </select>
+                                    <button
+                                        onClick={() => setSortDesc(!sortDesc)}
+                                        className="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-slate-300 hover:bg-slate-800"
+                                    >
+                                        {sortDesc ? 'Desc' : 'Asc'}
+                                    </button>
                                 </div>
 
                                 <div className="space-y-1 max-h-64 overflow-y-auto">
@@ -271,6 +307,29 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
                                         ))
                                     )}
                                 </div>
+
+                                {/* Pagination Controls */}
+                                {selectedJob && totalPages > 1 && (
+                                    <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
+                                        <button
+                                            onClick={() => setDesignsPage(p => Math.max(0, p - 1))}
+                                            disabled={designsPage === 0}
+                                            className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            Previous
+                                        </button>
+                                        <span className="text-xs text-slate-500">
+                                            Page {designsPage + 1} of {totalPages}
+                                        </span>
+                                        <button
+                                            onClick={() => setDesignsPage(p => Math.min(totalPages - 1, p + 1))}
+                                            disabled={designsPage >= totalPages - 1}
+                                            className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            Next
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -378,7 +437,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget }: TargetAntige
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }
 
