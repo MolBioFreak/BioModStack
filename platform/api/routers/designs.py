@@ -80,6 +80,11 @@ class DesignResponse(BaseModel):
     is_favorite: bool
     notes: Optional[str]
     
+    # Backbone grouping & epitope analysis
+    backbone_id: Optional[int] = None
+    epitope_contact_count: Optional[int] = None
+    epitope_min_distance: Optional[float] = None
+    
     created_at: datetime
     
     class Config:
@@ -104,10 +109,14 @@ class NotesUpdate(BaseModel):
 @router.get("", response_model=DesignList)
 async def list_designs(
     job_id: Optional[str] = None,
+    backbone_id: Optional[int] = Query(None, description="Filter by backbone ID"),
     plddt_min: Optional[float] = Query(None, description="Minimum pLDDT score"),
     pae_max: Optional[float] = Query(None, description="Maximum pAE score"),
+    iptm_min: Optional[float] = Query(None, description="Minimum iPTM score"),
     favorites_only: bool = Query(False, description="Show only favorites"),
-    limit: int = Query(100, le=1000),
+    sort_by: Optional[str] = Query(None, description="Sort field: plddt, iptm, ptm, pae, backbone"),
+    sort_desc: bool = Query(True, description="Sort descending"),
+    limit: int = Query(100, le=10000),
     offset: int = Query(0),
     session: AsyncSession = Depends(get_session)
 ):
@@ -116,20 +125,40 @@ async def list_designs(
     
     Filters:
     - job_id: Filter by specific job
+    - backbone_id: Filter by backbone number
     - plddt_min: Minimum pLDDT threshold
     - pae_max: Maximum pAE threshold
+    - iptm_min: Minimum iPTM threshold
     - favorites_only: Show only favorited designs
+    - sort_by: Sort by specific field
     """
-    query = select(Design).order_by(Design.created_at.desc())
+    # Build base query with optional sorting
+    sort_field_map = {
+        'plddt': Design.plddt_overall,
+        'iptm': Design.iptm,
+        'ptm': Design.ptm,
+        'pae': Design.pae_overall,
+        'backbone': Design.backbone_id,
+    }
+    
+    order_col = sort_field_map.get(sort_by, Design.created_at)
+    if sort_desc:
+        query = select(Design).order_by(order_col.desc().nulls_last())
+    else:
+        query = select(Design).order_by(order_col.asc().nulls_last())
     
     # Apply filters
     conditions = []
     if job_id:
         conditions.append(Design.job_id == job_id)
+    if backbone_id is not None:
+        conditions.append(Design.backbone_id == backbone_id)
     if plddt_min is not None:
         conditions.append(Design.plddt_overall >= plddt_min)
     if pae_max is not None:
         conditions.append(Design.pae_overall <= pae_max)
+    if iptm_min is not None:
+        conditions.append(Design.iptm >= iptm_min)
     if favorites_only:
         conditions.append(Design.is_favorite == True)
     
@@ -151,6 +180,55 @@ async def list_designs(
         designs=[DesignResponse.model_validate(d) for d in designs],
         total=total
     )
+
+
+@router.get("/by-job/{job_id}/backbone-summary")
+async def get_backbone_summary(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get backbone-level aggregate statistics for a job.
+    
+    Returns counts and average metrics per backbone for UI toggle display.
+    """
+    # Query backbone aggregate stats
+    query = select(
+        Design.backbone_id,
+        func.count(Design.id).label('count'),
+        func.avg(Design.plddt_overall).label('avg_plddt'),
+        func.avg(Design.iptm).label('avg_iptm'),
+        func.avg(Design.ptm).label('avg_ptm'),
+        func.min(Design.pae_overall).label('min_pae')
+    ).where(
+        Design.job_id == job_id,
+        Design.backbone_id.isnot(None)
+    ).group_by(Design.backbone_id).order_by(Design.backbone_id)
+    
+    result = await session.execute(query)
+    rows = result.all()
+    
+    # Format response
+    backbones = {}
+    for row in rows:
+        backbone_id = row.backbone_id
+        backbones[backbone_id] = {
+            'count': row.count,
+            'avg_plddt': round(row.avg_plddt, 1) if row.avg_plddt else None,
+            'avg_iptm': round(row.avg_iptm, 3) if row.avg_iptm else None,
+            'avg_ptm': round(row.avg_ptm, 3) if row.avg_ptm else None,
+            'min_pae': round(row.min_pae, 1) if row.min_pae else None,
+        }
+    
+    # Also get total count for "All" option
+    total_query = select(func.count(Design.id)).where(Design.job_id == job_id)
+    total = (await session.execute(total_query)).scalar()
+    
+    return {
+        'job_id': job_id,
+        'total': total,
+        'backbones': backbones
+    }
 
 
 @router.get("/{design_id}", response_model=DesignResponse)
@@ -295,7 +373,7 @@ async def update_notes(
 @router.get("/by-job/{job_id}", response_model=DesignList)
 async def get_designs_for_job(
     job_id: str,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, le=10000),
     offset: int = Query(0),
     session: AsyncSession = Depends(get_session)
 ):

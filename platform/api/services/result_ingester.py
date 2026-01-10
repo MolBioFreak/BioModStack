@@ -16,15 +16,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import Design, Job
+from .structure_utils import calculate_epitope_contacts
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
+def parse_backbone_id(design_name: str) -> Optional[int]:
+    """
+    Extract backbone ID from design name.
+    
+    Formats:
+    - antibody_job_2_seq_15_model_0 -> 2
+    - boltzgen_input_5 -> 5
+    - rfd_design_3 -> 3
+    """
+    import re
+    
+    # Pattern: job_X, input_X, design_X
+    match = re.search(r'(?:job|input|design)[_-](\d+)', design_name)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
-    session: AsyncSession
+    session: AsyncSession,
+    epitope_residues: Optional[list] = None
 ) -> int:
     """
     Parse pipeline outputs and populate Design table.
@@ -33,6 +53,8 @@ async def ingest_job_results(
         job_id: The job ID to associate designs with
         output_dir: Path to the job's output directory (e.g., pdj_results/job_xxx)
         session: Async database session
+        epitope_residues: Optional list of epitope residues (e.g., ["A111", "A112"])
+            for calculating contact metrics
         
     Returns:
         Number of designs ingested
@@ -75,12 +97,16 @@ async def ingest_job_results(
                 
                 for row in reader:
                     # Map CSV columns to Design fields
+                    design_name = row.get('description', f'design_{designs_created}')
                     design = Design(
                         id=str(uuid.uuid4()),
                         job_id=job_id,
-                        name=row.get('description', f'design_{designs_created}'),
-                        pdb_path=find_pdb_path(output_path, row.get('description', '')),
+                        name=design_name,
+                        pdb_path=find_pdb_path(output_path, design_name),
                         json_path=None,  # Could add if needed
+                        
+                        # Backbone grouping
+                        backbone_id=parse_backbone_id(design_name),
                         
                         # Structural metrics from RFdiffusion
                         num_helices=safe_int(row.get('pr_helices')),
@@ -139,6 +165,9 @@ async def ingest_loose_files(
 ) -> int:
     """Ingest designs from individual JSON/PDB files (fallback)."""
     
+    # epitope_residues not passed to this function - set to None (optional)
+    epitope_residues = None
+    
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
@@ -163,13 +192,18 @@ async def ingest_loose_files(
     
     # Track ingested names to avoid duplicates
     ingested_names = set()
+    
+    print(f"[Ingester DEBUG] Search paths: {[str(p) for p in search_paths]}")
 
     for search_dir in search_paths:
         if not search_dir.exists():
             continue
         
+        json_files = list(search_dir.glob("confidence_*.json"))
+        print(f"[Ingester DEBUG] {search_dir}: {len(json_files)} confidence JSONs found")
+        
         # BOLTZ2: Look for confidence_*.json patterns
-        for json_file in search_dir.glob("confidence_*.json"):
+        for json_file in json_files:
             try:
                 # Filename format: confidence_DESIGNNAME.json
                 design_name = json_file.stem.replace("confidence_", "")
@@ -250,6 +284,17 @@ async def ingest_loose_files(
                 # Extract per-residue pLDDT from PDB B-factors
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
                 
+                # Calculate epitope contacts if epitope_residues provided
+                epitope_contact_count = None
+                epitope_min_distance = None
+                if epitope_residues and structure_path:
+                    epitope_contact_count, epitope_min_distance = calculate_epitope_contacts(
+                        structure_path, 
+                        epitope_residues,
+                        antibody_chain="A",  # RFantibody outputs antibody as chain A
+                        target_chain="B"     # Target as chain B
+                    )
+                
                 # Create design
                 design = Design(
                     id=str(uuid.uuid4()),
@@ -257,6 +302,13 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(structure_path),
                     json_path=str(json_file),
+                    
+                    # Backbone grouping
+                    backbone_id=parse_backbone_id(design_name),
+                    
+                    # Epitope contact metrics
+                    epitope_contact_count=epitope_contact_count,
+                    epitope_min_distance=epitope_min_distance,
                     
                     # Metrics
                     plddt_overall=safe_float(plddt),
@@ -359,6 +411,9 @@ async def ingest_loose_files(
                     pdb_path=str(structure_path),  # Can be .cif or .pdb
                     json_path=str(json_file),
                     
+                    # Backbone grouping
+                    backbone_id=parse_backbone_id(design_name),
+                    
                     # Metrics
                     plddt_overall=safe_float(plddt),
                     pae_overall=safe_float(pae),
@@ -401,6 +456,9 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(pdb_file),
                     json_path=None,
+                    
+                    # Backbone grouping
+                    backbone_id=parse_backbone_id(design_name),
                     
                     # Store extracted pLDDT (both average and per-residue)
                     plddt_overall=plddt,
