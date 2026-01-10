@@ -6,7 +6,7 @@ process PrepMPNN {
     tuple path(pdb_files), path(json_files)
 
     output:
-    path ("mpnn_input/*.pdb"), emit: pdbs
+    path ("mpnn_fixed/*.pdb"), emit: pdbs
     path ("mpnn_prep_*.log")
 
     script:
@@ -20,6 +20,13 @@ process PrepMPNN {
     
     # Add unique ID to mpnn prep logfile
     cp mpnn_prep.log mpnn_prep_${task.index}.log
+
+    # Add FIXED labels to PDB B-factors (Locks everything except H and L)
+    # This is the official method used by dl_binder_design
+    python /scripts/add_fixed_labels.py \
+        --input_dir "mpnn_input" \
+        --output_dir "mpnn_fixed" \
+        --designable_chains "H,L"
 
     """
 }

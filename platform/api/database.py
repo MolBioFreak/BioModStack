@@ -140,6 +140,13 @@ class Design(Base):
     notes = Column(Text, nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # BACKBONE GROUPING & EPITOPE ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    backbone_id = Column(Integer, nullable=True, index=True)  # Job number from design name (antibody_job_X)
+    epitope_contact_count = Column(Integer, nullable=True)    # CDR residues within 8Å of epitope
+    epitope_min_distance = Column(Float, nullable=True)       # Closest CDR-epitope distance (Å)
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS
     # ═══════════════════════════════════════════════════════════════════════════
     # CDR Sequences (IMGT numbering by default)
@@ -150,6 +157,16 @@ class Design(Base):
     cdr_l2 = Column(String(100), nullable=True)
     cdr_l3 = Column(String(100), nullable=True)
     numbering_scheme = Column(String(20), default="imgt")
+    
+    # CDR Loop Lengths (for sorting/filtering)
+    binder_length = Column(Integer, nullable=True)  # Total AA count of designed binder
+    cdr_h1_length = Column(Integer, nullable=True)
+    cdr_h2_length = Column(Integer, nullable=True)
+    cdr_h3_length = Column(Integer, nullable=True)
+    cdr_l1_length = Column(Integer, nullable=True)  # NULL for VHH/nanobodies
+    cdr_l2_length = Column(Integer, nullable=True)
+    cdr_l3_length = Column(Integer, nullable=True)
+    antibody_type = Column(String(20), nullable=True)  # vhh, fab, scfv, or NULL
     
     # Antibody Properties
     humanness_score = Column(Float, nullable=True)  # OAS/ANARCI derived

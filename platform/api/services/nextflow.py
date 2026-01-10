@@ -370,7 +370,22 @@ async def launch_nextflow_job(
                         # Ingest results into Design table
                         try:
                             from services.result_ingester import ingest_job_results
-                            design_count = await ingest_job_results(job_id, output_dir, session)
+                            
+                            # Extract epitope residues from job params for contact calculation
+                            epitope_residues = None
+                            if job.params:
+                                # hotspot_residues format: "A111,A112,..." or already list
+                                hotspots = job.params.get('hotspot_residues') or job.params.get('epitope_residues')
+                                if hotspots:
+                                    if isinstance(hotspots, str):
+                                        epitope_residues = [r.strip() for r in hotspots.split(',')]
+                                    elif isinstance(hotspots, list):
+                                        epitope_residues = hotspots
+                            
+                            design_count = await ingest_job_results(
+                                job_id, output_dir, session,
+                                epitope_residues=epitope_residues
+                            )
                             logger.info(f"Ingested {design_count} designs for job {job_id}")
                         except Exception as ingest_err:
                             logger.warning(f"Result ingestion failed: {ingest_err}")
@@ -549,6 +564,9 @@ def build_nextflow_command(
         'sequence_name': 'sequence_name',
         # Parallelization
         'num_parallel_jobs': 'num_parallel_jobs',
+        # Target complex prediction (optional upstream for antibody design)
+        'target_protein_seq': 'target_protein_seq',
+        'target_dna_seq': 'target_dna_seq',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process

@@ -80,9 +80,9 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
     // Fetch jobs for "Your Runs" tab
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: fetchJobs,
+        queryFn: () => fetchJobs(),
     });
-    const jobs = (jobsData as any)?.jobs ?? [];
+    const jobs = (jobsData as any)?.data?.jobs ?? [];
     const completedJobs = jobs.filter((j: any) => j.status === 'completed');
 
     // Fetch designs for selected job
@@ -91,7 +91,7 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
         queryFn: () => fetchDesigns({ job_id: selectedJobId }),
         enabled: !!selectedJobId,
     });
-    const designs = (designsData as any)?.designs ?? [];
+    const designs = (designsData as any)?.data?.designs ?? [];
     // Filter out current design from the comparison list
     const filteredDesigns = designs.filter((d: any) => d.id !== currentDesignId);
 
