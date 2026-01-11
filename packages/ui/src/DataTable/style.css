@@ -555,6 +555,7 @@ body:not(.drag-active)
 .ReactTable .rt-noData {
   z-index: unset;
   margin-top: 5px;
+  color: rgba(0, 0, 0, 0.65);
 }
 
 /* dark styles */

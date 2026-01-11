@@ -11,6 +11,8 @@ process PrepBoltzGenInput {
     val protein_sequence
     val dna_template_seq
     val dna_primer_seq
+    val secondary_structure
+    val protocol
     path input_pdb
     path ligand_pdb
     path dna_structure
@@ -34,6 +36,8 @@ process PrepBoltzGenInput {
         ${protein_sequence ? "--protein_sequence '${protein_sequence}'" : ''} \\
         ${dna_template_seq ? "--dna_template_seq '${dna_template_seq}'" : ''} \\
         ${dna_primer_seq ? "--dna_primer_seq '${dna_primer_seq}'" : ''} \\
+        ${secondary_structure ? "--secondary_structure '${secondary_structure}'" : ''} \\
+        ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
         ${input_pdb.name != 'NO_INPUT_PDB' ? "--input_pdb '${input_pdb}'" : ''} \\
         ${ligand_pdb.name != 'NO_LIGAND_PDB' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
         ${dna_structure.name != 'NO_DNA_STRUCT' ? "--dna_structure '${dna_structure}'" : ''} \\
@@ -82,6 +86,7 @@ process RunBoltzGen {
 process FilterBoltzGen {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "filtered/*.json"
 
     input:
     path pdbs
@@ -89,15 +94,17 @@ process FilterBoltzGen {
 
     output:
     path "filtered/*.pdb", emit: pdbs
+    path "filtered/*.json", emit: jsons, optional: true
+    path "filtered/filter_summary.json", emit: summary, optional: true
     path "*.log"
 
     script:
-    // Use generic filter params or specific ones if added later
-    def paramString = Utils.formatFilterParams(
-        params,
-        "boltzgen",
-        ["min_plddt", "min_conf_score"],
-    )
+    // Build filter parameters
+    def minPlddt = params.boltzgen_min_plddt ?: ''
+    def minConfScore = params.boltzgen_min_conf_score ?: ''
+    def maxRmsd = params.boltzgen_max_rmsd ?: ''
+    def budget = params.boltzgen_budget ?: ''
+    def alpha = params.boltzgen_alpha ?: '0.01'
 
     """
     eval "\$(micromamba shell hook --shell bash)"
@@ -106,7 +113,11 @@ process FilterBoltzGen {
     python /scripts/filter_boltzgen.py \\
         --pdbs ${pdbs} \\
         --jsons ${jsons} \\
-        ${paramString} \\
+        ${minPlddt ? "--boltzgen-min-plddt ${minPlddt}" : ''} \\
+        ${minConfScore ? "--boltzgen-min-conf-score ${minConfScore}" : ''} \\
+        ${maxRmsd ? "--boltzgen-max-rmsd ${maxRmsd}" : ''} \\
+        ${budget ? "--budget ${budget}" : ''} \\
+        --alpha ${alpha} \\
         --out_dir filtered \\
         2>&1 | tee filter_boltzgen.log
     """

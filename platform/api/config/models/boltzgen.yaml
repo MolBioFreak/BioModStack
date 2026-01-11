@@ -156,6 +156,48 @@ params:
     minimum: 1
     maximum: 32
 
+  # Filtering parameters (new)
+  - name: budget
+    type: integer
+    description: "Final number of designs to keep after diversity selection"
+    required: false
+    minimum: 1
+
+  - name: alpha
+    type: number
+    description: "Quality/diversity tradeoff: 0.0=quality only, 1.0=diversity only"
+    default: 0.01
+    minimum: 0
+    maximum: 1
+
+  - name: max_rmsd
+    type: number
+    description: "Maximum refolding RMSD threshold (lower is better)"
+    required: false
+    minimum: 0
+
+  - name: min_plddt
+    type: number
+    description: "Minimum structure confidence (pLDDT) threshold"
+    default: 70
+    minimum: 0
+    maximum: 100
+
+  - name: secondary_structure
+    type: string
+    description: "Secondary structure constraints (e.g., 'helix:1-20,sheet:25-35,loop:40-45')"
+    required: false
+
+  - name: protocol
+    type: string
+    description: "BoltzGen protocol to use"
+    default: "protein-anything"
+    enum:
+      - protein-anything
+      - peptide-anything
+      - protein-small_molecule
+      - nanobody-anything
+
 # Pre-configured NTP templates
 ntp_templates:
   # DNA nucleotides (dNTPs)

@@ -722,3 +722,59 @@ export const fetchAntibodyData = (designId: string) =>
 
 export const fetchAntiFoldLogits = (designId: string) =>
     `/api/designs/${designId}/antifold-logits`;
+
+// ============================================================
+// ADVANCED ANALYTICS API
+// ============================================================
+
+export interface CorrelationMatrix {
+    job_id: string;
+    metrics: string[];
+    matrix: number[][];  // NxN Pearson R values
+    sample_sizes: number[][];
+}
+
+export interface AACount {
+    aa: string;
+    count: number;
+    frequency: number;
+}
+
+export interface CDRComposition {
+    cdr_name: string;
+    total_residues: number;
+    composition: AACount[];
+}
+
+export interface AACompositionResponse {
+    job_id: string;
+    overall: AACount[];
+    by_cdr: CDRComposition[];
+}
+
+export interface PositionFrequency {
+    position: number;
+    frequencies: Record<string, number>;
+}
+
+export interface SequenceLogoData {
+    cdr_name: string;
+    length: number;
+    positions: PositionFrequency[];
+    consensus: string;
+    sequence_count: number;
+}
+
+export interface CDRAnalysisResponse {
+    job_id: string;
+    logos: SequenceLogoData[];
+}
+
+export const fetchCorrelationMatrix = (jobId: string) =>
+    api.get<CorrelationMatrix>(`/api/analytics/job/${jobId}/correlation-matrix`);
+
+export const fetchAAComposition = (jobId: string) =>
+    api.get<AACompositionResponse>(`/api/analytics/job/${jobId}/aa-composition`);
+
+export const fetchCDRLogos = (jobId: string) =>
+    api.get<CDRAnalysisResponse>(`/api/analytics/job/${jobId}/cdr-logos`);
