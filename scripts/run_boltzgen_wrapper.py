@@ -120,6 +120,16 @@ def main():
     parser.add_argument("--protocol", type=str, default="auto", 
                         help="BoltzGen protocol (auto, protein-anything, protein-small_molecule, etc)")
     
+    # Diffusion parameters
+    parser.add_argument("--step_scale", type=float, default=None, help="Fixed step scale (e.g., 1.8)")
+    parser.add_argument("--noise_scale", type=float, default=None, help="Fixed noise scale (e.g., 0.98)")
+    
+    # Inverse folding parameters
+    parser.add_argument("--inverse_fold_avoid", type=str, default=None, 
+                        help="Disallowed residues (e.g., 'C' or 'KEC')")
+    parser.add_argument("--inverse_fold_num_sequences", type=int, default=None,
+                        help="Number of sequences per backbone")
+    
     args, unknown = parser.parse_known_args()
     
     # Collect config files (support both single and batch modes)
@@ -155,6 +165,18 @@ def main():
         
         # BoltzGen CLI: boltzgen run <design_spec.yaml> --output <dir> --num_designs N --protocol X
         cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {protocol}"
+        
+        # Add diffusion parameters if specified
+        if args.step_scale:
+            cmd += f" --step_scale {args.step_scale}"
+        if args.noise_scale:
+            cmd += f" --noise_scale {args.noise_scale}"
+        
+        # Add inverse folding parameters if specified
+        if args.inverse_fold_avoid:
+            cmd += f" --inverse_fold_avoid '{args.inverse_fold_avoid}'"
+        if args.inverse_fold_num_sequences:
+            cmd += f" --inverse_fold_num_sequences {args.inverse_fold_num_sequences}"
         
         # Add any extra args passed through
         if unknown:

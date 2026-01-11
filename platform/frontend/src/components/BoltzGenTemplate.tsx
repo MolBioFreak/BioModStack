@@ -74,6 +74,19 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     const [alpha, setAlpha] = useState(initialValues?.boltzgen_alpha || 0.01);
     const [maxRmsd, setMaxRmsd] = useState<number | ''>(initialValues?.boltzgen_max_rmsd || '');
     const [minPlddt, setMinPlddt] = useState<number | ''>(initialValues?.boltzgen_min_plddt || 70);
+    const [minConfScore, setMinConfScore] = useState<number | ''>(initialValues?.boltzgen_min_conf_score || '');
+    const [filterBiased, setFilterBiased] = useState(initialValues?.boltzgen_filter_biased !== false); // default true
+    const [metricsOverride, setMetricsOverride] = useState(initialValues?.boltzgen_metrics_override || '');
+    const [additionalFilters, setAdditionalFilters] = useState(initialValues?.boltzgen_additional_filters || '');
+    const [sizeBuckets, setSizeBuckets] = useState(initialValues?.boltzgen_size_buckets || '');
+
+    // Inverse folding parameters
+    const [inverseFoldAvoid, setInverseFoldAvoid] = useState(initialValues?.boltzgen_inverse_fold_avoid || '');
+    const [inverseFoldNumSeqs, setInverseFoldNumSeqs] = useState<number>(initialValues?.boltzgen_inverse_fold_num_sequences || 1);
+
+    // Diffusion parameters
+    const [stepScale, setStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale || '');
+    const [noiseScale, setNoiseScale] = useState<number | ''>(initialValues?.boltzgen_noise_scale || '');
 
     // Secondary structure and protocol
     const [secondaryStructure, setSecondaryStructure] = useState(initialValues?.boltzgen_secondary_structure || '');
@@ -148,6 +161,31 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         params.boltzgen_alpha = alpha;
         if (maxRmsd) params.boltzgen_max_rmsd = maxRmsd;
         if (minPlddt) params.boltzgen_min_plddt = minPlddt;
+        if (minConfScore) params.boltzgen_min_conf_score = minConfScore;
+        params.boltzgen_filter_biased = filterBiased;
+
+        // Inverse folding parameters
+        if (inverseFoldAvoid.trim()) {
+            params.boltzgen_inverse_fold_avoid = inverseFoldAvoid;
+        }
+        if (inverseFoldNumSeqs > 1) {
+            params.boltzgen_inverse_fold_num_sequences = inverseFoldNumSeqs;
+        }
+
+        // Diffusion parameters
+        if (stepScale) params.boltzgen_step_scale = stepScale;
+        if (noiseScale) params.boltzgen_noise_scale = noiseScale;
+
+        // Advanced filtering parameters
+        if (metricsOverride.trim()) {
+            params.boltzgen_metrics_override = metricsOverride;
+        }
+        if (additionalFilters.trim()) {
+            params.boltzgen_additional_filters = additionalFilters;
+        }
+        if (sizeBuckets.trim()) {
+            params.boltzgen_size_buckets = sizeBuckets;
+        }
 
         // Secondary structure and protocol
         if (secondaryStructure.trim()) {
@@ -500,6 +538,141 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                     <div className="flex justify-between text-xs text-slate-500 mt-1">
                                         <span>Quality</span>
                                         <span>Diversity</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Additional Filtering Options */}
+                            <div className="grid grid-cols-2 gap-4 mt-4">
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Min Affinity Score</label>
+                                    <input
+                                        type="number"
+                                        value={minConfScore}
+                                        onChange={e => setMinConfScore(e.target.value ? parseFloat(e.target.value) : '')}
+                                        placeholder="e.g., 0.5"
+                                        min={0}
+                                        max={1}
+                                        step={0.05}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                    />
+                                    <p className="text-xs text-slate-500 mt-1">Binding probability (0-1)</p>
+                                </div>
+                                <div className="flex items-center">
+                                    <label className="flex items-center gap-3 cursor-pointer">
+                                        <div className={`w-10 h-6 rounded-full p-1 transition-colors ${filterBiased ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                                            <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${filterBiased ? 'translate-x-4' : ''}`} />
+                                        </div>
+                                        <input type="checkbox" className="hidden" checked={filterBiased} onChange={e => setFilterBiased(e.target.checked)} />
+                                        <div>
+                                            <span className="text-sm text-slate-300">Filter Biased</span>
+                                            <p className="text-xs text-slate-500">Remove AA outliers</p>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Inverse Folding Options */}
+                            <div className="border-t border-slate-700 pt-4 mt-4">
+                                <label className="block text-sm font-medium text-slate-300 mb-3">Inverse Folding</label>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Avoid Residues</label>
+                                        <input
+                                            type="text"
+                                            value={inverseFoldAvoid}
+                                            onChange={e => setInverseFoldAvoid(e.target.value.toUpperCase())}
+                                            placeholder="e.g., C or KEC"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Disallowed amino acids (1-letter codes)</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Seqs per Backbone</label>
+                                        <input
+                                            type="number"
+                                            value={inverseFoldNumSeqs}
+                                            onChange={e => setInverseFoldNumSeqs(parseInt(e.target.value) || 1)}
+                                            min={1}
+                                            max={10}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Sequences to sample per backbone</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Diffusion Parameters */}
+                            <div className="border-t border-slate-700 pt-4 mt-4">
+                                <label className="block text-sm font-medium text-slate-300 mb-3">Diffusion Tuning</label>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Step Scale</label>
+                                        <input
+                                            type="number"
+                                            value={stepScale}
+                                            onChange={e => setStepScale(e.target.value ? parseFloat(e.target.value) : '')}
+                                            placeholder="e.g., 1.8 (default: schedule)"
+                                            min={0.1}
+                                            max={5}
+                                            step={0.1}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Fixed step scale (leave empty for schedule)</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Noise Scale</label>
+                                        <input
+                                            type="number"
+                                            value={noiseScale}
+                                            onChange={e => setNoiseScale(e.target.value ? parseFloat(e.target.value) : '')}
+                                            placeholder="e.g., 0.98 (default: schedule)"
+                                            min={0}
+                                            max={2}
+                                            step={0.01}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Fixed noise scale (leave empty for schedule)</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Advanced Filtering */}
+                            <div className="border-t border-slate-700 pt-4 mt-4">
+                                <label className="block text-sm font-medium text-slate-300 mb-3">Advanced Filtering</label>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Metrics Override</label>
+                                        <input
+                                            type="text"
+                                            value={metricsOverride}
+                                            onChange={e => setMetricsOverride(e.target.value)}
+                                            placeholder="e.g., plip_hbonds_refolded=4 delta_sasa_refolded=2"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Per-metric weights (metric=weight, larger down-weights)</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Additional Filters</label>
+                                        <input
+                                            type="text"
+                                            value={additionalFilters}
+                                            onChange={e => setAdditionalFilters(e.target.value)}
+                                            placeholder="e.g., design_ALA>0.3 design_GLY<0.2"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Custom filters (feature&gt;threshold or feature&lt;threshold)</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Size Buckets</label>
+                                        <input
+                                            type="text"
+                                            value={sizeBuckets}
+                                            onChange={e => setSizeBuckets(e.target.value)}
+                                            placeholder="e.g., 10-20:5 20-30:10 30-40:5"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">Size constraints (min-max:count)</p>
                                     </div>
                                 </div>
                             </div>

@@ -67,6 +67,10 @@ process RunBoltzGen {
     def numDesigns = params.boltzgen_num_designs ?: 10
     def batchSize = params.boltzgen_batch_size ?: 1
     def protocol = params.boltzgen_protocol ?: 'auto'
+    def stepScale = params.boltzgen_step_scale ?: ''
+    def noiseScale = params.boltzgen_noise_scale ?: ''
+    def inverseFoldAvoid = params.boltzgen_inverse_fold_avoid ?: ''
+    def inverseFoldNumSeqs = params.boltzgen_inverse_fold_num_sequences ?: ''
     // Handle both single config and batch of configs
     def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" : "--config ${yaml_configs}"
     """
@@ -78,6 +82,10 @@ process RunBoltzGen {
         --num_designs ${numDesigns} \\
         ${batchSize > 1 ? "--batch_size ${batchSize}" : ""} \\
         --protocol ${protocol} \\
+        ${stepScale ? "--step_scale ${stepScale}" : ''} \\
+        ${noiseScale ? "--noise_scale ${noiseScale}" : ''} \\
+        ${inverseFoldAvoid ? "--inverse_fold_avoid '${inverseFoldAvoid}'" : ''} \\
+        ${inverseFoldNumSeqs ? "--inverse_fold_num_sequences ${inverseFoldNumSeqs}" : ''} \\
         ${params.boltzgen_extra_config ? params.boltzgen_extra_config : ''} \\
         2>&1 | tee boltzgen.log
     """
@@ -105,6 +113,10 @@ process FilterBoltzGen {
     def maxRmsd = params.boltzgen_max_rmsd ?: ''
     def budget = params.boltzgen_budget ?: ''
     def alpha = params.boltzgen_alpha ?: '0.01'
+    def filterBiased = params.boltzgen_filter_biased != false ? 'true' : 'false'
+    def metricsOverride = params.boltzgen_metrics_override ?: ''
+    def additionalFilters = params.boltzgen_additional_filters ?: ''
+    def sizeBuckets = params.boltzgen_size_buckets ?: ''
 
     """
     eval "\$(micromamba shell hook --shell bash)"
@@ -118,6 +130,10 @@ process FilterBoltzGen {
         ${maxRmsd ? "--boltzgen-max-rmsd ${maxRmsd}" : ''} \\
         ${budget ? "--budget ${budget}" : ''} \\
         --alpha ${alpha} \\
+        --filter-biased ${filterBiased} \\
+        ${metricsOverride ? "--metrics-override '${metricsOverride}'" : ''} \\
+        ${additionalFilters ? "--additional-filters '${additionalFilters}'" : ''} \\
+        ${sizeBuckets ? "--size-buckets '${sizeBuckets}'" : ''} \\
         --out_dir filtered \\
         2>&1 | tee filter_boltzgen.log
     """
