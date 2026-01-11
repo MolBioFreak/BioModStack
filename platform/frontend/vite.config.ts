@@ -16,6 +16,8 @@ export default defineConfig({
       'buffer',
       'string_decoder',
       'events',
+      'plotly.js-dist-min',
+      'react-plotly.js',
     ],
     esbuildOptions: {
       loader: {

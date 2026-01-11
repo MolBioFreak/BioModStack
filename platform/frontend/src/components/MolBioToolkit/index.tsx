@@ -94,6 +94,7 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
     // Use updateEditor to push sequence data and panel configuration into Redux store
     useEffect(() => {
         updateEditor(store, EDITOR_NAME, {
+            readOnly: false, // Enable editing mode by default so users can add primers/annotations
             sequenceData: oveSequenceData,
             // Panel layout configuration - include all tools
             panelsShown: [
@@ -168,6 +169,7 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                             "cutsiteTool",
                             "featureTool",
                             "partTool",
+                            "primerTool",
                             "oligoTool",
                             "orfTool",
                             "editTool",

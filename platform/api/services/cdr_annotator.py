@@ -100,29 +100,43 @@ def identify_binder_chain(sequences: Dict[str, str], pdb_path: str) -> Optional[
     """
     Identify which chain is the antibody binder (not the target).
     
-    Heuristics:
-    1. Chain H, L, or A (antibody naming conventions)
-    2. Shortest chain if target is typically larger
-    3. For VHH: ~110-130 AA range
+    Uses sequence signatures to detect antibody chains:
+    - VHH/VH typically starts with QVQLV, EVQLV, QVKLV (framework 1)
+    - VL/VK typically starts with DIVMT, DIQMT, EIVLT
     """
-    # Priority chain IDs that typically indicate antibody
-    antibody_chain_ids = ["H", "L", "A", "B"]
+    # Common VH/VHH framework 1 signatures
+    vh_signatures = ["QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVTLK", "QVQLK"]
+    vl_signatures = ["DIVMT", "DIQMT", "EIVLT", "DIVLT", "EIVMT", "QSVLT"]
     
-    for chain_id in antibody_chain_ids:
-        if chain_id in sequences:
-            seq = sequences[chain_id]
-            # VHH/nanobody range or Fab heavy chain range
-            if 100 <= len(seq) <= 250:
+    # First, try to detect by sequence signature (most reliable)
+    for chain_id, seq in sequences.items():
+        seq_upper = seq.upper()[:10]  # Check first 10 residues
+        
+        # Check for VH/VHH signature
+        for sig in vh_signatures:
+            if seq_upper.startswith(sig):
+                print(f"[CDR Annotator] Chain {chain_id} identified as VH/VHH (signature: {sig})")
+                return chain_id
+        
+        # Check for VL signature
+        for sig in vl_signatures:
+            if seq_upper.startswith(sig):
+                print(f"[CDR Annotator] Chain {chain_id} identified as VL (signature: {sig})")
                 return chain_id
     
-    # Fallback: find chain in VHH size range
+    # Fallback: check for chain in typical antibody length range
     for chain_id, seq in sequences.items():
-        if 100 <= len(seq) <= 150:
+        if 100 <= len(seq) <= 150:  # VHH/Fab typical range
+            print(f"[CDR Annotator] Chain {chain_id} selected by length ({len(seq)} AA)")
             return chain_id
     
-    # Last resort: shortest chain (likely binder, not target)
-    if sequences:
+    # Last resort: if only two chains, return the smaller one (likely binder)
+    if len(sequences) == 2:
         return min(sequences.keys(), key=lambda k: len(sequences[k]))
+    
+    # Final fallback: any chain
+    if sequences:
+        return list(sequences.keys())[0]
     
     return None
 

@@ -76,6 +76,22 @@ class DesignResponse(BaseModel):
     residue_plddt: Optional[List[float]] = None
     chain_metrics: Optional[Dict[str, ChainMetric]] = None
     
+    # Antibody CDR annotation
+    binder_length: Optional[int] = None
+    antibody_type: Optional[str] = None  # vhh, fab, scfv
+    cdr_h1: Optional[str] = None
+    cdr_h2: Optional[str] = None
+    cdr_h3: Optional[str] = None
+    cdr_l1: Optional[str] = None
+    cdr_l2: Optional[str] = None
+    cdr_l3: Optional[str] = None
+    cdr_h1_length: Optional[int] = None
+    cdr_h2_length: Optional[int] = None
+    cdr_h3_length: Optional[int] = None
+    cdr_l1_length: Optional[int] = None
+    cdr_l2_length: Optional[int] = None
+    cdr_l3_length: Optional[int] = None
+    
     # User annotations
     is_favorite: bool
     notes: Optional[str]
