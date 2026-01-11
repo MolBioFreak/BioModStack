@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
+import { DesignModeSelector } from './DesignModeSelector';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -21,6 +22,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
     const [explorationMode, setExplorationMode] = useState(true); // Parallel GPU distribution
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
+
+    // Design mode settings
+    type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
+    const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
+    const [selectedCDRLoops, setSelectedCDRLoops] = useState<Set<string>>(new Set(['H1', 'H2', 'H3', 'L1', 'L2', 'L3']));
+    const [protectTetrad, setProtectTetrad] = useState(true);
 
     // Framework selection - preset or custom
     type FrameworkType = 'standard-fv' | 'nanobody' | 'custom';
@@ -250,6 +257,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                     // Optional DNA sequence for complex prediction
                     target_dna_seq: targetDnaSeq.trim() || undefined,
+                    // Design mode settings
+                    antibody_design_mode: designMode,
+                    antibody_design_loops: Array.from(selectedCDRLoops).sort().join(','),
+                    protect_vhh_tetrad: protectTetrad,
+                    antibody_chains: frameworkType === 'nanobody' ? 'H' : 'H,L',
                 }
             };
 
@@ -468,8 +480,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <button
                             onClick={() => setShowDnaInput(!showDnaInput)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showDnaInput
-                                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                 }`}
                         >
                             {showDnaInput ? '🧬 Enabled' : '+ Add DNA/RNA'}
@@ -497,6 +509,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                     )}
                 </div>
+
+                {/* Design Mode Selector */}
+                <DesignModeSelector
+                    mode={designMode}
+                    onModeChange={setDesignMode}
+                    selectedLoops={selectedCDRLoops}
+                    onLoopsChange={setSelectedCDRLoops}
+                    protectTetrad={protectTetrad}
+                    onProtectTetradChange={setProtectTetrad}
+                    frameworkType={frameworkType}
+                />
 
                 {/* Number of Backbones */}
                 <div>

@@ -746,3 +746,68 @@
 .bp3-context-menu {
     color: #3C3C3C !important;
 }
+
+/* ========================================
+   PANEL TAB TEXT - Fix invisible white tabs
+   ======================================== */
+
+/* Draggable tab container */
+.ove-editor-container .ve-draggable-tabs {
+    color: var(--ove-text-primary) !important;
+    background-color: var(--ove-bg-secondary) !important;
+    border-bottom: 1px solid var(--ove-border) !important;
+}
+
+/* Individual tab items */
+.ove-editor-container .ve-draggable-tabs>div,
+.ove-editor-container .ve-draggable-tabs span,
+.ove-editor-container .ve-draggable-tabs button,
+.ove-editor-container .ve-draggable-tabs a {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Active tab styling */
+.ove-editor-container .veTabActive,
+.ove-editor-container .ve-draggable-tabs .veTabActive,
+.ove-editor-container [class*="veTab-"].veTabActive {
+    color: var(--ove-accent) !important;
+    border-bottom-color: var(--ove-accent) !important;
+}
+
+/* Tab text for specific panel types */
+.ove-editor-container [class*="veTab-"],
+.ove-editor-container .veTab-circularMap,
+.ove-editor-container .veTab-rail,
+.ove-editor-container .veTab-sequence,
+.ove-editor-container .veTab-properties,
+.ove-editor-container .veTab-digestTool,
+.ove-editor-container .veTab-pcrTool,
+.ove-editor-container .veTab-linearMap {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Hover state for tabs */
+.ove-editor-container .ve-draggable-tabs>*:hover {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Right-click tab menu */
+.ove-editor-container .veRightClickTabMenu {
+    color: var(--ove-text-secondary) !important;
+}
+
+/* Ensure all text within panel headers is dark */
+.ove-editor-container .reflex-element .ve-draggable-tabs * {
+    color: var(--ove-text-primary) !important;
+}
+
+/* Override any inherited white text in tab area */
+.ove-editor-container .veEditor .ve-draggable-tabs,
+.ove-editor-container .veEditor .ve-draggable-tabs * {
+    color: var(--ove-text-secondary) !important;
+}
+
+.ove-editor-container .veEditor .ve-draggable-tabs .veTabActive,
+.ove-editor-container .veEditor .ve-draggable-tabs .veTabActive * {
+    color: var(--ove-accent) !important;
+}

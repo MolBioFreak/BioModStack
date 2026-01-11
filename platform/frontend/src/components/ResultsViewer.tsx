@@ -12,11 +12,13 @@ import { PAEHeatmap } from './PAEHeatmap';
 import { DesignComparePane } from './DesignComparePane';
 import { ReferenceSelector } from './ReferenceSelector';
 import { MetricOverlay } from './MetricOverlay';
+import { ExperimentalAnalyticsPane } from './ExperimentalAnalyticsPane';
 
 // Tab definitions
 const TABS = [
     { id: 'overview', label: 'Overview', icon: 'View' },
     { id: 'analytics', label: 'Analytics', icon: 'Chart' },
+    { id: 'experimental', label: 'Experimental', icon: '🧪' },
     { id: 'structure', label: 'Structure', icon: '3D' },
     { id: 'antibody', label: 'Antibody', icon: 'Immune' },
     { id: 'table', label: 'Data Table', icon: 'List' },
@@ -56,7 +58,7 @@ export function ResultsViewer() {
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
-    const [showPlddt, setShowPlddt] = useState(true);  // pLDDT coloring on by default
+    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr'>('plddt');  // Structure coloring mode
     const [showReferencePanel, setShowReferencePanel] = useState(false);
     const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
     const [selectedBackboneId, setSelectedBackboneId] = useState<number | null>(null);
@@ -165,18 +167,45 @@ export function ResultsViewer() {
     });
     const antibodyData = antibodyDataWrapper?.data;
 
-    // Antibody selections for Molstar (IMGT Scheme)
+    // Antibody selections for Molstar - dynamic based on actual CDR data
     const antibodySelections = useMemo(() => {
-        if (!antibodyData) return undefined;
-        return [
-            { chain_id: 'H', start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 50, b: 50 } }, // H1 - Red
-            { chain_id: 'H', start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 50 } }, // H2 - Green
-            { chain_id: 'H', start_residue_number: 105, end_residue_number: 117, color: { r: 50, g: 100, b: 255 } }, // H3 - Blue
-            { chain_id: 'L', start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 255, b: 50 } }, // L1 - Yellow
-            { chain_id: 'L', start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 255 } }, // L2 - Cyan
-            { chain_id: 'L', start_residue_number: 105, end_residue_number: 117, color: { r: 255, g: 50, b: 255 } }, // L3 - Magenta
+        const design = designs.find(d => d.id === selectedDesignId) as any;
+        if (!design?.cdr_h1_length) return undefined;
+
+        // Use chain 'B' which is typically the binder in RFantibody outputs
+        // Compute approximate positions based on framework regions
+        // Standard VHH/Fab structure: FR1 (1-26) | CDR1 | FR2 (39-55) | CDR2 | FR3 (66-104) | CDR3 | FR4
+        const h1Start = 27;
+        const h1End = 26 + (design.cdr_h1_length || 12);
+        const h2Start = h1End + 17; // FR2 is ~17 residues
+        const h2End = h2Start + (design.cdr_h2_length || 10) - 1;
+        const h3Start = h2End + 39; // FR3 is ~39 residues
+        const h3End = h3Start + (design.cdr_h3_length || 12) - 1;
+
+        const selections = [
+            { chain_id: 'A', start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } }, // H1 - Red
+            { chain_id: 'A', start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } }, // H2 - Green
+            { chain_id: 'A', start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } }, // H3 - Blue
         ];
-    }, [antibodyData]);
+
+        // Add L-chain CDRs if this is a Fab (not VHH)
+        if (design.antibody_type !== 'vhh' && design.cdr_l1_length) {
+            const l1Start = 27;
+            const l1End = 26 + (design.cdr_l1_length || 11);
+            const l2Start = l1End + 16;
+            const l2End = l2Start + (design.cdr_l2_length || 7) - 1;
+            const l3Start = l2End + 33;
+            const l3End = l3Start + (design.cdr_l3_length || 9) - 1;
+
+            selections.push(
+                { chain_id: 'C', start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } }, // L1 - Yellow
+                { chain_id: 'C', start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } }, // L2 - Cyan
+                { chain_id: 'C', start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } }, // L3 - Magenta
+            );
+        }
+
+        return selections;
+    }, [designs, selectedDesignId]);
 
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
@@ -757,24 +786,43 @@ export function ResultsViewer() {
                                                     </div>
                                                 </div>
 
-                                                {/* pLDDT Toggle */}
-                                                <button
-                                                    onClick={() => setShowPlddt(!showPlddt)}
-                                                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors backdrop-blur-sm ${showPlddt
-                                                        ? 'bg-blue-500/30 text-blue-400 border border-blue-500/40'
-                                                        : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
-                                                        }`}
-                                                    title="Toggle pLDDT confidence coloring"
-                                                >
-                                                    <span className={`w-2 h-2 rounded-full ${showPlddt ? 'bg-blue-400' : 'bg-slate-500'}`} />
-                                                    pLDDT
-                                                </button>
-                                                {showPlddt && (
+                                                {/* Color Mode Dropdown */}
+                                                <div className="relative">
+                                                    <select
+                                                        value={colorMode}
+                                                        onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
+                                                        className="appearance-none bg-slate-800/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1.5 pr-8 text-xs text-white cursor-pointer hover:bg-slate-700/60 transition-colors"
+                                                    >
+                                                        <option value="default">Chain Colors</option>
+                                                        <option value="plddt">pLDDT Confidence</option>
+                                                        <option
+                                                            value="cdr"
+                                                            disabled={!(activeJob?.model_id === 'rfantibody' || activeJob?.name?.toLowerCase().includes('antibody'))}
+                                                        >
+                                                            CDR Regions {!(activeJob?.model_id === 'rfantibody' || activeJob?.name?.toLowerCase().includes('antibody')) ? '(N/A)' : ''}
+                                                        </option>
+                                                    </select>
+                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
+                                                        ▾
+                                                    </div>
+                                                </div>
+                                                {/* Color Mode Legend */}
+                                                {colorMode === 'plddt' && (
                                                     <div className="flex items-center gap-1 text-xs text-slate-400">
                                                         <span className="text-blue-400">■</span>≥90
                                                         <span className="text-cyan-400 ml-1">■</span>≥70
                                                         <span className="text-yellow-400 ml-1">■</span>≥50
                                                         <span className="text-orange-400 ml-1">■</span>&lt;50
+                                                    </div>
+                                                )}
+                                                {colorMode === 'cdr' && (
+                                                    <div className="flex items-center gap-1 text-xs text-slate-400">
+                                                        <span className="text-red-400">■</span>H1
+                                                        <span className="text-green-400 ml-1">■</span>H2
+                                                        <span className="text-blue-400 ml-1">■</span>H3
+                                                        <span className="text-yellow-400 ml-1">■</span>L1
+                                                        <span className="text-cyan-400 ml-1">■</span>L2
+                                                        <span className="text-pink-400 ml-1">■</span>L3
                                                     </div>
                                                 )}
 
@@ -867,10 +915,11 @@ export function ResultsViewer() {
                                             {/* Main Viewer - Full Size */}
                                             <div className="absolute inset-0">
                                                 <MolstarViewer
-                                                    key={selectedDesignId}
+                                                    key={selectedDesignId + '_' + colorMode}
                                                     structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
                                                     format={structureFormat}
-                                                    alphafoldView={showPlddt}
+                                                    alphafoldView={colorMode === 'plddt'}
+                                                    selections={colorMode === 'cdr' ? antibodySelections : undefined}
                                                     height="100%"
                                                     backgroundColor="#0f172a"
                                                 />
@@ -920,9 +969,23 @@ export function ResultsViewer() {
                                                         <div className="lg:col-span-2 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
                                                             <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-700/50 flex justify-between items-center">
                                                                 <h3 className="text-sm font-semibold text-white">CDR Loops (IMGT)</h3>
-                                                                <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-md border border-blue-500/30">
-                                                                    {selectedDesign?.name}
-                                                                </span>
+                                                                {/* Design Selector Dropdown */}
+                                                                <div className="relative">
+                                                                    <select
+                                                                        value={selectedDesignId ?? ''}
+                                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                                        className="appearance-none bg-slate-700/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1 pr-8 text-xs text-blue-300 cursor-pointer hover:bg-slate-600/60 transition-colors min-w-[200px]"
+                                                                    >
+                                                                        {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
+                                                                            <option key={d.id} value={d.id}>
+                                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
+                                                                            </option>
+                                                                        ))}
+                                                                    </select>
+                                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
+                                                                        ▾
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                             <div className="p-4 overflow-x-auto">
                                                                 <table className="w-full text-sm">
@@ -1108,24 +1171,29 @@ export function ResultsViewer() {
                                                     onChange={e => setFilterText(e.target.value)}
                                                     className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm w-64"
                                                 />
-                                                <button
-                                                    onClick={async () => {
-                                                        const jobIdToUse = activeJob?.id || selectedJobId;
-                                                        if (!jobIdToUse) return;
-                                                        try {
-                                                            const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdr`, { method: 'POST' });
-                                                            const data = await res.json();
-                                                            alert(data.message || 'CDR annotation complete');
-                                                            // Refetch designs to show updated data
-                                                            window.location.reload();
-                                                        } catch (err) {
-                                                            alert('CDR annotation failed: ' + err);
-                                                        }
-                                                    }}
-                                                    className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-                                                >
-                                                    🧬 Annotate CDRs
-                                                </button>
+                                                {/* Show Annotate CDRs only for antibody jobs */}
+                                                {(activeJob?.model_id === 'rfantibody' ||
+                                                    activeJob?.name?.toLowerCase().includes('antibody') ||
+                                                    activeJob?.mode?.toLowerCase().includes('antibody')) && (
+                                                        <button
+                                                            onClick={async () => {
+                                                                const jobIdToUse = activeJob?.id || selectedJobId;
+                                                                if (!jobIdToUse) return;
+                                                                try {
+                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdr`, { method: 'POST' });
+                                                                    const data = await res.json();
+                                                                    alert(data.message || 'CDR annotation complete');
+                                                                    // Refetch designs to show updated data
+                                                                    window.location.reload();
+                                                                } catch (err) {
+                                                                    alert('CDR annotation failed: ' + err);
+                                                                }
+                                                            }}
+                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                                        >
+                                                            🧬 Annotate CDRs
+                                                        </button>
+                                                    )}
                                             </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">
@@ -1292,6 +1360,15 @@ export function ResultsViewer() {
                                         <DesignComparePane
                                             designs={designs}
                                             preSelectedId={selectedDesignId}
+                                        />
+                                    )}
+
+                                    {/* EXPERIMENTAL ANALYTICS TAB (Plotly-powered) */}
+                                    {activeTab === 'experimental' && (
+                                        <ExperimentalAnalyticsPane
+                                            designs={designs}
+                                            jobName={activeJob?.name}
+                                            jobId={selectedJobId}
                                         />
                                     )}
                                 </>
