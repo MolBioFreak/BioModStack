@@ -54,6 +54,7 @@ class JobInfo:
     priority: int
     pinned_gpu: Optional[int]
     created_at: datetime
+    batch_id: Optional[str] = None  # For GPU locking - all jobs in a batch share exclusive GPU access
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -122,10 +123,12 @@ def read_scheduler_config() -> Dict[str, Any]:
     
     default_config = {
         "global": {
-            "target_vram_fill": 0.75,
+            "target_vram_fill": 0.85,  # More aggressive packing (was 0.75)
             "enabled": True,
         },
-        "overrides": {}
+        "overrides": {},
+        "workflow_pins": {},  # Map of model_type -> gpu_id
+        "gpu_locks": {}  # Map of batch_id -> gpu_id for exclusive locks
     }
     
     if not config_path.exists():
@@ -144,6 +147,52 @@ def is_gpu_disabled(gpu_index: int, config: Dict[str, Any]) -> bool:
     overrides = config.get("overrides", {})
     gpu_override = overrides.get(str(gpu_index), {})
     return gpu_override.get("disabled", False)
+
+
+def get_workflow_pin(job_model_type: str, config: Dict[str, Any]) -> Optional[int]:
+    """
+    Check if a workflow type has a workflow-level GPU pin.
+    
+    Workflow pins are set via the API to route all jobs of a specific model_type
+    (e.g., 'boltz', 'fampnn', 'rfantibody') to a specific GPU.
+    
+    Returns the pinned GPU index, or None if no workflow pin exists.
+    """
+    workflow_pins = config.get("workflow_pins", {})
+    if job_model_type in workflow_pins:
+        return workflow_pins[job_model_type]
+    return None
+
+
+def is_gpu_locked(gpu_index: int, batch_id: Optional[str], config: Dict[str, Any]) -> bool:
+    """
+    Check if a GPU is locked for exclusive use by a different batch.
+    
+    GPU locks are used when a user pins all child jobs in a batch to a single GPU
+    AND locks that GPU from other workflows.
+    
+    Returns True if the GPU is locked by a DIFFERENT batch, False otherwise.
+    """
+    gpu_locks = config.get("gpu_locks", {})
+    for locked_batch, locked_gpu in gpu_locks.items():
+        if locked_gpu == gpu_index:
+            # GPU is locked - only allow if this job is from the same batch
+            if batch_id and batch_id == locked_batch:
+                return False  # Same batch, allowed
+            return True  # Different batch, blocked
+    return False
+
+
+def get_batch_lock_gpu(batch_id: Optional[str], config: Dict[str, Any]) -> Optional[int]:
+    """
+    Get the GPU that a batch has locked for exclusive use.
+    
+    Returns the locked GPU index, or None if no lock exists.
+    """
+    if not batch_id:
+        return None
+    gpu_locks = config.get("gpu_locks", {})
+    return gpu_locks.get(batch_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -199,23 +248,52 @@ def pack_jobs_to_gpus(
         best_gpu = None
         best_score = -float('inf')
         
+        # ═══════════════════════════════════════════════════════════════════
+        # PRE-CHECK: Determine forced GPU assignment from pins/locks
+        # Priority: batch_lock > job.pinned_gpu > workflow_pin
+        # ═══════════════════════════════════════════════════════════════════
+        forced_gpu = None
+        
+        # Check 0a: Batch lock (highest priority - exclusive GPU for batch)
+        batch_lock_gpu = get_batch_lock_gpu(getattr(job, 'batch_id', None), config)
+        if batch_lock_gpu is not None:
+            forced_gpu = batch_lock_gpu
+            logger.debug(f"[PACK] {job.name}: Batch lock forces GPU {forced_gpu}")
+        
+        # Check 0b: Job-level pinning (user explicitly chose GPU for this job)
+        elif job.pinned_gpu is not None:
+            forced_gpu = job.pinned_gpu
+            logger.debug(f"[PACK] {job.name}: Job pin forces GPU {forced_gpu}")
+        
+        # Check 0c: Workflow-level pin (all jobs of this model_type go to specific GPU)
+        else:
+            workflow_pin = get_workflow_pin(job.model_type, config)
+            if workflow_pin is not None:
+                forced_gpu = workflow_pin
+                logger.debug(f"[PACK] {job.name}: Workflow pin ({job.model_type}) forces GPU {forced_gpu}")
+        
         for gpu in active_gpus:
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
             
-            # Check 1: Respect user pinning
-            if job.pinned_gpu is not None:
-                if job.pinned_gpu != gpu.index:
+            # Check 1: Respect forced GPU assignment (pins/locks)
+            if forced_gpu is not None:
+                if forced_gpu != gpu.index:
                     continue
             
-            # Check 2: Model compatibility (heavy models skip 5060 Ti)
+            # Check 2: GPU lock exclusion (skip GPUs locked by other batches)
+            job_batch_id = getattr(job, 'batch_id', None)
+            if is_gpu_locked(gpu.index, job_batch_id, config):
+                continue  # GPU is locked by a different batch
+            
+            # Check 3: Model compatibility (heavy models skip 5060 Ti)
             if job.model_type in HEAVY_MODELS:
                 if not gpu_caps.get('supports_heavy', True):
                     continue
             
-            # Check 3: VRAM availability (with per-GPU safety margin)
+            # Check 4: VRAM availability (with per-GPU safety margin)
             gpu_override = config.get("overrides", {}).get(str(gpu.index), {})
             safety_margin = gpu_override.get("vram_safety_margin_mb", 500)
-            target_fill = config.get("global", {}).get("target_vram_fill", 0.75)
+            target_fill = config.get("global", {}).get("target_vram_fill", 0.85)
             available = (capacity[gpu.index] * target_fill) - projected[gpu.index] - safety_margin
             
             if job.vram_estimate_mb > available:
@@ -413,7 +491,8 @@ class GPUOrchestrator:
                     sequence_length=job.sequence_length or 300,
                     priority=job.priority or 0,
                     pinned_gpu=job.pinned_gpu,
-                    created_at=job.created_at
+                    created_at=job.created_at,
+                    batch_id=getattr(job, 'batch_id', None)  # For GPU locking
                 ))
             
             # 3. Get GPU state
@@ -444,9 +523,10 @@ class GPUOrchestrator:
                 if not job:
                     continue
                 
-                # Stagger launches to prevent GPU memory racing (2 second delay between)
+                # Stagger launches to prevent GPU memory racing (0.5 second delay between)
+                # Reduced from 2.0s for faster throughput
                 if i > 0:
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(0.5)
                 
                 try:
                     # Launch Nextflow with GPU assignment

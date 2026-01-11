@@ -6,6 +6,7 @@ import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
+import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -28,6 +29,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
     const [selectedCDRLoops, setSelectedCDRLoops] = useState<Set<string>>(new Set(['H1', 'H2', 'H3', 'L1', 'L2', 'L3']));
     const [protectTetrad, setProtectTetrad] = useState(true);
+
+    // Quality settings
+    const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
+    const [qualitySettings, setQualitySettings] = useState<QualitySettings>(PRESETS.balanced);
 
     // Framework selection - preset or custom
     type FrameworkType = 'standard-fv' | 'nanobody' | 'custom';
@@ -262,6 +267,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     antibody_design_loops: Array.from(selectedCDRLoops).sort().join(','),
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: frameworkType === 'nanobody' ? 'H' : 'H,L',
+                    // Quality settings - Boltz-2
+                    boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
+                    boltz_recycling_steps: qualitySettings.boltz_recycling_steps,
+                    boltz_num_samples: qualitySettings.boltz_num_samples,
+                    boltz_use_potentials: qualitySettings.boltz_use_potentials,
+                    boltz_use_msa: qualitySettings.boltz_use_msa,
+                    // Quality settings - FAMPNN
+                    fampnn_temperature: qualitySettings.fampnn_temperature,
+                    fampnn_num_steps: qualitySettings.fampnn_num_steps,
+                    fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
                 }
             };
 
@@ -519,6 +534,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protectTetrad={protectTetrad}
                     onProtectTetradChange={setProtectTetrad}
                     frameworkType={frameworkType}
+                />
+
+                {/* Quality Settings Panel */}
+                <QualitySettingsPanel
+                    settings={qualitySettings}
+                    onSettingsChange={setQualitySettings}
+                    preset={qualityPreset}
+                    onPresetChange={setQualityPreset}
                 />
 
                 {/* Number of Backbones */}

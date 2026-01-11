@@ -605,8 +605,10 @@ async def get_scheduler_config():
     """Get current GPU scheduler configuration."""
     config = read_scheduler_config()
     return {
-        "global": config["global"],
-        "overrides": config["overrides"],
+        "global": config.get("global", {}),
+        "overrides": config.get("overrides", {}),
+        "workflow_pins": config.get("workflow_pins", {}),
+        "gpu_locks": config.get("gpu_locks", {}),
         "config_path": str(GPU_CONFIG_PATH)
     }
 
@@ -701,3 +703,208 @@ async def clear_gpu_override(gpu_id: str):
         return {"success": True, "message": f"Cleared override for GPU {gpu_id}"}
     
     return {"success": True, "message": f"No override existed for GPU {gpu_id}"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKFLOW PINNING ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/workflow-pins")
+async def get_workflow_pins():
+    """
+    Get all active workflow-level GPU pins.
+    
+    Workflow pins route ALL jobs of a specific model_type to a specific GPU.
+    """
+    config = read_scheduler_config()
+    return {
+        "workflow_pins": config.get("workflow_pins", {}),
+        "available_workflows": [
+            "boltz", "fampnn", "rfantibody", "rfdiffusion", "rfd3", "rf3",
+            "af2", "mpnn", "boltzgen", "diffdock", "unidock", "msa_batch",
+            "antibody_child", "antibody_denovo"
+        ]
+    }
+
+
+@router.post("/workflow-pins/{workflow_type}/gpu/{gpu_id}")
+async def pin_workflow_to_gpu(workflow_type: str, gpu_id: int):
+    """
+    Pin all jobs of a specific workflow type to a GPU.
+    
+    Args:
+        workflow_type: Model type (e.g., 'boltz', 'fampnn', 'rfantibody')
+        gpu_id: GPU index (0-3)
+    
+    Example: POST /gpu/workflow-pins/boltz/gpu/2
+             → All Boltz jobs will run on GPU 2
+    """
+    if gpu_id < 0 or gpu_id > 3:
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Must be 0-3.")
+    
+    config = read_scheduler_config()
+    
+    if "workflow_pins" not in config:
+        config["workflow_pins"] = {}
+    
+    config["workflow_pins"][workflow_type] = gpu_id
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "message": f"All '{workflow_type}' jobs will now run on GPU {gpu_id}",
+        "workflow_pins": config["workflow_pins"]
+    }
+
+
+@router.delete("/workflow-pins/{workflow_type}")
+async def unpin_workflow(workflow_type: str):
+    """Remove workflow-level GPU pin for a model type."""
+    config = read_scheduler_config()
+    
+    workflow_pins = config.get("workflow_pins", {})
+    
+    if workflow_type in workflow_pins:
+        del workflow_pins[workflow_type]
+        config["workflow_pins"] = workflow_pins
+        
+        if not write_scheduler_config(config):
+            raise HTTPException(status_code=500, detail="Failed to save config")
+        
+        return {
+            "success": True,
+            "message": f"Removed pin for '{workflow_type}' - jobs will use normal orchestrator logic",
+            "workflow_pins": config["workflow_pins"]
+        }
+    
+    return {
+        "success": True,
+        "message": f"No pin existed for '{workflow_type}'",
+        "workflow_pins": workflow_pins
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GPU LOCK ENDPOINTS (Exclusive batch access)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/gpu-locks")
+async def get_gpu_locks():
+    """
+    Get all active GPU locks.
+    
+    GPU locks reserve a GPU exclusively for a batch of child jobs.
+    Other workflows are blocked from using a locked GPU.
+    """
+    config = read_scheduler_config()
+    return {
+        "gpu_locks": config.get("gpu_locks", {}),
+        "message": "GPU locks reserve a GPU exclusively for a batch. Other jobs are blocked."
+    }
+
+
+@router.post("/gpu-locks/{batch_id}/gpu/{gpu_id}")
+async def lock_gpu_for_batch(batch_id: str, gpu_id: int):
+    """
+    Lock a GPU exclusively for a batch of jobs.
+    
+    When locked:
+    - All jobs in this batch will run on the specified GPU
+    - Other workflows/batches are BLOCKED from this GPU
+    
+    Args:
+        batch_id: Unique batch identifier (e.g., parent job ID)
+        gpu_id: GPU index to lock (0-3)
+    """
+    if gpu_id < 0 or gpu_id > 3:
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Must be 0-3.")
+    
+    config = read_scheduler_config()
+    
+    if "gpu_locks" not in config:
+        config["gpu_locks"] = {}
+    
+    # Check if this GPU is already locked by another batch
+    existing_locks = config["gpu_locks"]
+    for existing_batch, locked_gpu in existing_locks.items():
+        if locked_gpu == gpu_id and existing_batch != batch_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"GPU {gpu_id} is already locked by batch '{existing_batch}'"
+            )
+    
+    config["gpu_locks"][batch_id] = gpu_id
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "message": f"GPU {gpu_id} is now LOCKED for batch '{batch_id}'. Other workflows blocked.",
+        "batch_id": batch_id,
+        "gpu_id": gpu_id,
+        "gpu_locks": config["gpu_locks"]
+    }
+
+
+@router.delete("/gpu-locks/{batch_id}")
+async def unlock_gpu_for_batch(batch_id: str):
+    """
+    Release a GPU lock for a batch.
+    
+    Call this when all jobs in a batch have completed to allow other
+    workflows to use the GPU again.
+    """
+    config = read_scheduler_config()
+    
+    gpu_locks = config.get("gpu_locks", {})
+    
+    if batch_id in gpu_locks:
+        released_gpu = gpu_locks[batch_id]
+        del gpu_locks[batch_id]
+        config["gpu_locks"] = gpu_locks
+        
+        if not write_scheduler_config(config):
+            raise HTTPException(status_code=500, detail="Failed to save config")
+        
+        return {
+            "success": True,
+            "message": f"GPU {released_gpu} is now UNLOCKED (was reserved by batch '{batch_id}')",
+            "released_gpu": released_gpu,
+            "gpu_locks": config["gpu_locks"]
+        }
+    
+    return {
+        "success": True,
+        "message": f"No lock existed for batch '{batch_id}'",
+        "gpu_locks": gpu_locks
+    }
+
+
+@router.get("/batch-status/{batch_id}")
+async def get_batch_status(batch_id: str):
+    """
+    Get the GPU assignment status for a batch.
+    
+    Returns whether the batch has a GPU lock and which GPU it's using.
+    """
+    config = read_scheduler_config()
+    gpu_locks = config.get("gpu_locks", {})
+    
+    if batch_id in gpu_locks:
+        return {
+            "batch_id": batch_id,
+            "locked": True,
+            "gpu_id": gpu_locks[batch_id],
+            "mode": "exclusive"
+        }
+    
+    return {
+        "batch_id": batch_id,
+        "locked": False,
+        "gpu_id": None,
+        "mode": "round_robin"
+    }
+

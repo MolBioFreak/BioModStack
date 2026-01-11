@@ -41,6 +41,7 @@ import withEditorProps from "../../withEditorProps";
 import { withPropsHook as withProps } from "../../utils/recomposeCompat";
 import { map, flatMap, round } from "lodash-es";
 import "./style.css";
+import PrimerSequenceInput from "../PrimerSequenceInput";
 
 class AddOrEditAnnotationDialog extends React.Component {
   componentDidMount() {
@@ -107,7 +108,7 @@ class AddOrEditAnnotationDialog extends React.Component {
                   <div style={{}} key={index}>
                     <div style={{ display: "flex", marginBottom: 10 }}>
                       <NumericInputField
-                        disabled={this.props.readOnly}
+                        disabled={this.props.readOnly === true}
                         containerStyle={{ marginBottom: 0, marginRight: 10 }}
                         inlineLabel
                         className="no-inline-label-margins"
@@ -120,7 +121,7 @@ class AddOrEditAnnotationDialog extends React.Component {
                         label="Start"
                       />
                       <NumericInputField
-                        disabled={this.props.readOnly}
+                        disabled={this.props.readOnly === true}
                         containerStyle={{ marginBottom: 0, marginRight: 10 }}
                         inlineLabel
                         className="no-inline-label-margins"
@@ -133,7 +134,7 @@ class AddOrEditAnnotationDialog extends React.Component {
                         label="End"
                       />
                       <Button
-                        disabled={this.props.readOnly}
+                        disabled={this.props.readOnly === true}
                         onClick={() => {
                           if (locations.length === 2) {
                             fields.remove(0);
@@ -153,7 +154,7 @@ class AddOrEditAnnotationDialog extends React.Component {
           </div>
         )}
         <Button
-          disabled={this.props.readOnly}
+          disabled={this.props.readOnly === true}
           style={{ marginBottom: 10, left: "50%" }}
           // intent="primary"
           onClick={() => {
@@ -326,7 +327,7 @@ class AddOrEditAnnotationDialog extends React.Component {
           </Callout>
         ) : null}
         <InputField
-          disabled={readOnly}
+          disabled={readOnly === true}
           inlineLabel
           tooltipError
           autoFocus
@@ -345,20 +346,21 @@ class AddOrEditAnnotationDialog extends React.Component {
           name="name"
           label="Name"
         />
-        {!isProtein &&
+        {/* Strand selector - hide for primers since it's auto-detected */}
+        {!isProtein && annotationTypePlural !== "primers" &&
           (annotationTypePlural === "features" &&
             allowMultipleFeatureDirections ? (
             <StrandField
               name="arrowheadType"
               label="Strand"
-              disabled={this.props.readOnly}
+              disabled={this.props.readOnly === true}
               inlineLabel
               inline
               tooltipError
             ></StrandField>
           ) : (
             <RadioGroupField
-              disabled={this.props.readOnly}
+              disabled={this.props.readOnly === true}
               inlineLabel
               inline
               tooltipError
@@ -376,8 +378,35 @@ class AddOrEditAnnotationDialog extends React.Component {
         )}
         {renderTags || null}
 
-        {/* {allowPrimerBasesToBeEdited && RenderBases ? null : !renderLocations || */}
-        {!renderLocations || !locations || locations.length < 2 ? (
+        {/* For primers: use sequence-based binding detection */}
+        {annotationTypePlural === "primers" ? (
+          <React.Fragment>
+            <PrimerSequenceInput
+              readOnly={this.props.readOnly}
+              sequenceData={sequenceData}
+              change={change}
+            />
+            {/* Hidden fields to ensure form registration */}
+            <NumericInputField
+              style={{ display: "none" }}
+              name="start"
+              defaultValue={start ?? 1}
+            />
+            <NumericInputField
+              style={{ display: "none" }}
+              name="end"
+              defaultValue={end ?? 1}
+            />
+            <RadioGroupField
+              style={{ display: "none" }}
+              options={[
+                { label: "Positive", value: true },
+                { label: "Negative", value: false }
+              ]}
+              name="forward"
+            />
+          </React.Fragment>
+        ) : (!renderLocations || !locations || locations.length < 2 ? (
           <React.Fragment>
             <div
               style={{ marginBottom: 10, fontSize: 12, fontStyle: "italic" }}
@@ -386,7 +415,7 @@ class AddOrEditAnnotationDialog extends React.Component {
             </div>
             <NumericInputField
               inlineLabel
-              disabled={this.props.readOnly}
+              disabled={this.props.readOnly === true}
               format={this.formatStart}
               parse={this.parseStart}
               tooltipError
@@ -394,11 +423,10 @@ class AddOrEditAnnotationDialog extends React.Component {
               min={1}
               max={sequenceLength || 1}
               name="start"
-              label={`${annotationTypePlural === "primers" ? "Bind " : ""
-                }Start`}
+              label="Start"
             />
             <NumericInputField
-              disabled={this.props.readOnly}
+              disabled={this.props.readOnly === true}
               format={this.formatEnd}
               parse={this.parseEnd}
               inlineLabel
@@ -407,10 +435,10 @@ class AddOrEditAnnotationDialog extends React.Component {
               min={1}
               max={sequenceLength || 1}
               name="end"
-              label={`${annotationTypePlural === "primers" ? "Bind " : ""}End`}
+              label="End"
             />
           </React.Fragment>
-        ) : null}
+        ) : null)}
         {renderLocations ? (
           <FieldArray component={this.renderLocations} name="locations" />
         ) : null}
@@ -469,7 +497,7 @@ class AddOrEditAnnotationDialog extends React.Component {
           <Button
             type="submit"
             loading={submitting}
-            disabled={this.props.readOnly}
+            disabled={this.props.readOnly === true}
             intent={Intent.PRIMARY}
           >
             Save
