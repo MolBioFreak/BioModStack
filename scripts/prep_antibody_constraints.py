@@ -71,10 +71,12 @@ def parse_hlt_cdr_labels(pdb_path):
         for line in f:
             if line.startswith('REMARK PDBinfo-LABEL:'):
                 parts = line.split()
-                if len(parts) >= 3:
+                # Format: REMARK PDBinfo-LABEL: <res_num> <loop_id>
+                # parts[0] = 'REMARK', parts[1] = 'PDBinfo-LABEL:', parts[2] = res_num, parts[3] = loop_id
+                if len(parts) >= 4:
                     try:
-                        res_num = int(parts[1])
-                        loop_id = parts[2].upper()  # H1, H2, H3, L1, L2, L3
+                        res_num = int(parts[2])
+                        loop_id = parts[3].upper()  # H1, H2, H3, L1, L2, L3
                         if loop_id in cdr_dict:
                             cdr_dict[loop_id].append(res_num)
                     except (ValueError, IndexError):
