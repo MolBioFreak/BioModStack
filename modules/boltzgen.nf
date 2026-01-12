@@ -71,6 +71,9 @@ process RunBoltzGen {
     def noiseScale = params.boltzgen_noise_scale ?: ''
     def inverseFoldAvoid = params.boltzgen_inverse_fold_avoid ?: ''
     def inverseFoldNumSeqs = params.boltzgen_inverse_fold_num_sequences ?: ''
+    def checkpointMode = params.boltzgen_checkpoint_mode ?: ''
+    def skipInverseFolding = params.boltzgen_skip_inverse_folding ?: false
+    def reuseExisting = params.boltzgen_reuse ?: false
     // Handle both single config and batch of configs
     def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" : "--config ${yaml_configs}"
     """
@@ -86,6 +89,9 @@ process RunBoltzGen {
         ${noiseScale ? "--noise_scale ${noiseScale}" : ''} \\
         ${inverseFoldAvoid ? "--inverse_fold_avoid '${inverseFoldAvoid}'" : ''} \\
         ${inverseFoldNumSeqs ? "--inverse_fold_num_sequences ${inverseFoldNumSeqs}" : ''} \\
+        ${checkpointMode && checkpointMode != 'both' ? "--checkpoint_mode ${checkpointMode}" : ''} \\
+        ${skipInverseFolding ? "--skip_inverse_folding" : ''} \\
+        ${reuseExisting ? "--reuse" : ''} \\
         ${params.boltzgen_extra_config ? params.boltzgen_extra_config : ''} \\
         2>&1 | tee boltzgen.log
     """

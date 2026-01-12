@@ -1,12 +1,11 @@
 /**
  * EpitopeMolstarViewer Component
- * 3D structure viewer with click-to-select epitope residues
+ * 3D structure viewer for visualizing epitope selections
  * 
  * Features:
  * - Displays uploaded PDB structure in 3D
- * - Click residues to toggle selection
- * - Highlights selected epitope residues
- * - Syncs with EpitopeSelector 2D grid
+ * - Highlights selected epitope residues (from 2D selector)
+ * - Visualization-only (selection happens in EpitopeSelector)
  */
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
@@ -26,7 +25,6 @@ interface Props {
     height?: number | string;
     backgroundColor?: string;
     selectedResidues: Set<string>;  // Set of "A45", "B100", etc.
-    onResidueClick?: (residueKey: string) => void;  // Called when user clicks a residue
 }
 
 // Track if script is loaded globally
@@ -83,10 +81,9 @@ export default function EpitopeMolstarViewer({
     structureUrl,
     pdbData,
     format = 'pdb',
-    height = 350,
+    height = 400,
     backgroundColor = '#0f172a',
     selectedResidues,
-    onResidueClick,
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -186,69 +183,6 @@ export default function EpitopeMolstarViewer({
         }
     }, [isScriptLoaded, effectiveUrl, applySelections, selections]);
 
-    // Set up click handler
-    useEffect(() => {
-        if (!isScriptLoaded || !onResidueClick) return;
-
-        const viewer = viewerRef.current as any;
-        if (!viewer) return;
-
-        // Wait for viewer instance and set up event listener
-        const setupClickHandler = async () => {
-            for (let i = 0; i < 50; i++) {
-                if (viewer.viewerInstance?.plugin) break;
-                await new Promise(r => setTimeout(r, 100));
-            }
-
-            if (!viewer.viewerInstance?.plugin) {
-                console.warn('[EpitopeMolstarViewer] Plugin not available for click events');
-                return;
-            }
-
-            try {
-                // Subscribe to selection events
-                const plugin = viewer.viewerInstance.plugin;
-
-                // Use the Mol* behavior for hover/click events
-                plugin.behaviors.interaction.click.subscribe((event: any) => {
-                    if (!event?.current?.loci) return;
-
-                    const loci = event.current.loci;
-                    if (loci.kind !== 'element-loci') return;
-
-                    // Extract residue info from loci
-                    const elements = loci.elements;
-                    if (!elements || elements.length === 0) return;
-
-                    const loc = elements[0];
-                    if (!loc.unit?.model?.atomicHierarchy) return;
-
-                    const hierarchy = loc.unit.model.atomicHierarchy;
-                    const residueIndex = loc.unit.elements[loc.indices[0]];
-
-                    // Get chain and residue number
-                    const chainId = hierarchy.chains.label_asym_id.value(
-                        hierarchy.residueAtomSegments.index[residueIndex]
-                    );
-                    const resNum = hierarchy.residues.label_seq_id.value(
-                        hierarchy.residueAtomSegments.index[residueIndex]
-                    );
-
-                    if (chainId && resNum !== undefined) {
-                        const residueKey = `${chainId}${resNum}`;
-                        console.log('[EpitopeMolstarViewer] Clicked:', residueKey);
-                        onResidueClick(residueKey);
-                    }
-                });
-            } catch (err) {
-                console.error('[EpitopeMolstarViewer] Failed to setup click handler:', err);
-            }
-        };
-
-        const timer = setTimeout(setupClickHandler, 1500);
-        return () => clearTimeout(timer);
-    }, [isScriptLoaded, effectiveUrl, onResidueClick]);
-
     // Background color
     const bgColor = useMemo(() => {
         const match = backgroundColor.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
@@ -287,7 +221,6 @@ export default function EpitopeMolstarViewer({
                 <div className="text-center">
                     <div className="text-4xl mb-2">🧬</div>
                     <div className="text-sm">Upload a PDB to view 3D structure</div>
-                    <div className="text-xs text-slate-600 mt-1">Click on residues to select epitopes</div>
                 </div>
             </div>
         );
@@ -301,8 +234,8 @@ export default function EpitopeMolstarViewer({
         >
             {/* Instructions overlay */}
             <div className="absolute top-2 left-2 z-10 px-2 py-1 bg-slate-800/90 text-slate-300 text-xs rounded flex items-center gap-2">
-                <span className="text-emerald-400">●</span>
-                Click residues to select epitopes
+                <span className="text-blue-400">🔍</span>
+                3D Preview - Use 2D grid below to select epitopes
             </div>
 
             {/* Selection count */}
