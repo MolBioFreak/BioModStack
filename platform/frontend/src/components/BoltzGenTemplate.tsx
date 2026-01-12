@@ -44,6 +44,8 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
 
     // Job metadata
     const [jobName, setJobName] = useState(initialValues?.name || '');
+    const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
+    const [lockGpus, setLockGpus] = useState(false);
 
     // Ligand inputs
     const [ligandSmiles, setLigandSmiles] = useState(initialValues?.ligand_smiles || initialValues?.boltzgen_ligand_smiles || '');
@@ -197,7 +199,12 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             name: jobName,
             model_id: 'boltzgen',
             mode: mode,
-            params
+            params: {
+                ...params,
+                pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+                lock_gpus: lockGpus && pinnedGpus.length > 0
+            },
+            pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null  // Single GPU for legacy compat
         });
     };
 
@@ -217,16 +224,71 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                 </div>
             </div>
 
-            {/* Job Name */}
+            {/* Job Name & GPU Pinning */}
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-                <label className="block text-sm font-medium text-slate-300 mb-2">Job Name</label>
-                <input
-                    type="text"
-                    value={jobName}
-                    onChange={e => setJobName(e.target.value)}
-                    placeholder="e.g., atp_binder_design_01"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
-                />
+                <div className="flex gap-6">
+                    <div className="flex-1">
+                        <label className="block text-sm font-medium text-slate-300 mb-2">Job Name</label>
+                        <input
+                            type="text"
+                            value={jobName}
+                            onChange={e => setJobName(e.target.value)}
+                            placeholder="e.g., atp_binder_design_01"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                            GPU Pinning {pinnedGpus.length > 0 && <span className="text-amber-400">({pinnedGpus.length} selected)</span>}
+                        </label>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setPinnedGpus([])}
+                                className={`px-3 py-2.5 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
+                                    ? 'bg-slate-600 text-white ring-2 ring-slate-400'
+                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                            >
+                                Auto
+                            </button>
+                            {[
+                                { id: 0, name: '5090' },
+                                { id: 1, name: '5060Ti' },
+                                { id: 2, name: '3090#1' },
+                                { id: 3, name: '3090#2' },
+                            ].map(gpu => (
+                                <button
+                                    key={gpu.id}
+                                    onClick={() => {
+                                        setPinnedGpus(prev =>
+                                            prev.includes(gpu.id)
+                                                ? prev.filter(g => g !== gpu.id)
+                                                : [...prev, gpu.id].sort()
+                                        );
+                                    }}
+                                    className={`px-3 py-2.5 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
+                                        ? 'bg-amber-600 text-white ring-2 ring-amber-400'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {gpu.name}
+                                </button>
+                            ))}
+                        </div>
+                        {/* GPU Lock Checkbox */}
+                        {pinnedGpus.length > 0 && (
+                            <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={lockGpus}
+                                    onChange={e => setLockGpus(e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                />
+                                <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
+                            </label>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Mode Selection */}
