@@ -73,14 +73,18 @@ def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
                 
                 # Calculate the overall average across all chains
                 average_psce = sum(all_chains_residue_averages) / len(all_chains_residue_averages)
-                print(f"Overall average pSCE for all chains in {pdb_file}: {average_psce:.2f}")
+                max_residue_psce = max(all_chains_residue_averages)
+                min_residue_psce = min(all_chains_residue_averages)
+                print(f"Overall average pSCE for all chains in {pdb_file}: {average_psce:.2f} (max: {max_residue_psce:.2f})")
 
                 # Create JSON output with sequences from all chains
                 output_data = {
                     "design": design_name,
                     "sequence": '|'.join(f"{chain_id}:{seq}" for chain_id, seq in all_chains_sequences.items()),
                     "chain_avg_psce": chain_averages,
-                    "fampnn_avg_psce": round(average_psce, 2)
+                    "fampnn_avg_psce": round(average_psce, 2),
+                    "fampnn_max_residue_psce": round(max_residue_psce, 2),
+                    "fampnn_min_residue_psce": round(min_residue_psce, 2)
                 }
             
             # If a specific chain is requested, process only that chain
@@ -112,13 +116,17 @@ def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
                     continue  # Skip to next file
                 
                 average_psce = sum(residue_averages) / len(residue_averages)
-                print(f"Average pSCE (on a per-residue basis) for side chains in chain {chain_id} of {pdb_file}: {average_psce:.2f}")
+                max_residue_psce = max(residue_averages)
+                min_residue_psce = min(residue_averages)
+                print(f"Average pSCE (on a per-residue basis) for side chains in chain {chain_id} of {pdb_file}: {average_psce:.2f} (max: {max_residue_psce:.2f})")
                 
                 # Create JSON output for single chain
                 output_data = {
                     "design": design_name,
                     "sequence": sequence_str,
-                    "fampnn_avg_psce": round(average_psce, 2)
+                    "fampnn_avg_psce": round(average_psce, 2),
+                    "fampnn_max_residue_psce": round(max_residue_psce, 2),
+                    "fampnn_min_residue_psce": round(min_residue_psce, 2)
                 }
             
             # Write JSON file

@@ -19,6 +19,10 @@ export interface QualitySettings {
     fampnn_temperature: number;
     fampnn_num_steps: number;
     fampnn_psce_threshold: number;
+
+    // Pre-Boltz filtering (saves compute by rejecting low-quality designs before expensive validation)
+    fampnn_max_psce: number | null;           // Max avg PSCE score to pass to Boltz (null = no filter)
+    fampnn_max_residue_psce: number | null;   // Max per-residue PSCE (catches individual bad residues)
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
@@ -41,6 +45,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
         fampnn_psce_threshold: 0.4,
+        // Pre-Boltz filter (null = disabled for speed mode, let everything through)
+        fampnn_max_psce: null,
+        fampnn_max_residue_psce: null,
     },
     balanced: {
         // RFantibody: Default quality
@@ -59,6 +66,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
         fampnn_psce_threshold: 0.3,
+        // Pre-Boltz filter: moderate filtering to save compute
+        fampnn_max_psce: 2.5,
+        fampnn_max_residue_psce: 5.0,
     },
     quality: {
         // RFantibody: Higher quality designs
@@ -77,6 +87,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
         fampnn_psce_threshold: 0.2,
+        // Pre-Boltz filter: stricter filtering for quality runs
+        fampnn_max_psce: 2.0,
+        fampnn_max_residue_psce: 4.0,
     },
     maximum: {
         // RFantibody: Best possible quality
@@ -95,6 +108,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
         fampnn_psce_threshold: 0.15,
+        // Pre-Boltz filter: strictest filtering for maximum quality
+        fampnn_max_psce: 1.5,
+        fampnn_max_residue_psce: 3.0,
     },
 };
 
@@ -454,6 +470,90 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <span>0.5 (permissive)</span>
                             </div>
                         </div>
+                    </div>
+
+                    {/* Pre-Boltz Filtering (Compute Savings) */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-medium text-green-400">
+                                Pre-Boltz Filtering
+                                <span className="text-xs text-slate-500 font-normal">(saves compute)</span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.fampnn_max_psce !== null}
+                                    onChange={(e) => updateSetting('fampnn_max_psce', e.target.checked ? 2.0 : null)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-green-600 focus:ring-green-500"
+                                />
+                                <span className="text-sm text-slate-300">Enable</span>
+                            </label>
+                        </div>
+
+                        {(settings.fampnn_max_psce !== null || settings.fampnn_max_residue_psce !== null) && (
+                            <div className="space-y-4">
+                                {/* Max Avg PSCE */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-xs text-slate-500">
+                                            Max Avg PSCE <span className="text-slate-600">({settings.fampnn_max_psce?.toFixed(1) ?? 'off'})</span>
+                                        </label>
+                                        <label className="flex items-center gap-1 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.fampnn_max_psce !== null}
+                                                onChange={(e) => updateSetting('fampnn_max_psce', e.target.checked ? 2.5 : null)}
+                                                className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-green-600"
+                                            />
+                                            <span className="text-[10px] text-slate-500">Enable</span>
+                                        </label>
+                                    </div>
+                                    {settings.fampnn_max_psce !== null && (
+                                        <input
+                                            type="range"
+                                            min={1.0}
+                                            max={4.0}
+                                            step={0.5}
+                                            value={settings.fampnn_max_psce}
+                                            onChange={(e) => updateSetting('fampnn_max_psce', parseFloat(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                                        />
+                                    )}
+                                </div>
+
+                                {/* Max Residue PSCE */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-xs text-slate-500">
+                                            Max Residue PSCE <span className="text-slate-600">({settings.fampnn_max_residue_psce?.toFixed(1) ?? 'off'})</span>
+                                        </label>
+                                        <label className="flex items-center gap-1 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.fampnn_max_residue_psce !== null}
+                                                onChange={(e) => updateSetting('fampnn_max_residue_psce', e.target.checked ? 5.0 : null)}
+                                                className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-green-600"
+                                            />
+                                            <span className="text-[10px] text-slate-500">Enable</span>
+                                        </label>
+                                    </div>
+                                    {settings.fampnn_max_residue_psce !== null && (
+                                        <input
+                                            type="range"
+                                            min={2.0}
+                                            max={8.0}
+                                            step={0.5}
+                                            value={settings.fampnn_max_residue_psce}
+                                            onChange={(e) => updateSetting('fampnn_max_residue_psce', parseFloat(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                                        />
+                                    )}
+                                    <p className="text-[10px] text-slate-600 mt-1">
+                                        Catches individual bad residues even if avg is OK
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Info Banner */}
