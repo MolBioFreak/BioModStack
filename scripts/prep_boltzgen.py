@@ -23,14 +23,23 @@ MG_COORD_SMILES = '[Mg+2]'
 def parse_binding_site(binding_site_str):
     """Parse binding site residue specification.
     
-    Format: 'A:45-52,A:78-85' -> list of (chain, start, end) tuples
+    Supports multiple formats:
+    - Frontend format: 'A45,A46,B100' (chain letter directly before residue number)
+    - Backend format: 'A:45-52,A:78-85' (chain:residue or chain:start-end)
+    
+    Returns: list of (chain, start, end) tuples
     """
     if not binding_site_str:
         return []
     
     sites = []
     for part in binding_site_str.split(','):
+        part = part.strip()
+        if not part:
+            continue
+            
         if ':' in part:
+            # Backend format: A:45 or A:45-52
             chain, residues = part.split(':', 1)
             if '-' in residues:
                 start, end = residues.split('-')
@@ -38,6 +47,16 @@ def parse_binding_site(binding_site_str):
             else:
                 res = int(residues)
                 sites.append((chain.strip(), res, res))
+        else:
+            # Frontend format: A45, B100 (letter followed by number)
+            import re
+            match = re.match(r'^([A-Z])(\d+)(?:-(\d+))?$', part)
+            if match:
+                chain = match.group(1)
+                start = int(match.group(2))
+                end = int(match.group(3)) if match.group(3) else start
+                sites.append((chain, start, end))
+    
     return sites
 
 
@@ -60,6 +79,14 @@ def main():
                         choices=["protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything", "antibody-anything"],
                         help="BoltzGen protocol to use")
     parser.add_argument("--covalent_bonds", type=str, help="JSON array of covalent bond constraints")
+    
+    # Nanobody-specific arguments
+    parser.add_argument("--nanobody_framework", type=str, help="VHH framework sequence template (X marks CDR positions)")
+    parser.add_argument("--cdr_h1_length", type=str, default="5-8", help="CDR-H1 length range (e.g., '5-8')")
+    parser.add_argument("--cdr_h2_length", type=str, default="6-10", help="CDR-H2 length range (e.g., '6-10')")
+    parser.add_argument("--cdr_h3_length", type=str, default="12-18", help="CDR-H3 length range (e.g., '12-18')")
+    parser.add_argument("--target_pdb", type=str, help="Target antigen PDB file for nanobody/antibody design")
+    
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
     args = parser.parse_args()
@@ -152,6 +179,67 @@ def main():
                 'pdb': args.ligand_pdb
             }
         })
+    # Mode 5: Nanobody design (VHH)
+    elif args.nanobody_framework or args.protocol == 'nanobody-anything':
+        print(f"Mode: Nanobody (VHH) design")
+        
+        # Protein entity - use framework if provided, else scaffold length range
+        if args.nanobody_framework:
+            # Framework sequence - X marks CDR loops to be designed
+            # BoltzGen should interpret X as positions to design
+            framework_seq = args.nanobody_framework.replace('X', 'X')  # Keep as-is
+            entities.append({
+                'protein': {
+                    'id': 'H',  # Heavy chain / VHH
+                    'sequence': framework_seq
+                }
+            })
+            print(f"  VHH framework: {len(framework_seq)} residues")
+        else:
+            # De novo - use VHH-typical length range
+            entities.append({
+                'protein': {
+                    'id': 'H',
+                    'sequence': '110..130'  # Typical VHH length
+                }
+            })
+        
+        # Target antigen entity (if provided)
+        if args.target_pdb and Path(args.target_pdb).exists():
+            print(f"  Target antigen: {args.target_pdb}")
+            entities.append({
+                'protein': {
+                    'id': 'T',  # Target
+                    'pdb': args.target_pdb
+                }
+            })
+        elif smiles:
+            # Small molecule target
+            print(f"  Small molecule target: {smiles[:50]}...")
+            entities.append({
+                'ligand': {
+                    'id': 'L',
+                    'smiles': smiles
+                }
+            })
+        
+        # Generate CDR secondary structure constraints
+        # CDR loops should be flexible/loop regions
+        cdr_constraints = []
+        # Note: These are approximate IMGT positions for VHH
+        # CDR-H1: ~26-35, CDR-H2: ~50-65, CDR-H3: ~95-102+
+        if args.cdr_h1_length:
+            cdr_constraints.append(f"loop:26-33")  # CDR-H1 region
+        if args.cdr_h2_length:
+            cdr_constraints.append(f"loop:50-58")  # CDR-H2 region
+        if args.cdr_h3_length:
+            cdr_constraints.append(f"loop:95-115")  # CDR-H3 region (most variable)
+        
+        if cdr_constraints and not args.secondary_structure:
+            # Only add if not already specified
+            args.secondary_structure = ','.join(cdr_constraints)
+            print(f"  CDR constraints: {args.secondary_structure}")
+            
     # Mode 3: Standard de-novo design with SMILES
     else:
         entities.append({

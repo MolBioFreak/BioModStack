@@ -2,23 +2,21 @@ import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchChainMetrics, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
+import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
 import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 import FloatingViewer from './FloatingViewer';
-import { Histogram, MetricScatter, ResidueLineChart, StabilityHeatmap } from './MetricCharts';
+import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
-import { PAEHeatmap } from './PAEHeatmap';
 import { DesignComparePane } from './DesignComparePane';
 import { ReferenceSelector } from './ReferenceSelector';
 import { MetricOverlay } from './MetricOverlay';
-import { ExperimentalAnalyticsPane } from './ExperimentalAnalyticsPane';
+import { AnalyticsDashboard } from './AnalyticsDashboard';
 
 // Tab definitions
 const TABS = [
     { id: 'overview', label: 'Overview', icon: 'View' },
-    { id: 'analytics', label: 'Analytics', icon: 'Chart' },
-    { id: 'experimental', label: 'Experimental', icon: '🧪' },
+    { id: 'charts', label: 'Charts', icon: 'Chart' },
     { id: 'structure', label: 'Structure', icon: '3D' },
     { id: 'antibody', label: 'Antibody', icon: 'Immune' },
     { id: 'table', label: 'Data Table', icon: 'List' },
@@ -102,14 +100,6 @@ export function ResultsViewer() {
         else navigate('/designs');
     };
 
-    // Fetch Analytics
-    const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
-        queryKey: ['analytics', selectedJobId],
-        queryFn: () => fetchJobAnalytics(selectedJobId),
-        enabled: !!selectedJobId,
-    });
-    const analytics = analyticsData?.data;
-
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId],
         queryFn: () => fetchDesigns({
@@ -133,22 +123,6 @@ export function ResultsViewer() {
         enabled: !!selectedJobId,
     });
     const backboneSummary = backboneSummaryData?.data;
-
-    // Fetch per-residue metrics for selected design (for line chart)
-    const { data: residueMetricsData } = useQuery({
-        queryKey: ['residueMetrics', selectedDesignId],
-        queryFn: () => fetchDesignResidueMetrics(selectedDesignId),
-        enabled: !!selectedDesignId,
-    });
-    const residueMetrics = residueMetricsData?.data;
-
-    // Fetch per-chain metrics
-    const { data: chainMetricsData } = useQuery({
-        queryKey: ['chainMetrics', selectedDesignId],
-        queryFn: () => fetchChainMetrics(selectedDesignId),
-        enabled: !!selectedDesignId,
-    });
-    const chainMetrics = chainMetricsData?.data;
 
     // Fetch structure analysis for selected design (Biotite-powered)
     const { data: structureAnalysisData, isLoading: _structureAnalysisLoading } = useQuery({
@@ -260,7 +234,7 @@ export function ResultsViewer() {
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
-    const isLoading = analyticsLoading || designsLoading;
+    const isLoading = designsLoading;
 
     // Quick stats for overview
     const stats = useMemo(() => {
@@ -531,202 +505,6 @@ export function ResultsViewer() {
                                         </div>
                                     )}
 
-                                    {/* ANALYTICS TAB */}
-                                    {activeTab === 'analytics' && analytics && (
-                                        <div className="p-6 space-y-6">
-                                            {/* Per-residue pLDDT Section */}
-                                            <div className="space-y-4">
-                                                <div className="flex items-center justify-between">
-                                                    <h3 className="text-lg font-semibold text-white">Per-Residue Confidence</h3>
-                                                    <select
-                                                        value={selectedDesignId}
-                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[280px]"
-                                                    >
-                                                        <option value="">Select a design...</option>
-                                                        {[...designs]
-                                                            .sort((a, b) => (b.conf_score ?? b.plddt_overall ?? 0) - (a.conf_score ?? a.plddt_overall ?? 0))
-                                                            .slice(0, 100)
-                                                            .map(d => (
-                                                                <option key={d.id} value={d.id}>
-                                                                    {d.name} • {d.conf_score ? `Conf: ${(d.conf_score * 100).toFixed(0)}%` : d.plddt_overall ? `pLDDT: ${d.plddt_overall.toFixed(0)}` : ''}
-                                                                </option>
-                                                            ))}
-                                                    </select>
-                                                </div>
-                                                {chainMetrics && Object.keys(chainMetrics).length > 0 ? (
-                                                    <div className="space-y-4">
-                                                        {Object.entries(chainMetrics)
-                                                            .sort(([idA, a], [idB, b]) => {
-                                                                const order = { protein: 0, dna: 1, rna: 2, ligand: 3 };
-                                                                return (order[a.type as keyof typeof order] ?? 4) - (order[b.type as keyof typeof order] ?? 4) || idA.localeCompare(idB);
-                                                            })
-                                                            .map(([chainId, metric]) => (
-                                                                metric.type !== 'ligand' && (
-                                                                    <div key={chainId} className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/30">
-                                                                        <div className="flex justify-between items-center mb-2">
-                                                                            <h4 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
-                                                                                <span className={`w-2 h-2 rounded-full ${metric.type === 'protein' ? 'bg-blue-400' :
-                                                                                    metric.type === 'dna' ? 'bg-amber-400' :
-                                                                                        metric.type === 'rna' ? 'bg-purple-400' : 'bg-slate-400'
-                                                                                    }`} />
-                                                                                Chain {chainId} <span className="text-slate-500 font-normal">({metric.type}, {metric.length} res)</span>
-                                                                            </h4>
-                                                                            <div className="text-xs font-mono">
-                                                                                <span className="text-slate-500 mr-2">Avg pLDDT:</span>
-                                                                                <span className={getMetricColor('plddt_overall', metric.avg_plddt)}>{metric.avg_plddt?.toFixed(1) ?? '—'}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                        <ResidueLineChart
-                                                                            residueNumbers={metric.residue_numbers ?? Array.from({ length: metric.length }, (_, i) => i + 1)}
-                                                                            plddt={metric.plddt}
-                                                                            designName={`Chain ${chainId}`}
-                                                                            height={180}
-                                                                        />
-                                                                    </div>
-                                                                )
-                                                            ))}
-                                                    </div>
-                                                ) : residueMetrics ? (
-                                                    <ResidueLineChart
-                                                        residueNumbers={residueMetrics.residue_numbers}
-                                                        plddt={residueMetrics.plddt}
-                                                        designName={residueMetrics.design_name}
-                                                        height={280}
-                                                    />
-                                                ) : (
-                                                    <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-700/40 text-center">
-                                                        <p className="text-slate-500">Select a design above to view per-residue pLDDT</p>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Histogram Grid */}
-                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                                {analytics.metrics?.plddt_overall && (
-                                                    <Histogram title="pLDDT Distribution" data={analytics.metrics.plddt_overall} color="#60a5fa" />
-                                                )}
-                                                {analytics.metrics?.pae_overall && (
-                                                    <Histogram title="PAE Distribution" data={analytics.metrics.pae_overall} color="#fbbf24" />
-                                                )}
-                                                {analytics.metrics?.ptm && (
-                                                    <Histogram title="pTM Score" data={analytics.metrics.ptm} color="#a78bfa" />
-                                                )}
-                                                {analytics.metrics?.conf_score && (
-                                                    <Histogram title="Confidence Score" data={analytics.metrics.conf_score} color="#34d399" />
-                                                )}
-                                                {analytics.correlations?.plddt_vs_pae && (
-                                                    <MetricScatter
-                                                        title="pLDDT vs PAE Correlation"
-                                                        data={analytics.correlations.plddt_vs_pae}
-                                                        xLabel="pLDDT"
-                                                        yLabel="PAE"
-                                                    />
-                                                )}
-                                                {/* PAE Heatmap for Selected Design - Full Width */}
-                                                {selectedDesignId && (
-                                                    <div className="lg:col-span-2 bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl p-6 border border-slate-700/50 shadow-xl">
-                                                        <div className="flex items-center justify-between mb-4">
-                                                            <h3 className="text-white text-base font-semibold flex items-center gap-2">
-                                                                <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z" />
-                                                                </svg>
-                                                                PAE Heatmap
-                                                            </h3>
-                                                            <span className="text-xs text-slate-400">
-                                                                {selectedDesign?.name}
-                                                            </span>
-                                                        </div>
-                                                        <PAEHeatmap
-                                                            designId={selectedDesignId}
-                                                            chainMetrics={chainMetrics ?? undefined}
-                                                            width={450}
-                                                            height={400}
-                                                        />
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Design Rankings Table */}
-                                            <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
-                                                <div className="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
-                                                    <h3 className="text-white text-base font-semibold flex items-center gap-2">
-                                                        <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                                                        </svg>
-                                                        Top Designs by pLDDT
-                                                    </h3>
-                                                    <span className="text-xs text-slate-400">Top 10 of {designs.length}</span>
-                                                </div>
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full">
-                                                        <thead>
-                                                            <tr className="bg-slate-800/50 text-xs uppercase tracking-wider text-slate-400">
-                                                                <th className="text-left px-6 py-3 font-medium">#</th>
-                                                                <th className="text-left px-6 py-3 font-medium">Design Name</th>
-                                                                <th className="text-right px-6 py-3 font-medium">pLDDT</th>
-                                                                <th className="text-right px-6 py-3 font-medium">PAE</th>
-                                                                <th className="text-right px-6 py-3 font-medium">pTM</th>
-                                                                <th className="text-right px-6 py-3 font-medium">Conf</th>
-                                                                <th className="text-center px-6 py-3 font-medium">Action</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-slate-700/50">
-                                                            {[...designs]
-                                                                .sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0))
-                                                                .slice(0, 10)
-                                                                .map((d, idx) => (
-                                                                    <tr key={d.id} className="hover:bg-slate-800/30 transition-colors">
-                                                                        <td className="px-6 py-3">
-                                                                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-500/20 text-amber-400' :
-                                                                                idx === 1 ? 'bg-slate-400/20 text-slate-300' :
-                                                                                    idx === 2 ? 'bg-orange-600/20 text-orange-400' :
-                                                                                        'bg-slate-700/50 text-slate-500'
-                                                                                }`}>
-                                                                                {idx + 1}
-                                                                            </span>
-                                                                        </td>
-                                                                        <td className="px-6 py-3 text-sm text-white font-medium truncate max-w-[200px]">{d.name}</td>
-                                                                        <td className={`px-6 py-3 text-sm text-right font-mono font-semibold ${(d.plddt_overall ?? 0) >= 80 ? 'text-emerald-400' :
-                                                                            (d.plddt_overall ?? 0) >= 60 ? 'text-amber-400' : 'text-red-400'
-                                                                            }`}>
-                                                                            {d.plddt_overall?.toFixed(1) ?? '—'}
-                                                                        </td>
-                                                                        <td className={`px-6 py-3 text-sm text-right font-mono ${d.pae_overall != null && d.pae_overall <= 10 ? 'text-emerald-400' :
-                                                                            d.pae_overall != null && d.pae_overall <= 20 ? 'text-amber-400' :
-                                                                                d.pae_overall != null ? 'text-red-400' : 'text-slate-600'
-                                                                            }`}>
-                                                                            {d.pae_overall?.toFixed(1) ?? '—'}
-                                                                        </td>
-                                                                        <td className={`px-6 py-3 text-sm text-right font-mono ${d.ptm != null && d.ptm >= 0.5 ? 'text-emerald-400' :
-                                                                            d.ptm != null && d.ptm >= 0.3 ? 'text-amber-400' :
-                                                                                d.ptm != null ? 'text-red-400' : 'text-slate-600'
-                                                                            }`}>
-                                                                            {d.ptm?.toFixed(3) ?? '—'}
-                                                                        </td>
-                                                                        <td className="px-6 py-3 text-sm text-right font-mono text-slate-400">
-                                                                            {d.conf_score?.toFixed(3) ?? '—'}
-                                                                        </td>
-                                                                        <td className="px-6 py-3 text-center">
-                                                                            <button
-                                                                                onClick={() => {
-                                                                                    setSelectedDesignId(d.id);
-                                                                                    setActiveTab('structure');
-                                                                                }}
-                                                                                className="text-blue-400 hover:text-blue-300 text-xs font-medium"
-                                                                            >
-                                                                                View 3D
-                                                                            </button>
-                                                                        </td>
-                                                                    </tr>
-                                                                ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
                                     {/* STRUCTURE TAB - TRUE FULLSCREEN (breaks out of container) */}
                                     {activeTab === 'structure' && (
                                         <div className="fixed inset-0 top-[64px] bg-slate-950 z-10">
@@ -944,7 +722,7 @@ export function ResultsViewer() {
                                                     initialPosition={{ x: 70, y: 60 }}
                                                     initialType="structure"
                                                     structureAnalysis={structureAnalysis ?? undefined}
-                                                    residueData={residueMetricsData?.data}
+                                                    residueData={undefined}
                                                     availableTypes={['structure', 'pae', 'plddt', 'iptm']}
                                                     pairChainsIptm={designs.find(d => d.id === selectedDesignId)?.pair_chains_iptm ?? undefined}
                                                 />
@@ -1363,12 +1141,11 @@ export function ResultsViewer() {
                                         />
                                     )}
 
-                                    {/* EXPERIMENTAL ANALYTICS TAB (Plotly-powered) */}
-                                    {activeTab === 'experimental' && (
-                                        <ExperimentalAnalyticsPane
+                                    {/* CHARTS TAB - Full Analytics Dashboard */}
+                                    {activeTab === 'charts' && (
+                                        <AnalyticsDashboard
                                             designs={designs}
                                             jobName={activeJob?.name}
-                                            jobId={selectedJobId}
                                         />
                                     )}
                                 </>

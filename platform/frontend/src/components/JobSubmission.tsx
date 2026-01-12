@@ -673,7 +673,7 @@ export function JobSubmission() {
                                                 name: 'Mutagenesis Library',
                                                 description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
                                                 icon: 'dna',
-                                                color: '#6366F1', // Indigo
+                                                color: '#8B5CF6', // Purple (was Indigo)
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
@@ -685,7 +685,7 @@ export function JobSubmission() {
                                                 name: 'RFantibody+',
                                                 description: 'Generate novel antibodies targeting an antigen. Uses RFantibody for backbone generation, FAMPNN for sequence design, and Boltz2 for validation.',
                                                 icon: 'flask',
-                                                color: '#10B981', // Emerald
+                                                color: '#14B8A6', // Teal (was Emerald)
                                                 stages: [
                                                     { tool: 'RFantibody' },
                                                     { tool: 'FAMPNN' },
@@ -699,7 +699,7 @@ export function JobSubmission() {
                                                 name: 'BoltzGEN',
                                                 description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
                                                 icon: 'pill',
-                                                color: '#F59E0B', // Amber
+                                                color: '#EC4899', // Pink (was Amber)
                                                 stages: [
                                                     { tool: 'BoltzGen' },
                                                     { tool: 'Filtering' },
@@ -712,17 +712,16 @@ export function JobSubmission() {
                                                 <div
                                                     key={template.id}
                                                     onClick={() => setSelectedTemplateId(template.id)}
-                                                    className={`cursor-pointer p-6 rounded-2xl border-2 transition-all flex-1 min-w-[280px] 
-                                                        ${isSelected ? 'scale-[1.02] shadow-xl' : 'hover:shadow-lg hover:scale-[1.01]'}
+                                                    className={`cursor-pointer p-6 border-2 transition-all flex-1 min-w-[280px] 
+                                                        ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
                                                         bg-[var(--card-bg)] text-[var(--text-primary)]`}
                                                     style={{
-                                                        borderColor: isSelected ? template.color : `${template.color}50`,
-                                                        boxShadow: isSelected ? `0 8px 30px ${template.color}35` : undefined
+                                                        boxShadow: isSelected ? `0 8px 30px color-mix(in srgb, var(--accent-primary) 35%, transparent)` : undefined
                                                     }}
                                                 >
                                                     <div className="flex items-center gap-4 mb-4">
                                                         <div
-                                                            className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold"
+                                                            className="w-14 h-14 flex items-center justify-center text-xl font-bold"
                                                             style={{ backgroundColor: `${template.color}20`, color: template.color }}
                                                         >
                                                             {template.icon === 'target' ? 'TG' :
@@ -741,7 +740,7 @@ export function JobSubmission() {
                                                         {template.stages.map((stage: any, idx: number) => (
                                                             <div key={idx} className="flex items-center">
                                                                 <div
-                                                                    className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap font-medium"
+                                                                    className="px-3 py-1.5 text-xs whitespace-nowrap font-medium"
                                                                     style={{ backgroundColor: `${template.color}18`, color: template.color }}
                                                                 >
                                                                     {stage.tool}
