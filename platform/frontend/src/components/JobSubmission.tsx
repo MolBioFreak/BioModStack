@@ -722,14 +722,19 @@ export function JobSubmission() {
                                                 key={template.id}
                                                 onClick={() => setSelectedTemplateId(template.id)}
                                                 className={`cursor-pointer p-6 rounded-2xl border-2 transition-all flex-1 min-w-[280px] ${selectedTemplateId === template.id
-                                                    ? 'bg-gradient-to-br from-slate-800 to-slate-900 border-blue-500 shadow-xl shadow-blue-500/20 scale-[1.02]'
-                                                    : 'bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-600 hover:border-slate-500 hover:shadow-lg hover:scale-[1.01]'
+                                                    ? 'scale-[1.02] shadow-xl'
+                                                    : 'hover:shadow-lg hover:scale-[1.01]'
                                                     }`}
+                                                style={{
+                                                    backgroundColor: selectedTemplateId === template.id ? `${template.color}15` : `${template.color}08`,
+                                                    borderColor: selectedTemplateId === template.id ? template.color : `${template.color}40`,
+                                                    boxShadow: selectedTemplateId === template.id ? `0 8px 30px ${template.color}25` : undefined
+                                                }}
                                             >
                                                 <div className="flex items-center gap-4 mb-4">
                                                     <div
-                                                        className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold shadow-lg"
-                                                        style={{ backgroundColor: `${template.color}30`, color: template.color, boxShadow: `0 4px 14px ${template.color}30` }}
+                                                        className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold"
+                                                        style={{ backgroundColor: `${template.color}25`, color: template.color, boxShadow: `0 4px 14px ${template.color}30` }}
                                                     >
                                                         {template.icon === 'target' ? 'TG' :
                                                             template.icon === 'flask' ? 'AB' :
@@ -738,19 +743,22 @@ export function JobSubmission() {
                                                                         template.icon === 'pill' ? 'BG' : 'WF'}
                                                     </div>
                                                     <div>
-                                                        <h3 className="font-bold text-lg text-white">{template.name}</h3>
+                                                        <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
                                                     </div>
                                                 </div>
-                                                <p className="text-sm text-slate-400 mb-4 line-clamp-2">{template.description}</p>
+                                                <p className="text-sm text-slate-500 mb-4 line-clamp-2">{template.description}</p>
                                                 {/* Stage Pipeline Diagram */}
                                                 <div className="flex items-center gap-1 flex-wrap">
                                                     {template.stages.map((stage: any, idx: number) => (
                                                         <div key={idx} className="flex items-center">
-                                                            <div className="bg-slate-700/70 px-3 py-1.5 rounded-lg text-xs text-slate-200 whitespace-nowrap font-medium">
+                                                            <div
+                                                                className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap font-medium"
+                                                                style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                                                            >
                                                                 {stage.tool}
                                                             </div>
                                                             {idx < template.stages.length - 1 && (
-                                                                <span className="text-slate-500 mx-1.5 text-lg">→</span>
+                                                                <span className="mx-1.5 text-lg" style={{ color: `${template.color}60` }}>→</span>
                                                             )}
                                                         </div>
                                                     ))}
