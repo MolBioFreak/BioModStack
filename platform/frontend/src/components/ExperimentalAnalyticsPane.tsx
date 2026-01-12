@@ -9,7 +9,7 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import { fetchAAComposition, fetchCDRLogos } from '../lib/api';
+import { fetchAAComposition, fetchCDRLogos, fetchContactMap, fetchChainPairIptm, fetchDesignResidueMetrics, fetchPAEData, fetchChainMetrics, type ChainMetric } from '../lib/api';
 
 interface Design {
     id: string;
@@ -63,16 +63,30 @@ type MetricKey = typeof NUMERIC_METRICS[number]['key'];
 
 // Preset analysis configurations
 const PRESET_ANALYSES = [
+    // Scatter plots
     { id: 'plddt_vs_pae', label: 'pLDDT vs PAE', xAxis: 'plddt_overall', yAxis: 'pae_overall', colorBy: 'ptm', type: 'scatter' },
     { id: 'confidence_vs_iptm', label: 'Confidence vs iPTM', xAxis: 'conf_score', yAxis: 'iptm', colorBy: 'plddt_overall', type: 'scatter' },
     { id: 'cdr_vs_plddt', label: 'CDR-H3 Length vs pLDDT', xAxis: 'cdr_h3_length', yAxis: 'plddt_overall', colorBy: 'iptm', type: 'scatter' },
+    // Distributions (match existing Analytics tab)
+    { id: 'plddt_distribution', label: 'pLDDT Distribution', xAxis: 'plddt_overall', yAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'pae_distribution', label: 'PAE Distribution', xAxis: 'pae_overall', yAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'ptm_distribution', label: 'pTM Distribution', xAxis: 'ptm', yAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'confidence_distribution', label: 'Confidence Distribution', xAxis: 'conf_score', yAxis: null, colorBy: null, type: 'histogram' },
     { id: 'affinity_distribution', label: 'Affinity Distribution', xAxis: 'affinity_score', yAxis: null, colorBy: null, type: 'histogram' },
+    // Statistical views
     { id: 'correlation_matrix', label: 'Metric Correlation Matrix', xAxis: null, yAxis: null, colorBy: null, type: 'heatmap' },
     { id: 'violin_confidence', label: 'Confidence Metrics (Violin)', xAxis: null, yAxis: null, colorBy: null, type: 'violin' },
     { id: 'box_binding', label: 'Binding Metrics (Box)', xAxis: null, yAxis: null, colorBy: null, type: 'box' },
+    // Antibody-specific
     { id: 'cdr3d', label: 'CDR Lengths 3D (H1×H2×H3)', xAxis: null, yAxis: null, colorBy: 'plddt_overall', type: '3d' },
     { id: 'aa_composition', label: 'AA Composition (CDRs)', xAxis: null, yAxis: null, colorBy: null, type: 'bar' },
     { id: 'sequence_logo', label: 'Sequence Logo (CDR-H3)', xAxis: null, yAxis: null, colorBy: null, type: 'logo' },
+    // Phase 3a: Per-design structural visualizations
+    { id: 'residue_plddt', label: 'Per-Residue pLDDT Profile', xAxis: null, yAxis: null, colorBy: null, type: 'line' },
+    { id: 'chain_plddt', label: 'Chain-by-Chain pLDDT', xAxis: null, yAxis: null, colorBy: null, type: 'chain_line' },
+    { id: 'pae_heatmap', label: 'PAE Heatmap', xAxis: null, yAxis: null, colorBy: null, type: 'pae' },
+    { id: 'chain_iptm', label: 'Chain-Pair iPTM Matrix', xAxis: null, yAxis: null, colorBy: null, type: 'chain_heatmap' },
+    { id: 'contact_map', label: 'Residue Contact Map', xAxis: null, yAxis: null, colorBy: null, type: 'contact' },
 ] as const;
 
 export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }: ExperimentalAnalyticsPaneProps) {
@@ -82,6 +96,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     const [colorBy, setColorBy] = useState<MetricKey | 'none'>('ptm');
     const [showCustom, setShowCustom] = useState(false);
     const [selectedCDR, setSelectedCDR] = useState<string>('CDR-H3');
+    const [selectedDesignId, setSelectedDesignId] = useState<string | null>(designs[0]?.id || null);
 
     // Fetch server-side data for AA composition and sequence logos
     const { data: aaComposition, isLoading: aaLoading } = useQuery({
@@ -97,6 +112,79 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         enabled: !!jobId && selectedPreset === 'sequence_logo',
         staleTime: 60000,
     });
+
+    // Phase 3a: Fetch per-residue pLDDT for selected design
+    const { data: residueData, isLoading: residueLoading } = useQuery({
+        queryKey: ['residue-metrics', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchDesignResidueMetrics(selectedDesignId).then(r => r.data) : null,
+        enabled: !!selectedDesignId && selectedPreset === 'residue_plddt',
+        staleTime: 60000,
+    });
+
+    // Phase 3a: Fetch contact map for selected design
+    const { data: contactMapData, isLoading: contactMapLoading } = useQuery({
+        queryKey: ['contact-map', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchContactMap(selectedDesignId, 300).then(r => r.data) : null,
+        enabled: !!selectedDesignId && selectedPreset === 'contact_map',
+        staleTime: 60000,
+    });
+
+    // Phase 3a: Fetch chain-pair iPTM for selected design
+    const { data: chainIptmData, isLoading: chainIptmLoading } = useQuery({
+        queryKey: ['chain-iptm', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchChainPairIptm(selectedDesignId).then(r => r.data) : null,
+        enabled: !!selectedDesignId && selectedPreset === 'chain_iptm',
+        staleTime: 60000,
+    });
+
+    // Phase 3a: Fetch PAE matrix for selected design
+    const { data: paeData, isLoading: paeLoading } = useQuery({
+        queryKey: ['pae-data', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchPAEData(selectedDesignId).then(r => r.data) : null,
+        enabled: !!selectedDesignId && selectedPreset === 'pae_heatmap',
+        staleTime: 60000,
+    });
+
+    // Phase 3a: Fetch chain-by-chain metrics for selected design
+    const { data: chainMetricsData, isLoading: chainMetricsLoading } = useQuery({
+        queryKey: ['chain-metrics', selectedDesignId],
+        queryFn: () => selectedDesignId ? fetchChainMetrics(selectedDesignId).then(r => r.data) : null,
+        enabled: !!selectedDesignId && selectedPreset === 'chain_plddt',
+        staleTime: 60000,
+    });
+
+    // Sort designs by relevant metric based on preset
+    const sortedDesigns = useMemo(() => {
+        const getSortKey = (): keyof Design | null => {
+            switch (selectedPreset) {
+                case 'residue_plddt': return 'plddt_overall';
+                case 'chain_plddt': return 'plddt_overall';
+                case 'pae_heatmap': return 'pae_overall';
+                case 'contact_map': return 'plddt_overall';
+                case 'chain_iptm': return 'iptm';
+                default: return 'plddt_overall';
+            }
+        };
+        const sortKey = getSortKey();
+        if (!sortKey) return designs;
+
+        return [...designs].sort((a, b) => {
+            const aVal = a[sortKey];
+            const bVal = b[sortKey];
+            // For PAE, lower is better; for others, higher is better
+            if (sortKey === 'pae_overall' || sortKey === 'pae_interaction') {
+                // Lower PAE is better, nulls go to end
+                if (aVal === null) return 1;
+                if (bVal === null) return -1;
+                return (aVal as number) - (bVal as number);
+            } else {
+                // Higher pLDDT/iPTM is better, nulls go to end
+                if (aVal === null) return 1;
+                if (bVal === null) return -1;
+                return (bVal as number) - (aVal as number);
+            }
+        });
+    }, [designs, selectedPreset]);
 
     // Extract numeric values from designs
     const extractValues = (key: MetricKey): number[] => {
@@ -721,6 +809,299 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                             No CDR sequence data available (requires antibody designs with annotated CDRs)
                         </div>
                     )
+                ) : selectedPreset === 'residue_plddt' ? (
+                    /* Phase 3a: Per-Residue pLDDT Profile */
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-4 px-4 pt-4">
+                            <label className="text-sm text-slate-400">Select Design:</label>
+                            <select
+                                value={selectedDesignId || ''}
+                                onChange={(e) => setSelectedDesignId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                            >
+                                {sortedDesigns.map(d => (
+                                    <option key={d.id} value={d.id}>
+                                        {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(1)})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {residueLoading ? (
+                            <div className="h-[450px] flex items-center justify-center text-slate-400">
+                                Loading per-residue data...
+                            </div>
+                        ) : residueData ? (
+                            <Plot
+                                data={[{
+                                    type: 'scatter',
+                                    mode: 'lines+markers',
+                                    x: residueData.residue_numbers,
+                                    y: residueData.plddt,
+                                    name: 'pLDDT',
+                                    line: { color: '#60a5fa', width: 1 },
+                                    marker: {
+                                        size: 3, color: residueData.plddt.map((v: number) =>
+                                            v >= 90 ? '#3b82f6' : v >= 70 ? '#22d3ee' : v >= 50 ? '#fbbf24' : '#f87171'
+                                        )
+                                    },
+                                    hovertemplate: 'Residue %{x}<br>pLDDT: %{y:.1f}<extra></extra>',
+                                }] as Data[]}
+                                layout={{
+                                    title: { text: `Per-Residue pLDDT: ${residueData.design_name}`, font: { color: '#e2e8f0', size: 16 } },
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: '#1e293b',
+                                    font: { color: '#e2e8f0' },
+                                    margin: { l: 60, r: 40, t: 50, b: 60 },
+                                    xaxis: { title: { text: 'Residue Number', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8' },
+                                    yaxis: { title: { text: 'pLDDT', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8', range: [0, 100] },
+                                    shapes: [
+                                        { type: 'line', x0: 0, x1: residueData.length, y0: 90, y1: 90, line: { color: '#3b82f6', width: 1, dash: 'dash' } },
+                                        { type: 'line', x0: 0, x1: residueData.length, y0: 70, y1: 70, line: { color: '#22d3ee', width: 1, dash: 'dash' } },
+                                        { type: 'line', x0: 0, x1: residueData.length, y0: 50, y1: 50, line: { color: '#fbbf24', width: 1, dash: 'dash' } },
+                                    ],
+                                }}
+                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `plddt_${residueData.design_name}` } }}
+                                style={{ width: '100%', height: '450px' }}
+                            />
+                        ) : (
+                            <div className="h-[450px] flex items-center justify-center text-slate-500">
+                                No per-residue data available for selected design
+                            </div>
+                        )}
+                    </div>
+                ) : selectedPreset === 'chain_plddt' ? (
+                    /* Phase 3a: Chain-by-Chain pLDDT */
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-4 px-4 pt-4">
+                            <label className="text-sm text-slate-400">Select Design:</label>
+                            <select
+                                value={selectedDesignId || ''}
+                                onChange={(e) => setSelectedDesignId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                            >
+                                {sortedDesigns.map(d => (
+                                    <option key={d.id} value={d.id}>
+                                        {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(1)})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {chainMetricsLoading ? (
+                            <div className="h-[550px] flex items-center justify-center text-slate-400">
+                                Loading chain metrics...
+                            </div>
+                        ) : chainMetricsData && Object.keys(chainMetricsData).length > 0 ? (
+                            <Plot
+                                data={Object.entries(chainMetricsData)
+                                    .filter(([, m]: [string, ChainMetric]) => m.type !== 'ligand')
+                                    .sort(([idA, a]: [string, ChainMetric], [idB, b]: [string, ChainMetric]) => {
+                                        const order = { protein: 0, dna: 1, rna: 2, ligand: 3 };
+                                        return (order[a.type as keyof typeof order] ?? 4) - (order[b.type as keyof typeof order] ?? 4) || idA.localeCompare(idB);
+                                    })
+                                    .map(([chainId, metric]: [string, ChainMetric]) => ({
+                                        type: 'scatter' as const,
+                                        mode: 'lines+markers' as const,
+                                        x: metric.residue_numbers ?? Array.from({ length: metric.length }, (_, i) => i + 1),
+                                        y: metric.plddt,
+                                        name: `Chain ${chainId} (${metric.type}, ${metric.length} res, avg: ${metric.avg_plddt?.toFixed(1) ?? '—'})`,
+                                        line: {
+                                            width: 1.5,
+                                            color: metric.type === 'protein' ? '#60a5fa' : metric.type === 'dna' ? '#fbbf24' : metric.type === 'rna' ? '#a78bfa' : '#94a3b8'
+                                        },
+                                        marker: { size: 2 },
+                                        hovertemplate: `Chain ${chainId}<br>Residue %{x}<br>pLDDT: %{y:.1f}<extra></extra>`,
+                                    })) as Data[]}
+                                layout={{
+                                    title: { text: `Chain-by-Chain pLDDT`, font: { color: '#e2e8f0', size: 16 } },
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: '#1e293b',
+                                    font: { color: '#e2e8f0' },
+                                    margin: { l: 60, r: 40, t: 50, b: 60 },
+                                    xaxis: { title: { text: 'Residue Number', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8' },
+                                    yaxis: { title: { text: 'pLDDT', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8', range: [0, 100] },
+                                    legend: { orientation: 'h', y: -0.15, font: { size: 10, color: '#94a3b8' } },
+                                    shapes: [
+                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 90, y1: 90, line: { color: '#3b82f680', width: 1, dash: 'dash' } },
+                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 70, y1: 70, line: { color: '#22d3ee80', width: 1, dash: 'dash' } },
+                                    ],
+                                }}
+                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: 'chain_plddt' } }}
+                                style={{ width: '100%', height: '550px' }}
+                            />
+                        ) : (
+                            <div className="h-[550px] flex items-center justify-center text-slate-500">
+                                No chain metrics available for selected design
+                            </div>
+                        )}
+                    </div>
+                ) : selectedPreset === 'pae_heatmap' ? (
+                    /* Phase 3a: PAE Heatmap */
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-4 px-4 pt-4">
+                            <label className="text-sm text-slate-400">Select Design:</label>
+                            <select
+                                value={selectedDesignId || ''}
+                                onChange={(e) => setSelectedDesignId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                            >
+                                {sortedDesigns.map(d => (
+                                    <option key={d.id} value={d.id}>
+                                        {d.name} {d.pae_overall ? `(PAE: ${d.pae_overall.toFixed(1)})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {paeLoading ? (
+                            <div className="h-[550px] flex items-center justify-center text-slate-400">
+                                Loading PAE matrix...
+                            </div>
+                        ) : paeData ? (
+                            <Plot
+                                data={[{
+                                    type: 'heatmap',
+                                    z: paeData.pae_matrix,
+                                    colorscale: [
+                                        [0, '#0d47a1'],
+                                        [0.25, '#2196f3'],
+                                        [0.5, '#4caf50'],
+                                        [0.75, '#ffeb3b'],
+                                        [1, '#f44336']
+                                    ],
+                                    zmin: 0,
+                                    zmax: 30,
+                                    hoverongaps: false,
+                                    hovertemplate: 'Residue %{x} ↔ Residue %{y}<br>PAE: %{z:.1f} Å<extra></extra>',
+                                    colorbar: { title: { text: 'PAE (Å)', font: { color: '#e2e8f0' } }, tickfont: { color: '#94a3b8' } },
+                                } as Data]}
+                                layout={{
+                                    title: { text: `Predicted Aligned Error: ${paeData.design_name}`, font: { color: '#e2e8f0', size: 16 } },
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: '#1e293b',
+                                    font: { color: '#e2e8f0' },
+                                    margin: { l: 60, r: 80, t: 50, b: 60 },
+                                    xaxis: { title: { text: 'Scored Residue', font: { color: '#94a3b8' } }, color: '#94a3b8', scaleanchor: 'y' },
+                                    yaxis: { title: { text: 'Aligned Residue', font: { color: '#94a3b8' } }, color: '#94a3b8', autorange: 'reversed' },
+                                }}
+                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `pae_${paeData.design_name}` } }}
+                                style={{ width: '100%', height: '550px' }}
+                            />
+                        ) : (
+                            <div className="h-[550px] flex items-center justify-center text-slate-500">
+                                No PAE data available for selected design
+                            </div>
+                        )}
+                    </div>
+                ) : selectedPreset === 'contact_map' ? (
+                    /* Phase 3a: Residue Contact Map */
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-4 px-4 pt-4">
+                            <label className="text-sm text-slate-400">Select Design:</label>
+                            <select
+                                value={selectedDesignId || ''}
+                                onChange={(e) => setSelectedDesignId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                            >
+                                {sortedDesigns.map(d => (
+                                    <option key={d.id} value={d.id}>{d.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        {contactMapLoading ? (
+                            <div className="h-[550px] flex items-center justify-center text-slate-400">
+                                Computing contact map...
+                            </div>
+                        ) : contactMapData ? (
+                            <Plot
+                                data={[{
+                                    type: 'heatmap',
+                                    z: contactMapData.distance_matrix,
+                                    x: contactMapData.residue_numbers,
+                                    y: contactMapData.residue_numbers,
+                                    colorscale: [[0, '#1e3a5f'], [0.1, '#60a5fa'], [0.25, '#22d3ee'], [0.5, '#fbbf24'], [1, '#ef4444']],
+                                    zmin: 0,
+                                    zmax: 30,
+                                    hoverongaps: false,
+                                    hovertemplate: 'Res %{x} ↔ Res %{y}<br>Distance: %{z:.1f} Å<extra></extra>',
+                                    colorbar: { title: { text: 'Distance (Å)', font: { color: '#e2e8f0' } }, tickfont: { color: '#94a3b8' } },
+                                } as Data]}
+                                layout={{
+                                    title: { text: `Contact Map: ${contactMapData.design_name}`, font: { color: '#e2e8f0', size: 16 } },
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: '#1e293b',
+                                    font: { color: '#e2e8f0' },
+                                    margin: { l: 60, r: 80, t: 50, b: 60 },
+                                    xaxis: { title: { text: 'Residue', font: { color: '#94a3b8' } }, color: '#94a3b8', scaleanchor: 'y' },
+                                    yaxis: { title: { text: 'Residue', font: { color: '#94a3b8' } }, color: '#94a3b8', autorange: 'reversed' },
+                                }}
+                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `contact_map_${contactMapData.design_name}` } }}
+                                style={{ width: '100%', height: '550px' }}
+                            />
+                        ) : (
+                            <div className="h-[550px] flex items-center justify-center text-slate-500">
+                                No structure data available for contact map
+                            </div>
+                        )}
+                    </div>
+                ) : selectedPreset === 'chain_iptm' ? (
+                    /* Phase 3a: Chain-Pair iPTM Matrix */
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-4 px-4 pt-4">
+                            <label className="text-sm text-slate-400">Select Design:</label>
+                            <select
+                                value={selectedDesignId || ''}
+                                onChange={(e) => setSelectedDesignId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white max-w-xs"
+                            >
+                                {sortedDesigns.map(d => (
+                                    <option key={d.id} value={d.id}>{d.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        {chainIptmLoading ? (
+                            <div className="h-[500px] flex items-center justify-center text-slate-400">
+                                Loading chain interface data...
+                            </div>
+                        ) : chainIptmData ? (
+                            <Plot
+                                data={[{
+                                    type: 'heatmap',
+                                    z: chainIptmData.iptm_matrix.map((row: (number | null)[]) => row.map((v: number | null) => v ?? 0)),
+                                    x: chainIptmData.chain_ids,
+                                    y: chainIptmData.chain_ids,
+                                    colorscale: 'Viridis',
+                                    zmin: 0,
+                                    zmax: 1,
+                                    hoverongaps: false,
+                                    hovertemplate: '%{x} ↔ %{y}<br>iPTM: %{z:.3f}<extra></extra>',
+                                    colorbar: { title: { text: 'iPTM', font: { color: '#e2e8f0' } }, tickfont: { color: '#94a3b8' } },
+                                } as Data]}
+                                layout={{
+                                    title: { text: `Chain-Pair Interface Quality: ${chainIptmData.design_name}`, font: { color: '#e2e8f0', size: 16 } },
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: '#1e293b',
+                                    font: { color: '#e2e8f0' },
+                                    margin: { l: 100, r: 80, t: 50, b: 100 },
+                                    xaxis: { title: { text: 'Chain', font: { color: '#94a3b8' } }, color: '#94a3b8', tickangle: -45 },
+                                    yaxis: { title: { text: 'Chain', font: { color: '#94a3b8' } }, color: '#94a3b8' },
+                                    annotations: chainIptmData.iptm_matrix.flatMap((row: (number | null)[], i: number) =>
+                                        row.map((val: number | null, j: number) => ({
+                                            x: chainIptmData.chain_ids[j],
+                                            y: chainIptmData.chain_ids[i],
+                                            text: val !== null ? val.toFixed(2) : '—',
+                                            showarrow: false,
+                                            font: { color: val !== null && val > 0.5 ? '#1e293b' : '#e2e8f0', size: 12 },
+                                        }))
+                                    ),
+                                }}
+                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `chain_iptm_${chainIptmData.design_name}` } }}
+                                style={{ width: '100%', height: '500px' }}
+                            />
+                        ) : (
+                            <div className="h-[500px] flex items-center justify-center text-slate-500">
+                                No chain-pair iPTM data available (requires Boltz2/AF3 complex prediction)
+                            </div>
+                        )}
+                    </div>
                 ) : (
                     <Plot
                         data={scatterData}
