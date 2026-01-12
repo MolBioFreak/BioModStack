@@ -27,6 +27,19 @@ export interface QualitySettings {
     // ThermoMPNN stability scoring (runs before Boltz when enabled)
     run_thermompnn: boolean;                  // Enable stability scoring before Boltz
     thermompnn_max_ddg: number | null;        // Max ddG to pass (null = score only, no filter)
+
+    // AF2 Backprop CDR refinement (runs after ThermoMPNN, before Boltz when enabled)
+    run_af2_backprop: boolean;                // Enable AF2 backprop CDR refinement
+    af2_backprop_soft_iters: number;          // Soft optimization iterations (continuous logits)
+    af2_backprop_temp_iters: number;          // Temperature annealing iterations
+    af2_backprop_hard_iters: number;          // Hard discrete iterations (one-hot)
+    af2_backprop_num_recycles: number;        // AF2 recycling iterations (quality vs speed)
+    af2_backprop_learning_rate: number;       // Gradient descent step size
+    af2_backprop_use_multimer: boolean;       // Use AlphaFold-Multimer (better for complexes)
+    af2_backprop_num_models: number;          // Number of AF2 models to ensemble (1-5)
+    af2_backprop_loss_plddt: number;          // Weight for pLDDT loss (confidence)
+    af2_backprop_loss_pae: number;            // Weight for PAE loss (alignment error)
+    af2_backprop_loss_contact: number;        // Weight for interface contact loss
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
@@ -55,6 +68,18 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // ThermoMPNN (disabled for speed)
         run_thermompnn: false,
         thermompnn_max_ddg: null,
+        // AF2 Backprop (disabled for speed)
+        run_af2_backprop: false,
+        af2_backprop_soft_iters: 100,
+        af2_backprop_temp_iters: 100,
+        af2_backprop_hard_iters: 10,
+        af2_backprop_num_recycles: 3,
+        af2_backprop_learning_rate: 0.1,
+        af2_backprop_use_multimer: true,
+        af2_backprop_num_models: 1,
+        af2_backprop_loss_plddt: 0.1,
+        af2_backprop_loss_pae: 0.1,
+        af2_backprop_loss_contact: 0.5,
     },
     balanced: {
         // RFantibody: Default quality
@@ -77,8 +102,20 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_max_psce: 2.5,
         fampnn_max_residue_psce: 5.0,
         // ThermoMPNN: enabled for balanced mode
-        run_thermompnn: true,
+        run_thermompnn: false,
         thermompnn_max_ddg: 5.0,  // kcal/mol, higher = more destabilizing
+        // AF2 Backprop (disabled by default)
+        run_af2_backprop: false,
+        af2_backprop_soft_iters: 100,
+        af2_backprop_temp_iters: 100,
+        af2_backprop_hard_iters: 10,
+        af2_backprop_num_recycles: 3,
+        af2_backprop_learning_rate: 0.1,
+        af2_backprop_use_multimer: true,
+        af2_backprop_num_models: 1,
+        af2_backprop_loss_plddt: 0.1,
+        af2_backprop_loss_pae: 0.1,
+        af2_backprop_loss_contact: 0.5,
     },
     quality: {
         // RFantibody: Higher quality designs
@@ -101,8 +138,20 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_max_psce: 2.0,
         fampnn_max_residue_psce: 4.0,
         // ThermoMPNN: stricter for quality runs
-        run_thermompnn: true,
+        run_thermompnn: false,
         thermompnn_max_ddg: 3.0,
+        // AF2 Backprop (disabled by default, can be enabled for better hit rate)
+        run_af2_backprop: false,
+        af2_backprop_soft_iters: 100,
+        af2_backprop_temp_iters: 100,
+        af2_backprop_hard_iters: 10,
+        af2_backprop_num_recycles: 5,
+        af2_backprop_learning_rate: 0.05,
+        af2_backprop_use_multimer: true,
+        af2_backprop_num_models: 2,
+        af2_backprop_loss_plddt: 0.1,
+        af2_backprop_loss_pae: 0.2,
+        af2_backprop_loss_contact: 0.4,
     },
     maximum: {
         // RFantibody: Best possible quality
@@ -125,8 +174,20 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_max_psce: 1.5,
         fampnn_max_residue_psce: 3.0,
         // ThermoMPNN: strictest for maximum quality
-        run_thermompnn: true,
+        run_thermompnn: false,
         thermompnn_max_ddg: 2.0,
+        // AF2 Backprop: enabled for maximum quality runs
+        run_af2_backprop: false,
+        af2_backprop_soft_iters: 150,
+        af2_backprop_temp_iters: 150,
+        af2_backprop_hard_iters: 20,
+        af2_backprop_num_recycles: 8,
+        af2_backprop_learning_rate: 0.03,
+        af2_backprop_use_multimer: true,
+        af2_backprop_num_models: 3,
+        af2_backprop_loss_plddt: 0.1,
+        af2_backprop_loss_pae: 0.3,
+        af2_backprop_loss_contact: 0.3,
     },
 };
 
@@ -633,6 +694,209 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         )}
                     </div>
+
+                    {/* AF2 Backprop CDR Refinement */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-medium text-cyan-400">
+                                🧪 AF2 Backprop
+                                <span className="text-xs text-slate-500 font-normal">(CDR refinement)</span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.run_af2_backprop}
+                                    onChange={(e) => updateSetting('run_af2_backprop', e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-600 focus:ring-cyan-500"
+                                />
+                                <span className="text-sm text-slate-300">Enable</span>
+                            </label>
+                        </div>
+
+                        {settings.run_af2_backprop && (
+                            <div className="space-y-4">
+                                <p className="text-xs text-slate-500">
+                                    Uses AlphaFold-Multimer gradient descent to optimize CDR sequences for binding confidence.
+                                </p>
+
+                                {/* Optimization Stages */}
+                                <div>
+                                    <div className="text-xs font-medium text-cyan-400/70 mb-2">Optimization Stages (design_3stage)</div>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">Soft</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_soft_iters}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={10}
+                                                max={200}
+                                                step={10}
+                                                value={settings.af2_backprop_soft_iters}
+                                                onChange={(e) => updateSetting('af2_backprop_soft_iters', parseInt(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                            <div className="text-[10px] text-slate-600">Continuous logits</div>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">Temp</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_temp_iters}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={10}
+                                                max={200}
+                                                step={10}
+                                                value={settings.af2_backprop_temp_iters}
+                                                onChange={(e) => updateSetting('af2_backprop_temp_iters', parseInt(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                            <div className="text-[10px] text-slate-600">Annealing</div>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">Hard</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_hard_iters}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={5}
+                                                max={50}
+                                                step={5}
+                                                value={settings.af2_backprop_hard_iters}
+                                                onChange={(e) => updateSetting('af2_backprop_hard_iters', parseInt(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                            <div className="text-[10px] text-slate-600">Discrete</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Model Settings */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="text-xs text-slate-500">Recycles</label>
+                                            <span className="text-xs text-cyan-400">{settings.af2_backprop_num_recycles}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={10}
+                                            step={1}
+                                            value={settings.af2_backprop_num_recycles}
+                                            onChange={(e) => updateSetting('af2_backprop_num_recycles', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="text-xs text-slate-500">Learning Rate</label>
+                                            <span className="text-xs text-cyan-400">{settings.af2_backprop_learning_rate.toFixed(3)}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min={0.01}
+                                            max={0.2}
+                                            step={0.01}
+                                            value={settings.af2_backprop_learning_rate}
+                                            onChange={(e) => updateSetting('af2_backprop_learning_rate', parseFloat(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="text-xs text-slate-500">Models</label>
+                                            <span className="text-xs text-cyan-400">{settings.af2_backprop_num_models}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min={1}
+                                            max={5}
+                                            step={1}
+                                            value={settings.af2_backprop_num_models}
+                                            onChange={(e) => updateSetting('af2_backprop_num_models', parseInt(e.target.value))}
+                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                        />
+                                    </div>
+
+                                    <label className="flex items-center gap-2 cursor-pointer pt-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.af2_backprop_use_multimer}
+                                            onChange={(e) => updateSetting('af2_backprop_use_multimer', e.target.checked)}
+                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-600 focus:ring-cyan-500"
+                                        />
+                                        <span className="text-xs text-slate-300">Use Multimer</span>
+                                    </label>
+                                </div>
+
+                                {/* Loss Weights */}
+                                <div>
+                                    <div className="text-xs font-medium text-cyan-400/70 mb-2">Loss Weights</div>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">pLDDT</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_loss_plddt.toFixed(2)}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={settings.af2_backprop_loss_plddt}
+                                                onChange={(e) => updateSetting('af2_backprop_loss_plddt', parseFloat(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">PAE</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_loss_pae.toFixed(2)}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={settings.af2_backprop_loss_pae}
+                                                onChange={(e) => updateSetting('af2_backprop_loss_pae', parseFloat(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <label className="text-xs text-slate-500">Contact</label>
+                                                <span className="text-xs text-cyan-400">{settings.af2_backprop_loss_contact.toFixed(2)}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={settings.af2_backprop_loss_contact}
+                                                onChange={(e) => updateSetting('af2_backprop_loss_contact', parseFloat(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="text-[10px] text-slate-600 mt-1">Confidence • Alignment Error • Interface Contacts</div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
 
                     {/* Info Banner */}
                     {settings.boltz_use_potentials && (
