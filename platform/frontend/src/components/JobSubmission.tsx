@@ -668,8 +668,8 @@ export function JobSubmission() {
                                 />
                             ) : (
                                 <>
-                                    <p className="text-slate-400 text-sm">Choose a preset workflow for your experiment goal:</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
+                                    <div className="flex flex-row gap-4 flex-wrap">
                                         {[
                                             // Dynamic templates from API - filter out hidden/removed templates
                                             ...(templatesData?.data ?? []).filter((t: any) =>
