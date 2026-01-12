@@ -556,17 +556,6 @@ export function JobSubmission() {
             </header>
 
             <main className="max-w-4xl mx-auto space-y-8">
-                {/* 1. Job Name */}
-                <section>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
-                    <input
-                        type="text"
-                        value={jobName}
-                        onChange={(e) => setJobName(e.target.value)}
-                        placeholder="e.g., binder_design_test_01"
-                        className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
-                    />
-                </section>
 
                 {/* 2. Mode Toggle: Templates vs Manual */}
                 <section>
@@ -678,18 +667,18 @@ export function JobSubmission() {
                                                 // Hide dna_polymerase unless debug mode
                                                 (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
                                             ),
-                                            // Hardcoded Mutagenesis Template - DEBUG: mainly for orchestrator testing
-                                            ...((window as any).__DEBUG_MODE__ ? [{
+                                            // Mutagenesis Template
+                                            {
                                                 id: 'mutagenesis',
-                                                name: 'Mutagenesis Library [DEBUG]',
-                                                description: 'Generate amino acid variants and predict their structures. DEBUG: Used for orchestrator testing.',
+                                                name: 'Mutagenesis Library',
+                                                description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
                                                 icon: 'dna',
-                                                color: '#6366F1', // Indigo (debug)
+                                                color: '#6366F1', // Indigo
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
                                                 ]
-                                            }] : []),
+                                            },
                                             // RFantibody+ (De Novo Antibody Design)
                                             {
                                                 id: 'antibody_denovo',
