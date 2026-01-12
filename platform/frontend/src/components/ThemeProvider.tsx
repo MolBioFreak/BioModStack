@@ -5,7 +5,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 
-export type ThemeId = 'midnight' | 'light' | 'desert' | 'solarized' | 'nord' | 'dracula' | 'forest' | 'ember' | 'retro' | 'cyberpunk' | 'ocean';
+export type ThemeId = 'midnight' | 'light' | 'clean_light' | 'slate_dark' | 'desert' | 'solarized' | 'nord' | 'dracula' | 'forest' | 'ember' | 'retro' | 'cyberpunk' | 'ocean';
 
 export interface ThemeConfig {
     id: ThemeId;
@@ -30,6 +30,18 @@ export const THEMES: ThemeConfig[] = [
         name: 'Light',
         description: 'Clean white with violet accents',
         preview: { bg: '#ffffff', accent: '#7c3aed', text: '#0f172a' }
+    },
+    {
+        id: 'clean_light',
+        name: 'Clean Light',
+        description: 'Bright white with blue accents',
+        preview: { bg: '#fafafa', accent: '#3b82f6', text: '#1e293b' }
+    },
+    {
+        id: 'slate_dark',
+        name: 'Slate Dark',
+        description: 'Dark gray with teal accents',
+        preview: { bg: '#1e293b', accent: '#14b8a6', text: '#f1f5f9' }
     },
     {
         id: 'desert',
