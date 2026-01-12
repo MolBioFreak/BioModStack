@@ -52,6 +52,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
+    const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
 
     // Optional DNA/RNA sequence for complex prediction (when protein binds nucleic acid)
     const [targetDnaSeq, setTargetDnaSeq] = useState<string>('');
@@ -285,13 +286,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     antibody_design_loops: Array.from(selectedCDRLoops).sort().join(','),
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: frameworkType === 'nanobody' ? 'H' : 'H,L',
-                    // Quality settings - Boltz-2
+                    // Quality settings - RFantibody (backbone diffusion)
+                    rfantibody_diffusion_steps: qualitySettings.rfantibody_diffusion_steps,
+                    rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
+                    rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
+                    rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,
+                    // Quality settings - Boltz-2 (structure validation)
                     boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
                     boltz_recycling_steps: qualitySettings.boltz_recycling_steps,
                     boltz_num_samples: qualitySettings.boltz_num_samples,
                     boltz_use_potentials: qualitySettings.boltz_use_potentials,
                     boltz_use_msa: qualitySettings.boltz_use_msa,
-                    // Quality settings - FAMPNN
+                    // Quality settings - FAMPNN (sequence design)
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
@@ -537,30 +543,37 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 {/* Interactive Epitope Selector with 3D Viewer */}
                 {parsedChains.length > 0 && (
                     <div className="space-y-4">
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            Epitope Selection
-                            <span className="ml-2 text-xs text-slate-500 font-normal">
-                                (Click residues in 3D or 2D view to select epitope hotspots)
-                            </span>
-                        </label>
+                        <div className="flex items-center justify-between">
+                            <label className="block text-sm font-medium text-slate-400">
+                                Epitope Selection
+                                <span className="ml-2 text-xs text-slate-500 font-normal">
+                                    (Select hotspot residues the antibody should target)
+                                </span>
+                            </label>
 
-                        {/* 3D Molstar Viewer for spatial selection */}
-                        {pdbBlobUrl && (
-                            <div>
-                                <div className="text-xs text-slate-500 mb-1">3D Structure View (click to select)</div>
+                            {/* Toggle 3D Viewer Button */}
+                            {pdbBlobUrl && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShow3DViewer(!show3DViewer)}
+                                    className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer
+                                        ? 'bg-blue-600/20 text-blue-400 border border-blue-600/40'
+                                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                        }`}
+                                >
+                                    <span>{show3DViewer ? '🔍' : '🧬'}</span>
+                                    3D Structure Preview
+                                </button>
+                            )}
+                        </div>
+
+                        {/* 3D Molstar Viewer for visualization - toggled */}
+                        {pdbBlobUrl && show3DViewer && (
+                            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                                 <EpitopeMolstarViewer
                                     structureUrl={pdbBlobUrl}
-                                    height={300}
+                                    height={400}
                                     selectedResidues={selectedResidues}
-                                    onResidueClick={(residueKey) => {
-                                        const newSelection = new Set(selectedResidues);
-                                        if (newSelection.has(residueKey)) {
-                                            newSelection.delete(residueKey);
-                                        } else {
-                                            newSelection.add(residueKey);
-                                        }
-                                        setSelectedResidues(newSelection);
-                                    }}
                                 />
                             </div>
                         )}

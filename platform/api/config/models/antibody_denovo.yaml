@@ -122,6 +122,38 @@ params:
     maximum: 100
     step: 1
 
+  - name: rfantibody_diffusion_steps
+    type: integer
+    description: Diffusion denoising steps (higher = better quality, slower)
+    default: 50
+    minimum: 20
+    maximum: 200
+    step: 10
+
+  - name: rfantibody_noise_scale_ca
+    type: number
+    description: C-alpha noise scale (lower = more consistent designs)
+    default: 1.0
+    minimum: 0.5
+    maximum: 2.0
+    step: 0.1
+
+  - name: rfantibody_noise_scale_frame
+    type: number
+    description: Frame noise scale (affects rotational diversity)
+    default: 1.0
+    minimum: 0.5
+    maximum: 2.0
+    step: 0.1
+
+  - name: rfantibody_guide_scale
+    type: number
+    description: Hotspot guidance strength (higher = stronger epitope focus)
+    default: 10
+    minimum: 1
+    maximum: 50
+    step: 1
+
   - name: cdr_lengths
     type: string
     description: CDR length ranges (e.g., "H1:8-13,H2:7,H3:5-13")
