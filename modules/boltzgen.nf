@@ -14,9 +14,14 @@ process PrepBoltzGenInput {
     val secondary_structure
     val protocol
     val covalent_bonds
+    val nanobody_framework
+    val cdr_h1_length
+    val cdr_h2_length
+    val cdr_h3_length
     path input_pdb
     path ligand_pdb
     path dna_structure
+    path target_pdb
 
     output:
     path "boltzgen_input.yaml", emit: yaml
@@ -40,9 +45,14 @@ process PrepBoltzGenInput {
         ${secondary_structure ? "--secondary_structure '${secondary_structure}'" : ''} \\
         ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
         ${covalent_bonds ? "--covalent_bonds '${covalent_bonds}'" : ''} \\
+        ${nanobody_framework ? "--nanobody_framework '${nanobody_framework}'" : ''} \\
+        ${cdr_h1_length ? "--cdr_h1_length '${cdr_h1_length}'" : ''} \\
+        ${cdr_h2_length ? "--cdr_h2_length '${cdr_h2_length}'" : ''} \\
+        ${cdr_h3_length ? "--cdr_h3_length '${cdr_h3_length}'" : ''} \\
         ${input_pdb.name != 'NO_INPUT_PDB' ? "--input_pdb '${input_pdb}'" : ''} \\
         ${ligand_pdb.name != 'NO_LIGAND_PDB' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
         ${dna_structure.name != 'NO_DNA_STRUCT' ? "--dna_structure '${dna_structure}'" : ''} \\
+        ${target_pdb.name != 'NO_TARGET_PDB' ? "--target_pdb '${target_pdb}'" : ''} \\
         --output_yaml boltzgen_input.yaml
 
     # Validate generated YAML using boltzgen check (fail-fast on bad config)

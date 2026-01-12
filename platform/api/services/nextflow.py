@@ -305,8 +305,8 @@ async def launch_nextflow_job(
         await launch_msa_batch_job(job_id, params, output_dir)
         return
     
-    # Build Nextflow command
-    cmd = build_nextflow_command(model_id, mode, params, output_dir)
+    # Build Nextflow command - pass job_id for spawn-wait-collect tracking
+    cmd = build_nextflow_command(model_id, mode, params, output_dir, job_id=job_id)
     logger.info(f"Nextflow command: {' '.join(cmd)}")
     
     async with async_session() as session:
@@ -543,7 +543,8 @@ def build_nextflow_command(
     model_id: str,
     mode: str,
     params: Dict[str, Any],
-    output_dir: str
+    output_dir: str,
+    job_id: str = None
 ) -> list:
     """
     Build the Nextflow command line dynamically.
@@ -581,6 +582,8 @@ def build_nextflow_command(
         ('template_antibody_denovo', 'default'): 'boltz',
         # Batch validation jobs (spawned by antibody_denovo logic)
         ('antibody_child', 'validation_batch'): 'boltz',
+        # RFantibody child jobs (backbone generation - spawned by orchestrator)
+        ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
     }
     
     # Determine profile based on model and mode
@@ -631,6 +634,10 @@ def build_nextflow_command(
             "-profile", profile,
             "--out_dir", output_dir,
         ]
+    
+    # Add job_id for spawn-wait-collect tracking
+    if job_id:
+        cmd.extend(["--job_id", job_id])
     
     # Map model-specific params to Nextflow params
     param_mapping = {
@@ -735,6 +742,10 @@ def build_nextflow_command(
     # Dynamic parameter passing
     for key, value in params.items():
         if value is not None:
+            # Skip empty strings - they would become valueless flags interpreted as boolean true
+            if value == '':
+                continue
+                
             # Use mapped param name if available
             nf_key = param_mapping.get(key, key)
             

@@ -268,6 +268,16 @@ async def create_job(
         initial_queue_status = 'pending_msa' if msa_job else 'queued'
         parent_msa_id = msa_job.id if msa_job else None
         
+        # Use parent_job_id from request (spawn-wait-collect) or MSA parent
+        effective_parent_id = job_data.parent_job_id or parent_msa_id
+        
+        # Use batch_id/batch_name from request if provided (child jobs), else use local values
+        effective_batch_id = job_data.batch_id or batch_id
+        effective_batch_name = job_data.batch_name or batch_name
+        
+        # Use sequence_length from request if provided (child jobs)
+        effective_seq_length = job_data.sequence_length or sequence_length
+        
         # Create job record with queue fields
         job = Job(
             id=job_id,
@@ -278,20 +288,21 @@ async def create_job(
             output_dir=output_dir,
             status=JobStatus.QUEUED.value,
             # Batch grouping for job sets
-            batch_id=batch_id,
-            batch_name=batch_name,
+            batch_id=effective_batch_id,
+            batch_name=effective_batch_name,
             # GPU Orchestrator fields
             queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
-            sequence_length=sequence_length,
+            sequence_length=effective_seq_length,
             pinned_gpu=job_data.pinned_gpu,  # User-specified GPU pin from frontend
             priority=0,  # Default priority
             paused=False,
             retry_count=0,
             max_retries=2,
             oom_tolerance='allow',
-            # MSA parent-child linking
-            parent_job_id=parent_msa_id,
+            # Parent-child linking (spawn-wait-collect or MSA)
+            parent_job_id=effective_parent_id,
+            child_stage=job_data.child_stage,  # Stage identifier for filtering
             job_phase='inference',
         )
         session.add(job)
