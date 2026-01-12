@@ -461,6 +461,8 @@ def build_nextflow_command(
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
         ('antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
         ('antibody_denovo', 'default'): 'boltz',
+        ('template_antibody_denovo', 'antibody_denovo_pipeline'): 'boltz',
+        ('template_antibody_denovo', 'default'): 'boltz',
         # Batch validation jobs (spawned by antibody_denovo logic)
         ('antibody_child', 'validation_batch'): 'boltz',
     }

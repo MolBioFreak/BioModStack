@@ -55,6 +55,7 @@ class JobInfo:
     pinned_gpu: Optional[int]
     created_at: datetime
     batch_id: Optional[str] = None  # For GPU locking - all jobs in a batch share exclusive GPU access
+    pinned_gpus: Optional[List[int]] = None  # Multi-GPU allowlist for parallel distribution
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -248,6 +249,10 @@ def pack_jobs_to_gpus(
         best_gpu = None
         best_score = -float('inf')
         
+        # Log if this job has a multi-GPU allowlist
+        if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
+            logger.debug(f"[PACK] {job.name}: GPU allowlist restricts to GPUs {job.pinned_gpus}")
+        
         # ═══════════════════════════════════════════════════════════════════
         # PRE-CHECK: Determine forced GPU assignment from pins/locks
         # Priority: batch_lock > job.pinned_gpu > workflow_pin
@@ -279,6 +284,11 @@ def pack_jobs_to_gpus(
             if forced_gpu is not None:
                 if forced_gpu != gpu.index:
                     continue
+            
+            # Check 1b: Multi-GPU allowlist (if specified, only use these GPUs)
+            if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
+                if gpu.index not in job.pinned_gpus:
+                    continue  # This GPU is not in the allowlist
             
             # Check 2: GPU lock exclusion (skip GPUs locked by other batches)
             job_batch_id = getattr(job, 'batch_id', None)
@@ -483,6 +493,12 @@ class GPUOrchestrator:
                     model = job.model_id or 'default'
                     vram = estimate_vram(model, seq_len)
                 
+                # Extract pinned_gpus from job params if present
+                job_params = job.params or {}
+                pinned_gpus = job_params.get('pinned_gpus', None)
+                if pinned_gpus is not None and not isinstance(pinned_gpus, list):
+                    pinned_gpus = None  # Invalid format, ignore
+                
                 job_infos.append(JobInfo(
                     id=job.id,
                     name=job.name,
@@ -492,7 +508,8 @@ class GPUOrchestrator:
                     priority=job.priority or 0,
                     pinned_gpu=job.pinned_gpu,
                     created_at=job.created_at,
-                    batch_id=getattr(job, 'batch_id', None)  # For GPU locking
+                    batch_id=getattr(job, 'batch_id', None),  # For GPU locking
+                    pinned_gpus=pinned_gpus  # Multi-GPU allowlist
                 ))
             
             # 3. Get GPU state
