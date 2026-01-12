@@ -23,6 +23,10 @@ export interface QualitySettings {
     // Pre-Boltz filtering (saves compute by rejecting low-quality designs before expensive validation)
     fampnn_max_psce: number | null;           // Max avg PSCE score to pass to Boltz (null = no filter)
     fampnn_max_residue_psce: number | null;   // Max per-residue PSCE (catches individual bad residues)
+
+    // ThermoMPNN stability scoring (runs before Boltz when enabled)
+    run_thermompnn: boolean;                  // Enable stability scoring before Boltz
+    thermompnn_max_ddg: number | null;        // Max ddG to pass (null = score only, no filter)
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
@@ -48,6 +52,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
+        // ThermoMPNN (disabled for speed)
+        run_thermompnn: false,
+        thermompnn_max_ddg: null,
     },
     balanced: {
         // RFantibody: Default quality
@@ -69,6 +76,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // Pre-Boltz filter: moderate filtering to save compute
         fampnn_max_psce: 2.5,
         fampnn_max_residue_psce: 5.0,
+        // ThermoMPNN: enabled for balanced mode
+        run_thermompnn: true,
+        thermompnn_max_ddg: 5.0,  // kcal/mol, higher = more destabilizing
     },
     quality: {
         // RFantibody: Higher quality designs
@@ -90,6 +100,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // Pre-Boltz filter: stricter filtering for quality runs
         fampnn_max_psce: 2.0,
         fampnn_max_residue_psce: 4.0,
+        // ThermoMPNN: stricter for quality runs
+        run_thermompnn: true,
+        thermompnn_max_ddg: 3.0,
     },
     maximum: {
         // RFantibody: Best possible quality
@@ -111,6 +124,9 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // Pre-Boltz filter: strictest filtering for maximum quality
         fampnn_max_psce: 1.5,
         fampnn_max_residue_psce: 3.0,
+        // ThermoMPNN: strictest for maximum quality
+        run_thermompnn: true,
+        thermompnn_max_ddg: 2.0,
     },
 };
 
@@ -551,6 +567,68 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     <p className="text-[10px] text-slate-600 mt-1">
                                         Catches individual bad residues even if avg is OK
                                     </p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ThermoMPNN Stability Scoring */}
+                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
+                                ThermoMPNN
+                                <span className="text-xs text-slate-500 font-normal">(stability scoring)</span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.run_thermompnn}
+                                    onChange={(e) => updateSetting('run_thermompnn', e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-600 focus:ring-amber-500"
+                                />
+                                <span className="text-sm text-slate-300">Enable</span>
+                            </label>
+                        </div>
+
+                        {settings.run_thermompnn && (
+                            <div className="space-y-3">
+                                <p className="text-xs text-slate-500">
+                                    Scores sequence stability before Boltz-2 validation. Lower ddG = more stable.
+                                </p>
+
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-xs text-slate-500">
+                                            Max ΔΔG (kcal/mol) <span className="text-slate-600">({settings.thermompnn_max_ddg?.toFixed(1) ?? 'scoring only'})</span>
+                                        </label>
+                                        <label className="flex items-center gap-1 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.thermompnn_max_ddg !== null}
+                                                onChange={(e) => updateSetting('thermompnn_max_ddg', e.target.checked ? 5.0 : null)}
+                                                className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-amber-600"
+                                            />
+                                            <span className="text-[10px] text-slate-500">Filter</span>
+                                        </label>
+                                    </div>
+                                    {settings.thermompnn_max_ddg !== null && (
+                                        <>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={10}
+                                                step={0.5}
+                                                value={settings.thermompnn_max_ddg}
+                                                onChange={(e) => updateSetting('thermompnn_max_ddg', parseFloat(e.target.value))}
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                            />
+                                            <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                                <span>0 (very stable)</span>
+                                                <span>5</span>
+                                                <span>10 (permissive)</span>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}

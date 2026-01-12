@@ -74,7 +74,9 @@ VRAM_PROFILES = {
     'af2': {'base': 12000, 'scale': 65},        # AlphaFold2 (highest VRAM)
     'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
     'rfantibody': {'base': 8000, 'scale': 40},  # RFantibody antibody generation
+    'rfantibody_child': {'base': 8000, 'scale': 40},  # RFantibody child (same as parent)
     'fampnn': {'base': 6000, 'scale': 20},      # Full-Atom MPNN (increased from 2000 due to OOMs)
+    'fampnn_child': {'base': 6000, 'scale': 20},  # FAMPNN child job
     'mpnn': {'base': 2000, 'scale': 5},         # ProteinMPNN (light)
     'proteinmpnn': {'base': 2000, 'scale': 5},  # Alias
     'diffdock': {'base': 4000, 'scale': 12},    # DiffDock

@@ -44,7 +44,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     const [mode, setMode] = useState<DesignMode>(initialValues?.mode || 'ligand_binder');
 
     // Job metadata
-    const [jobName, setJobName] = useState(initialValues?.name || '');
+    const [jobName, setJobName] = useState(initialValues?.name || 'boltzgen_design');
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
     const [lockGpus, setLockGpus] = useState(false);
 
@@ -99,6 +99,24 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     const [checkpointMode, setCheckpointMode] = useState<CheckpointMode>(initialValues?.boltzgen_checkpoint_mode || 'both');
     const [skipInverseFolding, setSkipInverseFolding] = useState(initialValues?.boltzgen_skip_inverse_folding || false);
     const [reuseExisting, setReuseExisting] = useState(initialValues?.boltzgen_reuse || false);
+
+    // Production Mode - unlocks high design counts (10k-60k)
+    const [productionMode, setProductionMode] = useState(initialValues?.boltzgen_production_mode || false);
+
+    // Covalent bond constraints (disulfide, WHL staple, custom)
+    interface CovalentBond {
+        id: string;
+        type: 'disulfide' | 'whl_staple' | 'custom';
+        atom1_chain: string;
+        atom1_residue: number;
+        atom1_atom: string;
+        atom2_chain: string;
+        atom2_residue: number;
+        atom2_atom: string;
+    }
+    const [covalentBonds, setCovalentBonds] = useState<CovalentBond[]>(
+        initialValues?.boltzgen_covalent_bonds || []
+    );
 
     // Derived state
     const effectiveSmiles = useMemo(() => {
@@ -210,6 +228,11 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         }
         if (reuseExisting) {
             params.boltzgen_reuse = true;
+        }
+
+        // Covalent bond constraints
+        if (covalentBonds.length > 0) {
+            params.boltzgen_covalent_bonds = JSON.stringify(covalentBonds);
         }
 
         submitMutation.mutate({
@@ -444,10 +467,12 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                             value={numDesigns}
                             onChange={e => setNumDesigns(parseInt(e.target.value) || 10)}
                             min={1}
-                            max={100}
+                            max={productionMode ? 60000 : 100}
                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
                         />
-                        <p className="text-xs text-slate-500 mt-1">1-100 designs</p>
+                        <p className="text-xs text-slate-500 mt-1">
+                            {productionMode ? '1-60,000 designs (production)' : '1-100 designs'}
+                        </p>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">Batch Size</label>
@@ -461,6 +486,23 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                         />
                         <p className="text-xs text-slate-500 mt-1">Designs per GPU pass</p>
                     </div>
+                </div>
+
+                {/* Production Mode Toggle */}
+                <div className="mt-4 p-4 border border-amber-500/30 rounded-lg bg-amber-500/5">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                        <div className={`w-10 h-6 rounded-full p-1 transition-colors ${productionMode ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                            <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${productionMode ? 'translate-x-4' : ''}`} />
+                        </div>
+                        <input type="checkbox" className="hidden" checked={productionMode} onChange={e => setProductionMode(e.target.checked)} />
+                        <span className="text-sm font-medium text-amber-400">Production Mode</span>
+                    </label>
+                    {productionMode && (
+                        <div className="mt-2 text-xs text-amber-400/80">
+                            Unlocks up to 60,000 designs. Recommended: 10k-60k for production runs.
+                            <br />Estimated time: ~30-60 sec/design on RTX 5090/3090.
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -508,6 +550,154 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
                             />
                             <p className="text-xs text-slate-500 mt-1">Optional: Specify helix/sheet/loop regions (residue ranges)</p>
+                        </div>
+
+                        {/* Covalent Constraints */}
+                        <div className="border-t border-slate-700 pt-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <label className="block text-sm font-medium text-slate-300">Covalent Constraints</label>
+                                <button
+                                    type="button"
+                                    onClick={() => setCovalentBonds([...covalentBonds, {
+                                        id: `bond_${Date.now()}`,
+                                        type: 'disulfide',
+                                        atom1_chain: 'A',
+                                        atom1_residue: 1,
+                                        atom1_atom: 'SG',
+                                        atom2_chain: 'A',
+                                        atom2_residue: 10,
+                                        atom2_atom: 'SG'
+                                    }])}
+                                    className="px-3 py-1 text-xs bg-amber-500/20 text-amber-400 rounded-lg hover:bg-amber-500/30 transition-colors"
+                                >
+                                    + Add Bond
+                                </button>
+                            </div>
+                            {covalentBonds.length === 0 ? (
+                                <p className="text-xs text-slate-500">No covalent constraints. Add disulfide bonds, WHL staples, or custom atom connections.</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {covalentBonds.map((bond, idx) => (
+                                        <div key={bond.id} className="p-3 bg-slate-900/50 rounded-lg border border-slate-700">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <select
+                                                    value={bond.type}
+                                                    onChange={e => {
+                                                        const newType = e.target.value as 'disulfide' | 'whl_staple' | 'custom';
+                                                        const updated = [...covalentBonds];
+                                                        updated[idx] = {
+                                                            ...bond,
+                                                            type: newType,
+                                                            atom1_atom: newType === 'disulfide' ? 'SG' : newType === 'whl_staple' ? 'SG' : bond.atom1_atom,
+                                                            atom2_atom: newType === 'disulfide' ? 'SG' : newType === 'whl_staple' ? 'CK' : bond.atom2_atom
+                                                        };
+                                                        setCovalentBonds(updated);
+                                                    }}
+                                                    className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white"
+                                                >
+                                                    <option value="disulfide">Disulfide (Cys-Cys)</option>
+                                                    <option value="whl_staple">WHL Staple</option>
+                                                    <option value="custom">Custom Bond</option>
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCovalentBonds(covalentBonds.filter(b => b.id !== bond.id))}
+                                                    className="text-red-400 hover:text-red-300 text-xs"
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+                                            <div className="grid grid-cols-6 gap-2 text-xs">
+                                                <div>
+                                                    <label className="text-slate-500">Chain 1</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bond.atom1_chain}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom1_chain: e.target.value };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-slate-500">Res 1</label>
+                                                    <input
+                                                        type="number"
+                                                        value={bond.atom1_residue}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom1_residue: parseInt(e.target.value) || 1 };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-slate-500">Atom 1</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bond.atom1_atom}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom1_atom: e.target.value };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        disabled={bond.type !== 'custom'}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white disabled:opacity-50"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-slate-500">Chain 2</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bond.atom2_chain}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom2_chain: e.target.value };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-slate-500">Res 2</label>
+                                                    <input
+                                                        type="number"
+                                                        value={bond.atom2_residue}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom2_residue: parseInt(e.target.value) || 1 };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-slate-500">Atom 2</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bond.atom2_atom}
+                                                        onChange={e => {
+                                                            const updated = [...covalentBonds];
+                                                            updated[idx] = { ...bond, atom2_atom: e.target.value };
+                                                            setCovalentBonds(updated);
+                                                        }}
+                                                        disabled={bond.type !== 'custom'}
+                                                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white disabled:opacity-50"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mt-2">
+                                                {bond.type === 'disulfide' ? 'Cysteine SG-SG bond' :
+                                                    bond.type === 'whl_staple' ? 'WHL staple: SG connects to WHL CK/CH' :
+                                                        'Custom atom-atom covalent bond'}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {/* Protocol Selection */}
