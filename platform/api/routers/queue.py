@@ -47,6 +47,8 @@ class QueuedJobResponse(BaseModel):
     max_retries: int
     created_at: datetime
     started_at: Optional[datetime]
+    current_stage: Optional[str] = None  # Current workflow step (rfantibody, fampnn, etc.)
+    stage_progress: Optional[str] = None  # Granular progress (e.g., "5/30")
     
     class Config:
         from_attributes = True

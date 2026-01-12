@@ -47,6 +47,12 @@ process RFANTIBODY {
     // Number of designs
     def num_designs = params.rfantibody_num_designs ?: 10
 
+    // Quality parameters for diffusion process
+    def diffusion_steps = params.rfantibody_diffusion_steps ?: 50      // 20-200, higher = better quality
+    def noise_scale_ca = params.rfantibody_noise_scale_ca ?: 1.0       // 0.5-2.0, lower = more consistent
+    def noise_scale_frame = params.rfantibody_noise_scale_frame ?: 1.0 // 0.5-2.0, affects rotational diversity
+    def guide_scale = params.rfantibody_guide_scale ?: 10              // 1-50, higher = stronger hotspot guidance
+
     // Framework selection based on framework_type param
     // Options: 'standard-fv', 'nanobody', 'custom'
     def frameworkType = params.framework_type ?: 'standard-fv'
@@ -67,6 +73,7 @@ process RFANTIBODY {
     echo "Hotspot residues: ${hotspots}" | tee -a rfantibody_${meta.id}.log
     echo "Design loops: ${design_loops}" | tee -a rfantibody_${meta.id}.log
     echo "Num designs: ${num_designs}" | tee -a rfantibody_${meta.id}.log
+    echo "Quality params: T=${diffusion_steps}, noise_ca=${noise_scale_ca}, noise_frame=${noise_scale_frame}, guide=${guide_scale}" | tee -a rfantibody_${meta.id}.log
     
     mkdir -p output
     
@@ -88,6 +95,10 @@ process RFANTIBODY {
         'ppi.hotspot_res=${hotspots}' \\
         'antibody.design_loops=${design_loops}' \\
         inference.num_designs=${num_designs} \\
+        diffuser.T=${diffusion_steps} \\
+        denoiser.noise_scale_ca=${noise_scale_ca} \\
+        denoiser.noise_scale_frame=${noise_scale_frame} \\
+        potentials.guide_scale=${guide_scale} \\
         inference.output_prefix=\${WORK_DIR}/output/${meta.id} \\
         2>&1 | tee -a rfantibody_${meta.id}.log
     

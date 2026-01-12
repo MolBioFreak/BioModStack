@@ -622,11 +622,11 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                             Not enough data for correlation matrix (need at least 2 metrics with 5+ data points)
                         </div>
                     )
-                ) : selectedPreset === 'affinity_distribution' ? (
+                ) : PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type === 'histogram' ? (
                     <Plot
                         data={histogramData}
                         layout={histogramLayout}
-                        config={{ responsive: true, displayModeBar: true }}
+                        config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `distribution_${xAxis}` } }}
                         style={{ width: '100%', height: '500px' }}
                     />
                 ) : selectedPreset === 'violin_confidence' ? (
