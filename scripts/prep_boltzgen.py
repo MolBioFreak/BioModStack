@@ -1,5 +1,6 @@
 import argparse
 import yaml
+import json
 import sys
 from pathlib import Path
 
@@ -56,8 +57,9 @@ def main():
     parser.add_argument("--dna_structure", type=str, help="Pre-generated DNA structure PDB")
     parser.add_argument("--secondary_structure", type=str, help="Secondary structure constraints (e.g., 'helix:1-20,sheet:25-35,loop:40-45')")
     parser.add_argument("--protocol", type=str, default="protein-anything", 
-                        choices=["protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything"],
+                        choices=["protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything", "antibody-anything"],
                         help="BoltzGen protocol to use")
+    parser.add_argument("--covalent_bonds", type=str, help="JSON array of covalent bond constraints")
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
     args = parser.parse_args()
@@ -188,6 +190,35 @@ def main():
                     'residues': args.binding_site_residues
                 }
             })
+    
+    # Parse covalent bond constraints (disulfides, WHL staples, custom)
+    if args.covalent_bonds:
+        try:
+            bonds = json.loads(args.covalent_bonds)
+            for bond in bonds:
+                # BoltzGen format: bond: atom1: [chain, residue, atom_name], atom2: [chain, residue, atom_name]
+                constraints.append({
+                    'bond': {
+                        'atom1': [bond['atom1_chain'], bond['atom1_residue'], bond['atom1_atom']],
+                        'atom2': [bond['atom2_chain'], bond['atom2_residue'], bond['atom2_atom']]
+                    }
+                })
+                print(f"Covalent bond: {bond['type']} - {bond['atom1_chain']}:{bond['atom1_residue']}:{bond['atom1_atom']} <-> {bond['atom2_chain']}:{bond['atom2_residue']}:{bond['atom2_atom']}")
+                
+                # If WHL staple, add WHL ligand entity
+                if bond.get('type') == 'whl_staple':
+                    # Check if WHL already added
+                    has_whl = any(e.get('ligand', {}).get('ccd') == 'WHL' for e in entities)
+                    if not has_whl:
+                        entities.append({
+                            'ligand': {
+                                'id': 'W',
+                                'ccd': 'WHL'
+                            }
+                        })
+                        print("Added WHL ligand entity for staple")
+        except json.JSONDecodeError as e:
+            print(f"Warning: Failed to parse covalent_bonds JSON: {e}")
     
     config = {'entities': entities}
     if constraints:
