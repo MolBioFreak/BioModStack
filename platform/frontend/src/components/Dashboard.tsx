@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, cancelJob, resubmitJob, fetchJobLogs, resumeJob } from '../lib/api';
+import { fetchJobs, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
 
 import { QuickViewer } from './QuickViewer';
@@ -20,6 +20,13 @@ export function Dashboard() {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [visibleCount, setVisibleCount] = useState(25); // Start with 25 jobs visible
+    const [debugMode, setDebugMode] = useState(() => {
+        try {
+            return localStorage.getItem('orchestrator_debug_mode') === 'true';
+        } catch {
+            return false;
+        }
+    });
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -92,6 +99,23 @@ export function Dashboard() {
         }
     };
 
+    // DEBUG: Permanent delete mutation
+    const deleteMutation = useMutation({
+        mutationFn: (jobId: string) => deleteJobPermanently(jobId),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            alert(`Deleted! ${response.data.children_deleted} children, ${response.data.directories_deleted.length} directories removed`);
+        },
+        onError: (error: any) => {
+            alert(`Delete failed: ${error.response?.data?.detail || error.message}`);
+        }
+    });
+
+    const handleDelete = (_jobId: string, _jobName: string) => {
+        // Confirmation is already done in the button onClick
+        deleteMutation.mutate(_jobId);
+    };
+
     const navigate = useNavigate();
 
     const handleClone = (job: Job) => {
@@ -107,6 +131,30 @@ export function Dashboard() {
         navigate('/submit');
     };
 
+    // Force-run mutation (debug feature)
+    const forceRunMutation = useMutation({
+        mutationFn: (jobId: string) => forceRunJob(jobId),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            alert(`Force-launched on GPU ${response.data.gpu_id}`);
+        },
+        onError: (error: any) => {
+            alert(`Force-run failed: ${error.response?.data?.detail || error.message}`);
+        }
+    });
+
+    const handleForceRun = (jobId: string, _gpuId?: number) => {
+        forceRunMutation.mutate(jobId);
+    };
+
+    const toggleDebugMode = () => {
+        const newValue = !debugMode;
+        setDebugMode(newValue);
+        try {
+            localStorage.setItem('orchestrator_debug_mode', String(newValue));
+        } catch { }
+    };
+
 
 
     return (
@@ -120,6 +168,17 @@ export function Dashboard() {
                     <p className="text-slate-400 mt-2">Protein Modification & Design Platform</p>
                 </div>
                 <div className="flex gap-3">
+                    {/* Debug mode toggle */}
+                    <button
+                        onClick={toggleDebugMode}
+                        className={`px-3 py-2 rounded-lg font-medium text-sm transition-all flex items-center gap-2 ${debugMode
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50 hover:bg-amber-500/30'
+                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-300'
+                            }`}
+                        title="Toggle debug mode for advanced orchestrator controls"
+                    >
+                        🔧 {debugMode ? 'Debug ON' : 'Debug'}
+                    </button>
                     <Link
                         to="/designs"
                         className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-lg font-semibold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
@@ -201,7 +260,10 @@ export function Dashboard() {
                                 onViewLogs={handleViewLogs}
                                 onViewQuick={setQuickViewJobId}
                                 onClone={handleClone}
+                                onDelete={handleDelete}
+                                onForceRun={handleForceRun}
                                 quickViewJobId={quickViewJobId}
+                                debugMode={debugMode}
                             />
 
                             {/* Pagination Controls */}

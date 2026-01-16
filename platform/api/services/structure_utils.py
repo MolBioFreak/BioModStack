@@ -346,8 +346,8 @@ def get_per_chain_metrics(path: Union[str, Path]) -> dict:
 def calculate_epitope_contacts(
     pdb_path: Union[str, Path],
     epitope_residues: List[str],
-    antibody_chain: str = "A",
-    target_chain: str = "B",
+    antibody_chain: str = "H",  # RFantibody outputs H/L chains
+    target_chain: str = "B",    # Target is typically renamed to B
     distance_threshold: float = 8.0
 ) -> Tuple[int, Optional[float]]:
     """
@@ -359,7 +359,8 @@ def calculate_epitope_contacts(
     Args:
         pdb_path: Path to structure file (PDB or CIF)
         epitope_residues: List of epitope residue specs (e.g., ["A111", "A112", ...])
-        antibody_chain: Chain ID for antibody (default "A")
+                         The chain letter is stripped - only residue numbers are used.
+        antibody_chain: Chain ID for antibody (default "H", also checks "L")
         target_chain: Chain ID for target protein (default "B")
         distance_threshold: Distance cutoff in Angstroms (default 8.0)
         
@@ -372,35 +373,57 @@ def calculate_epitope_contacts(
     try:
         structure = load_structure(pdb_path)
         
-        # Parse epitope residue numbers
+        # Parse epitope residue numbers (strip chain prefix, only use numbers)
         epitope_resnums = set()
         for res_spec in epitope_residues:
-            # Format: "A111" or "B52" - extract chain and number
-            if len(res_spec) < 2:
+            if not res_spec:
                 continue
-            chain_id = res_spec[0]
-            try:
-                resnum = int(res_spec[1:])
-                epitope_resnums.add(resnum)
-            except ValueError:
-                continue
+            # Strip leading non-digit characters (chain ID like 'A', 'B', etc.)
+            res_spec = res_spec.strip()
+            num_str = ''.join(c for c in res_spec if c.isdigit() or c == '-')
+            if num_str:
+                try:
+                    resnum = int(num_str)
+                    epitope_resnums.add(resnum)
+                except ValueError:
+                    continue
         
         if not epitope_resnums:
             logger.warning(f"[structure_utils] No valid epitope residues parsed from {epitope_residues}")
             return 0, None
         
-        # Get CA atoms for antibody and target chains
-        ab_ca = structure[
-            (structure.chain_id == antibody_chain) & 
-            (structure.atom_name == "CA")
-        ]
+        # Get all chain IDs in structure
+        all_chains = set(structure.chain_id)
+        logger.info(f"[structure_utils] Structure chains: {all_chains}, epitope resnums: {sorted(epitope_resnums)[:5]}...")
+        
+        # Auto-detect antibody chains (H and L for standard, just H for nanobody)
+        ab_chain_ids = []
+        for potential_ab in ['H', 'L', 'A']:  # Try H, L first, fall back to A
+            if potential_ab in all_chains:
+                ab_chain_ids.append(potential_ab)
+        
+        # Auto-detect target chain (first non-antibody chain, prefer B)
+        if target_chain not in all_chains:
+            non_ab_chains = [c for c in all_chains if c not in ['H', 'L', 'A']]
+            if non_ab_chains:
+                target_chain = non_ab_chains[0]
+                logger.info(f"[structure_utils] Auto-detected target chain: {target_chain}")
+        
+        # Get CA atoms for antibody chains (combine H and L)
+        ab_mask = np.isin(structure.chain_id, ab_chain_ids) & (structure.atom_name == "CA")
+        ab_ca = structure[ab_mask]
+        
+        # Get CA atoms for target chain
         target_ca = structure[
             (structure.chain_id == target_chain) & 
             (structure.atom_name == "CA")
         ]
         
-        if len(ab_ca) == 0 or len(target_ca) == 0:
-            logger.warning(f"[structure_utils] Missing chains: Ab({antibody_chain})={len(ab_ca)}, Target({target_chain})={len(target_ca)}")
+        if len(ab_ca) == 0:
+            logger.warning(f"[structure_utils] No antibody CA atoms found in chains {ab_chain_ids}")
+            return 0, None
+        if len(target_ca) == 0:
+            logger.warning(f"[structure_utils] No target CA atoms found in chain {target_chain}")
             return 0, None
         
         # Filter target to only epitope residues
@@ -408,8 +431,11 @@ def calculate_epitope_contacts(
         epitope_ca = target_ca[epitope_mask]
         
         if len(epitope_ca) == 0:
-            logger.warning(f"[structure_utils] No epitope residues found in chain {target_chain}")
+            logger.warning(f"[structure_utils] No epitope residues found in chain {target_chain}. "
+                          f"Target has res_ids: {sorted(set(target_ca.res_id))[:10]}...")
             return 0, None
+        
+        logger.info(f"[structure_utils] Found {len(epitope_ca)} epitope atoms, {len(ab_ca)} antibody atoms")
         
         # Calculate distances between all antibody CA and epitope CA
         ab_coords = ab_ca.coord
@@ -429,6 +455,8 @@ def calculate_epitope_contacts(
         
         # Overall minimum distance
         overall_min = float(np.min(min_distances)) if len(min_distances) > 0 else None
+        
+        logger.info(f"[structure_utils] Epitope contacts: {contact_count}, min_distance: {overall_min:.2f}Å" if overall_min else "")
         
         return contact_count, overall_min
         

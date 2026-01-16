@@ -12,6 +12,7 @@ import {
     cancelAllQueuedJobs,
     fetchCancelledJobs,
     killActiveNextflowJobs,
+    forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
 
@@ -105,16 +106,8 @@ function GPUBadge({ gpu, pinned }: { gpu: number | null; pinned: boolean }) {
 }
 
 // Elapsed time badge for running jobs
-function ElapsedTimeBadge({ startedAt }: { startedAt: string | null }) {
-    const [, forceUpdate] = useState(0);
-
-    // Update every second for running jobs
-    useEffect(() => {
-        if (!startedAt) return;
-        const timer = setInterval(() => forceUpdate(n => n + 1), 1000);
-        return () => clearInterval(timer);
-    }, [startedAt]);
-
+// NOTE: tick prop is passed from parent to trigger re-renders without N intervals
+function ElapsedTimeBadge({ startedAt, tick: _tick }: { startedAt: string | null; tick: number }) {
     if (!startedAt) return null;
 
     const start = new Date(startedAt).getTime();
@@ -174,6 +167,13 @@ export function JobQueuePanel() {
     const queryClient = useQueryClient();
     const [expanded, setExpanded] = useState(true);
     const [showCancelled, setShowCancelled] = useState(false);
+    // Single timer for all elapsed time badges (fixes N-interval proliferation)
+    const [elapsedTick, setElapsedTick] = useState(0);
+
+    useEffect(() => {
+        const timer = setInterval(() => setElapsedTick(t => t + 1), 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     // Fetch queue data
     const { data: queueData, isLoading } = useQuery({
@@ -254,11 +254,20 @@ export function JobQueuePanel() {
         },
     });
 
+    const forceLaunchMutation = useMutation({
+        mutationFn: ({ jobId, gpuId }: { jobId: string; gpuId: number }) =>
+            forceLaunchQueueJob(jobId, gpuId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['queue'] });
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+        },
+    });
+
     const queue = queueData?.data || [];
     const stats = statsData?.data;
     const cancelledJobs = cancelledData?.data || [];
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
-        cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending;
+        cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
     // Separate running, queued, and pending_msa jobs
     const runningJobs = queue.filter(j => j.queue_status === 'running');
@@ -399,6 +408,7 @@ export function JobQueuePanel() {
                                                     }
                                                 }}
                                                 isPending={isPending}
+                                                elapsedTick={elapsedTick}
                                             />
                                         ))}
                                     </div>
@@ -423,6 +433,7 @@ export function JobQueuePanel() {
                                                     }
                                                 }}
                                                 isPending={isPending}
+                                                elapsedTick={elapsedTick}
                                             />
                                         ))}
                                     </div>
@@ -448,7 +459,9 @@ export function JobQueuePanel() {
                                                     }
                                                 }}
                                                 onPin={(gpuId) => pinMutation.mutate({ jobId: job.id, gpuId })}
+                                                onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
+                                                elapsedTick={elapsedTick}
                                             />
                                         ))}
                                     </div>
@@ -468,7 +481,9 @@ interface JobRowProps {
     onResume?: () => void;
     onCancel: () => void;
     onPin?: (gpuId: number | null) => void;
+    onForceLaunch?: (gpuId: number) => void;
     isPending: boolean;
+    elapsedTick: number;  // For elapsed time display
 }
 
 function JobRow({
@@ -477,9 +492,12 @@ function JobRow({
     onResume,
     onCancel,
     onPin,
+    onForceLaunch,
     isPending,
+    elapsedTick,
 }: JobRowProps) {
     const [showPinMenu, setShowPinMenu] = useState(false);
+    const [showForceMenu, setShowForceMenu] = useState(false);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -509,7 +527,7 @@ function JobRow({
                             {job.queue_status === 'running' && (
                                 <>
                                     <StageBadge stage={job.current_stage} progress={job.stage_progress} />
-                                    <ElapsedTimeBadge startedAt={job.started_at} />
+                                    <ElapsedTimeBadge startedAt={job.started_at} tick={elapsedTick} />
                                 </>
                             )}
                         </div>
@@ -553,6 +571,33 @@ function JobRow({
                         </div>
                     )}
 
+                    {/* Force Launch - only for queued jobs */}
+                    {job.queue_status === 'queued' && onForceLaunch && (
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowForceMenu(!showForceMenu)}
+                                disabled={isPending}
+                                className="px-2 py-1 rounded bg-emerald-600/50 hover:bg-emerald-600 text-white text-xs disabled:opacity-50"
+                                title="Force launch on GPU (bypass VRAM checks)"
+                            >
+                                Force
+                            </button>
+                            {showForceMenu && (
+                                <div className="absolute right-0 top-8 z-10 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1 min-w-[140px]">
+                                    {[0, 1, 2, 3].map((gpu) => (
+                                        <button
+                                            key={gpu}
+                                            onClick={() => { onForceLaunch(gpu); setShowForceMenu(false); }}
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 text-slate-300"
+                                        >
+                                            {GPU_NAMES[gpu]}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Pause/Resume */}
                     {job.paused && onResume ? (
                         <button
@@ -561,7 +606,7 @@ function JobRow({
                             className="px-2 py-1 rounded bg-green-600/50 hover:bg-green-600 text-white text-xs disabled:opacity-50"
                             title="Resume"
                         >
-                            ▶
+                            Resume
                         </button>
                     ) : job.queue_status !== 'running' && onPause ? (
                         <button
@@ -570,7 +615,7 @@ function JobRow({
                             className="px-2 py-1 rounded bg-yellow-600/50 hover:bg-yellow-600 text-white text-xs disabled:opacity-50"
                             title="Pause"
                         >
-                            ⏸
+                            Pause
                         </button>
                     ) : null}
 

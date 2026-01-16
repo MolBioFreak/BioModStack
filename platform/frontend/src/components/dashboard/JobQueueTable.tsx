@@ -16,7 +16,10 @@ interface JobQueueTableProps {
     onViewLogs: (jobId: string) => void;
     onViewQuick: (jobId: string) => void;
     onClone?: (job: Job) => void;
+    onDelete?: (jobId: string, name: string) => void;
+    onForceRun?: (jobId: string, gpuId?: number) => void;
     quickViewJobId: string | null;
+    debugMode?: boolean;
 }
 
 export function JobQueueTable({
@@ -28,7 +31,10 @@ export function JobQueueTable({
     onViewLogs,
     onViewQuick,
     onClone,
-    quickViewJobId
+    onDelete,
+    onForceRun,
+    quickViewJobId,
+    debugMode = false
 }: JobQueueTableProps) {
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
     const [sortColumn, setSortColumn] = useState<SortColumn>('created');
@@ -362,6 +368,18 @@ export function JobQueueTable({
                                                             Cancel
                                                         </button>
                                                     )}
+                                                    {debugMode && job.status === 'queued' && onForceRun && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                onForceRun(job.id);
+                                                            }}
+                                                            className="px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 rounded transition-colors border border-amber-500/30"
+                                                            title="[DEBUG] Force-run this job immediately, bypassing orchestrator"
+                                                        >
+                                                            ⚡ Force
+                                                        </button>
+                                                    )}
                                                     {(job.status === 'failed' || job.status === 'cancelled') && (
                                                         <>
                                                             <button
@@ -392,6 +410,20 @@ export function JobQueueTable({
                                                                 🔄 Retry
                                                             </button>
                                                         </>
+                                                    )}
+                                                    {onDelete && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (window.confirm(`⚠️ PERMANENTLY DELETE "${job.name}"?\n\nThis will delete:\n- Job from database\n- All child jobs\n- All designs\n- Output directories\n\nThis is IRREVERSIBLE!`)) {
+                                                                    onDelete(job.id, job.name);
+                                                                }
+                                                            }}
+                                                            className="px-2 py-1 text-xs bg-red-900/40 text-red-300 hover:bg-red-700/50 hover:text-red-200 rounded transition-colors border border-red-700/50"
+                                                            title="DEBUG: Permanently delete job and all data"
+                                                        >
+                                                            🗑️ Delete
+                                                        </button>
                                                     )}
                                                 </div>
                                             </td>
@@ -462,28 +494,60 @@ function StageProgress({ job }: { job: Job }) {
 
     if (stages.length === 0) return null;
 
+    // Job status determines overall behavior
+    const jobIsCompleted = job.status === 'completed';
+    const jobIsFailed = job.status === 'failed';
+    const jobIsCancelled = job.status === 'cancelled';
     const completed = job.completed_stages || [];
     const current = job.current_stage;
 
     return (
         <div className="flex items-center space-x-1 mt-1">
             {stages.map((stage, idx) => {
-                const isCompleted = completed.includes(stage);
+                // Determine stage state based on job status
+                const wasCompleted = completed.includes(stage);
                 const isCurrent = stage === current;
-                const isPending = !isCompleted && !isCurrent;
+
+                // Stage coloring logic:
+                // - Completed job: all stages green
+                // - Failed job: completed stages green, current stage red, pending gray
+                // - Cancelled job: completed stages green, current stage orange, pending gray
+                // - Running job: completed stages green, current stage blue (pulsing), pending gray
+                let stageClass = '';
+                let connectorClass = 'bg-slate-700';
+
+                if (jobIsCompleted) {
+                    // All stages completed - show all green
+                    stageClass = 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400';
+                    connectorClass = 'bg-emerald-500/30';
+                } else if (wasCompleted) {
+                    // This stage finished successfully
+                    stageClass = 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400';
+                    connectorClass = 'bg-emerald-500/30';
+                } else if (isCurrent && jobIsFailed) {
+                    // This is where the job failed - show red
+                    stageClass = 'bg-red-500/20 border-red-500/30 text-red-400';
+                } else if (isCurrent && jobIsCancelled) {
+                    // This is where the job was cancelled - show orange
+                    stageClass = 'bg-orange-500/20 border-orange-500/30 text-orange-400';
+                } else if (isCurrent) {
+                    // Currently running - show blue with pulse
+                    stageClass = 'bg-blue-500/20 border-blue-500/30 text-blue-400 animate-pulse';
+                } else {
+                    // Pending/not reached - show gray
+                    stageClass = 'bg-slate-800/50 border-slate-700 text-slate-600';
+                }
 
                 return (
                     <div key={stage} className="flex items-center">
                         <div className={`
                             px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded-[3px] border
-                            ${isCompleted ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : ''}
-                            ${isCurrent ? 'bg-blue-500/20 border-blue-500/30 text-blue-400 animate-pulse' : ''}
-                            ${isPending ? 'bg-slate-800/50 border-slate-700 text-slate-600' : ''}
+                            ${stageClass}
                         `}>
                             {getStageDisplayName(stage)}
                         </div>
                         {idx < stages.length - 1 && (
-                            <div className={`w-1 h-px mx-0.5 ${isCompleted ? 'bg-emerald-500/30' : 'bg-slate-700'}`} />
+                            <div className={`w-1 h-px mx-0.5 ${connectorClass}`} />
                         )}
                     </div>
                 );

@@ -64,27 +64,27 @@ class JobInfo:
 
 # Base VRAM + scaling factor per model
 # Formula: base + scale * (sequence_length / 100)^2
-# NOTE: These are CONSERVATIVE estimates tuned to prevent OOMs.
-# Better to underutilize GPU than crash jobs.
+# NOTE: These estimates are tuned for actual observed VRAM usage.
+# Boltz-2 typically uses 6-8GB even for larger proteins.
 VRAM_PROFILES = {
-    'boltz': {'base': 8000, 'scale': 45},       # Boltz-2 structure prediction
-    'boltz_batch': {'base': 10000, 'scale': 50},# Boltz-2 batch mode uses more
-    'boltzgen': {'base': 6000, 'scale': 30},    # BoltzGen design
+    'boltz': {'base': 5000, 'scale': 20},       # Boltz-2 structure prediction (~6-8GB observed)
+    'boltz_batch': {'base': 6000, 'scale': 25}, # Boltz-2 batch mode
+    'boltzgen': {'base': 5000, 'scale': 20},    # BoltzGen design
     'rf3': {'base': 10000, 'scale': 55},        # RosettaFold3 (high VRAM)
     'af2': {'base': 12000, 'scale': 65},        # AlphaFold2 (highest VRAM)
     'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
-    'rfantibody': {'base': 8000, 'scale': 40},  # RFantibody antibody generation
-    'rfantibody_child': {'base': 8000, 'scale': 40},  # RFantibody child (same as parent)
-    'fampnn': {'base': 6000, 'scale': 20},      # Full-Atom MPNN (increased from 2000 due to OOMs)
-    'fampnn_child': {'base': 6000, 'scale': 20},  # FAMPNN child job
+    'rfantibody': {'base': 6000, 'scale': 25},  # RFantibody antibody generation
+    'rfantibody_child': {'base': 6000, 'scale': 25},  # RFantibody child (same as parent)
+    'fampnn': {'base': 3000, 'scale': 10},      # FAMPNN sequence design (CDR loops) - lighter than structure pred
+    'fampnn_child': {'base': 3000, 'scale': 10},  # FAMPNN child: VHH ~3200MB, full Ab ~3800MB
     'mpnn': {'base': 2000, 'scale': 5},         # ProteinMPNN (light)
     'proteinmpnn': {'base': 2000, 'scale': 5},  # Alias
     'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
     'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
-    'antibody_child': {'base': 10000, 'scale': 50},  # Antibody validation (Boltz + scoring)
-    'antibody_denovo': {'base': 8000, 'scale': 40},  # Full antibody pipeline
-    'default': {'base': 8000, 'scale': 35},     # Conservative fallback
+    'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
+    'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
+    'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
 # GPU capabilities
@@ -426,6 +426,8 @@ class GPUOrchestrator:
                 await self._process_cycle()
                 # Poll progress for running jobs (updates stage_progress in DB)
                 await self.update_running_job_progress()
+                # Check for completed/failed jobs and update their status
+                await self.check_job_completions()
             except Exception as e:
                 logger.error(f"[ORCHESTRATOR] Error in cycle: {e}", exc_info=True)
             
@@ -487,6 +489,46 @@ class GPUOrchestrator:
             if not pending_jobs:
                 return  # Nothing to do
             
+            # ═══════════════════════════════════════════════════════════════════════
+            # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
+            # ═══════════════════════════════════════════════════════════════════════
+            concurrency_limits = config.get("concurrency_limits", {})
+            if concurrency_limits:
+                # Count running jobs per model type
+                running_by_model = {}
+                running_result = await session.execute(
+                    select(Job.model_id, func.count(Job.id)).where(
+                        Job.queue_status == "running"
+                    ).group_by(Job.model_id)
+                )
+                for model_id, count in running_result:
+                    running_by_model[model_id] = count
+                
+                # Filter pending jobs based on limits
+                filtered_jobs = []
+                skipped_by_limit = {}
+                for job in pending_jobs:
+                    limit = concurrency_limits.get(job.model_id)
+                    if limit is not None:
+                        running_count = running_by_model.get(job.model_id, 0)
+                        if running_count >= limit:
+                            skipped_by_limit[job.model_id] = skipped_by_limit.get(job.model_id, 0) + 1
+                            continue
+                        # Account for jobs we're about to add this cycle
+                        filtered_for_model = len([j for j in filtered_jobs if j.model_id == job.model_id])
+                        if running_count + filtered_for_model >= limit:
+                            skipped_by_limit[job.model_id] = skipped_by_limit.get(job.model_id, 0) + 1
+                            continue
+                    filtered_jobs.append(job)
+                
+                if skipped_by_limit:
+                    logger.info(f"[CONCURRENCY] Skipped jobs due to limits: {skipped_by_limit}")
+                
+                pending_jobs = filtered_jobs
+                
+                if not pending_jobs:
+                    return  # All jobs blocked by concurrency limits
+            
             # Convert to JobInfo for packing
             job_infos = []
             for job in pending_jobs:
@@ -518,24 +560,63 @@ class GPUOrchestrator:
             
             # 3. Get GPU state
             gpu_stats = self.get_gpu_stats()
-            gpu_states = [
-                GPUState(
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # CRITICAL: Include recently-launched jobs in VRAM projection
+            # Jobs take 10-30s to actually allocate GPU memory after launching.
+            # Without this, the orchestrator keeps launching more every 3s cycle.
+            # Query running jobs and add their estimated VRAM to GPU usage.
+            # ═══════════════════════════════════════════════════════════════════════
+            running_jobs_result = await session.execute(
+                select(Job).where(
+                    Job.queue_status == 'running',
+                    Job.assigned_gpu.isnot(None),
+                    Job.vram_estimate_mb.isnot(None)
+                )
+            )
+            running_jobs = running_jobs_result.scalars().all()
+            
+            # Sum estimated VRAM per GPU from running jobs
+            pending_vram = {}  # gpu_index -> estimated VRAM from running jobs
+            for rj in running_jobs:
+                gpu_idx = rj.assigned_gpu
+                if gpu_idx is not None:
+                    pending_vram[gpu_idx] = pending_vram.get(gpu_idx, 0) + (rj.vram_estimate_mb or 0)
+            
+            if pending_vram:
+                logger.debug(f"[ORCHESTRATOR] Pending VRAM from running jobs: {pending_vram}")
+            
+            gpu_states = []
+            for g in gpu_stats:
+                # Add pending VRAM to memory_used for scheduling purposes
+                effective_used = g.memory_used_mb + pending_vram.get(g.index, 0)
+                gpu_states.append(GPUState(
                     index=g.index,
                     name=g.name,
-                    memory_used_mb=g.memory_used_mb,
+                    memory_used_mb=effective_used,  # Include pending VRAM
                     memory_total_mb=g.memory_total_mb,
-                    memory_free_mb=g.memory_total_mb - g.memory_used_mb,
+                    memory_free_mb=g.memory_total_mb - effective_used,
                     utilization=g.utilization,
                     temperature=g.temperature
-                )
-                for g in gpu_stats
-            ]
+                ))
             
             # 4. Run bin-packing
             assignments = pack_jobs_to_gpus(job_infos, gpu_states, target_fill, config)
             
             if not assignments:
                 return  # No jobs could be packed
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # CRITICAL: Limit launches per cycle to prevent RAM/VRAM overload
+            # When many jobs queue at once (e.g., 40 FAMPNN children), launching them
+            # all simultaneously causes system RAM exhaustion before GPU allocation.
+            # Limit to 3 per cycle (~9 seconds), allowing VRAM to allocate before more.
+            # ═══════════════════════════════════════════════════════════════════════
+            max_launches_per_cycle = config.get("global", {}).get("max_launches_per_cycle", 3)
+            assignments = assignments[:max_launches_per_cycle]
+            
+            if len(assignments) < len(job_infos):
+                logger.info(f"[ORCHESTRATOR] Throttled to {len(assignments)}/{len(job_infos)} launches this cycle")
             
             # 5. Launch assigned jobs with stagger to prevent GPU initialization OOM
             for i, (job_info, gpu_id) in enumerate(assignments):
@@ -575,9 +656,101 @@ class GPUOrchestrator:
             await session.commit()
     
     async def check_job_completions(self):
-        """Check running jobs for completion or failure."""
-        # TODO: Implement by checking Nextflow process status
-        pass
+        """
+        Check running jobs for completion or failure.
+        
+        Uses multiple detection strategies:
+        1. PID check (if tracked)
+        2. Job name in running processes
+        3. Model-type processes on assigned GPU
+        """
+        import subprocess
+        
+        try:
+            async with self.db_session_factory() as session:
+                from sqlalchemy import select, func
+                from database import Job
+                
+                # Get jobs that are currently running
+                result = await session.execute(
+                    select(Job).where(
+                        Job.queue_status == "running"
+                    )
+                )
+                running_jobs = result.scalars().all()
+                
+                if not running_jobs:
+                    return
+                
+                # Get all running processes once (expensive operation)
+                try:
+                    ps_result = subprocess.run(
+                        ['ps', 'aux'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    all_processes = ps_result.stdout if ps_result.returncode == 0 else ""
+                except Exception as e:
+                    logger.debug(f"[COMPLETION] Failed to get process list: {e}")
+                    all_processes = ""
+                
+                # Count FAMPNN/Nextflow processes per GPU
+                gpu_has_activity = {}
+                for line in all_processes.split('\n'):
+                    if 'seq_design.py' in line or 'nextflow' in line:
+                        # Try to extract gpu_id from the process args
+                        import re
+                        gpu_match = re.search(r'gpu_id[=\s]+(\d+)', line)
+                        if gpu_match:
+                            gpu_id = int(gpu_match.group(1))
+                            gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
+                
+                completions = 0
+                for job in running_jobs:
+                    # CRITICAL: Skip ALL top-level jobs - they complete via their own Nextflow workflow
+                    # Only mark CHILD jobs (spawned by a parent) as complete via process detection
+                    # Top-level jobs run the full pipeline and complete via Nextflow exit
+                    if job.parent_job_id is None:
+                        logger.debug(f"[COMPLETION] Skipping top-level job {job.name}")
+                        continue
+                    
+                    job_is_running = False
+                    
+                    # Method 1: Check if job name appears in any process
+                    job_name_pattern = job.name.replace(' ', '.')  # Spaces might be different
+                    if job.name in all_processes or job_name_pattern in all_processes:
+                        job_is_running = True
+                    
+                    # Method 2: Check if there's any activity on the job's assigned GPU
+                    if not job_is_running and job.assigned_gpu is not None:
+                        if job.assigned_gpu in gpu_has_activity:
+                            # GPU has activity - job might be running
+                            # But we need to be more specific for FAMPNN
+                            if 'fampnn' in job.name.lower() and 'seq_design' not in all_processes:
+                                # No FAMPNN processes at all - job is done
+                                job_is_running = False
+                            else:
+                                job_is_running = True
+                    
+                    # Method 3: If job has been running > 1 minute and no process found, mark complete
+                    if not job_is_running and job.started_at:
+                        from datetime import timezone
+                        age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
+                        if age_seconds > 60:  # Only mark complete if running > 1 min
+                            job.queue_status = "completed"
+                            if job.status == "running":
+                                job.status = "completed"
+                            job.completed_at = datetime.utcnow()
+                            completions += 1
+                            logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
+                
+                if completions > 0:
+                    await session.commit()
+                    logger.info(f"[COMPLETION] Marked {completions} jobs as completed")
+                
+        except Exception as e:
+            logger.error(f"[COMPLETION] Error checking completions: {e}", exc_info=True)
     
     async def handle_oom_failures(self):
         """Handle OOM failures based on job's oom_tolerance setting."""

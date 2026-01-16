@@ -2,7 +2,7 @@
 Jobs API router - Create, list, cancel pipeline jobs.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional, List
@@ -46,6 +46,7 @@ async def list_jobs(
     q: Optional[str] = None,
     limit: int = 500,
     offset: int = 0,
+    include_children: bool = False,  # New param: show child jobs if True
     session: AsyncSession = Depends(get_session)
 ):
     """List all jobs with optional status filter and search query."""
@@ -58,6 +59,10 @@ async def list_jobs(
         .order_by(Job.created_at.desc())
     )
     
+    # Filter out child jobs by default (show only parent/top-level jobs)
+    if not include_children:
+        query = query.where(Job.parent_job_id == None)
+    
     if status:
         query = query.where(Job.status == status.value)
     
@@ -68,13 +73,16 @@ async def list_jobs(
     result = await session.execute(query)
     rows = result.all()
     
-    # Get total count (for pagination)
+    # Get total count (for pagination) - also exclude children
     count_query = select(func.count(Job.id))
+    if not include_children:
+        count_query = count_query.where(Job.parent_job_id == None)
     if status:
         count_query = count_query.where(Job.status == status.value)
     if q:
         count_query = count_query.where(Job.name.ilike(f"%{q}%"))
     total = (await session.execute(count_query)).scalar()
+
     
     job_responses = []
     for job, design_count in rows:
@@ -153,17 +161,21 @@ async def create_job(
     os.makedirs(base_output_dir, exist_ok=True)
     
     # Extract sequence length for VRAM estimation (same for all jobs in batch)
-    sequence_length = None
-    if 'sequence_input' in job_data.params and job_data.params['sequence_input']:
-        sequence_length = len(job_data.params['sequence_input'])
-    elif 'complex_components' in job_data.params:
-        # For complexes, use the longest chain
-        max_len = 0
-        for comp in job_data.params['complex_components']:
-            if comp.get('type') == 'protein' and comp.get('sequence'):
-                max_len = max(max_len, len(comp['sequence']))
-        if max_len > 0:
-            sequence_length = max_len
+    # PRIORITY: 1) job_data.sequence_length (explicit), 2) extract from params, 3) fallback
+    sequence_length = job_data.sequence_length  # May be explicitly set by spawn scripts
+    
+    if sequence_length is None:
+        # Try to extract from params
+        if 'sequence_input' in job_data.params and job_data.params['sequence_input']:
+            sequence_length = len(job_data.params['sequence_input'])
+        elif 'complex_components' in job_data.params:
+            # For complexes, use the longest chain
+            max_len = 0
+            for comp in job_data.params['complex_components']:
+                if comp.get('type') == 'protein' and comp.get('sequence'):
+                    max_len = max(max_len, len(comp['sequence']))
+            if max_len > 0:
+                sequence_length = max_len
     
     if sequence_length is None:
         sequence_length = 300  # Default fallback
@@ -401,6 +413,95 @@ async def cancel_job(
     return {"message": "Job cancelled", "job_id": job_id}
 
 
+@router.delete("/{job_id}/permanent")
+async def delete_job_permanently(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Permanently delete a job and ALL its data.
+    
+    DEBUG FEATURE - Removes:
+    - Job from database
+    - All child jobs from database
+    - All designs from database  
+    - Output directory (pdj_results/...)
+    - Work directory (work/...)
+    
+    This is irreversible!
+    """
+    import shutil
+    
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Cancel if running
+    if job.status == JobStatus.RUNNING.value and job.nextflow_run_id:
+        try:
+            await cancel_nextflow_job(job.nextflow_run_id)
+        except:
+            pass  # Continue with deletion even if cancel fails
+    
+    job_name = job.name
+    output_dir = job.output_dir
+    
+    # Delete designs associated with this job
+    from database import Design
+    await session.execute(
+        Design.__table__.delete().where(Design.job_id == job_id)
+    )
+    
+    # Delete child jobs first
+    child_result = await session.execute(
+        select(Job).where(Job.parent_job_id == job_id)
+    )
+    child_jobs = child_result.scalars().all()
+    
+    child_output_dirs = []
+    for child in child_jobs:
+        if child.output_dir:
+            child_output_dirs.append(child.output_dir)
+        # Delete child's designs
+        await session.execute(
+            Design.__table__.delete().where(Design.job_id == child.id)
+        )
+        await session.delete(child)
+    
+    # Delete the job itself
+    await session.delete(job)
+    await session.commit()
+    
+    # Delete output directories
+    deleted_paths = []
+    if output_dir:
+        output_path = PROJECT_ROOT / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
+        if output_path.exists():
+            try:
+                shutil.rmtree(output_path)
+                deleted_paths.append(str(output_path))
+            except Exception as e:
+                print(f"Warning: Failed to delete output dir {output_path}: {e}")
+    
+    for child_dir in child_output_dirs:
+        child_path = PROJECT_ROOT / child_dir if not Path(child_dir).is_absolute() else Path(child_dir)
+        if child_path.exists():
+            try:
+                shutil.rmtree(child_path)
+                deleted_paths.append(str(child_path))
+            except Exception as e:
+                print(f"Warning: Failed to delete child output dir {child_path}: {e}")
+    
+    return {
+        "message": f"Job '{job_name}' permanently deleted",
+        "job_id": job_id,
+        "children_deleted": len(child_jobs),
+        "directories_deleted": deleted_paths
+    }
+
+
 @router.post("/{job_id}/resubmit")
 async def resubmit_job(
     job_id: str,
@@ -541,13 +642,18 @@ async def reingest_job_results(
         raise HTTPException(status_code=500, detail=f"Re-ingestion failed: {str(e)}")
 
 
-@router.post("/{job_id}/annotate-cdr")
+@router.post("/{job_id}/annotate-cdrs")
 async def annotate_cdr_regions(
     job_id: str,
+    include_children: bool = Query(True, description="Include designs from child jobs (for parent exploration jobs)"),
     session: AsyncSession = Depends(get_session)
 ):
     """
     Annotate CDR regions for all designs in a job using ANARCII.
+    
+    If include_children is True (default), also annotates designs from child jobs
+    that have this job as their parent. This is needed for exploration mode where
+    designs are spread across spawned child validation jobs.
     
     This runs in the background (~1-2 minutes for large jobs).
     Returns immediately with status "started".
@@ -562,10 +668,22 @@ async def annotate_cdr_regions(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Get all designs for this job
-    designs_result = await session.execute(
-        select(Design).where(Design.job_id == job_id)
-    )
+    # Get designs - include children if requested
+    if include_children:
+        # Get all child job IDs for this parent
+        child_query = select(Job.id).where(Job.parent_job_id == job_id)
+        child_result = await session.execute(child_query)
+        child_job_ids = [row[0] for row in child_result.all()]
+        
+        # Include both parent and children
+        all_job_ids = [job_id] + child_job_ids
+        designs_result = await session.execute(
+            select(Design).where(Design.job_id.in_(all_job_ids))
+        )
+    else:
+        designs_result = await session.execute(
+            select(Design).where(Design.job_id == job_id)
+        )
     designs = designs_result.scalars().all()
     
     if not designs:
@@ -575,8 +693,8 @@ async def annotate_cdr_regions(
     designs_to_annotate = list(designs)
     
     # Collect PDB paths and design IDs for background processing
-    pdb_paths = [d.pdb_path for d in designs_to_annotate]
-    design_ids = [d.id for d in designs_to_annotate]
+    pdb_paths = [d.pdb_path for d in designs_to_annotate if d.pdb_path]
+    design_ids = [d.id for d in designs_to_annotate if d.pdb_path]
     total_count = len(designs)
     
     logger.info(f"[CDR ANNOTATE] Starting background annotation on {len(pdb_paths)} designs for job {job_id}")
@@ -688,13 +806,24 @@ async def report_stage_complete(
 async def get_children_status(
     parent_id: str,
     stage: Optional[str] = None,
+    batch_name: Optional[str] = None,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Get aggregate status of all children spawned by a parent job.
     
     Used by wait_for_children.py to poll until all children complete.
-    Optionally filter by child_stage (e.g., 'rfantibody', 'fampnn', 'boltz2').
+    
+    Args:
+        parent_id: Parent job ID to search for children
+        stage: Optional filter by child_stage (e.g., 'rfantibody', 'fampnn', 'boltz2')
+        batch_name: Optional batch_name to search (for resume scenarios where new parent
+                    ID differs from original but batch_name is preserved)
+    
+    Resume Support:
+        When a job is resumed, it gets a new parent_id but keeps the same batch_name.
+        By passing batch_name, we can find children from the original run even when
+        the parent_id has changed.
     
     Returns:
         - total: Total child count
@@ -703,8 +832,20 @@ async def get_children_status(
         - child_output_dirs: List of output directories for aggregation
         - success_rate: Percentage of children that completed successfully
     """
-    # Build query for children of this parent
-    query = select(Job).where(Job.parent_job_id == parent_id)
+    from sqlalchemy import or_
+    
+    # Build query for children - match by parent_id OR batch_name
+    if batch_name:
+        # Resume mode: search by batch_name to find children from original run
+        query = select(Job).where(
+            or_(
+                Job.parent_job_id == parent_id,
+                Job.batch_name == batch_name
+            )
+        )
+    else:
+        # Normal mode: just search by parent_id
+        query = select(Job).where(Job.parent_job_id == parent_id)
     
     if stage:
         query = query.where(Job.child_stage == stage)
