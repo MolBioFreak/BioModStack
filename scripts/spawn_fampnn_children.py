@@ -42,6 +42,46 @@ def spawn_fampnn_jobs(
         print(f"[SPAWN-FAMPNN] No PDBs found in {pdb_dir}", file=sys.stderr)
         return {"status": "error", "message": "No PDBs found"}
     
+    # Check for already-completed FAMPNN jobs for this parent
+    # This prevents re-spawning on resume
+    already_done_pdbs = set()
+    try:
+        resp = requests.get(
+            f"{api_url}/api/jobs",
+            params={"parent_job_id": parent_job_id},
+            timeout=10
+        )
+        if resp.ok:
+            existing_jobs = resp.json()
+            for job in existing_jobs:
+                # Check if this is a completed FAMPNN child job
+                if (job.get("status") == "completed" and 
+                    "fampnn" in job.get("name", "").lower() and
+                    job.get("params", {}).get("pdb_paths")):
+                    # Get PDB basenames from this completed job
+                    pdb_paths_str = job["params"].get("pdb_paths", "")
+                    for pdb_path_str in pdb_paths_str.split(","):
+                        if pdb_path_str:
+                            already_done_pdbs.add(Path(pdb_path_str).name)
+            if already_done_pdbs:
+                print(f"[SPAWN-FAMPNN] Found {len(already_done_pdbs)} PDBs already processed")
+    except Exception as e:
+        print(f"[SPAWN-FAMPNN] Warning: Could not check existing jobs: {e}", file=sys.stderr)
+    
+    # Filter out already-processed PDBs
+    if already_done_pdbs:
+        original_count = len(pdbs)
+        pdbs = [p for p in pdbs if p.name not in already_done_pdbs]
+        skipped = original_count - len(pdbs)
+        if skipped > 0:
+            print(f"[SPAWN-FAMPNN] Skipping {skipped} already-processed PDBs")
+    
+    if not pdbs:
+        print(f"[SPAWN-FAMPNN] All PDBs already processed, nothing to spawn")
+        return {"status": "complete", "spawned_jobs": 0, "failed_spawns": 0, 
+                "total_pdbs": 0, "pdbs_per_job": pdbs_per_job, "child_jobs": [],
+                "skipped_pdbs": len(already_done_pdbs)}
+    
     total_pdbs = len(pdbs)
     num_jobs = (total_pdbs + pdbs_per_job - 1) // pdbs_per_job
     
@@ -67,14 +107,17 @@ def spawn_fampnn_jobs(
         # Convert to absolute paths
         pdb_paths = [str(p.absolute()) for p in job_pdbs]
         
-        # Estimate sequence length for VRAM calculation (average ~250 AA)
-        estimated_seq_len = 250 * len(job_pdbs)
+        # VRAM estimate based on CDR loops being designed (NOT entire chain)
+        # VHH: 3 CDR loops ~40 AA total, Full H+L: 6 CDR loops ~80 AA total
+        is_vhh = extra_params.get('vhh_mode', False) or extra_params.get('antibody_format') == 'VHH'
+        estimated_seq_len = 40 if is_vhh else 80
         
         job_data = {
             "name": f"{batch_name}_fampnn_{i}",
             "model_id": "fampnn_child",
             "mode": "sequence_design",
             "params": {
+                "rfd_mode": "fampnn_child",  # Critical: routes to fampnn_child block in main.nf
                 "pdb_paths": ",".join(pdb_paths),
                 "seqs_per_design": seqs_per_design,
                 "pdb_count": len(job_pdbs),

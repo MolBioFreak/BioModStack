@@ -17,8 +17,9 @@ def wait_for_children(
     parent_job_id: str,
     stage: str,
     poll_interval: int = 10,
-    timeout: int = 7200,
-    api_url: str = "http://localhost:8000"
+    timeout: int = 0,  # 0 = no timeout (disabled by default)
+    api_url: str = "http://localhost:8000",
+    batch_name: str = None  # For resume: find children by batch_name
 ):
     """
     Block until all children for this parent+stage complete.
@@ -27,7 +28,7 @@ def wait_for_children(
         parent_job_id: Parent job's ID
         stage: Stage filter (rfantibody, fampnn, boltz2)
         poll_interval: Seconds between polls
-        timeout: Maximum wait time in seconds
+        timeout: Maximum wait time in seconds (0 = no timeout)
         api_url: API base URL
         
     Returns:
@@ -36,13 +37,16 @@ def wait_for_children(
     start_time = time.time()
     endpoint = f"{api_url}/api/jobs/{parent_job_id}/children/status"
     params = {"stage": stage} if stage else {}
+    if batch_name:
+        params["batch_name"] = batch_name
     
     print(f"[WAIT] Waiting for children of {parent_job_id} (stage={stage})...")
     
     while True:
         elapsed = time.time() - start_time
         
-        if elapsed > timeout:
+        # Only check timeout if explicitly set (timeout > 0)
+        if timeout > 0 and elapsed > timeout:
             print(f"[WAIT] TIMEOUT after {timeout}s", file=sys.stderr)
             return {
                 "status": "timeout",
@@ -105,8 +109,9 @@ def main():
     parser.add_argument("--parent_job_id", required=True, help="Parent job ID")
     parser.add_argument("--stage", default=None, help="Stage filter (rfantibody, fampnn, boltz2)")
     parser.add_argument("--poll_interval", type=int, default=10, help="Seconds between polls")
-    parser.add_argument("--timeout", type=int, default=7200, help="Max wait time in seconds")
+    parser.add_argument("--timeout", type=int, default=0, help="Max wait time in seconds (0 = no timeout)")
     parser.add_argument("--api_url", default="http://localhost:8000", help="API URL")
+    parser.add_argument("--batch_name", default=None, help="Batch name for resume (find children by batch_name)")
     parser.add_argument("--output", default="child_outputs.json", help="Output JSON file")
     
     args = parser.parse_args()
@@ -116,7 +121,8 @@ def main():
         stage=args.stage,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
-        api_url=args.api_url
+        api_url=args.api_url,
+        batch_name=args.batch_name
     )
     
     # Write result to file for Nextflow to consume

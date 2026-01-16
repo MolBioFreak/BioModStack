@@ -89,6 +89,8 @@ process RunBoltz {
             --sampling_steps ${params.boltz_sampling_steps ?: 50} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \
             ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \
+            ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \
+            ${params.boltz_affinity_mw_correction ? '--affinity_mw_correction' : ''} \
             --cache /boltzcache \
             ${params.boltz_extra_config ? params.boltz_extra_config : ''} \
             2>&1 | tee boltz_${batch_id}.log
@@ -106,6 +108,8 @@ process RunBoltz {
             if [ -f "\${dir}/confidence_\${inputname}_model_0.json" ]; then
                 mv "\${dir}/confidence_\${inputname}_model_0.json" "predictions/\${inputname}_boltzpred.json"
             fi
+            # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
+            cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
         done
 
         """

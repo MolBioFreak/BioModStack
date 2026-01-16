@@ -2,16 +2,23 @@ process BatchBoltzValidation {
     label 'Boltz'
     label 'gpu'
     container 'apptainer/boltz.sif'
-    
+
+    // CRITICAL: Publish validated structures and confidence scores to output directory
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.json"
+    publishDir "${params.out_dir}/run/boltz", mode: 'copy', pattern: "*.log"
+
     input:
-    path pdbs   // List of PDB files
-    path msa    // Shared MSA file
-    
+    path pdbs
+    // List of PDB files
+    path msa
+
     output:
     path "predictions/*.pdb", emit: pdbs
     path "predictions/*.json", emit: scores
     path "boltz_batch.log"
-    
+
     script:
     """
     mkdir -p yamls predictions
@@ -46,13 +53,13 @@ process BatchBoltzValidation {
 process BatchImmunogenicity {
     label 'Antiberty'
     container 'apptainer/antibody_tools.sif'
-    
+
     input:
     path pdbs
-    
+
     output:
     path "immunogenicity_scores.csv", emit: scores
-    
+
     script:
     """
     # Run AntiBERTy on all PDBs at once
@@ -65,13 +72,13 @@ process BatchImmunogenicity {
 process BatchStability {
     label 'ThermoMPNN'
     container 'apptainer/stability_tools.sif'
-    
+
     input:
     path pdbs
-    
+
     output:
     path "stability_scores.csv", emit: scores
-    
+
     script:
     """
     # ThermoMPNN custom_inference.py expects ../local.yaml relative to the analysis/ folder
@@ -93,4 +100,3 @@ process BatchStability {
     done
     """
 }
-

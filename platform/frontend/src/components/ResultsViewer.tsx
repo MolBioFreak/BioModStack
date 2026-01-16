@@ -5,13 +5,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
 import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
-import FloatingViewer from './FloatingViewer';
+// FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
-import { ReferenceSelector } from './ReferenceSelector';
-import { MetricOverlay } from './MetricOverlay';
+// ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
+import StructureViewerPane from './StructureViewerPane';
 
 // Tab definitions
 const TABS = [
@@ -44,6 +44,21 @@ const getMetricColor = (metric: string, value: number | null): string => {
     return 'text-slate-300';
 };
 
+// Binding quality tier based on iPTM (interface predicted TM-score)
+// A: Excellent binding confidence, B: Good, C: Moderate, D: Low/uncertain
+const getBindingTier = (iptm: number | null | undefined, epitopeContacts: number | null | undefined): { tier: string; color: string; bgColor: string; label: string } => {
+    if (iptm == null) return { tier: '—', color: 'text-slate-500', bgColor: 'bg-slate-700/50', label: 'No data' };
+
+    // Bonus for epitope contacts (validates iPTM with physical proximity)
+    const contactBonus = (epitopeContacts ?? 0) >= 5 ? 0.05 : 0;
+    const adjustedIptm = iptm + contactBonus;
+
+    if (adjustedIptm >= 0.75) return { tier: 'A', color: 'text-emerald-300', bgColor: 'bg-emerald-500/30 border-emerald-500/50', label: 'Excellent' };
+    if (adjustedIptm >= 0.55) return { tier: 'B', color: 'text-blue-300', bgColor: 'bg-blue-500/30 border-blue-500/50', label: 'Good' };
+    if (adjustedIptm >= 0.40) return { tier: 'C', color: 'text-amber-300', bgColor: 'bg-amber-500/30 border-amber-500/50', label: 'Moderate' };
+    return { tier: 'D', color: 'text-red-300', bgColor: 'bg-red-500/30 border-red-500/50', label: 'Low' };
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -57,13 +72,14 @@ export function ResultsViewer() {
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
     const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr'>('plddt');  // Structure coloring mode
-    const [showReferencePanel, setShowReferencePanel] = useState(false);
-    const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
+    // Compare feature disabled for now:
+    // const [showReferencePanel, setShowReferencePanel] = useState(false);
+    // const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
     const [selectedBackboneId, setSelectedBackboneId] = useState<number | null>(null);
     const [plddtMin, setPlddtMin] = useState<number>(0);
     const [iptmMin, setIptmMin] = useState<number>(0);
     const [contactsMin, setContactsMin] = useState<number>(0);
-    const MAX_COMPARE_VIEWERS = 3;
+    // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
     const [pageSize, setPageSize] = useState<number>(100);
@@ -245,6 +261,17 @@ export function ResultsViewer() {
         const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
 
+        // Binding tier distribution
+        const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
+        designs.forEach(d => {
+            const tier = getBindingTier(d.iptm, d.epitope_contact_count);
+            if (tier.tier === 'A') tierCounts.A++;
+            else if (tier.tier === 'B') tierCounts.B++;
+            else if (tier.tier === 'C') tierCounts.C++;
+            else if (tier.tier === 'D') tierCounts.D++;
+            else tierCounts.none++;
+        });
+
         return {
             total: totalDesigns, // Use API total, not current page length
             pageSize: designs.length, // Current page count
@@ -256,6 +283,10 @@ export function ResultsViewer() {
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
+            tierA: tierCounts.A,
+            tierB: tierCounts.B,
+            tierC: tierCounts.C,
+            tierD: tierCounts.D,
         };
     }, [designs, totalDesigns]);
 
@@ -297,50 +328,55 @@ export function ResultsViewer() {
                                 <option value="">Select a job...</option>
                                 {(() => {
                                     const sortedJobs = [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-                                    const batchedJobs = new Map<string, typeof sortedJobs>();
-                                    const standaloneJobs: typeof sortedJobs = [];
 
-                                    // Separate batched and standalone jobs
+                                    // Build parent-children map and calculate aggregated design counts
+                                    const parentChildMap = new Map<string, { parent: Job; children: Job[]; totalDesigns: number }>();
+                                    const childJobIds = new Set<string>();
+
+                                    // First pass: identify all child jobs
                                     sortedJobs.forEach(job => {
-                                        if (job.batch_id && job.batch_name) {
-                                            const existing = batchedJobs.get(job.batch_id) || [];
-                                            existing.push(job);
-                                            batchedJobs.set(job.batch_id, existing);
-                                        } else {
-                                            standaloneJobs.push(job);
+                                        if (job.parent_job_id) {
+                                            childJobIds.add(job.id);
+                                            const existing = parentChildMap.get(job.parent_job_id);
+                                            if (existing) {
+                                                existing.children.push(job);
+                                                existing.totalDesigns += job.design_count || 0;
+                                            } else {
+                                                // Find the parent job
+                                                const parent = sortedJobs.find(p => p.id === job.parent_job_id);
+                                                if (parent) {
+                                                    parentChildMap.set(job.parent_job_id, {
+                                                        parent,
+                                                        children: [job],
+                                                        totalDesigns: (parent.design_count || 0) + (job.design_count || 0)
+                                                    });
+                                                }
+                                            }
                                         }
                                     });
 
                                     const elements: React.ReactNode[] = [];
 
-                                    // Render batch groups first
-                                    batchedJobs.forEach((batchJobs, batchId) => {
-                                        const batchName = batchJobs[0].batch_name;
-                                        elements.push(
-                                            <optgroup key={batchId} label={`📦 ${batchName} (${batchJobs.length} sims)`}>
-                                                {batchJobs.map(job => {
-                                                    const date = new Date(job.created_at);
-                                                    const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-                                                    const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
-                                                    return (
-                                                        <option key={job.id} value={job.id}>
-                                                            {statusIcon} {job.name} │ {timeStr} │ {job.design_count} designs
-                                                        </option>
-                                                    );
-                                                })}
-                                            </optgroup>
-                                        );
-                                    });
+                                    // Render jobs (skip child jobs entirely)
+                                    sortedJobs.forEach(job => {
+                                        // Skip child jobs - they're aggregated under parent
+                                        if (childJobIds.has(job.id)) {
+                                            return;
+                                        }
 
-                                    // Render standalone jobs
-                                    standaloneJobs.forEach(job => {
                                         const date = new Date(job.created_at);
                                         const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                                         const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
                                         const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
+
+                                        // Check if this is a parent with children
+                                        const parentData = parentChildMap.get(job.id);
+                                        const displayDesigns = parentData ? parentData.totalDesigns : (job.design_count || 0);
+                                        const childIndicator = parentData ? ` (${parentData.children.length} batches)` : '';
+
                                         elements.push(
                                             <option key={job.id} value={job.id}>
-                                                {statusIcon} {job.name} │ {dateStr} {timeStr} │ {job.model_id || job.mode} │ {job.design_count} designs
+                                                {statusIcon} {job.name} │ {dateStr} {timeStr} │ {job.model_id || job.mode}{childIndicator} │ {displayDesigns} designs
                                             </option>
                                         );
                                     });
@@ -471,9 +507,42 @@ export function ResultsViewer() {
                                                 <StatCard label="Avg Binder %" value={stats.avgBinderProb ? (stats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
                                                 <StatCard label="High Confidence" value={stats.highConfidence} subtitle="pLDDT ≥ 80" color="text-emerald-400" />
-                                                <StatCard label="Low Error" value={stats.lowError} subtitle="PAE ≤ 5" color="text-emerald-400" />
                                             </div>
 
+                                            {/* Binding Tier Distribution */}
+                                            <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-xl p-5 border border-slate-700/50">
+                                                <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                                                    <span>🔗</span>
+                                                    Binding Quality Distribution
+                                                    <span className="text-xs text-slate-500 font-normal">(based on iPTM)</span>
+                                                </h3>
+                                                <div className="grid grid-cols-4 gap-3">
+                                                    <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
+                                                        <div className="text-2xl font-bold text-emerald-300">{stats.tierA}</div>
+                                                        <div className="text-xs text-emerald-400 font-medium">Tier A</div>
+                                                        <div className="text-[10px] text-slate-500">Excellent</div>
+                                                    </div>
+                                                    <div className="bg-blue-500/20 rounded-lg p-3 text-center border border-blue-500/30">
+                                                        <div className="text-2xl font-bold text-blue-300">{stats.tierB}</div>
+                                                        <div className="text-xs text-blue-400 font-medium">Tier B</div>
+                                                        <div className="text-[10px] text-slate-500">Good</div>
+                                                    </div>
+                                                    <div className="bg-amber-500/20 rounded-lg p-3 text-center border border-amber-500/30">
+                                                        <div className="text-2xl font-bold text-amber-300">{stats.tierC}</div>
+                                                        <div className="text-xs text-amber-400 font-medium">Tier C</div>
+                                                        <div className="text-[10px] text-slate-500">Moderate</div>
+                                                    </div>
+                                                    <div className="bg-red-500/20 rounded-lg p-3 text-center border border-red-500/30">
+                                                        <div className="text-2xl font-bold text-red-300">{stats.tierD}</div>
+                                                        <div className="text-xs text-red-400 font-medium">Tier D</div>
+                                                        <div className="text-[10px] text-slate-500">Low</div>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-3 text-xs text-slate-500 flex items-center gap-3">
+                                                    <span>Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D &lt; 0.40</span>
+                                                    <span className="text-amber-500/80">+0.05 bonus for ≥5 epitope contacts</span>
+                                                </div>
+                                            </div>
                                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                                 {/* Top Designs */}
                                                 <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
@@ -502,232 +571,67 @@ export function ResultsViewer() {
                                                     </dl>
                                                 </div>
                                             </div>
+
+                                            {/* CDR Annotation Button - Only for antibody/nanobody workflows */}
+                                            {(activeJob?.model_id === 'rfantibody' ||
+                                                activeJob?.model_id === 'antibody_child' ||
+                                                activeJob?.name?.toLowerCase().includes('antibody') ||
+                                                activeJob?.mode?.toLowerCase().includes('antibody') ||
+                                                activeJob?.mode?.toLowerCase().includes('nanobody') ||
+                                                activeJob?.mode?.toLowerCase().includes('vhh') ||
+                                                (activeJob?.model_id === 'boltzgen' && (
+                                                    activeJob?.params?.nanobody_mode === true ||
+                                                    activeJob?.mode?.toLowerCase().includes('nanobody') ||
+                                                    activeJob?.mode?.toLowerCase().includes('vhh')
+                                                ))) && (
+                                                    <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                                                        <h3 className="text-sm font-semibold text-slate-300 mb-3">Antibody CDR Annotation</h3>
+                                                        <p className="text-xs text-slate-400 mb-4">
+                                                            Run ANARCII to extract CDR loop sequences (H1, H2, H3, L1, L2, L3) from all designs.
+                                                            This populates the CDR columns in the Data Table and enables CDR-based analytics.
+                                                        </p>
+                                                        <button
+                                                            onClick={async () => {
+                                                                const jobIdToUse = activeJob?.id || selectedJobId;
+                                                                if (!jobIdToUse) return;
+                                                                try {
+                                                                    const btn = document.getElementById('cdr-annotate-btn');
+                                                                    if (btn) {
+                                                                        btn.textContent = '⏳ Annotating...';
+                                                                        btn.setAttribute('disabled', 'true');
+                                                                    }
+                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
+                                                                    const data = await res.json();
+                                                                    alert(data.message || 'CDR annotation started - refresh in 1-2 minutes');
+                                                                } catch (err) {
+                                                                    alert('CDR annotation failed: ' + err);
+                                                                }
+                                                            }}
+                                                            id="cdr-annotate-btn"
+                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                                        >
+                                                            🧬 Annotate CDRs
+                                                        </button>
+                                                    </div>
+                                                )}
                                         </div>
                                     )}
 
-                                    {/* STRUCTURE TAB - TRUE FULLSCREEN (breaks out of container) */}
+                                    {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
                                     {activeTab === 'structure' && (
-                                        <div className="fixed inset-0 top-[64px] bg-slate-950 z-10">
-                                            {/* Compact Toolbar - 40% transparent */}
-                                            <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-3 px-3 py-2 bg-slate-900/40 backdrop-blur-sm border-b border-slate-700/30">
-                                                {/* Back Button - Exit Theater Mode */}
-                                                <button
-                                                    onClick={() => setActiveTab('overview')}
-                                                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-slate-300 bg-slate-700/50 hover:bg-slate-600/50 rounded-lg border border-slate-600/50 transition-colors"
-                                                    title="Exit Theater Mode (go to Overview)"
-                                                >
-                                                    <span className="text-sm">←</span>
-                                                    Back
-                                                </button>
-
-                                                <span className="text-slate-600">│</span>
-
-                                                {/* Job Selector */}
-                                                <div className="relative">
-                                                    <select
-                                                        value={selectedJobId ?? ''}
-                                                        onChange={(e) => setSelectedJobId(e.target.value)}
-                                                        className="appearance-none bg-slate-700/50 backdrop-blur-sm border border-slate-600/50 rounded px-2 py-1 pr-6 text-xs text-slate-300 cursor-pointer hover:bg-slate-600/50 transition-colors max-w-[120px]"
-                                                        title="Switch Job"
-                                                    >
-                                                        {jobs
-                                                            .filter((j: Job) => j.status === 'completed' && j.design_count > 0)
-                                                            .slice(0, 50)
-                                                            .map((job: Job) => (
-                                                                <option key={job.id} value={job.id}>
-                                                                    {job.name} ({job.design_count})
-                                                                </option>
-                                                            ))}
-                                                    </select>
-                                                    <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 text-[10px]">
-                                                        ▾
-                                                    </div>
-                                                </div>
-
-                                                <span className="text-slate-600">│</span>
-
-                                                {/* Design Selector Dropdown */}
-                                                <div className="relative">
-                                                    <select
-                                                        value={selectedDesignId ?? ''}
-                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                        className="appearance-none bg-slate-800/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700/60 transition-colors min-w-[180px]"
-                                                    >
-                                                        {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                                            <option key={d.id} value={d.id}>
-                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                                                        ▾
-                                                    </div>
-                                                </div>
-
-                                                {/* Color Mode Dropdown */}
-                                                <div className="relative">
-                                                    <select
-                                                        value={colorMode}
-                                                        onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
-                                                        className="appearance-none bg-slate-800/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1.5 pr-8 text-xs text-white cursor-pointer hover:bg-slate-700/60 transition-colors"
-                                                    >
-                                                        <option value="default">Chain Colors</option>
-                                                        <option value="plddt">pLDDT Confidence</option>
-                                                        <option
-                                                            value="cdr"
-                                                            disabled={!(activeJob?.model_id === 'rfantibody' || activeJob?.name?.toLowerCase().includes('antibody'))}
-                                                        >
-                                                            CDR Regions {!(activeJob?.model_id === 'rfantibody' || activeJob?.name?.toLowerCase().includes('antibody')) ? '(N/A)' : ''}
-                                                        </option>
-                                                    </select>
-                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
-                                                        ▾
-                                                    </div>
-                                                </div>
-                                                {/* Color Mode Legend */}
-                                                {colorMode === 'plddt' && (
-                                                    <div className="flex items-center gap-1 text-xs text-slate-400">
-                                                        <span className="text-blue-400">■</span>≥90
-                                                        <span className="text-cyan-400 ml-1">■</span>≥70
-                                                        <span className="text-yellow-400 ml-1">■</span>≥50
-                                                        <span className="text-orange-400 ml-1">■</span>&lt;50
-                                                    </div>
-                                                )}
-                                                {colorMode === 'cdr' && (
-                                                    <div className="flex items-center gap-1 text-xs text-slate-400">
-                                                        <span className="text-red-400">■</span>H1
-                                                        <span className="text-green-400 ml-1">■</span>H2
-                                                        <span className="text-blue-400 ml-1">■</span>H3
-                                                        <span className="text-yellow-400 ml-1">■</span>L1
-                                                        <span className="text-cyan-400 ml-1">■</span>L2
-                                                        <span className="text-pink-400 ml-1">■</span>L3
-                                                    </div>
-                                                )}
-
-                                                {/* Compare Toggle + Counter */}
-                                                <button
-                                                    onClick={() => setShowReferencePanel(!showReferencePanel)}
-                                                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors backdrop-blur-sm ${showReferencePanel || referenceStructures.length > 0
-                                                        ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
-                                                        : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
-                                                        }`}
-                                                >
-                                                    <span className={`w-2 h-2 rounded-full ${referenceStructures.length > 0 ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-                                                    Compare
-                                                    {referenceStructures.length > 0 && (
-                                                        <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                                                            {referenceStructures.length}/{MAX_COMPARE_VIEWERS}
-                                                        </span>
-                                                    )}
-                                                </button>
-                                                {referenceStructures.length > 0 && (
-                                                    <button
-                                                        onClick={() => setReferenceStructures([])}
-                                                        className="text-xs text-red-400 hover:text-red-300"
-                                                        title="Clear all comparisons"
-                                                    >
-                                                        Clear all
-                                                    </button>
-                                                )}
-
-                                                {/* Quick metrics badge */}
-                                                {selectedDesign && (
-                                                    <div className="ml-auto flex items-center gap-3 text-xs">
-                                                        {selectedDesign.plddt_overall && (
-                                                            <span className={`font-mono ${getMetricColor('plddt_overall', selectedDesign.plddt_overall)}`}>
-                                                                pLDDT: {selectedDesign.plddt_overall.toFixed(1)}
-                                                            </span>
-                                                        )}
-                                                        {selectedDesign.pae_overall && (
-                                                            <span className={`font-mono ${getMetricColor('pae_overall', selectedDesign.pae_overall)}`}>
-                                                                PAE: {selectedDesign.pae_overall.toFixed(2)}
-                                                            </span>
-                                                        )}
-                                                        {selectedDesign.ptm && (
-                                                            <span className="font-mono text-amber-400">
-                                                                pTM: {selectedDesign.ptm.toFixed(3)}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Reference Selector Panel - floating overlay */}
-                                            {showReferencePanel && (
-                                                <div className="absolute top-12 left-3 z-30 w-96 bg-slate-900/95 backdrop-blur-sm border border-slate-600 rounded-lg shadow-xl">
-                                                    <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
-                                                        <span className="text-sm font-medium text-slate-200">
-                                                            Add Compare Structure ({referenceStructures.length}/{MAX_COMPARE_VIEWERS})
-                                                        </span>
-                                                        <button
-                                                            onClick={() => setShowReferencePanel(false)}
-                                                            className="text-slate-400 hover:text-white"
-                                                        >
-                                                            ✕
-                                                        </button>
-                                                    </div>
-                                                    <div className="p-3">
-                                                        <ReferenceSelector
-                                                            onSelect={(ref) => {
-                                                                if (ref && referenceStructures.length < MAX_COMPARE_VIEWERS) {
-                                                                    // Check if not already added
-                                                                    const alreadyExists = referenceStructures.some(r => r.url === ref.url);
-                                                                    if (!alreadyExists) {
-                                                                        setReferenceStructures([...referenceStructures, ref]);
-                                                                    }
-                                                                }
-                                                                setShowReferencePanel(false);
-                                                            }}
-                                                            selectedRef={null}
-                                                            currentDesignId={selectedDesignId}
-                                                        />
-                                                    </div>
-                                                    {referenceStructures.length >= MAX_COMPARE_VIEWERS && (
-                                                        <div className="px-3 pb-3 text-xs text-amber-400">
-                                                            ⚠ Maximum {MAX_COMPARE_VIEWERS} compare viewers reached
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Main Viewer - Full Size */}
-                                            <div className="absolute inset-0">
-                                                <MolstarViewer
-                                                    key={selectedDesignId + '_' + colorMode}
-                                                    structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                                                    format={structureFormat}
-                                                    alphafoldView={colorMode === 'plddt'}
-                                                    selections={colorMode === 'cdr' ? antibodySelections : undefined}
-                                                    height="100%"
-                                                    backgroundColor="#0f172a"
-                                                />
-                                            </div>
-
-                                            {/* Floating Reference Viewers - Multiple */}
-                                            {referenceStructures.map((ref, index) => (
-                                                <FloatingViewer
-                                                    key={ref.url}
-                                                    structureUrl={ref.url}
-                                                    format={ref.format}
-                                                    label={ref.name}
-                                                    initialPosition={{ x: 20 + (index * 30), y: 60 + (index * 30) }}
-                                                    onClose={() => setReferenceStructures(refs => refs.filter((_, i) => i !== index))}
-                                                />
-                                            ))}
-
-                                            {/* Floating Metric Overlay - Draggable */}
-                                            {selectedDesignId && (
-                                                <MetricOverlay
-                                                    designId={selectedDesignId}
-                                                    initialPosition={{ x: 70, y: 60 }}
-                                                    initialType="structure"
-                                                    structureAnalysis={structureAnalysis ?? undefined}
-                                                    residueData={undefined}
-                                                    availableTypes={['structure', 'pae', 'plddt', 'iptm']}
-                                                    pairChainsIptm={designs.find(d => d.id === selectedDesignId)?.pair_chains_iptm ?? undefined}
-                                                />
-                                            )}
-                                        </div>
+                                        <StructureViewerPane
+                                            selectedDesignId={selectedDesignId}
+                                            setSelectedDesignId={setSelectedDesignId}
+                                            designs={designs}
+                                            selectedDesign={selectedDesign}
+                                            colorMode={colorMode}
+                                            setColorMode={setColorMode}
+                                            structureFormat={structureFormat}
+                                            antibodySelections={antibodySelections}
+                                            structureAnalysis={structureAnalysis}
+                                            activeJob={activeJob}
+                                            getMetricColor={getMetricColor}
+                                        />
                                     )}
 
                                     {/* ANTIBODY TAB */}
@@ -980,6 +884,7 @@ export function ResultsViewer() {
                                                         <tr className="border-b border-slate-700">
                                                             {[
                                                                 { key: 'name', label: 'Name' },
+                                                                { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
@@ -1016,6 +921,21 @@ export function ResultsViewer() {
                                                                 }}
                                                             >
                                                                 <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
+
+                                                                {/* Binding Quality Tier */}
+                                                                <td className="px-3 py-2">
+                                                                    {(() => {
+                                                                        const tier = getBindingTier(d.iptm, d.epitope_contact_count);
+                                                                        return (
+                                                                            <span
+                                                                                className={`px-2 py-0.5 text-xs font-bold rounded border ${tier.bgColor} ${tier.color}`}
+                                                                                title={`${tier.label} binding (iPTM: ${d.iptm?.toFixed(2) ?? '—'}, Contacts: ${d.epitope_contact_count ?? '—'})`}
+                                                                            >
+                                                                                {tier.tier}
+                                                                            </span>
+                                                                        );
+                                                                    })()}
+                                                                </td>
 
                                                                 {/* Binder Size (AA count) */}
                                                                 <td className="px-3 py-2 font-mono text-slate-400">

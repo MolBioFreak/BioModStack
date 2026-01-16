@@ -477,10 +477,12 @@ async def launch_nextflow_job(
                 
                 if job.status == JobStatus.CANCELLED.value:
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
+                    job.queue_status = 'cancelled'
                     
                 elif job.status == JobStatus.RUNNING.value:
                     if exit_code == 0:
                         job.status = JobStatus.COMPLETED.value
+                        job.queue_status = 'completed'  # Update queue_status so job leaves the queue UI
                         job.current_stage = "Complete" # Clear stage
                         
                         # Ingest results into Design table
@@ -509,11 +511,13 @@ async def launch_nextflow_job(
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
                         job.status = JobStatus.CANCELLED.value
+                        job.queue_status = 'cancelled'  # Update queue_status
                         job.error_message = "Job cancelled by user"
                         logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
                         
                     else:
                         job.status = JobStatus.FAILED.value
+                        job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                         job.error_message = f"Nextflow exited with code {exit_code}"
                         logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
                         
@@ -534,6 +538,7 @@ async def launch_nextflow_job(
                 await session.refresh(job)
                 if job.status != JobStatus.CANCELLED.value:
                     job.status = JobStatus.FAILED.value
+                    job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
                     job.completed_at = datetime.utcnow()
                     await session.commit()
@@ -584,6 +589,8 @@ def build_nextflow_command(
         ('antibody_child', 'validation_batch'): 'boltz',
         # RFantibody child jobs (backbone generation - spawned by orchestrator)
         ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
+        # FAMPNN child jobs (sequence design - spawned by orchestrator)
+        ('fampnn_child', 'sequence_design'): 'fampnn_predict',
     }
     
     # Determine profile based on model and mode
@@ -680,6 +687,11 @@ def build_nextflow_command(
         'boltz_method': 'boltz_method',
         'boltz_use_potentials': 'boltz_use_potentials',
         'boltz_step_scale': 'boltz_step_scale',
+        # Boltz-2 affinity prediction (quality feature)
+        'boltz_predict_affinity': 'boltz_predict_affinity',
+        'boltz_sampling_steps_affinity': 'boltz_sampling_steps_affinity',
+        'boltz_diffusion_samples_affinity': 'boltz_diffusion_samples_affinity',
+        'boltz_affinity_mw_correction': 'boltz_affinity_mw_correction',
         # RF3 structure prediction params
         'rf3_num_recycles': 'rf3_num_recycles',
         'rf3_num_samples': 'rf3_num_samples',
