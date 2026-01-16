@@ -39,13 +39,14 @@ process PrepFAMPNN {
 process RunFAMPNN {
     label 'FAMPNN'
     label 'gpu_light'
-    // FAMPNN is lightweight, prefer 5060 Ti
-    // Supports multi-GPU parallelism via per-process gpu_id input
-
-    // Use gpu_id for per-process GPU assignment (enables multi-GPU parallel execution)
-    containerOptions "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id}"
+    // GPU assignment handled by orchestrator via params.gpu_id -> config's gpu_light containerOptions
     
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
+    // Additional publishDir for child job collection - CollectFAMPNNOutputs looks in pdb_files
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
     tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)
@@ -60,21 +61,21 @@ process RunFAMPNN {
     """
     mkdir -p results
 
-    python /app/fampnn/fampnn/inference/seq_design.py \
-        batch_size=${params.fampnn_batch_size ?: 16} \
-        checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \
-        exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \
-        fixed_pos_csv=${csv} \
-        num_seqs_per_pdb=${params.seqs_per_design ?: 8} \
-        pdb_dir="./" \
-        presort_by_length=true \
-        psce_threshold=${params.fampnn_psce_threshold ?: 0.3}  \
-        temperature=${params.fampnn_temperature ?: 0.1} \
-        seq_only=${params.fampnn_seq_only ?: false} \
-        repack_last=${params.fampnn_repack_last ?: true} \
-        timestep_schedule.num_steps=${params.fampnn_num_steps ?: 100} \
-        out_dir="fampnn_output" \
-        ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \
+    python /app/fampnn/fampnn/inference/seq_design.py \\
+        batch_size=${params.fampnn_batch_size ?: 16} \\
+        checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \\
+        exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
+        fixed_pos_csv=${csv} \\
+        num_seqs_per_pdb=${params.seqs_per_design ?: 8} \\
+        pdb_dir="./" \\
+        presort_by_length=true \\
+        psce_threshold=${params.fampnn_psce_threshold ?: 0.3}  \\
+        temperature=${params.fampnn_temperature ?: 0.1} \\
+        seq_only=${params.fampnn_seq_only ?: false} \\
+        repack_last=${params.fampnn_repack_last ?: true} \\
+        timestep_schedule.num_steps=${params.fampnn_num_steps ?: 100} \\
+        out_dir="fampnn_output" \\
+        ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \\
         2>&1 | tee fampnn_${task.index}.log
 
     # Rename output files from fold_X_sampleY.pdb to fold_X_seq_Y.pdb
@@ -85,18 +86,28 @@ process RunFAMPNN {
         cp "\$file" "results/\$new_name"
     done
 
-    python /scripts/analyse_fampnn.py \\
-        --input_dir results \
-        --chain_id ${analysis_chain_id} \
-        --ignore_cbeta \
+    python /scripts/analyse_fampnn.py \\\\
+        --input_dir results \\
+        --chain_id ${analysis_chain_id} \\
+        --ignore_cbeta \\
         --out_dir results
 
     # Combine metadata to jsonl file
-    python /scripts/metadata_converter.py --input_dir results --input_ext ".json" \
+    python /scripts/metadata_converter.py --input_dir results --input_ext ".json" \\
         --converter fampnn --output_file "fampnn_metadata_${batch_id}.jsonl"
+    
+    # EXPLICIT SYNC: Ensure files are written to output dir even if publishDir fails
+    # This is a fallback for orchestrator-spawned child jobs where Nextflow may not complete publishDir
+    if [ -n "${params.out_dir}" ]; then
+        mkdir -p "${params.out_dir}/pdb_files"
+        cp results/*.pdb "${params.out_dir}/pdb_files/" 2>/dev/null || true
+        cp results/*.json "${params.out_dir}/pdb_files/" 2>/dev/null || true
+        echo "FAMPNN outputs synced to ${params.out_dir}/pdb_files/"
+    fi
     
     """
 }
+
 process FilterFAMPNN {
     label 'pyrosetta_tools'
 

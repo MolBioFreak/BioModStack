@@ -125,6 +125,7 @@ class NotesUpdate(BaseModel):
 @router.get("", response_model=DesignList)
 async def list_designs(
     job_id: Optional[str] = None,
+    include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
     backbone_id: Optional[int] = Query(None, description="Filter by backbone ID"),
     plddt_min: Optional[float] = Query(None, description="Minimum pLDDT score"),
     pae_max: Optional[float] = Query(None, description="Maximum pAE score"),
@@ -140,7 +141,8 @@ async def list_designs(
     List designs with optional filtering.
     
     Filters:
-    - job_id: Filter by specific job
+    - job_id: Filter by specific job (if include_children=True, also includes child job designs)
+    - include_children: When job_id is specified, also fetch designs from child jobs
     - backbone_id: Filter by backbone number
     - plddt_min: Minimum pLDDT threshold
     - pae_max: Maximum pAE threshold
@@ -163,10 +165,20 @@ async def list_designs(
     else:
         query = select(Design).order_by(order_col.asc().nulls_last())
     
-    # Apply filters
+    # Apply filters - handle include_children for job_id
     conditions = []
     if job_id:
-        conditions.append(Design.job_id == job_id)
+        if include_children:
+            # Get all child job IDs for this parent
+            child_query = select(Job.id).where(Job.parent_job_id == job_id)
+            child_result = await session.execute(child_query)
+            child_job_ids = [row[0] for row in child_result.all()]
+            
+            # Include both parent and children
+            all_job_ids = [job_id] + child_job_ids
+            conditions.append(Design.job_id.in_(all_job_ids))
+        else:
+            conditions.append(Design.job_id == job_id)
     if backbone_id is not None:
         conditions.append(Design.backbone_id == backbone_id)
     if plddt_min is not None:
@@ -389,24 +401,46 @@ async def update_notes(
 @router.get("/by-job/{job_id}", response_model=DesignList)
 async def get_designs_for_job(
     job_id: str,
+    include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
     limit: int = Query(100, le=10000),
     offset: int = Query(0),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get all designs for a specific job."""
+    """
+    Get all designs for a specific job.
+    
+    If include_children is True (default), also fetches designs from all child jobs
+    that have parent_job_id matching this job. This enables viewing all aggregated
+    designs under the parent exploration job.
+    """
     # Verify job exists
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     if not job_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Job not found")
     
-    query = select(Design).where(Design.job_id == job_id).order_by(Design.name)
+    # Build job_id filter - include children if requested
+    if include_children:
+        # Get all child job IDs for this parent
+        child_query = select(Job.id).where(Job.parent_job_id == job_id)
+        child_result = await session.execute(child_query)
+        child_job_ids = [row[0] for row in child_result.all()]
+        
+        # Include both parent and children
+        all_job_ids = [job_id] + child_job_ids
+        query = select(Design).where(Design.job_id.in_(all_job_ids)).order_by(Design.name)
+        count_query = select(func.count(Design.id)).where(Design.job_id.in_(all_job_ids))
+    else:
+        # Only this specific job
+        query = select(Design).where(Design.job_id == job_id).order_by(Design.name)
+        count_query = select(func.count(Design.id)).where(Design.job_id == job_id)
+    
+    # Apply pagination
     query = query.limit(limit).offset(offset)
     
     result = await session.execute(query)
     designs = result.scalars().all()
     
     # Count total
-    count_query = select(func.count(Design.id)).where(Design.job_id == job_id)
     total = (await session.execute(count_query)).scalar()
     
     return DesignList(

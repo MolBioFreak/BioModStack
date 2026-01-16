@@ -92,6 +92,12 @@ class CPUStatus(BaseModel):
     frequency_current_mhz: float
     frequency_max_mhz: float
     temperature: Optional[float] = None  # Celsius, if available
+    power_watts: Optional[float] = None  # Package power via RAPL
+
+
+# RAPL power tracking (for computing instantaneous power from energy delta)
+_last_rapl_energy_uj: Optional[float] = None
+_last_rapl_time: Optional[float] = None
 
 
 class RAMStatus(BaseModel):
@@ -279,6 +285,7 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
 def get_cpu_stats() -> CPUStatus:
     """Get CPU statistics using psutil."""
     import psutil
+    global _last_rapl_energy_uj, _last_rapl_time
     
     # Get CPU name from /proc/cpuinfo on Linux
     cpu_name = "Unknown CPU"
@@ -306,6 +313,32 @@ def get_cpu_stats() -> CPUStatus:
     except:
         pass
     
+    # Get CPU package power via RAPL (works for Intel and AMD)
+    cpu_power = None
+    try:
+        rapl_energy_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+        if rapl_energy_path.exists():
+            current_energy = float(rapl_energy_path.read_text().strip())
+            current_time = time.time()
+            
+            if _last_rapl_energy_uj is not None and _last_rapl_time is not None:
+                # Calculate power from energy delta
+                energy_delta_uj = current_energy - _last_rapl_energy_uj
+                time_delta_s = current_time - _last_rapl_time
+                
+                # Handle counter rollover (32-bit counter rolls over at ~4294967296)
+                if energy_delta_uj < 0:
+                    energy_delta_uj += 2**32
+                
+                if time_delta_s > 0.01:  # Avoid division by zero
+                    cpu_power = round(energy_delta_uj / (time_delta_s * 1_000_000), 1)  # uJ to W
+            
+            _last_rapl_energy_uj = current_energy
+            _last_rapl_time = current_time
+    except (PermissionError, FileNotFoundError, ValueError):
+        # RAPL requires read permission - may need to configure group access
+        pass
+    
     return CPUStatus(
         name=cpu_name,
         cores_physical=psutil.cpu_count(logical=False) or 0,
@@ -314,7 +347,8 @@ def get_cpu_stats() -> CPUStatus:
         per_core_utilization=psutil.cpu_percent(interval=0.1, percpu=True),
         frequency_current_mhz=freq.current if freq else 0,
         frequency_max_mhz=freq.max if freq else 0,
-        temperature=cpu_temp
+        temperature=cpu_temp,
+        power_watts=cpu_power
     )
 
 
@@ -908,3 +942,172 @@ async def get_batch_status(batch_id: str):
         "mode": "round_robin"
     }
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEBUG ORCHESTRATOR OVERRIDES
+# These endpoints allow bypassing normal orchestrator scheduling for debugging
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ForceRunRequest(BaseModel):
+    """Request to force-run a queued job."""
+    gpu_id: Optional[int] = None  # None = any available
+
+
+@router.post("/force-run/{job_id}")
+async def force_run_job(job_id: str, request: ForceRunRequest):
+    """
+    [DEBUG] Force a queued job to run immediately, bypassing orchestrator.
+    
+    Skips VRAM checks and concurrency limits. Use with caution.
+    """
+    import logging
+    from database import async_session, Job
+    from sqlalchemy import select
+    from datetime import datetime
+    from services.nextflow import launch_nextflow_job
+    
+    logger = logging.getLogger("api.gpu")
+    
+    async with async_session() as session:
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        job = result.scalar_one_or_none()
+        
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        
+        if job.queue_status != "queued":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Job must be queued to force-run (current: {job.queue_status})"
+            )
+        
+        # Determine GPU
+        gpu_id = request.gpu_id
+        if gpu_id is None:
+            # Pick least-loaded GPU
+            try:
+                gpu_stats = get_gpu_stats()
+                enabled_gpus = [g for g in gpu_stats if g.index != 1]  # Skip GPU 1 (display)
+                if enabled_gpus:
+                    gpu_id = min(enabled_gpus, key=lambda g: g.memory_used_mb).index
+                else:
+                    gpu_id = 0
+            except Exception:
+                gpu_id = 0
+        
+        # Update job status
+        job.queue_status = "running"
+        job.assigned_gpu = gpu_id
+        job.started_at = datetime.utcnow()
+        await session.commit()
+        
+        # Build params with gpu_id
+        import json
+        params = json.loads(job.params) if isinstance(job.params, str) else (job.params or {})
+        params["gpu_id"] = gpu_id
+        
+        logger.warning(f"[FORCE RUN] User forced {job.name} to GPU {gpu_id}")
+        
+        # Launch the job
+        import asyncio
+        asyncio.create_task(launch_nextflow_job(
+            job_id=job.id,
+            model_id=job.model_id,
+            mode=params.get("mode", "default"),
+            params=params,
+            output_dir=job.output_dir
+        ))
+        
+        return {
+            "success": True,
+            "message": f"Force-launched {job.name} on GPU {gpu_id}",
+            "job_id": job_id,
+            "gpu_id": gpu_id
+        }
+
+
+class ConcurrencyLimitRequest(BaseModel):
+    """Request to set concurrency limit for a model type."""
+    model_type: str  # e.g., "fampnn", "rfantibody", "boltz"
+    limit: Optional[int] = None  # None = auto (no limit)
+
+
+@router.get("/concurrency-limits")
+async def get_concurrency_limits():
+    """
+    [DEBUG] Get current concurrency limits for all model types.
+    """
+    config = read_scheduler_config()
+    return {
+        "concurrency_limits": config.get("concurrency_limits", {}),
+        "description": "Model type -> max concurrent jobs (null = auto/unlimited)"
+    }
+
+
+@router.put("/concurrency-limits")
+async def set_concurrency_limit(request: ConcurrencyLimitRequest):
+    """
+    [DEBUG] Set concurrency limit for a specific model type.
+    
+    Limits how many jobs of this type can run concurrently.
+    Set to null to remove the limit (auto mode).
+    """
+    import logging
+    logger = logging.getLogger("api.gpu")
+    
+    config = read_scheduler_config()
+    
+    if "concurrency_limits" not in config:
+        config["concurrency_limits"] = {}
+    
+    old_limit = config["concurrency_limits"].get(request.model_type)
+    
+    if request.limit is None:
+        # Remove the limit
+        config["concurrency_limits"].pop(request.model_type, None)
+        logger.info(f"[CONCURRENCY] Removed limit for {request.model_type}")
+    else:
+        config["concurrency_limits"][request.model_type] = request.limit
+        logger.info(f"[CONCURRENCY] Set {request.model_type} limit to {request.limit}")
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    return {
+        "success": True,
+        "model_type": request.model_type,
+        "old_limit": old_limit,
+        "new_limit": request.limit,
+        "concurrency_limits": config["concurrency_limits"]
+    }
+
+
+@router.delete("/concurrency-limits/{model_type}")
+async def delete_concurrency_limit(model_type: str):
+    """
+    [DEBUG] Remove concurrency limit for a model type (revert to auto).
+    """
+    import logging
+    logger = logging.getLogger("api.gpu")
+    
+    config = read_scheduler_config()
+    
+    if "concurrency_limits" not in config:
+        return {"success": True, "message": "No limits configured"}
+    
+    old_limit = config["concurrency_limits"].pop(model_type, None)
+    
+    if old_limit is None:
+        return {"success": True, "message": f"No limit was set for {model_type}"}
+    
+    if not write_scheduler_config(config):
+        raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    logger.info(f"[CONCURRENCY] Removed limit for {model_type} (was {old_limit})")
+    
+    return {
+        "success": True,
+        "model_type": model_type,
+        "removed_limit": old_limit,
+        "concurrency_limits": config["concurrency_limits"]
+    }

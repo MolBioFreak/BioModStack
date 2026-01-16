@@ -32,6 +32,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [parallelMode, setParallelMode] = useState<'standard' | 'full_orchestrator'>('standard');
     const [designsPerJob, setDesignsPerJob] = useState(5); // Backbones per child job
     const [pdBsPerJob, setPdBsPerJob] = useState(5); // FAMPNN PDBs per child job
+    const [seqsPerBoltzJob, setSeqsPerBoltzJob] = useState(10); // Sequences per Boltz validation job
 
     // Template manager
     const [showTemplateManager, setShowTemplateManager] = useState(false);
@@ -66,6 +67,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     // Optional DNA/RNA sequence for complex prediction (when protein binds nucleic acid)
     const [targetDnaSeq, setTargetDnaSeq] = useState<string>('');
     const [showDnaInput, setShowDnaInput] = useState(false);
+
+    // Debug mode settings - hidden by default
+    const [showDebugSettings, setShowDebugSettings] = useState(false);
+    const [skipRFantibody, setSkipRFantibody] = useState(false);
+    const [rfantibodyInputPdbs, setRfantibodyInputPdbs] = useState<string>('');
+    const [skipFampnn, setSkipFampnn] = useState(false);
+    const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
+    const [customOutputDir, setCustomOutputDir] = useState<string>('');
 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -218,12 +227,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     };
 
     const handleSubmit = async () => {
-        if (!targetPdb) {
+        // When skipping early steps, target PDB and epitope are not required
+        const skippingEarlySteps = skipRFantibody || skipFampnn;
+
+        if (!skippingEarlySteps && !targetPdb) {
             alert('Please upload a target PDB file');
             return;
         }
-        if (selectedResidues.size === 0) {
+        if (!skippingEarlySteps && selectedResidues.size === 0) {
             alert('Please select at least one epitope residue');
+            return;
+        }
+
+        // Validate skip inputs have paths
+        if (skipRFantibody && !rfantibodyInputPdbs.trim()) {
+            alert('Please provide a path to backbone PDBs for Skip RFantibody');
+            return;
+        }
+        if (skipFampnn && !fampnnCollectedPdbs.trim()) {
+            alert('Please provide a path to sequenced PDBs for Skip FAMPNN');
             return;
         }
 
@@ -232,9 +254,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // - targetSource.path: file from previous run, preset, or RCSB PDB  
             // - uploadedPath: manually uploaded file (already on server)
             // - handleFileUpload: new file upload (needs to be uploaded first)
+            // - When skipping, use a placeholder or the input dir path
             let pdbPath = targetSource?.path || uploadedPath;
             if (!pdbPath && targetPdb) {
                 pdbPath = await handleFileUpload(targetPdb);
+            }
+            // When skipping, don't require a target PDB
+            if (!pdbPath && skippingEarlySteps) {
+                pdbPath = skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs;
             }
 
             if (!pdbPath) {
@@ -306,6 +333,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     boltz_num_samples: qualitySettings.boltz_num_samples,
                     boltz_use_potentials: qualitySettings.boltz_use_potentials,
                     boltz_use_msa: qualitySettings.boltz_use_msa,
+                    // Boltz-2 affinity prediction
+                    boltz_predict_affinity: qualitySettings.boltz_predict_affinity,
+                    boltz_diffusion_samples_affinity: qualitySettings.boltz_diffusion_samples_affinity,
                     // Quality settings - FAMPNN (sequence design)
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
@@ -332,6 +362,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
                     seqs_per_job: pdBsPerJob,
+                    seqs_per_boltz_job: seqsPerBoltzJob,
+                    // Debug: Skip step settings
+                    skip_rfantibody: skipRFantibody || undefined,
+                    rfantibody_input_pdbs: rfantibodyInputPdbs.trim() || undefined,
+                    fampnn_collected_pdbs: fampnnCollectedPdbs.trim() || undefined,
+                    // Debug: Custom output directory
+                    out_dir: customOutputDir.trim() || undefined,
                 }
             };
 
@@ -786,7 +823,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <input
                                     type="range"
                                     min="1"
-                                    max="20"
+                                    max="500"
                                     value={designsPerJob}
                                     onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
                                     className="w-full accent-orange-500"
@@ -798,12 +835,114 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <input
                                     type="range"
                                     min="1"
-                                    max="20"
+                                    max="500"
                                     value={pdBsPerJob}
                                     onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
                                     className="w-full accent-orange-500"
                                 />
                                 <span className="text-sm text-slate-300">{pdBsPerJob}</span>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500">Sequences per Boltz job</label>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="500"
+                                    value={seqsPerBoltzJob}
+                                    onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
+                                    className="w-full accent-orange-500"
+                                />
+                                <span className="text-sm text-slate-300">{seqsPerBoltzJob}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Debug Settings Panel - Hidden by default */}
+                <div className="mt-6 border border-amber-600/30 rounded-lg overflow-hidden">
+                    <button
+                        onClick={() => setShowDebugSettings(!showDebugSettings)}
+                        className={`w-full px-4 py-3 flex items-center justify-between text-left transition-colors ${showDebugSettings
+                            ? 'bg-amber-600/20 text-amber-400'
+                            : 'bg-slate-900/50 text-slate-500 hover:bg-slate-800/50'
+                            }`}
+                    >
+                        <div className="flex items-center gap-2">
+                            <span>🔧</span>
+                            <span className="font-medium">Debug Settings</span>
+                            {(skipRFantibody || skipFampnn || customOutputDir) && (
+                                <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
+                            )}
+                        </div>
+                        <span className="text-lg">{showDebugSettings ? '−' : '+'}</span>
+                    </button>
+
+                    {showDebugSettings && (
+                        <div className="p-4 bg-slate-900/30 space-y-4">
+                            <div className="text-xs text-amber-500/80 mb-3">
+                                ⚠️ Debug settings allow skipping workflow steps. Use with caution.
+                            </div>
+
+                            {/* Skip RFantibody */}
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={skipRFantibody}
+                                        onChange={e => {
+                                            setSkipRFantibody(e.target.checked);
+                                            if (!e.target.checked) setRfantibodyInputPdbs('');
+                                        }}
+                                        className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                    />
+                                    <span className="text-sm text-slate-300">Skip RFantibody (use pre-existing backbone PDBs)</span>
+                                </label>
+                                {skipRFantibody && (
+                                    <input
+                                        type="text"
+                                        value={rfantibodyInputPdbs}
+                                        onChange={e => setRfantibodyInputPdbs(e.target.value)}
+                                        placeholder="/path/to/backbone/pdbs"
+                                        className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                    />
+                                )}
+                            </div>
+
+                            {/* Skip FAMPNN */}
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={skipFampnn}
+                                        onChange={e => {
+                                            setSkipFampnn(e.target.checked);
+                                            if (!e.target.checked) setFampnnCollectedPdbs('');
+                                        }}
+                                        className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                    />
+                                    <span className="text-sm text-slate-300">Skip FAMPNN (use pre-existing sequenced PDBs)</span>
+                                </label>
+                                {skipFampnn && (
+                                    <input
+                                        type="text"
+                                        value={fampnnCollectedPdbs}
+                                        onChange={e => setFampnnCollectedPdbs(e.target.value)}
+                                        placeholder="/path/to/fampnn/output/pdbs"
+                                        className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                    />
+                                )}
+                            </div>
+
+                            {/* Custom Output Directory */}
+                            <div className="space-y-2">
+                                <label className="text-sm text-slate-400">Custom Output Directory (optional)</label>
+                                <input
+                                    type="text"
+                                    value={customOutputDir}
+                                    onChange={e => setCustomOutputDir(e.target.value)}
+                                    placeholder="/mnt/BioModStack/pdj_results/custom_run"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-slate-500 outline-none font-mono"
+                                />
                             </div>
                         </div>
                     )}
@@ -822,7 +961,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </button>
                 <button
                     onClick={handleSubmit}
-                    disabled={submitMutation.isPending || isUploading || !targetPdb || selectedResidues.size === 0}
+                    disabled={
+                        submitMutation.isPending ||
+                        isUploading ||
+                        // When skipping, don't require target PDB or hotspots
+                        (!(skipRFantibody || skipFampnn) && (!targetPdb || selectedResidues.size === 0)) ||
+                        // When skipping, require the skip paths
+                        (skipRFantibody && !rfantibodyInputPdbs.trim()) ||
+                        (skipFampnn && !fampnnCollectedPdbs.trim())
+                    }
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
                     {isUploading ? (
@@ -834,6 +981,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <>
                             <span className="animate-spin">⚙️</span>
                             Submitting...
+                        </>
+                    ) : (skipRFantibody || skipFampnn) ? (
+                        <>
+                            🔧 Run Skipped Workflow
                         </>
                     ) : (
                         <>
@@ -892,6 +1043,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
                     pdbs_per_job: pdBsPerJob,
+                    seqs_per_boltz_job: seqsPerBoltzJob,
                     // Design mode
                     design_mode: designMode,
                     selected_cdr_loops: Array.from(selectedCDRLoops),

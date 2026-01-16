@@ -147,6 +147,67 @@ workflow {
     }
 
     /////////////////////////////
+    // FAMPNN CHILD JOB        //
+    /////////////////////////////
+    // Standalone FAMPNN sequence design for orchestrator-spawned child jobs
+    if (params.rfd_mode == 'fampnn_child') {
+        println("Running FAMPNN Sequence Design (Child Job)")
+        println("* PDB paths: ${params.pdb_paths}")
+        println("* Seqs per design: ${params.seqs_per_design}")
+        println("* GPU: ${params.gpu_id}")
+
+        if (!params.pdb_paths) {
+            error("PDB paths required for fampnn_child mode")
+        }
+
+        // Parse PDB paths (comes as comma-separated string)
+        def pdb_paths_raw = params.pdb_paths.toString()
+        def pdb_list = pdb_paths_raw.split(',').collect { it.strip().replaceAll(/[\[\]'"]/, '') }.findAll { it }.collect { file(it) }
+        
+        if (pdb_list.isEmpty()) {
+            error("No valid PDB files found in pdb_paths: ${params.pdb_paths}")
+        }
+        
+        println("* Processing ${pdb_list.size()} PDBs")
+
+        // Prepare FAMPNN input - PrepFAMPNN expects tuple [pdbs, jsons]
+        fampnn_prep_input = Channel.of(tuple(pdb_list, file("${projectDir}/lib/NO_JSON")))
+        
+        PrepFAMPNN(fampnn_prep_input)
+        
+        // RunFAMPNN expects tuple [batch_id, pdbs, csv, gpu_id], analysis_chain_id
+        // Build input by joining PrepFAMPNN outputs with gpu_id
+        def gpu_id_val = params.gpu_id ?: 0
+        
+        // Collect PDFs as-is (they're already in a collection from the glob)
+        // PrepFAMPNN.out.pdbs emits path objects matching the glob
+        // Use collect to group them, then merge with CSV
+        fampnn_run_input = PrepFAMPNN.out.pdbs
+            .collect()  // Collect all paths from glob into list
+            .merge(PrepFAMPNN.out.csv)  // Merge with CSV channel
+            .map { collected_items -> 
+                // collected_items is [List<Path>, Path] from merge
+                def pdbs = collected_items[0]  // First is the collected PDBs list
+                def csv = collected_items[1]   // Second is the CSV
+                tuple(0, pdbs, csv, gpu_id_val)
+            }
+        
+        RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: 'all_chains')
+        
+        // Optional filtering
+        def filterEnabled = params.enable_fampnn_filter != false && 
+                           (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
+        
+        if (filterEnabled) {
+            println("  Filtering FAMPNN designs...")
+            FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
+        }
+        
+        println("FAMPNN child job complete")
+        return null
+    }
+
+    /////////////////////////////
     // ANTIBODY DESIGN STACK   //
     /////////////////////////////
     if (params.rfd_mode in ['structure_prediction', 'inverse_folding', 'stability_prediction', 'de_novo', 'antibody_denovo_pipeline']) {

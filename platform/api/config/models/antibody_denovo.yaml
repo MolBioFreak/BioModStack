@@ -221,6 +221,20 @@ params:
     maximum: 100
     step: 5
 
+  - name: boltz_predict_affinity
+    type: boolean
+    description: Predict binding affinity (log10 IC50 & probability) - adds ~2-5 min/design
+    default: false
+
+  - name: boltz_diffusion_samples_affinity
+    type: integer
+    description: Affinity diffusion samples (more = better estimate, slower)
+    default: 5
+    minimum: 1
+    maximum: 20
+    step: 1
+    depends_on: boltz_predict_affinity
+
   # ===== STEP 4: IMMUNOGENICITY PARAMS =====
   - name: run_immunogenicity_scoring
     type: boolean
