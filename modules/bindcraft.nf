@@ -25,6 +25,10 @@ process PrepBindCraftInput {
     val design_algorithm
     val chains
     val binder_name
+    // Design mode (de novo vs scaffold redesign)
+    val design_mode
+    path scaffold_pdb
+    val binder_chain
     // Advanced settings
     val use_multimer_design
     val num_recycles_design
@@ -46,7 +50,7 @@ process PrepBindCraftInput {
     path "settings_target.json", emit: target_settings
     path "settings_advanced.json", emit: advanced_settings
     path "settings_filters.json", emit: filter_settings
-    path "${target_pdb}", emit: target_pdb_out
+    path "${design_mode == 'scaffold_redesign' && scaffold_pdb.name != 'null' ? scaffold_pdb : target_pdb}", emit: target_pdb_out
     
     script:
     """
@@ -56,15 +60,30 @@ process PrepBindCraftInput {
     from pathlib import Path
     
     # Generate settings_target.json
+    design_mode = "${design_mode}" or "denovo"
+    scaffold_pdb_name = "${scaffold_pdb}"
+    
+    # Use scaffold PDB for redesign mode, target PDB for de novo
+    if design_mode == "scaffold_redesign" and scaffold_pdb_name != "null":
+        input_pdb = scaffold_pdb_name
+    else:
+        input_pdb = "${target_pdb}"
+    
     target_settings = {
         "design_path": "./output",
         "binder_name": "${binder_name}" or "binder",
-        "starting_pdb": "${target_pdb}",
+        "starting_pdb": input_pdb,
         "chains": "${chains}" or "A",
         "target_hotspot_residues": ${hotspot_residues ? "\"${hotspot_residues}\"" : "null"},
         "lengths": "${binder_lengths}" or "80-120",
         "number_of_final_designs": ${num_final_designs}
     }
+    
+    # Add binder_chain for scaffold redesign mode (ColabDesign supervised loss)
+    if design_mode == "scaffold_redesign":
+        binder_chain = "${binder_chain}" or "B"
+        target_settings["binder_chain"] = binder_chain
+        print(f"Scaffold redesign mode: preserving binder chain {binder_chain}")
     
     with open("settings_target.json", "w") as f:
         json.dump(target_settings, f, indent=2)
@@ -174,10 +193,14 @@ process PrepBindCraftInput {
         json.dump(filter_settings, f, indent=2)
     
     print(f"Generated BindCraft configuration files")
-    print(f"  Target: ${target_pdb}")
+    print(f"  Design mode: {design_mode}")
+    print(f"  Input PDB: {input_pdb}")
+    print(f"  Target chains: ${chains}")
     print(f"  Hotspots: ${hotspot_residues ?: 'auto-detect'}")
     print(f"  Binder lengths: ${binder_lengths}")
     print(f"  Algorithm: ${design_algorithm}")
+    if design_mode == "scaffold_redesign":
+        print(f"  Binder chain to preserve: {binder_chain}")
     """
 }
 
