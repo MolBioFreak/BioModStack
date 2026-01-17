@@ -892,6 +892,7 @@ export function ResultsViewer() {
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
                                                                 { key: 'pae_overall', label: 'PAE' },
                                                                 { key: 'ptm', label: 'pTM' },
+                                                                { key: 'iptm', label: 'iPTM' },
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'RMSD' },
@@ -967,6 +968,11 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
+                                                                </td>
+
+                                                                {/* iPTM (basic interface pTM) */}
+                                                                <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.iptm, 2)}
                                                                 </td>
 
                                                                 {/* Ligand iPTM */}
