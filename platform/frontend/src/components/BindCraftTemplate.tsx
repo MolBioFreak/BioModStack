@@ -69,6 +69,13 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
     const [jobName, setJobName] = useState<string>('');
 
     // ============================================================================
+    // State: Design Approach (De Novo vs Scaffold Redesign)
+    // ============================================================================
+    const [designApproach, setDesignApproach] = useState<'denovo' | 'scaffold_redesign'>('denovo');
+    const [scaffoldPdbPath, setScaffoldPdbPath] = useState<string>('');
+    const [binderChain, setBinderChain] = useState<string>('B');
+
+    // ============================================================================
     // State: Binder Configuration
     // ============================================================================
     const [designMode, setDesignMode] = useState<'minibinder' | 'peptide'>('minibinder');
@@ -194,10 +201,29 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
         }
     };
 
+    const handleScaffoldUpload = async (file: File) => {
+        setError(null);
+        try {
+            const result = await uploadFile('bindcraft/scaffolds', file);
+            setScaffoldPdbPath(result.data.path);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+            setError(`Failed to upload scaffold file: ${errorMessage}`);
+        }
+    };
+
     const handleSubmit = async () => {
-        if (!targetPdbPath) {
-            setError('Please upload a target PDB file');
-            return;
+        // Validate based on design approach
+        if (designApproach === 'scaffold_redesign') {
+            if (!scaffoldPdbPath) {
+                setError('Please upload a scaffold PDB file (target + binder complex)');
+                return;
+            }
+        } else {
+            if (!targetPdbPath) {
+                setError('Please upload a target PDB file');
+                return;
+            }
         }
 
         const binderLengths = `${binderLengthMin}-${binderLengthMax}`;
@@ -206,6 +232,10 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             workflow: 'bindcraft',
             name: jobName || `BindCraft_${new Date().toISOString().slice(0, 10)}`,
             rfd_mode: 'bindcraft',
+            // Design approach
+            bindcraft_design_mode: designApproach,
+            bindcraft_scaffold_pdb: designApproach === 'scaffold_redesign' ? scaffoldPdbPath : null,
+            bindcraft_binder_chain: designApproach === 'scaffold_redesign' ? binderChain : null,
             // Target
             bindcraft_target_pdb: targetPdbPath,
             bindcraft_hotspot_residues: hotspotResidues || null,
@@ -302,11 +332,75 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 />
             </div>
 
+            {/* Design Approach Toggle */}
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
+                <h3 className="text-sm font-medium text-slate-300 mb-4">Design Approach</h3>
+
+                <div className="flex gap-4 mb-4">
+                    <button
+                        onClick={() => setDesignApproach('denovo')}
+                        className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'denovo'
+                                ? 'border-emerald-500 bg-emerald-600/20'
+                                : 'border-slate-700 hover:bg-slate-800'
+                            }`}
+                    >
+                        <div className="font-medium text-slate-200">De Novo Design</div>
+                        <div className="text-xs text-slate-500">Hallucinate new binder from scratch</div>
+                    </button>
+                    <button
+                        onClick={() => setDesignApproach('scaffold_redesign')}
+                        className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'scaffold_redesign'
+                                ? 'border-emerald-500 bg-emerald-600/20'
+                                : 'border-slate-700 hover:bg-slate-800'
+                            }`}
+                    >
+                        <div className="font-medium text-slate-200">Scaffold Redesign</div>
+                        <div className="text-xs text-slate-500">Optimize VHH/nanobody scaffold</div>
+                    </button>
+                </div>
+
+                {designApproach === 'scaffold_redesign' && (
+                    <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-emerald-500/30">
+                        <div className="text-xs text-emerald-400 mb-2">
+                            ℹ️ Upload a PDB containing the target protein and existing binder complex. The binder backbone will be preserved while the sequence is optimized.
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                Complex PDB (Target + Binder)
+                            </label>
+                            <input
+                                type="file"
+                                accept=".pdb"
+                                onChange={(e) => e.target.files?.[0] && handleScaffoldUpload(e.target.files[0])}
+                                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                            {scaffoldPdbPath && (
+                                <p className="mt-1 text-xs text-emerald-400">✓ Uploaded: {scaffoldPdbPath.split('/').pop()}</p>
+                            )}
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                Binder Chain ID
+                            </label>
+                            <input
+                                type="text"
+                                value={binderChain}
+                                onChange={(e) => setBinderChain(e.target.value.toUpperCase())}
+                                maxLength={1}
+                                placeholder="B"
+                                className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Chain ID of the binder/VHH to redesign</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* Section 1: Target Configuration */}
             <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-4">
                     <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-xs font-bold">1</span>
-                    Target Configuration
+                    {designApproach === 'scaffold_redesign' ? 'Target Chain Configuration' : 'Target Configuration'}
                 </h3>
 
                 {/* PDB Upload with Molstar Viewer */}
