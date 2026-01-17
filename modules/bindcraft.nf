@@ -394,3 +394,48 @@ process FilterBindCraft {
     cat filter_bindcraft.log
     """
 }
+
+/*
+ * CDR Hallucination Process
+ * Uses ColabDesign partial protocol to hallucinate CDR loops
+ * while preserving VHH framework and tetrad
+ */
+process CDRHallucination {
+    tag "cdr_hallucination"
+    label 'BindCraft'
+    label 'gpu'
+    
+    container 'apptainer/bindcraft.sif'
+    
+    input:
+    path target_pdb
+    val target_chain
+    val hotspot_residues
+    val num_designs
+    val cdr_length_mode
+    val cdr_h1_range
+    val cdr_h2_range
+    val cdr_h3_range
+    
+    output:
+    path "output/*.pdb", emit: designs
+    path "output/cdr_hallucination_summary.json", emit: summary
+    path "cdr_hallucination.log", emit: log
+    
+    script:
+    def hotspotArg = hotspot_residues ? "--hotspot \"${hotspot_residues}\"" : ""
+    """
+    python3 /app/scripts/cdr_hallucination.py \\
+        --target_pdb ${target_pdb} \\
+        --target_chain ${target_chain ?: 'A'} \\
+        ${hotspotArg} \\
+        --num_designs ${num_designs ?: 10} \\
+        --cdr_length_mode ${cdr_length_mode ?: 'fixed'} \\
+        --cdr_h1_range ${cdr_h1_range ?: '5-12'} \\
+        --cdr_h2_range ${cdr_h2_range ?: '6-10'} \\
+        --cdr_h3_range ${cdr_h3_range ?: '10-18'} \\
+        --output_dir output \\
+        2>&1 | tee cdr_hallucination.log
+    """
+}
+
