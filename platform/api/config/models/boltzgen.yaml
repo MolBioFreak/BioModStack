@@ -63,6 +63,26 @@ modes:
       - num_designs
       - batch_size
 
+  - id: nanobody_binder
+    name: VHH Nanobody Design
+    description: Design VHH single-domain antibody binders
+    params:
+      - target_pdb
+      - num_designs
+      - batch_size
+      - scaffold_length
+      - binding_site_residues
+
+  - id: peptide_binder
+    name: Peptide Binder Design
+    description: Design short peptide binders
+    params:
+      - target_pdb
+      - num_designs
+      - batch_size
+      - scaffold_length
+      - binding_site_residues
+
   # DEPRECATED: dna_complex mode has been moved to Boltz-2 Complex Prediction
   # Use Boltz-2 with DNA/RNA complex components instead
 
