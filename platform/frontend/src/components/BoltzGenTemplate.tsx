@@ -194,6 +194,11 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     // Inverse folding parameters
     const [inverseFoldAvoid, setInverseFoldAvoid] = useState(initialValues?.boltzgen_inverse_fold_avoid || '');
     const [inverseFoldNumSeqs, setInverseFoldNumSeqs] = useState<number>(initialValues?.boltzgen_inverse_fold_num_sequences || 1);
+    // Cysteine avoidance - default ON for peptide/nanobody per upstream BoltzGen docs
+    const [avoidCysteine, setAvoidCysteine] = useState<boolean>(
+        initialValues?.boltzgen_avoid_cysteine ??
+        (initialValues?.mode === 'peptide_binder' || initialValues?.mode === 'nanobody_binder')
+    );
 
     // Diffusion parameters
     const [stepScale, setStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale || 1.8);
@@ -221,6 +226,25 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         }
     }, [ssElements, customSS]);
 
+    // Auto-enable cysteine avoidance for peptide/nanobody modes (per upstream BoltzGen defaults)
+    useEffect(() => {
+        if (mode === 'peptide_binder' || mode === 'nanobody_binder') {
+            setAvoidCysteine(true);
+        }
+    }, [mode]);
+
+    // Check for ubiquitin risk zone (73-76 AA)
+    const ubiquitinWarning = useMemo(() => {
+        const match = scaffoldLength.match(/(\d+)-(\d+)/);
+        if (match) {
+            const min = parseInt(match[1]);
+            const max = parseInt(match[2]);
+            // Check if range overlaps 73-76
+            return (min <= 76 && max >= 73);
+        }
+        return false;
+    }, [scaffoldLength]);
+
     // Additional advanced options (new)
     const [checkpointMode, setCheckpointMode] = useState<CheckpointMode>(initialValues?.boltzgen_checkpoint_mode || 'both');
     const [skipInverseFolding, setSkipInverseFolding] = useState(initialValues?.boltzgen_skip_inverse_folding || false);
@@ -228,6 +252,8 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
 
     // Production Mode - unlocks high design counts (10k-60k)
     const [productionMode, setProductionMode] = useState(initialValues?.boltzgen_production_mode || false);
+    // Parallelization factor - designs per child job (SWA pattern)
+    const [designsPerJob, setDesignsPerJob] = useState<number>(initialValues?.boltzgen_designs_per_job || 100);
 
     // Covalent bond constraints (disulfide, WHL staple, custom)
     interface CovalentBond {
@@ -340,8 +366,13 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         if (minConfScore) params.boltzgen_min_conf_score = minConfScore;
         params.boltzgen_filter_biased = filterBiased;
 
-        // Inverse folding parameters
-        if (inverseFoldAvoid.trim()) {
+        // Inverse folding parameters - cysteine avoidance
+        if (avoidCysteine) {
+            // Merge with any custom avoid residues
+            const avoidSet = new Set(inverseFoldAvoid.split('').filter(c => c.match(/[A-Z]/)));
+            avoidSet.add('C');
+            params.boltzgen_inverse_fold_avoid = Array.from(avoidSet).join('');
+        } else if (inverseFoldAvoid.trim()) {
             params.boltzgen_inverse_fold_avoid = inverseFoldAvoid;
         }
         if (inverseFoldNumSeqs > 1) {
@@ -383,6 +414,16 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         // Covalent bond constraints
         if (covalentBonds.length > 0) {
             params.boltzgen_covalent_bonds = JSON.stringify(covalentBonds);
+        }
+
+        // Production mode parallelization
+        if (productionMode) {
+            params.boltzgen_production_mode = true;
+            params.boltzgen_designs_per_job = designsPerJob;
+            // Enable parallel mode when designs exceed threshold
+            if (numDesigns > designsPerJob) {
+                params.boltzgen_parallel_mode = true;
+            }
         }
 
         submitMutation.mutate({
@@ -848,6 +889,15 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                         <p className="text-xs text-slate-500 mt-1">
                             {mode === 'nanobody_binder' ? 'Typical VHH ~120 residues' : 'Binder size range'}
                         </p>
+                        {/* Ubiquitin warning for 73-76 AA range */}
+                        {ubiquitinWarning && mode !== 'peptide_binder' && mode !== 'nanobody_binder' && (
+                            <div className="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                                <p className="text-xs text-yellow-400 flex items-center gap-1">
+                                    <span>⚠️</span>
+                                    <span>Lengths near 73-76 AA often converge to ubiquitin-like structures. Verify designs aren't ubiquitin.</span>
+                                </p>
+                            </div>
+                        )}
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">Number of Designs</label>
@@ -881,6 +931,24 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                     </div>
                 </div>
 
+                {/* Cysteine Avoidance Checkbox - appears for peptide/nanobody modes primarily */}
+                <div className="mt-4 flex items-center gap-4">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={avoidCysteine}
+                            onChange={e => setAvoidCysteine(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                        />
+                        <span className="text-sm text-slate-300">Avoid Cysteine (C)</span>
+                    </label>
+                    <span className="text-xs text-slate-500">
+                        {(mode === 'peptide_binder' || mode === 'nanobody_binder')
+                            ? 'Recommended for peptide/nanobody design'
+                            : 'Prevents reactive Cys in designed sequences'}
+                    </span>
+                </div>
+
                 {/* Production Mode Toggle */}
                 <div className="mt-4 p-4 border border-amber-500/30 rounded-lg bg-amber-500/5">
                     <label className="flex items-center gap-3 cursor-pointer">
@@ -891,9 +959,41 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                         <span className="text-sm font-medium text-amber-400">Production Mode</span>
                     </label>
                     {productionMode && (
-                        <div className="mt-2 text-xs text-amber-400/80">
-                            Unlocks up to 60,000 designs. Recommended: 10k-60k for production runs.
-                            <br />Estimated time: ~30-60 sec/design on RTX 5090/3090.
+                        <div className="mt-3 space-y-3">
+                            <div className="text-xs text-amber-400/80">
+                                Unlocks up to 60,000 designs. Recommended: 10k-60k for production runs.
+                                <br />Estimated time: ~30-60 sec/design on RTX 5090/3090.
+                            </div>
+
+                            {/* Parallelization Slider */}
+                            <div className="pt-2 border-t border-amber-500/20">
+                                <label className="block text-sm font-medium text-slate-300 mb-2">
+                                    Parallelization: {designsPerJob} designs/job
+                                </label>
+                                <input
+                                    type="range"
+                                    min={10}
+                                    max={500}
+                                    step={10}
+                                    value={designsPerJob}
+                                    onChange={e => setDesignsPerJob(Number(e.target.value))}
+                                    className="w-full accent-amber-500"
+                                />
+                                <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                    <span>10 (more jobs)</span>
+                                    <span>500 (fewer jobs)</span>
+                                </div>
+                                {numDesigns > designsPerJob && (
+                                    <div className="mt-2 px-3 py-2 bg-slate-800 rounded-lg border border-slate-700">
+                                        <span className="text-xs text-slate-400">
+                                            {numDesigns} designs ÷ {designsPerJob}/job = {' '}
+                                            <span className="text-amber-400 font-bold">
+                                                {Math.ceil(numDesigns / designsPerJob)} GPU jobs
+                                            </span>
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -960,8 +1060,8 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                         <div className="flex flex-wrap gap-2">
                                             {ssElements.map(el => (
                                                 <div key={el.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${el.type === 'helix' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
-                                                        el.type === 'sheet' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
-                                                            'bg-green-500/20 text-green-300 border border-green-500/30'
+                                                    el.type === 'sheet' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                                                        'bg-green-500/20 text-green-300 border border-green-500/30'
                                                     }`}>
                                                     <span className="capitalize">{el.type}</span>
                                                     <span className="font-mono">{el.start}-{el.end}</span>

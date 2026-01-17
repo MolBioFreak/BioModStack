@@ -11,7 +11,7 @@ include { AlignAF2 ; FilterAF2 ; RunAF2 } from './modules/af2.nf'
 include { AnalyseBestDesigns } from './modules/analysis.nf'
 include { PublishResults } from './modules/publish.nf'
 include { AlignBoltz ; FilterBoltz ; PrepBoltz ; RunBoltz } from './modules/boltz.nf'
-include { PrepBoltzGenInput ; RunBoltzGen ; FilterBoltzGen } from './modules/boltzgen.nf'
+include { PrepBoltzGenInput ; RunBoltzGen ; FilterBoltzGen ; SpawnBoltzGenJobs ; WaitForBoltzGenChildren ; CollectBoltzGenOutputs ; AggregateBoltzGenResults } from './modules/boltzgen.nf'
 include { PrepDiffDock ; RunDiffDock ; FilterDiffDock } from './modules/diffdock.nf'
 include { PrepUniDock ; RunUniDock ; FilterUniDock } from './modules/unidock.nf'
 include { CombineMetadata } from './modules/combine_metadata.nf'
@@ -46,7 +46,7 @@ workflow {
     try {
         nextflow.preview.topic = true
     }
-    catch (Exception e) {
+    catch (e: Exception) {
     }
 
     def outputDirectory = params.out_dir
@@ -199,46 +199,47 @@ workflow {
         // Parse PDB paths (comes as comma-separated string)
         def pdb_paths_raw = params.pdb_paths.toString()
         def pdb_list = pdb_paths_raw.split(',').collect { it.strip().replaceAll(/[\[\]'"]/, '') }.findAll { it }.collect { file(it) }
-        
+
         if (pdb_list.isEmpty()) {
             error("No valid PDB files found in pdb_paths: ${params.pdb_paths}")
         }
-        
+
         println("* Processing ${pdb_list.size()} PDBs")
 
         // Prepare FAMPNN input - PrepFAMPNN expects tuple [pdbs, jsons]
         fampnn_prep_input = Channel.of(tuple(pdb_list, file("${projectDir}/lib/NO_JSON")))
-        
+
         PrepFAMPNN(fampnn_prep_input)
-        
+
         // RunFAMPNN expects tuple [batch_id, pdbs, csv, gpu_id], analysis_chain_id
         // Build input by joining PrepFAMPNN outputs with gpu_id
         def gpu_id_val = params.gpu_id ?: 0
-        
+
         // Collect PDFs as-is (they're already in a collection from the glob)
         // PrepFAMPNN.out.pdbs emits path objects matching the glob
         // Use collect to group them, then merge with CSV
         fampnn_run_input = PrepFAMPNN.out.pdbs
-            .collect()  // Collect all paths from glob into list
-            .merge(PrepFAMPNN.out.csv)  // Merge with CSV channel
-            .map { collected_items -> 
+            .collect()
+            .merge(PrepFAMPNN.out.csv)
+            .map { collected_items ->
                 // collected_items is [List<Path>, Path] from merge
-                def pdbs = collected_items[0]  // First is the collected PDBs list
-                def csv = collected_items[1]   // Second is the CSV
+                def pdbs = collected_items[0]
+                // First is the collected PDBs list
+                def csv = collected_items[1]
+                // Second is the CSV
                 tuple(0, pdbs, csv, gpu_id_val)
             }
-        
+
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: 'all_chains')
-        
+
         // Optional filtering
-        def filterEnabled = params.enable_fampnn_filter != false && 
-                           (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
-        
+        def filterEnabled = params.enable_fampnn_filter != false && (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
+
         if (filterEnabled) {
             println("  Filtering FAMPNN designs...")
             FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
         }
-        
+
         println("FAMPNN child job complete")
         return null
     }
@@ -580,49 +581,100 @@ workflow {
             params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB"),
         )
 
-        // Run generation
-        RunBoltzGen(PrepBoltzGenInput.out.yaml)
+        // =========================================================================
+        // PARALLEL MODE: Use SWA pattern for large campaigns
+        // =========================================================================
+        if (params.boltzgen_parallel_mode) {
+            println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(params.boltzgen_num_designs / params.boltzgen_designs_per_job)} child jobs")
 
-        // Filter designs
-        FilterBoltzGen(RunBoltzGen.out.pdbs, RunBoltzGen.out.jsons)
+            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB")
 
-        // Branching logic
-        if (params.run_boltzgen_only) {
-            println("BoltzGen standalone mode complete. Exiting.")
-            // Assign to final_pdbs for publishing
-            FilterBoltzGen.out.pdbs
+            // Spawn child jobs via API
+            SpawnBoltzGenJobs(
+                params.job_id ?: 'unknown',
+                params.boltzgen_num_designs,
+                params.boltzgen_designs_per_job ?: 100,
+                PrepBoltzGenInput.out.yaml,
+                target_pdb,
+                params.boltzgen_mode ?: 'nanobody_binder',
+                params.name ?: 'boltzgen_campaign',
+            )
+
+            // Wait for all children to complete
+            WaitForBoltzGenChildren(
+                params.job_id ?: 'unknown',
+                SpawnBoltzGenJobs.out.result,
+            )
+
+            // Collect outputs from children
+            CollectBoltzGenOutputs(WaitForBoltzGenChildren.out.result)
+
+            // Aggregate and ingest results
+            AggregateBoltzGenResults(
+                params.job_id ?: 'unknown',
+                CollectBoltzGenOutputs.out.pdbs.collect(),
+                CollectBoltzGenOutputs.out.jsons.collect(),
+                CollectBoltzGenOutputs.out.manifest,
+            )
+
+            // Set final outputs
+            CollectBoltzGenOutputs.out.pdbs
                 .flatten()
                 .collect()
                 .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
                 .set { final_pdbs }
 
-            // Set other channels to empty/defaults to avoid errors
+            // Set empty channels for downstream
             rfd_tuples = Channel.empty()
             filt_rfd_pdbs_jsons = Channel.empty()
             filt_seq_pdbs = Channel.empty()
             analysis_input_pdbs = Channel.empty()
-
-            // Skip downstream stages
-            params.skip_rfd_seq = true
-            params.skip_rfd_seq_pred = true
         }
         else {
-            // Pipeline mode: Output flows into Stage 3 (Prediction) or Stage 4 (Docking)
-            // We set filt_seq_pdbs so it gets picked up by prediction stage if active
-            FilterBoltzGen.out.pdbs
-                .flatten()
-                .collect()
-                .set { filt_seq_pdbs }
+            // Run generation
+            RunBoltzGen(PrepBoltzGenInput.out.yaml)
 
-            // Also set analysis_input_pdbs for analysis stage (BoltzGen skips prediction)
-            FilterBoltzGen.out.pdbs
-                .flatten()
-                .collect()
-                .set { analysis_input_pdbs }
+            // Filter designs
+            FilterBoltzGen(RunBoltzGen.out.pdbs, RunBoltzGen.out.jsons)
 
-            // Set RFD/Seq channels empty since we skipped them
-            rfd_tuples = Channel.empty()
-            filt_rfd_pdbs_jsons = Channel.empty()
+            // Branching logic
+            if (params.run_boltzgen_only) {
+                println("BoltzGen standalone mode complete. Exiting.")
+                // Assign to final_pdbs for publishing
+                FilterBoltzGen.out.pdbs
+                    .flatten()
+                    .collect()
+                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .set { final_pdbs }
+
+                // Set other channels to empty/defaults to avoid errors
+                rfd_tuples = Channel.empty()
+                filt_rfd_pdbs_jsons = Channel.empty()
+                filt_seq_pdbs = Channel.empty()
+                analysis_input_pdbs = Channel.empty()
+
+                // Skip downstream stages
+                params.skip_rfd_seq = true
+                params.skip_rfd_seq_pred = true
+            }
+            else {
+                // Pipeline mode: Output flows into Stage 3 (Prediction) or Stage 4 (Docking)
+                // We set filt_seq_pdbs so it gets picked up by prediction stage if active
+                FilterBoltzGen.out.pdbs
+                    .flatten()
+                    .collect()
+                    .set { filt_seq_pdbs }
+
+                // Also set analysis_input_pdbs for analysis stage (BoltzGen skips prediction)
+                FilterBoltzGen.out.pdbs
+                    .flatten()
+                    .collect()
+                    .set { analysis_input_pdbs }
+
+                // Set RFD/Seq channels empty since we skipped them
+                rfd_tuples = Channel.empty()
+                filt_rfd_pdbs_jsons = Channel.empty()
+            }
         }
     }
     else if (params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred) {
