@@ -161,7 +161,7 @@ def main():
         entities.append({
             'protein': {
                 'id': 'A',
-                'pdb': args.input_pdb  # BoltzGen may accept PDB paths
+                'path': args.input_pdb  # BoltzGen uses 'path' for PDB files
             }
         })
     # Mode 2: Scaffold around ligand - fixed ligand pose
@@ -176,7 +176,7 @@ def main():
         entities.append({
             'ligand': {
                 'id': 'L',
-                'pdb': args.ligand_pdb
+                'path': args.ligand_pdb  # Use 'path' for PDB files
             }
         })
     # Mode 5: Nanobody design (VHH)
@@ -210,7 +210,7 @@ def main():
             entities.append({
                 'protein': {
                     'id': 'T',  # Target
-                    'pdb': args.target_pdb
+                    'path': args.target_pdb  # Use 'path' for PDB files
                 }
             })
         elif smiles:
@@ -272,12 +272,19 @@ def main():
         sites = parse_binding_site(args.binding_site_residues)
         if sites:
             print(f"Binding site constraints: {sites}")
-            # Add as pocket specification (format depends on BoltzGen API)
-            constraints.append({
-                'binding_pocket': {
-                    'residues': args.binding_site_residues
-                }
-            })
+            # Set include_proximity on the binder entity to bias towards these residues
+            # Format: include_proximity on the target entity with binder as reference
+            # Note: BoltzGen uses entity-level include_proximity or design-level constraints
+            # For now, we'll use include_proximity format on the binder entity
+            for entity in entities:
+                if 'protein' in entity and entity['protein'].get('id') in ['A', 'H']:  # Binder
+                    # Add include_proximity to binder to encourage contacts with target residues
+                    entity['protein']['include_proximity'] = {
+                        'chain': sites[0][0],  # Reference chain (target)
+                        'res_index': sites[0][1],  # Reference residue
+                        'radius': 10  # 10 angstroms
+                    }
+                    break
     
     # Parse covalent bond constraints (disulfides, WHL staples, custom)
     if args.covalent_bonds:
