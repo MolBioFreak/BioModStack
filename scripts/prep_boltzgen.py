@@ -307,21 +307,27 @@ def main():
             })
         
         # Generate CDR secondary structure constraints
-        # CDR loops should be flexible/loop regions
-        cdr_constraints = []
-        # Note: These are approximate IMGT positions for VHH
-        # CDR-H1: ~26-35, CDR-H2: ~50-65, CDR-H3: ~95-102+
-        if args.cdr_h1_length:
-            cdr_constraints.append(f"loop:26-33")  # CDR-H1 region
-        if args.cdr_h2_length:
-            cdr_constraints.append(f"loop:50-58")  # CDR-H2 region
-        if args.cdr_h3_length:
-            cdr_constraints.append(f"loop:95-115")  # CDR-H3 region (most variable)
-        
-        if cdr_constraints and not args.secondary_structure:
-            # Only add if not already specified
-            args.secondary_structure = ','.join(cdr_constraints)
-            print(f"  CDR constraints: {args.secondary_structure}")
+        # NOTE: Only apply when using a length range (de novo), NOT when using a full framework sequence
+        # BoltzGen only allows secondary structure constraints on positions that will be designed
+        if not args.nanobody_framework:  # De novo mode with length range
+            cdr_constraints = []
+            # Note: These are approximate IMGT positions for VHH
+            # CDR-H1: ~26-35, CDR-H2: ~50-65, CDR-H3: ~95-102+
+            if args.cdr_h1_length:
+                cdr_constraints.append(f"loop:26-33")  # CDR-H1 region
+            if args.cdr_h2_length:
+                cdr_constraints.append(f"loop:50-58")  # CDR-H2 region
+            if args.cdr_h3_length:
+                cdr_constraints.append(f"loop:95-115")  # CDR-H3 region (most variable)
+            
+            if cdr_constraints and not args.secondary_structure:
+                # Only add if not already specified
+                args.secondary_structure = ','.join(cdr_constraints)
+                print(f"  CDR constraints: {args.secondary_structure}")
+        else:
+            # When using a framework sequence, we don't add secondary structure constraints
+            # The framework already defines the structure
+            print(f"  Using full framework - skipping secondary structure constraints")
             
     # Mode 3: Standard de-novo design with SMILES
     else:
