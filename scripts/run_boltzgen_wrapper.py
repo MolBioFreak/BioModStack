@@ -119,6 +119,95 @@ def create_metadata_json(csv_path: Path, output_dir: Path):
         return False
 
 
+def extract_metrics_from_npz(batch_dir: Path, output_dir: Path) -> int:
+    """
+    Extract confidence metrics from BoltzGen NPZ files.
+    
+    This is a fallback when the analysis step fails and no CSV is generated.
+    NPZ files contain: iptm, ptm, protein_iptm, design_ptm, plddt (per-residue), etc.
+    
+    Returns: number of designs processed
+    """
+    import numpy as np
+    
+    processed = 0
+    
+    # Search for NPZ files in intermediate outputs
+    search_paths = [
+        batch_dir / "intermediate_designs_inverse_folded" / "fold_out_npz",
+        batch_dir / "intermediate_designs_inverse_folded",
+        batch_dir / "final_ranked_designs",
+        batch_dir
+    ]
+    
+    for search_dir in search_paths:
+        if not search_dir.exists():
+            continue
+            
+        for npz_path in search_dir.glob("*.npz"):
+            try:
+                npz = np.load(npz_path)
+                design_id = npz_path.stem
+                
+                # Extract key metrics (take mean across samples if multi-sample)
+                def safe_mean(arr):
+                    """Get scalar mean, handling NaN and multi-sample arrays."""
+                    if arr is None or arr.size == 0:
+                        return 0.0
+                    val = np.nanmean(arr)
+                    return float(val) if not np.isnan(val) else 0.0
+                
+                # Core confidence metrics
+                iptm = safe_mean(npz.get('iptm'))
+                ptm = safe_mean(npz.get('ptm'))
+                protein_iptm = safe_mean(npz.get('protein_iptm'))
+                design_ptm = safe_mean(npz.get('design_ptm'))
+                design_iptm = safe_mean(npz.get('design_iptm'))
+                target_ptm = safe_mean(npz.get('target_ptm'))
+                
+                # pLDDT requires special handling - it's per-residue
+                # BoltzGen stores confidence as pLDDT-like values (0-100 scale)
+                # Approximate pLDDT from ptm (typical correlation: pLDDT ≈ ptm * 100)
+                # Or if per-residue plddt exists, use mean
+                if 'plddt' in npz.files:
+                    plddt = safe_mean(npz.get('plddt'))
+                    if plddt < 1:  # Normalized 0-1 scale
+                        plddt = plddt * 100
+                else:
+                    # Estimate from design_ptm (reasonable approximation)
+                    plddt = design_ptm * 100 if design_ptm > 0 else ptm * 100
+                
+                metadata = {
+                    'design_id': design_id,
+                    'plddt': round(plddt, 2),
+                    'iptm': round(iptm, 4),
+                    'ptm': round(ptm, 4),
+                    'protein_iptm': round(protein_iptm, 4),
+                    'design_ptm': round(design_ptm, 4),
+                    'design_iptm': round(design_iptm, 4),
+                    'target_ptm': round(target_ptm, 4),
+                    'source': 'boltzgen',
+                    'metrics_source': 'npz'
+                }
+                
+                json_path = output_dir / f"confidence_{design_id}.json"
+                with open(json_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                processed += 1
+                print(f"Extracted metrics from NPZ: {design_id} (pLDDT={plddt:.1f}, iPTM={iptm:.3f})")
+                
+            except Exception as e:
+                print(f"Warning: Failed to extract metrics from {npz_path}: {e}")
+                continue
+        
+        # If we found NPZ files in this directory, don't search others
+        if processed > 0:
+            break
+    
+    return processed
+
+
 def auto_detect_protocol(config_path: str) -> str:
     """
     Auto-detect the appropriate BoltzGen protocol based on entity types in the YAML.
@@ -346,15 +435,27 @@ def main():
         print(f"Converted {cif_converted} CIF files to PDB across {len(batch_dirs)} batch(es)")
     
     # Convert metrics CSVs to JSON metadata from all batches
+    # Fall back to NPZ extraction if CSV not available (analysis step failed)
+    csv_found = False
     for batch_dir in batch_dirs:
         for loc in [batch_dir / "final_ranked_designs" / "all_designs_metrics.csv",
                     batch_dir / "intermediate_designs_inverse_folded" / "metrics.csv"]:
             if loc.exists():
                 create_metadata_json(loc, designs_dir)
                 print(f"Created JSON metadata from {loc}")
+                csv_found = True
                 break
     
-    # Create minimal JSON for any PDBs without metadata
+    # Fallback: Extract metrics from NPZ files if no CSV found
+    if not csv_found:
+        print("No metrics CSV found - extracting from NPZ files (analysis step may have failed)")
+        npz_extracted = 0
+        for batch_dir in batch_dirs:
+            npz_extracted += extract_metrics_from_npz(batch_dir, designs_dir)
+        if npz_extracted > 0:
+            print(f"Extracted metrics from {npz_extracted} NPZ files")
+    
+    # Create minimal JSON for any PDBs still without metadata
     for pdb in designs_dir.glob("*.pdb"):
         json_path = designs_dir / f"confidence_{pdb.stem}.json"
         if not json_path.exists():
