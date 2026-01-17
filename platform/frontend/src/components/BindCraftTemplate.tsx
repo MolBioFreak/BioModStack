@@ -71,9 +71,15 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
     // ============================================================================
     // State: Design Approach (De Novo vs Scaffold Redesign)
     // ============================================================================
-    const [designApproach, setDesignApproach] = useState<'denovo' | 'scaffold_redesign'>('denovo');
+    const [designApproach, setDesignApproach] = useState<'denovo' | 'scaffold_redesign' | 'cdr_hallucination'>('denovo');
     const [scaffoldPdbPath, setScaffoldPdbPath] = useState<string>('');
     const [binderChain, setBinderChain] = useState<string>('B');
+
+    // CDR Hallucination specific settings
+    const [cdrLengthMode, setCdrLengthMode] = useState<'fixed' | 'sample'>('fixed');
+    const [cdrH1Range, setCdrH1Range] = useState<string>('5-12');
+    const [cdrH2Range, setCdrH2Range] = useState<string>('6-10');
+    const [cdrH3Range, setCdrH3Range] = useState<string>('10-18');
 
     // ============================================================================
     // State: Binder Configuration
@@ -219,6 +225,17 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 setError('Please upload a scaffold PDB file (target + binder complex)');
                 return;
             }
+        } else if (designApproach === 'cdr_hallucination') {
+            if (!targetPdbPath) {
+                setError('Please upload a target PDB file for CDR hallucination');
+                return;
+            }
+            // Validate CDR length ranges format
+            const rangePattern = /^\d+-\d+$/;
+            if (!rangePattern.test(cdrH1Range) || !rangePattern.test(cdrH2Range) || !rangePattern.test(cdrH3Range)) {
+                setError('CDR length ranges must be in format "min-max" (e.g., "10-18")');
+                return;
+            }
         } else {
             if (!targetPdbPath) {
                 setError('Please upload a target PDB file');
@@ -236,7 +253,13 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             bindcraft_design_mode: designApproach,
             bindcraft_scaffold_pdb: designApproach === 'scaffold_redesign' ? scaffoldPdbPath : null,
             bindcraft_binder_chain: designApproach === 'scaffold_redesign' ? binderChain : null,
+            // CDR Hallucination specific
+            bindcraft_cdr_length_mode: designApproach === 'cdr_hallucination' ? cdrLengthMode : null,
+            bindcraft_cdr_h1_range: designApproach === 'cdr_hallucination' ? cdrH1Range : null,
+            bindcraft_cdr_h2_range: designApproach === 'cdr_hallucination' ? cdrH2Range : null,
+            bindcraft_cdr_h3_range: designApproach === 'cdr_hallucination' ? cdrH3Range : null,
             // Target
+
             bindcraft_target_pdb: targetPdbPath,
             bindcraft_hotspot_residues: hotspotResidues || null,
             bindcraft_chains: chains,
@@ -340,8 +363,8 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                     <button
                         onClick={() => setDesignApproach('denovo')}
                         className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'denovo'
-                                ? 'border-emerald-500 bg-emerald-600/20'
-                                : 'border-slate-700 hover:bg-slate-800'
+                            ? 'border-emerald-500 bg-emerald-600/20'
+                            : 'border-slate-700 hover:bg-slate-800'
                             }`}
                     >
                         <div className="font-medium text-slate-200">De Novo Design</div>
@@ -350,12 +373,22 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                     <button
                         onClick={() => setDesignApproach('scaffold_redesign')}
                         className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'scaffold_redesign'
-                                ? 'border-emerald-500 bg-emerald-600/20'
-                                : 'border-slate-700 hover:bg-slate-800'
+                            ? 'border-emerald-500 bg-emerald-600/20'
+                            : 'border-slate-700 hover:bg-slate-800'
                             }`}
                     >
                         <div className="font-medium text-slate-200">Scaffold Redesign</div>
-                        <div className="text-xs text-slate-500">Optimize VHH/nanobody scaffold</div>
+                        <div className="text-xs text-slate-500">Sequence optimization of scaffold</div>
+                    </button>
+                    <button
+                        onClick={() => setDesignApproach('cdr_hallucination')}
+                        className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'cdr_hallucination'
+                            ? 'border-purple-500 bg-purple-600/20'
+                            : 'border-slate-700 hover:bg-slate-800'
+                            }`}
+                    >
+                        <div className="font-medium text-slate-200">CDR Hallucination</div>
+                        <div className="text-xs text-slate-500">Redesign CDR loops de novo</div>
                     </button>
                 </div>
 
@@ -391,6 +424,74 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                             <p className="mt-1 text-xs text-slate-500">Chain ID of the binder/VHH to redesign</p>
+                        </div>
+                    </div>
+                )}
+
+                {designApproach === 'cdr_hallucination' && (
+                    <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-purple-500/30">
+                        <div className="text-xs text-purple-400 mb-2">
+                            🧬 VHH-optimized CDR design. Framework regions and VHH tetrad (F37, E44, R45, G47) automatically protected.
+                        </div>
+
+                        {/* CDR Length Mode */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">CDR Length Mode</label>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setCdrLengthMode('fixed')}
+                                    className={`px-4 py-2 rounded-lg border transition-colors ${cdrLengthMode === 'fixed'
+                                        ? 'border-purple-500 bg-purple-600/20 text-purple-300'
+                                        : 'border-slate-700 text-slate-400 hover:bg-slate-800'
+                                        }`}
+                                >
+                                    Fixed (use median)
+                                </button>
+                                <button
+                                    onClick={() => setCdrLengthMode('sample')}
+                                    className={`px-4 py-2 rounded-lg border transition-colors ${cdrLengthMode === 'sample'
+                                        ? 'border-purple-500 bg-purple-600/20 text-purple-300'
+                                        : 'border-slate-700 text-slate-400 hover:bg-slate-800'
+                                        }`}
+                                >
+                                    Sample (randomize per trajectory)
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* CDR Length Ranges */}
+                        <div className="grid grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-400 mb-1">CDR-H1 Length</label>
+                                <input
+                                    type="text"
+                                    value={cdrH1Range}
+                                    onChange={(e) => setCdrH1Range(e.target.value)}
+                                    placeholder="5-12"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-400 mb-1">CDR-H2 Length</label>
+                                <input
+                                    type="text"
+                                    value={cdrH2Range}
+                                    onChange={(e) => setCdrH2Range(e.target.value)}
+                                    placeholder="6-10"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-400 mb-1">CDR-H3 Length</label>
+                                <input
+                                    type="text"
+                                    value={cdrH3Range}
+                                    onChange={(e) => setCdrH3Range(e.target.value)}
+                                    placeholder="10-18"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                />
+                                <p className="mt-1 text-xs text-slate-500">Most variable loop</p>
+                            </div>
                         </div>
                     </div>
                 )}
