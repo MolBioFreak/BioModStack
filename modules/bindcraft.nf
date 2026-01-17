@@ -14,9 +14,9 @@
 // =============================================================================
 process PrepBindCraftInput {
     label 'pyrosetta_tools'
-    
+
     publishDir "${params.out_dir}/run/bindcraft/config", mode: 'copy', pattern: "*.json"
-    
+
     input:
     path target_pdb
     val hotspot_residues
@@ -45,13 +45,13 @@ process PrepBindCraftInput {
     val remove_unrelaxed_complex
     val remove_binder_monomer
     val save_trajectory_pickle
-    
+
     output:
     path "settings_target.json", emit: target_settings
     path "settings_advanced.json", emit: advanced_settings
     path "settings_filters.json", emit: filter_settings
     path "${design_mode == 'scaffold_redesign' && scaffold_pdb.name != 'null' ? scaffold_pdb : target_pdb}", emit: target_pdb_out
-    
+
     script:
     """
     #!/usr/bin/env python3
@@ -210,32 +210,32 @@ process PrepBindCraftInput {
 process RunBindCraft {
     label 'BindCraft'
     label 'gpu'
-    
+
     // Publish outputs
     publishDir "${params.out_dir}/run/bindcraft", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/bindcraft/trajectories", mode: 'copy', pattern: "output/Trajectory/*.pdb"
     publishDir "${params.out_dir}/run/bindcraft/mpnn", mode: 'copy', pattern: "output/MPNN/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/Accepted/*.pdb"
     publishDir "${params.out_dir}/run/bindcraft/stats", mode: 'copy', pattern: "output/*.csv"
-    
+
     // Container with AF2 weights mounted
     container 'apptainer/bindcraft.sif'
     containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind /mnt/BioModStack/weights/alphafold:/app/params --writable-tmpfs" }
-    
+
     input:
     path target_settings
     path advanced_settings
     path filter_settings
     path target_pdb
     val job_id
-    
+
     output:
     path "output/Accepted/*.pdb", emit: accepted_pdbs, optional: true
     path "output/final_design_stats.csv", emit: stats, optional: true
     path "output/trajectory_stats.csv", emit: trajectory_stats, optional: true
     path "output/mpnn_design_stats.csv", emit: mpnn_stats, optional: true
     path "*.log", emit: logs
-    
+
     script:
     """
     set -euo pipefail
@@ -288,27 +288,27 @@ with open('settings_target.json', 'w') as f:
 // =============================================================================
 process FilterBindCraft {
     label 'pyrosetta_tools'
-    
+
     publishDir "${params.out_dir}/run/filter_bindcraft", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/filter_bindcraft", mode: 'copy', pattern: "filtered/*.json"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "filtered/*.pdb"
-    
+
     input:
     path accepted_pdbs
     path stats_csv
     val budget
     val alpha
-    
+
     output:
     path "filtered/*.pdb", emit: pdbs
     path "filtered/filter_summary.json", emit: summary, optional: true
     path "filtered/ranked_designs.csv", emit: ranked_csv, optional: true
     path "*.log"
-    
+
     script:
     def budgetArg = budget ? "--budget ${budget}" : ""
     def alphaArg = alpha ? "--alpha ${alpha}" : "--alpha 0.01"
-    
+
     """
     #!/usr/bin/env python3
     import json
@@ -390,8 +390,6 @@ process FilterBindCraft {
             shutil.copy(pdb, f"filtered/{pdb.name}")
     
     print("=== Filter Complete ===")
-    """ > filter_bindcraft.log 2>&1
-    cat filter_bindcraft.log
     """
 }
 
@@ -404,9 +402,9 @@ process CDRHallucination {
     tag "cdr_hallucination"
     label 'BindCraft'
     label 'gpu'
-    
+
     container 'apptainer/bindcraft.sif'
-    
+
     input:
     path target_pdb
     val target_chain
@@ -416,12 +414,12 @@ process CDRHallucination {
     val cdr_h1_range
     val cdr_h2_range
     val cdr_h3_range
-    
+
     output:
     path "output/*.pdb", emit: designs
     path "output/cdr_hallucination_summary.json", emit: summary
     path "cdr_hallucination.log", emit: log
-    
+
     script:
     def hotspotArg = hotspot_residues ? "--hotspot \"${hotspot_residues}\"" : ""
     """
@@ -438,4 +436,3 @@ process CDRHallucination {
         2>&1 | tee cdr_hallucination.log
     """
 }
-
