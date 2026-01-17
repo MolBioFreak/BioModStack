@@ -719,11 +719,11 @@ export function JobSubmission() {
                                             {
                                                 id: 'bindcraft',
                                                 name: 'BindCraft',
-                                                description: 'Design minibinders and peptides using AF2 backpropagation, ProteinMPNN, and PyRosetta. ~50% experimental success rate.',
-                                                icon: 'target',
+                                                description: 'Design minibinders and peptides via AF2 hallucination, ProteinMPNN sequence optimization, and PyRosetta filtering.',
+                                                icon: 'binder',
                                                 color: '#10B981', // Emerald
                                                 stages: [
-                                                    { tool: 'AF2 Backprop' },
+                                                    { tool: 'AF2 Hallucination' },
                                                     { tool: 'MPNN' },
                                                     { tool: 'Filtering' }
                                                 ]
@@ -750,7 +750,8 @@ export function JobSubmission() {
                                                                 template.icon === 'flask' ? 'RF' :
                                                                     template.icon === 'dna' ? 'MU' :
                                                                         template.icon === 'microscope' ? 'SP' :
-                                                                            template.icon === 'pill' ? 'BG' : 'WF'}
+                                                                            template.icon === 'pill' ? 'BG' :
+                                                                                template.icon === 'binder' ? 'BC' : 'WF'}
                                                         </div>
                                                         <div>
                                                             <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
