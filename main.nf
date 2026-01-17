@@ -35,6 +35,9 @@ include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 // Antibody Child Workflow (single design validation - spawned by parent in exploration mode)
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 
+// BindCraft Workflow (de novo minibinder design via AF2 backpropagation)
+include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
+
 // RFantibody module for standalone backbone generation
 include { RFANTIBODY } from './modules/rfantibody'
 
@@ -105,6 +108,39 @@ workflow {
             pdb_list,
             params.msa_path ?: "",
         )
+
+        return null
+    }
+
+    /////////////////////////////
+    // BINDCRAFT DE NOVO       //
+    /////////////////////////////
+    // BindCraft minibinder design workflow
+    if (params.rfd_mode == 'bindcraft') {
+        println("Running BindCraft De Novo Binder Design")
+        println("* Target PDB: ${params.bindcraft_target_pdb}")
+        println("* Hotspots: ${params.bindcraft_hotspot_residues ?: 'auto-detect'}")
+        println("* Binder lengths: ${params.bindcraft_binder_lengths}")
+        println("* Algorithm: ${params.bindcraft_design_algorithm}")
+        println("* Final designs: ${params.bindcraft_num_final_designs}")
+
+        if (!params.bindcraft_target_pdb) {
+            error("Target PDB required for bindcraft mode")
+        }
+
+        BINDCRAFT_DESIGN()
+
+        return null
+    }
+
+    // BindCraft child job (spawned by SWA parent)
+    if (params.rfd_mode == 'bindcraft_child') {
+        println("Running BindCraft Child Job (SWA)")
+        println("* Child index: ${params.child_index}")
+        println("* Trajectories: ${params.bindcraft_num_final_designs}")
+
+        // Child runs directly without further spawning
+        BINDCRAFT_DESIGN()
 
         return null
     }
