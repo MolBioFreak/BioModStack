@@ -55,14 +55,10 @@ process PrepBoltzGenInput {
         ${target_pdb.name != 'NO_TARGET_PDB' ? "--target_pdb '${target_pdb}'" : ''} \\
         --output_yaml boltzgen_input.yaml
 
-    # Validate generated YAML using boltzgen check (fail-fast on bad config)
-    echo "Validating BoltzGen YAML..."
-    boltzgen check boltzgen_input.yaml || {
-        echo "ERROR: BoltzGen YAML validation failed"
-        cat boltzgen_input.yaml
-        exit 1
-    }
-    echo "YAML validation passed"
+    # Note: boltzgen YAML validation skipped here (boltzgen CLI only in boltzgen.sif)
+    # The prep_boltzgen.py script validates structure internally
+    echo "BoltzGen YAML prepared: boltzgen_input.yaml"
+    cat boltzgen_input.yaml
     """
 }
 
