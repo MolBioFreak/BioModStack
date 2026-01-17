@@ -179,8 +179,13 @@ function ChartCard({ title, hasData = true, isHidden = false, onToggleHidden, ch
                 </div>
             </div>
             {!isHidden && (
-                <div className={`p-2 ${isFullscreen ? 'h-[calc(100vh-48px)]' : ''}`}>
-                    {children}
+                <div
+                    className={`p-2 ${isFullscreen ? 'flex-1 flex flex-col' : ''}`}
+                    style={isFullscreen ? { height: 'calc(100vh - 48px)' } : undefined}
+                >
+                    <div className={isFullscreen ? 'flex-1 [&_.js-plotly-plot]:!h-full [&_.plotly]:!h-full [&_.svg-container]:!h-full' : ''}>
+                        {children}
+                    </div>
                 </div>
             )}
         </div>
@@ -951,7 +956,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('plddt_overall', 'pae_overall')}
                         isHidden={hiddenCharts.has('plddt-pae')}
                         onToggleHidden={() => toggleHidden('plddt-pae')}
-                        
+
                     >
                         <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -963,7 +968,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('conf_score', 'iptm')}
                         isHidden={hiddenCharts.has('conf-iptm')}
                         onToggleHidden={() => toggleHidden('conf-iptm')}
-                        
+
                     >
                         <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -975,7 +980,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('affinity_score', 'binder_probability')}
                         isHidden={hiddenCharts.has('affinity-binder')}
                         onToggleHidden={() => toggleHidden('affinity-binder')}
-                        
+
                     >
                         <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -987,7 +992,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('plddt_overall', 'rog')}
                         isHidden={hiddenCharts.has('plddt-rog')}
                         onToggleHidden={() => toggleHidden('plddt-rog')}
-                        
+
                     >
                         <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -999,7 +1004,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('plddt_overall')}
                     isHidden={hiddenCharts.has('hist-plddt')}
                     onToggleHidden={() => toggleHidden('hist-plddt')}
-                    
+
                 >
                     <Plot data={makeHistogram('plddt_overall', 0)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1009,7 +1014,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('pae_overall')}
                     isHidden={hiddenCharts.has('hist-pae')}
                     onToggleHidden={() => toggleHidden('hist-pae')}
-                    
+
                 >
                     <Plot data={makeHistogram('pae_overall', 2)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1019,7 +1024,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('iptm')}
                     isHidden={hiddenCharts.has('hist-iptm')}
                     onToggleHidden={() => toggleHidden('hist-iptm')}
-                    
+
                 >
                     <Plot data={makeHistogram('iptm', 4)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1029,7 +1034,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('conf_score')}
                     isHidden={hiddenCharts.has('hist-conf')}
                     onToggleHidden={() => toggleHidden('hist-conf')}
-                    
+
                 >
                     <Plot data={makeHistogram('conf_score', 6)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1094,7 +1099,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={has3DData('plddt_overall', 'iptm', 'pae_overall')}
                     isHidden={hiddenCharts.has('3d-quality')}
                     onToggleHidden={() => toggleHidden('3d-quality')}
-                    
+
                 >
                     <Plot
                         data={make3DScatter('plddt_overall', 'iptm', 'pae_overall', 'conf_score')}
@@ -1110,7 +1115,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={has3DData('affinity_score', 'binder_probability', 'iptm')}
                     isHidden={hiddenCharts.has('3d-binding')}
                     onToggleHidden={() => toggleHidden('3d-binding')}
-                    
+
                 >
                     <Plot
                         data={make3DScatter('affinity_score', 'binder_probability', 'iptm', 'plddt_overall')}
