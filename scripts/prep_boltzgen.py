@@ -19,6 +19,63 @@ NTP_TEMPLATES = {
 # Mg2+ coordination template for catalytic sites
 MG_COORD_SMILES = '[Mg+2]'
 
+# 3-letter to 1-letter amino acid mapping
+AA_3TO1 = {
+    'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+    'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+    'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+    'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
+    # Non-standard
+    'MSE': 'M', 'SEC': 'C', 'PYL': 'K'
+}
+
+
+def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
+    """Extract protein sequence from a PDB file.
+    
+    Args:
+        pdb_path: Path to PDB file
+        chain_id: Optional chain ID to extract (if None, extracts first protein chain)
+    
+    Returns:
+        One-letter amino acid sequence string, or empty string on failure
+    """
+    try:
+        residues = {}  # (chain, resnum) -> resname
+        with open(pdb_path, 'r') as f:
+            for line in f:
+                if line.startswith('ATOM') or line.startswith('HETATM'):
+                    resname = line[17:20].strip()
+                    if resname not in AA_3TO1:
+                        continue  # Skip non-protein residues
+                    chain = line[21]
+                    if chain_id and chain != chain_id:
+                        continue
+                    try:
+                        resnum = int(line[22:26].strip())
+                    except ValueError:
+                        continue
+                    residues[(chain, resnum)] = resname
+        
+        if not residues:
+            return ''
+        
+        # Sort by chain, then residue number
+        sorted_res = sorted(residues.items(), key=lambda x: (x[0][0], x[0][1]))
+        
+        # If no chain specified, use all residues (typical for single-chain files)
+        if chain_id:
+            seq = ''.join(AA_3TO1.get(r[1], 'X') for r in sorted_res)
+        else:
+            # Just get the first chain
+            first_chain = sorted_res[0][0][0]
+            seq = ''.join(AA_3TO1.get(r[1], 'X') for r in sorted_res if r[0][0] == first_chain)
+        
+        return seq
+    except Exception as e:
+        print(f"Warning: Failed to extract sequence from {pdb_path}: {e}")
+        return ''
+
 
 def parse_binding_site(binding_site_str):
     """Parse binding site residue specification.
@@ -157,13 +214,25 @@ def main():
     # Mode 1: Backbone docking - use existing protein structure
     elif args.input_pdb and Path(args.input_pdb).exists():
         print(f"Mode: Backbone docking with existing structure: {args.input_pdb}")
-        # Read sequence from PDB (simplified - just use as template)
-        entities.append({
-            'protein': {
-                'id': 'A',
-                'path': args.input_pdb  # BoltzGen uses 'path' for PDB files
-            }
-        })
+        # BoltzGen requires BOTH path AND sequence for PDB-loaded entities
+        input_seq = extract_sequence_from_pdb(args.input_pdb)
+        if input_seq:
+            entities.append({
+                'protein': {
+                    'id': 'A',
+                    'path': args.input_pdb,
+                    'sequence': input_seq
+                }
+            })
+            print(f"  Backbone sequence: {len(input_seq)} AA")
+        else:
+            print("  Warning: Could not extract sequence from input PDB")
+            entities.append({
+                'protein': {
+                    'id': 'A',
+                    'path': args.input_pdb
+                }
+            })
     # Mode 2: Scaffold around ligand - fixed ligand pose
     elif args.ligand_pdb and Path(args.ligand_pdb).exists():
         print(f"Mode: Scaffold around fixed ligand: {args.ligand_pdb}")
@@ -207,12 +276,26 @@ def main():
         # Target antigen entity (if provided)
         if args.target_pdb and Path(args.target_pdb).exists():
             print(f"  Target antigen: {args.target_pdb}")
-            entities.append({
-                'protein': {
-                    'id': 'T',  # Target
-                    'path': args.target_pdb  # Use 'path' for PDB files
-                }
-            })
+            # BoltzGen requires BOTH path AND sequence for PDB-loaded entities
+            target_seq = extract_sequence_from_pdb(args.target_pdb)
+            if target_seq:
+                entities.append({
+                    'protein': {
+                        'id': 'T',  # Target
+                        'path': args.target_pdb,
+                        'sequence': target_seq  # Required by BoltzGen schema
+                    }
+                })
+                print(f"  Target sequence: {len(target_seq)} AA")
+            else:
+                # Fallback: just use path and hope BoltzGen handles it
+                print("  Warning: Could not extract sequence from target PDB")
+                entities.append({
+                    'protein': {
+                        'id': 'T',
+                        'path': args.target_pdb
+                    }
+                })
         elif smiles:
             # Small molecule target
             print(f"  Small molecule target: {smiles[:50]}...")
