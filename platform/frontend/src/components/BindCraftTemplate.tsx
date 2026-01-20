@@ -13,6 +13,7 @@ import { submitJob, uploadFile } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TemplateManagerModal } from './TemplateManagerModal';
+import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 
 // Design algorithm options
 const DESIGN_ALGORITHMS = [
@@ -145,6 +146,36 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
     const [showTemplateManager, setShowTemplateManager] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
+    // ============================================================================
+    // State: Phase 1 - Framework Selection & 3D Viewer
+    // ============================================================================
+    const [selectedFramework, setSelectedFramework] = useState<SelectedFramework | null>(null);
+    const [showFrameworkBrowser, setShowFrameworkBrowser] = useState<boolean>(false);
+    const [frameworkPdbUrl, setFrameworkPdbUrl] = useState<string | null>(null);
+    const [viewerMode, setViewerMode] = useState<'target' | 'framework'>('target');
+    const [show3DViewer, setShow3DViewer] = useState<boolean>(true); // Default to showing viewer
+
+    // ============================================================================
+    // State: Phase 2 - Residue Mask (Fixed vs Redesign positions)
+    // ============================================================================
+    const [maskMode, setMaskMode] = useState<'none' | 'imgt_auto' | 'manual' | 'range'>('none');
+    const [redesignRanges, setRedesignRanges] = useState<string>(''); // e.g., "26-35,50-65,95-115"
+
+    // ============================================================================
+    // State: Phase 3 - Template Flexibility Controls
+    // ============================================================================
+    const [rmTemplateSeqDesign, setRmTemplateSeqDesign] = useState<boolean>(false);
+    const [rmTemplateScDesign, setRmTemplateScDesign] = useState<boolean>(false);
+    const [predictInitialGuess, setPredictInitialGuess] = useState<boolean>(true);
+    const [useTerminiDistanceLoss, setUseTerminiDistanceLoss] = useState<boolean>(false);
+    const [showTemplateOptions, setShowTemplateOptions] = useState<boolean>(false);
+
+    // ============================================================================
+    // State: Phase 4 - CDR Length Sampling
+    // ============================================================================
+    const [cdrSamplingEnabled, setCdrSamplingEnabled] = useState<boolean>(false);
+    const [cdrSamplingCount, setCdrSamplingCount] = useState<number>(5); // Generate N configs with different lengths
+
     // Update binder length defaults based on design mode
     useEffect(() => {
         if (designMode === 'peptide') {
@@ -251,15 +282,26 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             rfd_mode: 'bindcraft',
             // Design approach
             bindcraft_design_mode: designApproach,
-            bindcraft_scaffold_pdb: designApproach === 'scaffold_redesign' ? scaffoldPdbPath : null,
+            bindcraft_scaffold_pdb: designApproach === 'scaffold_redesign' ? scaffoldPdbPath :
+                (designApproach === 'cdr_hallucination' && scaffoldPdbPath ? scaffoldPdbPath : null),
             bindcraft_binder_chain: designApproach === 'scaffold_redesign' ? binderChain : null,
             // CDR Hallucination specific
             bindcraft_cdr_length_mode: designApproach === 'cdr_hallucination' ? cdrLengthMode : null,
             bindcraft_cdr_h1_range: designApproach === 'cdr_hallucination' ? cdrH1Range : null,
             bindcraft_cdr_h2_range: designApproach === 'cdr_hallucination' ? cdrH2Range : null,
             bindcraft_cdr_h3_range: designApproach === 'cdr_hallucination' ? cdrH3Range : null,
+            // Phase 2: Residue Mask
+            bindcraft_mask_mode: designApproach === 'cdr_hallucination' ? maskMode : null,
+            bindcraft_redesign_ranges: designApproach === 'cdr_hallucination' && maskMode === 'range' ? redesignRanges : null,
+            // Phase 3: Template Flexibility
+            bindcraft_rm_template_seq_design: rmTemplateSeqDesign,
+            bindcraft_rm_template_sc_design: rmTemplateScDesign,
+            bindcraft_predict_initial_guess: predictInitialGuess,
+            bindcraft_use_termini_distance_loss: useTerminiDistanceLoss,
+            // Phase 4: CDR Sampling
+            bindcraft_cdr_sampling_enabled: cdrSamplingEnabled,
+            bindcraft_cdr_sampling_count: cdrSamplingEnabled ? cdrSamplingCount : null,
             // Target
-
             bindcraft_target_pdb: targetPdbPath,
             bindcraft_hotspot_residues: hotspotResidues || null,
             bindcraft_chains: chains,
@@ -431,7 +473,72 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 {designApproach === 'cdr_hallucination' && (
                     <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-purple-500/30">
                         <div className="text-xs text-purple-400 mb-2">
-                            🧬 VHH-optimized CDR design. Framework regions and VHH tetrad (F37, E44, R45, G47) automatically protected.
+                            🧬 VHH-optimized CDR design. Select a framework template and configure CDR regions to redesign.
+                        </div>
+
+                        {/* VHH Framework Selection */}
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-slate-300">
+                                    VHH Framework Template
+                                </label>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowFrameworkBrowser(!showFrameworkBrowser)}
+                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-1.5 ${showFrameworkBrowser
+                                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                            }`}
+                                    >
+                                        📚 {showFrameworkBrowser ? 'Hide Browser' : 'Browse SAbDab'}
+                                    </button>
+                                    {selectedFramework && (
+                                        <span className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs flex items-center gap-1">
+                                            🧬 {selectedFramework.pdbCode || selectedFramework.name}
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSelectedFramework(null);
+                                                    setFrameworkPdbUrl(null);
+                                                    setScaffoldPdbPath('');
+                                                }}
+                                                className="ml-1 text-purple-400 hover:text-purple-200"
+                                            >✕</button>
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* FrameworkBrowser */}
+                            {showFrameworkBrowser && (
+                                <div className="bg-slate-900/50 rounded-lg border border-slate-700 p-3">
+                                    <FrameworkBrowser
+                                        onSelect={(fw) => {
+                                            setSelectedFramework(fw);
+                                            // Set scaffold path if file downloaded
+                                            if (fw?.filePath) {
+                                                setScaffoldPdbPath(fw.filePath);
+                                            }
+                                            // Set framework PDB URL for 3D preview
+                                            if (fw?.pdbCode) {
+                                                setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
+                                                setViewerMode('framework');
+                                                setShow3DViewer(true);
+                                            }
+                                            // Auto-populate CDR-H3 length from SAbDab
+                                            if (fw?.cdrH3Length) {
+                                                const min = Math.max(8, fw.cdrH3Length - 3);
+                                                const max = fw.cdrH3Length + 3;
+                                                setCdrH3Range(`${min}-${max}`);
+                                            }
+                                            setShowFrameworkBrowser(false);
+                                        }}
+                                        selectedFramework={selectedFramework}
+                                        showCustomUpload={false}
+                                    />
+                                </div>
+                            )}
                         </div>
 
                         {/* CDR Length Mode */}
@@ -454,7 +561,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         : 'border-slate-700 text-slate-400 hover:bg-slate-800'
                                         }`}
                                 >
-                                    Sample (randomize per trajectory)
+                                    Sample (randomize)
                                 </button>
                             </div>
                         </div>
@@ -493,6 +600,132 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 <p className="mt-1 text-xs text-slate-500">Most variable loop</p>
                             </div>
                         </div>
+
+                        {/* Phase 4: CDR Sampling Option */}
+                        {cdrLengthMode === 'sample' && (
+                            <div className="mt-3 p-3 bg-slate-900/40 rounded-lg border border-purple-500/20">
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="text-sm font-medium text-slate-400">
+                                        Generate Multiple CDR Length Configurations
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCdrSamplingEnabled(!cdrSamplingEnabled)}
+                                        className={`px-3 py-1 text-xs rounded-lg transition-all ${cdrSamplingEnabled
+                                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                            }`}
+                                    >
+                                        {cdrSamplingEnabled ? '✓ Enabled' : 'Enable'}
+                                    </button>
+                                </div>
+                                {cdrSamplingEnabled && (
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-xs text-slate-500">Number of configurations:</span>
+                                        <input
+                                            type="number"
+                                            value={cdrSamplingCount}
+                                            onChange={(e) => setCdrSamplingCount(parseInt(e.target.value) || 5)}
+                                            min={2}
+                                            max={20}
+                                            className="w-16 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center text-sm"
+                                        />
+                                        <span className="text-xs text-slate-500">Each with different CDR lengths sampled from ranges</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Phase 2: Residue Mask Mode */}
+                        <div className="mt-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-slate-400">
+                                    Residue Mask Mode
+                                </label>
+                                <div className="flex gap-2">
+                                    {(['none', 'imgt_auto', 'range'] as const).map((mode) => (
+                                        <button
+                                            key={mode}
+                                            onClick={() => setMaskMode(mode)}
+                                            className={`px-3 py-1 text-xs rounded-lg transition-all ${maskMode === mode
+                                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                                }`}
+                                        >
+                                            {mode === 'none' ? 'Default' : mode === 'imgt_auto' ? 'IMGT Auto' : 'Custom Range'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            {maskMode === 'imgt_auto' && (
+                                <div className="text-xs text-purple-400 bg-purple-500/10 rounded p-2">
+                                    ✓ IMGT positions will be used: CDR-H1 (26-35), CDR-H2 (50-65), CDR-H3 (95-115) → Redesign<br />
+                                    Framework regions → Fixed
+                                </div>
+                            )}
+                            {maskMode === 'range' && (
+                                <div>
+                                    <label className="block text-xs text-slate-500 mb-1">Custom redesign positions (e.g., "26-35,50-65,95-115")</label>
+                                    <input
+                                        type="text"
+                                        value={redesignRanges}
+                                        onChange={(e) => setRedesignRanges(e.target.value)}
+                                        placeholder="26-35,50-65,95-115"
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Phase 3: Template Flexibility Options */}
+                        <button
+                            type="button"
+                            onClick={() => setShowTemplateOptions(!showTemplateOptions)}
+                            className="w-full text-left text-xs text-slate-500 hover:text-slate-400 flex items-center gap-2 mt-4"
+                        >
+                            <span>{showTemplateOptions ? '▼' : '▶'}</span>
+                            Advanced Template Options
+                        </button>
+                        {showTemplateOptions && (
+                            <div className="space-y-2 p-3 bg-slate-900/40 rounded-lg border border-slate-700">
+                                <label className="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={rmTemplateSeqDesign}
+                                        onChange={(e) => setRmTemplateSeqDesign(e.target.checked)}
+                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                    />
+                                    <span className="text-sm text-slate-400">Remove target template sequence (more flexible)</span>
+                                </label>
+                                <label className="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={rmTemplateScDesign}
+                                        onChange={(e) => setRmTemplateScDesign(e.target.checked)}
+                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                    />
+                                    <span className="text-sm text-slate-400">Remove target sidechains</span>
+                                </label>
+                                <label className="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={predictInitialGuess}
+                                        onChange={(e) => setPredictInitialGuess(e.target.checked)}
+                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                    />
+                                    <span className="text-sm text-slate-400">Use scaffold as initial geometry guess</span>
+                                </label>
+                                <label className="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={useTerminiDistanceLoss}
+                                        onChange={(e) => setUseTerminiDistanceLoss(e.target.checked)}
+                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                    />
+                                    <span className="text-sm text-slate-400">Minimize N/C terminus distance (for grafting)</span>
+                                </label>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -515,12 +748,64 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
 
-                    {targetPdbPath && (
-                        <div className="mt-4">
-                            <EpitopeMolstarViewer
-                                structureUrl={`/api/files/read?path=${encodeURIComponent(targetPdbPath)}`}
-                                selectedResidues={hotspotSet}
-                            />
+                    {(targetPdbPath || frameworkPdbUrl) && (
+                        <div className="mt-4 space-y-2">
+                            {/* Toggle Buttons */}
+                            <div className="flex items-center gap-2">
+                                {targetPdbPath && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (viewerMode === 'target' && show3DViewer) {
+                                                setShow3DViewer(false);
+                                            } else {
+                                                setViewerMode('target');
+                                                setShow3DViewer(true);
+                                            }
+                                        }}
+                                        className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'target' && show3DViewer
+                                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                            }`}
+                                    >
+                                        🎯 Target 3D
+                                    </button>
+                                )}
+                                {frameworkPdbUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (viewerMode === 'framework' && show3DViewer) {
+                                                setShow3DViewer(false);
+                                            } else {
+                                                setViewerMode('framework');
+                                                setShow3DViewer(true);
+                                            }
+                                        }}
+                                        className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'framework' && show3DViewer
+                                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                            }`}
+                                    >
+                                        🧬 Framework 3D
+                                    </button>
+                                )}
+                            </div>
+                            {/* 3D Viewer */}
+                            {show3DViewer && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <div className="text-xs text-slate-500 mb-2">
+                                        {viewerMode === 'target' ? '🎯 Target Antigen Preview' : '🧬 VHH Framework Template Preview'}
+                                    </div>
+                                    <EpitopeMolstarViewer
+                                        structureUrl={viewerMode === 'target'
+                                            ? `/api/files/read?path=${encodeURIComponent(targetPdbPath)}`
+                                            : frameworkPdbUrl!
+                                        }
+                                        selectedResidues={viewerMode === 'target' ? hotspotSet : new Set<string>()}
+                                    />
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
