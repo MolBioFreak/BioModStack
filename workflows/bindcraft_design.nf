@@ -21,43 +21,53 @@ include { BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
 
 process SpawnBindCraftJobs {
     label 'process_low'
-    
+
     publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
     publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
-    
+
     input:
     path target_pdb
     val total_trajectories
     val trajectories_per_job
     val parent_job_id
     val batch_name
-    
+
     output:
     path "spawn_bindcraft_result.json", emit: spawn_result
     path "*.log"
-    
+
     script:
-    def params_json = groovy.json.JsonOutput.toJson([
-        target_pdb: target_pdb.name,
-        hotspot_residues: params.bindcraft_hotspot_residues ?: '',
-        binder_lengths: params.bindcraft_binder_lengths ?: '80-120',
-        num_final_designs: params.bindcraft_num_final_designs ?: 100,
-        design_algorithm: params.bindcraft_design_algorithm ?: '4stage',
-        chains: params.bindcraft_chains ?: 'A',
-        use_multimer_design: params.bindcraft_use_multimer_design ?: true,
-        num_recycles_design: params.bindcraft_num_recycles_design ?: 3,
-        num_recycles_validation: params.bindcraft_num_recycles_validation ?: 3,
-        mpnn_weights: params.bindcraft_mpnn_weights ?: 'soluble',
-        num_mpnn_sequences: params.bindcraft_num_mpnn_sequences ?: 8,
-        min_iptm: params.bindcraft_min_iptm ?: 0.6,
-        max_hotspot_rmsd: params.bindcraft_max_hotspot_rmsd ?: 3.0,
-        zip_animations: params.bindcraft_zip_animations ?: true,
-        zip_plots: params.bindcraft_zip_plots ?: true,
-        remove_unrelaxed_trajectory: params.bindcraft_remove_unrelaxed_trajectory ?: true,
-        remove_unrelaxed_complex: params.bindcraft_remove_unrelaxed_complex ?: true,
-        remove_binder_monomer: params.bindcraft_remove_binder_monomer ?: true,
-        save_trajectory_pickle: params.bindcraft_save_trajectory_pickle ?: false
-    ])
+    def params_json = groovy.json.JsonOutput.toJson(
+        [
+            target_pdb: target_pdb.name,
+            hotspot_residues: params.bindcraft_hotspot_residues ?: '',
+            binder_lengths: params.bindcraft_binder_lengths ?: '80-120',
+            num_final_designs: params.bindcraft_num_final_designs ?: 100,
+            design_algorithm: params.bindcraft_design_algorithm ?: '4stage',
+            chains: params.bindcraft_chains ?: 'A',
+            use_multimer_design: params.bindcraft_use_multimer_design ?: true,
+            num_recycles_design: params.bindcraft_num_recycles_design ?: 3,
+            num_recycles_validation: params.bindcraft_num_recycles_validation ?: 3,
+            mpnn_weights: params.bindcraft_mpnn_weights ?: 'soluble',
+            num_mpnn_sequences: params.bindcraft_num_mpnn_sequences ?: 8,
+            min_iptm: params.bindcraft_min_iptm ?: 0.6,
+            max_hotspot_rmsd: params.bindcraft_max_hotspot_rmsd ?: 3.0,
+            zip_animations: params.bindcraft_zip_animations ?: true,
+            zip_plots: params.bindcraft_zip_plots ?: true,
+            remove_unrelaxed_trajectory: params.bindcraft_remove_unrelaxed_trajectory ?: true,
+            remove_unrelaxed_complex: params.bindcraft_remove_unrelaxed_complex ?: true,
+            remove_binder_monomer: params.bindcraft_remove_binder_monomer ?: true,
+            save_trajectory_pickle: params.bindcraft_save_trajectory_pickle ?: false,
+            mask_mode: params.bindcraft_mask_mode ?: 'none',
+            redesign_ranges: params.bindcraft_redesign_ranges ?: '',
+            rm_template_seq_design: params.bindcraft_rm_template_seq_design ?: false,
+            rm_template_sc_design: params.bindcraft_rm_template_sc_design ?: false,
+            predict_initial_guess: params.bindcraft_predict_initial_guess ?: false,
+            use_termini_distance_loss: params.bindcraft_use_termini_distance_loss ?: false,
+            cdr_sampling_enabled: params.bindcraft_cdr_sampling_enabled ?: false,
+            cdr_sampling_count: params.bindcraft_cdr_sampling_count ?: 5,
+        ]
+    )
     """
     python3 ${projectDir}/scripts/spawn_bindcraft_children.py \\
         --parent_job_id "${parent_job_id}" \\
@@ -74,16 +84,16 @@ process SpawnBindCraftJobs {
 
 process WaitForBindCraftChildren {
     label 'process_low'
-    
+
     input:
     val parent_job_id
     val stage_name
     val poll_interval_seconds
     val batch_name
-    
+
     output:
     path "child_outputs.json", emit: child_outputs
-    
+
     script:
     """
     python3 ${projectDir}/scripts/wait_for_children.py \\
@@ -98,18 +108,18 @@ process WaitForBindCraftChildren {
 
 process CollectBindCraftOutputs {
     label 'process_low'
-    
+
     publishDir "${params.out_dir}/collected/bindcraft", mode: 'copy', pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/bindcraft", mode: 'copy', pattern: "*.csv"
-    
+
     input:
     path child_outputs_json
-    
+
     output:
     path "*.pdb", emit: pdbs, optional: true
     path "merged_stats.csv", emit: stats, optional: true
     path "collection_manifest.json", emit: manifest
-    
+
     script:
     """
     #!/usr/bin/env python3
@@ -170,56 +180,57 @@ process CollectBindCraftOutputs {
 // MAIN WORKFLOW
 // =============================================================================
 workflow BINDCRAFT_DESIGN {
+
     main:
     // Input validation
     if (!params.bindcraft_target_pdb) {
-        error "Missing required parameter: bindcraft_target_pdb"
+        error("Missing required parameter: bindcraft_target_pdb")
     }
-    
+
     target_pdb = file(params.bindcraft_target_pdb)
     job_id = params.job_id ?: UUID.randomUUID().toString().take(8)
     batch_name = params.batch_name ?: "bindcraft_${job_id}"
-    
+
     // Check if running in SWA mode (multiple GPUs / high trajectory count)
     total_trajectories = params.bindcraft_total_trajectories ?: 100
     trajectories_per_job = params.bindcraft_trajectories_per_job ?: 25
     use_swa = params.bindcraft_use_swa ?: (total_trajectories > trajectories_per_job)
-    
+
     if (use_swa) {
         // =====================================================================
         // SWA Mode: Spawn multiple child jobs for parallel trajectory generation
         // =====================================================================
-        
+
         // 1. Spawn child jobs
         SpawnBindCraftJobs(
             target_pdb,
             total_trajectories,
             trajectories_per_job,
             job_id,
-            batch_name
+            batch_name,
         )
-        
+
         // 2. Wait for all children to complete
         WaitForBindCraftChildren(
             job_id,
             "bindcraft",
             params.bindcraft_poll_interval ?: 60,
-            batch_name
+            batch_name,
         )
-        
+
         // 3. Collect outputs from all children
         CollectBindCraftOutputs(
             WaitForBindCraftChildren.out.child_outputs
         )
-        
+
         collected_pdbs = CollectBindCraftOutputs.out.pdbs
         collected_stats = CollectBindCraftOutputs.out.stats
-        
-    } else {
+    }
+    else {
         // =====================================================================
         // Single Job Mode: Run BindCraft directly
         // =====================================================================
-        
+
         // 1. Prepare configuration files
         PrepBindCraftInput(
             target_pdb,
@@ -229,6 +240,9 @@ workflow BINDCRAFT_DESIGN {
             params.bindcraft_design_algorithm ?: '4stage',
             params.bindcraft_chains ?: 'A',
             params.binder_name ?: 'binder',
+            params.bindcraft_design_mode ?: 'denovo',
+            params.bindcraft_scaffold_pdb ? file(params.bindcraft_scaffold_pdb) : file('null'),
+            params.bindcraft_binder_chain ?: 'B',
             params.bindcraft_use_multimer_design ?: true,
             params.bindcraft_num_recycles_design ?: 3,
             params.bindcraft_num_recycles_validation ?: 3,
@@ -241,37 +255,42 @@ workflow BINDCRAFT_DESIGN {
             params.bindcraft_remove_unrelaxed_trajectory ?: true,
             params.bindcraft_remove_unrelaxed_complex ?: true,
             params.bindcraft_remove_binder_monomer ?: true,
-            params.bindcraft_save_trajectory_pickle ?: false
+            params.bindcraft_save_trajectory_pickle ?: false,
+            params.bindcraft_mask_mode ?: 'none',
+            params.bindcraft_redesign_ranges ?: '',
+            params.bindcraft_rm_template_seq_design ?: false,
+            params.bindcraft_rm_template_sc_design ?: false,
+            params.bindcraft_predict_initial_guess ?: false,
+            params.bindcraft_use_termini_distance_loss ?: false,
+            params.bindcraft_cdr_sampling_enabled ?: false,
+            params.bindcraft_cdr_sampling_count ?: 5,
         )
-        
+
         // 2. Run BindCraft
         RunBindCraft(
             PrepBindCraftInput.out.target_settings,
             PrepBindCraftInput.out.advanced_settings,
             PrepBindCraftInput.out.filter_settings,
             PrepBindCraftInput.out.target_pdb_out,
-            job_id
+            job_id,
         )
-        
+
         collected_pdbs = RunBindCraft.out.accepted_pdbs
         collected_stats = RunBindCraft.out.stats
     }
-    
+
     // 4. Filter and rank results
     FilterBindCraft(
         collected_pdbs,
         collected_stats,
         params.bindcraft_budget ?: '',
-        params.bindcraft_alpha ?: 0.01
+        params.bindcraft_alpha ?: 0.01,
     )
-    
+
     // 5. Optional: Boltz-2 validation (if enabled)
     if (params.bindcraft_boltz_validation ?: false) {
-        // Extract sequences from accepted PDBs and validate with Boltz-2
-        // This provides orthogonal structure validation
-        // Implementation follows antibody_denovo.nf pattern
     }
-    
+
     emit:
     final_pdbs = FilterBindCraft.out.pdbs
     summary = FilterBindCraft.out.summary
