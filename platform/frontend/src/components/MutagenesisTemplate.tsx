@@ -6,6 +6,7 @@ import { InteractiveSequence } from './InteractiveSequence';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
+import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
@@ -53,6 +54,30 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     // PDB Import State
     const [showPdbImport, setShowPdbImport] = useState(false);
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
+    const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
+    const [show3DViewer, setShow3DViewer] = useState(false);
+    const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
+
+    // Convert mutation positions to Set for 3D viewer highlighting
+    const mutationPositionsSet = useMemo(() => {
+        const positions = new Set<string>();
+        const chainId = selectedChainId || 'A';
+        // For library mode, use regions
+        if (mode === 'library' && regions.length > 0) {
+            for (const region of regions) {
+                for (let i = region.start; i <= region.end; i++) {
+                    positions.add(`${chainId}${i}`);
+                }
+            }
+        }
+        // For manual mode, use mutation positions
+        if (mode === 'manual') {
+            for (const mut of manualMutations) {
+                positions.add(`${chainId}${mut.position}`);
+            }
+        }
+        return positions;
+    }, [mode, regions, manualMutations, selectedChainId]);
 
     // Handlers
     const handleGeneratePreview = () => {
@@ -183,6 +208,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         <div className="mt-2 text-xs text-slate-500 font-mono bg-slate-950 p-2 rounded border border-slate-800/50 break-all flex justify-between items-center">
                             <span>Length: {baseSequence.length} aa</span>
                             <button onClick={() => setBaseSequence('')} className="text-red-400 hover:text-red-300">Clear</button>
+                        </div>
+                    )}
+
+                    {/* 3D Structure Preview (if PDB loaded) */}
+                    {pdbBlobUrl && (
+                        <div className="mt-4">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-slate-400">3D Structure Preview</span>
+                                <button
+                                    onClick={() => setShow3DViewer(!show3DViewer)}
+                                    className={`px-3 py-1 text-xs rounded-lg transition-all ${show3DViewer
+                                        ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
+                                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                                        }`}
+                                >
+                                    {show3DViewer ? '🔍 Hide 3D' : '🧬 Show 3D'}
+                                </button>
+                            </div>
+                            {show3DViewer && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <div className="text-xs text-slate-500 mb-2">
+                                        {mutationPositionsSet.size > 0
+                                            ? `🎯 ${mutationPositionsSet.size} mutation positions highlighted`
+                                            : 'Define regions or mutations to highlight positions'}
+                                    </div>
+                                    <EpitopeMolstarViewer
+                                        structureUrl={pdbBlobUrl}
+                                        height={350}
+                                        selectedResidues={mutationPositionsSet}
+                                    />
+                                </div>
+                            )}
                         </div>
                     )}
                 </section>
@@ -533,16 +590,20 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         try {
                                             const response = await fetch(target.url);
                                             const blob = await response.blob();
+                                            const blobUrl = URL.createObjectURL(blob);
                                             const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
                                             const parsed = await parsePDBFile(file);
                                             if (parsed.chains.length === 1) {
                                                 // Single chain - use directly
                                                 setBaseSequence(parsed.chains[0].sequence);
+                                                setPdbBlobUrl(blobUrl);
+                                                setSelectedChainId(parsed.chains[0].id);
                                                 setShowPdbImport(false);
                                                 setParsedChains([]);
                                             } else if (parsed.chains.length > 1) {
                                                 // Multiple chains - let user select
                                                 setParsedChains(parsed.chains);
+                                                setPdbBlobUrl(blobUrl);  // Store for later use
                                             } else {
                                                 alert('No protein chains found in PDB');
                                             }
@@ -552,13 +613,17 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         }
                                     } else if (target?.file) {
                                         try {
+                                            const blobUrl = URL.createObjectURL(target.file);
                                             const parsed = await parsePDBFile(target.file);
                                             if (parsed.chains.length === 1) {
                                                 setBaseSequence(parsed.chains[0].sequence);
+                                                setPdbBlobUrl(blobUrl);
+                                                setSelectedChainId(parsed.chains[0].id);
                                                 setShowPdbImport(false);
                                                 setParsedChains([]);
                                             } else if (parsed.chains.length > 1) {
                                                 setParsedChains(parsed.chains);
+                                                setPdbBlobUrl(blobUrl);  // Store for later use
                                             } else {
                                                 alert('No protein chains found in PDB');
                                             }
@@ -578,6 +643,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                             key={chain.id}
                                             onClick={() => {
                                                 setBaseSequence(chain.sequence);
+                                                setSelectedChainId(chain.id);
                                                 setShowPdbImport(false);
                                                 setParsedChains([]);
                                             }}
