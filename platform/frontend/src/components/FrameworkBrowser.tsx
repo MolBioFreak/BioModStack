@@ -80,6 +80,7 @@ export interface SelectedFramework {
     pdbCode?: string;
     sequence?: string;
     filePath?: string;
+    cdrH3Length?: number;  // CDR-H3 length from SAbDab for auto-population
 }
 
 interface FrameworkBrowserProps {
@@ -135,13 +136,13 @@ export function FrameworkBrowser({
 
     // Download mutation
     const downloadMutation = useMutation({
-        mutationFn: async (pdbCode: string) => {
+        mutationFn: async ({ pdbCode, cdrH3Length }: { pdbCode: string; cdrH3Length?: number | null }) => {
             setDownloadingPdb(pdbCode);
             const response = await downloadSabdabFramework(pdbCode, {
                 scheme: 'imgt',
                 convert_hlt: true
             });
-            return response.data;
+            return { ...response.data, cdrH3Length };
         },
         onSuccess: (data) => {
             queryClient.invalidateQueries({ queryKey: ['cached-frameworks'] });
@@ -150,7 +151,8 @@ export function FrameworkBrowser({
                 id: data.pdb_code,
                 name: `SAbDab: ${data.pdb_code}`,
                 pdbCode: data.pdb_code,
-                filePath: data.file_path || undefined
+                filePath: data.file_path || undefined,
+                cdrH3Length: data.cdrH3Length ?? undefined
             });
             setDownloadingPdb(null);
         },
@@ -352,7 +354,7 @@ export function FrameworkBrowser({
                                 {frameworks.map((fw) => (
                                     <button
                                         key={fw.pdb_code}
-                                        onClick={() => downloadMutation.mutate(fw.pdb_code)}
+                                        onClick={() => downloadMutation.mutate({ pdbCode: fw.pdb_code, cdrH3Length: fw.cdr_h3_length })}
                                         disabled={downloadingPdb !== null}
                                         className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${selectedFramework?.pdbCode === fw.pdb_code
                                             ? 'bg-purple-500/20 border border-purple-500/50'

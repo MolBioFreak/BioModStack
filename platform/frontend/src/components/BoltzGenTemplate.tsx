@@ -673,6 +673,14 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                                 if (fw?.sequence) {
                                                     setNanobodyFramework(fw.sequence);
                                                 }
+                                                // Auto-populate CDR-H3 length from SAbDab annotation
+                                                if (fw?.cdrH3Length) {
+                                                    // Set range around the known length (+/- 3)
+                                                    const min = Math.max(8, fw.cdrH3Length - 3);
+                                                    const max = fw.cdrH3Length + 3;
+                                                    setCdrH3Length(`${min}-${max}`);
+                                                    console.log(`[BoltzGen] Auto-set CDR-H3 length: ${min}-${max} (from SAbDab: ${fw.cdrH3Length})`);
+                                                }
                                                 // Set framework PDB URL for 3D preview
                                                 if (fw?.pdbCode) {
                                                     setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
