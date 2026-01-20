@@ -159,3 +159,61 @@ async def serve_pdb(file_path: str):
         path=full_path,
         media_type="chemical/x-pdb" if full_path.suffix.lower() == '.pdb' else "chemical/x-mmcif"
     )
+
+
+@router.post("/extract-chain")
+async def extract_chain(
+    input_path: str = Form(...),
+    chain_id: str = Form(...),
+    rename_to: str = Form(None)
+):
+    """
+    Extract a single chain from a multi-chain PDB file.
+    
+    This is used when a user selects a specific chain from a complex PDB
+    (e.g., selecting Chain I from 7TLY which has Ab fragments on chains A,B).
+    
+    Args:
+        input_path: Path to input PDB (relative to project root)
+        chain_id: Chain ID to extract (e.g., 'I')
+        rename_to: Optional new chain ID (e.g., 'T' for target)
+        
+    Returns:
+        Path to the extracted single-chain PDB file
+    """
+    import sys
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    from extract_chain import extract_chains
+    
+    full_input = PROJECT_ROOT / input_path
+    
+    if not is_path_allowed(full_input):
+        raise HTTPException(status_code=403, detail="Access denied to input file")
+    
+    if not full_input.exists():
+        raise HTTPException(status_code=404, detail="Input file not found")
+    
+    # Create output filename with chain suffix
+    output_name = f"{full_input.stem}_chain{chain_id}{full_input.suffix}"
+    output_path = full_input.parent / output_name
+    
+    try:
+        result = extract_chains(
+            str(full_input),
+            str(output_path),
+            [chain_id],
+            renumber=False,
+            new_chain_id=rename_to
+        )
+        
+        return {
+            "success": True,
+            "input_path": input_path,
+            "output_path": str(output_path.relative_to(PROJECT_ROOT)),
+            "chain_extracted": chain_id,
+            "atom_count": result["atom_count"],
+            "renamed_to": rename_to
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chain extraction failed: {str(e)}")
+
