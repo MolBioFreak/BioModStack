@@ -40,6 +40,13 @@ class CDRAnnotation:
     cdr_h2_range: Optional[tuple] = None
     cdr_h3_range: Optional[tuple] = None
     
+    # Framework contact hotspots (Zavrtanik et al. 2018)
+    # These FR positions mediate antigen contacts in nanobodies
+    fr2_contacts: Optional[str] = None   # IMGT 37, 42, 44, 45, 47
+    de_loop: Optional[str] = None        # IMGT 72-75
+    fr3_contacts: Optional[str] = None   # IMGT 82-87
+    fr4_contacts: Optional[str] = None   # IMGT 101-103
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "antibody_type": self.antibody_type,
@@ -56,6 +63,10 @@ class CDRAnnotation:
             "cdr_l1_length": self.cdr_l1_length,
             "cdr_l2_length": self.cdr_l2_length,
             "cdr_l3_length": self.cdr_l3_length,
+            "fr2_contacts": self.fr2_contacts,
+            "de_loop": self.de_loop,
+            "fr3_contacts": self.fr3_contacts,
+            "fr4_contacts": self.fr4_contacts,
         }
 
 
@@ -395,6 +406,12 @@ from anarcii import Anarcii
 numberer = Anarcii(cpu=True, batch_size=500, ncpu=24)
 results = numberer.number(sequences)
 
+# FR contact hotspot IMGT positions (Zavrtanik et al. 2018)
+FR2_POSITIONS = {37, 42, 44, 45, 47}  # VHH tetrad + contacts
+DE_LOOP_RANGE = (72, 75)              # DE loop
+FR3_RANGE = (82, 87)                  # FR3 contacts
+FR4_RANGE = (101, 103)                # C-terminal contacts
+
 output = []
 for seq_name, data in results.items():
     chain_type = data.get("chain_type", "")
@@ -404,21 +421,42 @@ for seq_name, data in results.items():
     cdr2_residues = []
     cdr3_residues = []
     
+    # FR contact hotspots
+    fr2_residues = []
+    de_loop_residues = []
+    fr3_residues = []
+    fr4_residues = []
+    
     for (pos, insertion), aa in numbering:
         if aa == "-":
             continue
+        # CDRs (IMGT)
         if 27 <= pos <= 38:
             cdr1_residues.append(aa)
         elif 56 <= pos <= 65:
             cdr2_residues.append(aa)
         elif 105 <= pos <= 117:
             cdr3_residues.append(aa)
+        
+        # FR contact hotspots
+        if pos in FR2_POSITIONS:
+            fr2_residues.append(aa)
+        if DE_LOOP_RANGE[0] <= pos <= DE_LOOP_RANGE[1]:
+            de_loop_residues.append(aa)
+        if FR3_RANGE[0] <= pos <= FR3_RANGE[1]:
+            fr3_residues.append(aa)
+        if FR4_RANGE[0] <= pos <= FR4_RANGE[1]:
+            fr4_residues.append(aa)
     
     output.append({
         "chain_type": chain_type,
         "cdr1": "".join(cdr1_residues),
         "cdr2": "".join(cdr2_residues),
         "cdr3": "".join(cdr3_residues),
+        "fr2_contacts": "".join(fr2_residues),
+        "de_loop": "".join(de_loop_residues),
+        "fr3_contacts": "".join(fr3_residues),
+        "fr4_contacts": "".join(fr4_residues),
     })
 
 print(json.dumps(output))
@@ -487,6 +525,11 @@ print(json.dumps(output))
             annotation.cdr_h1_length = len(annotation.cdr_h1) if annotation.cdr_h1 else None
             annotation.cdr_h2_length = len(annotation.cdr_h2) if annotation.cdr_h2 else None
             annotation.cdr_h3_length = len(annotation.cdr_h3) if annotation.cdr_h3 else None
+            # FR contact hotspots (VHH/heavy chain only - Zavrtanik et al. 2018)
+            annotation.fr2_contacts = result.get("fr2_contacts", "")
+            annotation.de_loop = result.get("de_loop", "")
+            annotation.fr3_contacts = result.get("fr3_contacts", "")
+            annotation.fr4_contacts = result.get("fr4_contacts", "")
         elif chain_type == "L":
             annotation.cdr_l1 = result.get("cdr1", "")
             annotation.cdr_l2 = result.get("cdr2", "")

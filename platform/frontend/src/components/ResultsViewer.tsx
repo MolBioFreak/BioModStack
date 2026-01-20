@@ -260,6 +260,7 @@ export function ResultsViewer() {
         const ptms = designs.map(d => d.ptm).filter((v): v is number => v != null);
         const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
+        const epitopeContacts = designs.map(d => d.epitope_contact_count).filter((v): v is number => v != null);
 
         // Binding tier distribution
         const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
@@ -281,8 +282,10 @@ export function ResultsViewer() {
             avgPtm: ptms.length ? ptms.reduce((a, b) => a + b, 0) / ptms.length : null,
             avgAffinity: affinities.length ? affinities.reduce((a, b) => a + b, 0) / affinities.length : null,
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
+            avgEpitopeContacts: epitopeContacts.length ? epitopeContacts.reduce((a, b) => a + b, 0) / epitopeContacts.length : null,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
+            highContacts: epitopeContacts.filter(v => v >= 5).length,
             tierA: tierCounts.A,
             tierB: tierCounts.B,
             tierC: tierCounts.C,
@@ -499,14 +502,15 @@ export function ResultsViewer() {
                                     {/* OVERVIEW TAB */}
                                     {activeTab === 'overview' && stats && (
                                         <div className="p-6 space-y-6">
-                                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
                                                 <StatCard label="Total Designs" value={stats.total.toLocaleString()} />
                                                 <StatCard label="Favorites" value={stats.favorites} color="text-yellow-400" />
                                                 <StatCard label="Avg pLDDT" value={formatMetric(stats.avgPlddt, 1)} color="text-blue-400" />
                                                 <StatCard label="Avg Affinity" value={formatMetric(stats.avgAffinity, 2)} color="text-emerald-400" />
                                                 <StatCard label="Avg Binder %" value={stats.avgBinderProb ? (stats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
-                                                <StatCard label="High Confidence" value={stats.highConfidence} subtitle="pLDDT ≥ 80" color="text-emerald-400" />
+                                                <StatCard label="Avg Contacts" value={formatMetric(stats.avgEpitopeContacts, 1)} color="text-lime-400" />
+                                                <StatCard label="High Contacts" value={stats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
                                             </div>
 
                                             {/* Binding Tier Distribution */}
@@ -887,6 +891,7 @@ export function ResultsViewer() {
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
+                                                                { key: 'epitope_contact_count', label: 'Contacts' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
@@ -896,6 +901,8 @@ export function ResultsViewer() {
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'RMSD' },
+                                                                { key: 'rog', label: 'RoG' },
+                                                                { key: 'fr2_contacts', label: 'FR2' },
                                                                 { key: 'is_favorite', label: '★' },
                                                             ].map(col => (
                                                                 <th
@@ -948,6 +955,12 @@ export function ResultsViewer() {
                                                                     {(d as any).cdr_h3_length ?? '—'}
                                                                 </td>
 
+                                                                {/* Epitope Contact Count */}
+                                                                <td className={`px-3 py-2 font-mono ${(d.epitope_contact_count ?? 0) >= 5 ? 'text-emerald-400' :
+                                                                    (d.epitope_contact_count ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {d.epitope_contact_count ?? '—'}
+                                                                </td>
+
                                                                 {/* Affinity */}
                                                                 <td className={`px-3 py-2 font-mono ${d.affinity_score != null && d.affinity_score > 6 ? 'text-emerald-400' :
                                                                     d.affinity_score != null && d.affinity_score > 4 ? 'text-white' : 'text-slate-500'}`}>
@@ -985,6 +998,9 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
+                                                                <td className="px-3 py-2 font-mono text-purple-400" title={`FR2: ${d.fr2_contacts || '—'}`}>
+                                                                    {d.fr2_contacts || '—'}
+                                                                </td>
                                                                 <td className="px-3 py-2">{d.is_favorite ? '★' : ''}</td>
                                                             </tr>
                                                         ))}

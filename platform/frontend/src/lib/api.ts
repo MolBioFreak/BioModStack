@@ -173,6 +173,34 @@ export const uploadFile = async (path: string, file: File) => {
     });
 };
 
+// Extract a single chain from a multi-chain PDB
+export interface ExtractChainResult {
+    success: boolean;
+    input_path: string;
+    output_path: string;
+    chain_extracted: string;
+    atom_count: number;
+    renamed_to: string | null;
+}
+
+export const extractChain = async (
+    inputPath: string,
+    chainId: string,
+    renameTo?: string
+): Promise<{ data: ExtractChainResult }> => {
+    const formData = new FormData();
+    formData.append('input_path', inputPath);
+    formData.append('chain_id', chainId);
+    if (renameTo) {
+        formData.append('rename_to', renameTo);
+    }
+    return api.post<ExtractChainResult>('/api/files/extract-chain', formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    });
+};
+
 // Start a job
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
@@ -268,6 +296,11 @@ export interface Design {
     backbone_id: number | null;
     epitope_contact_count: number | null;
     epitope_min_distance: number | null;
+    // Framework contact hotspots (Zavrtanik 2018)
+    fr2_contacts: string | null;  // IMGT 37, 42, 44, 45, 47
+    de_loop: string | null;       // IMGT 72-75
+    fr3_contacts: string | null;  // IMGT 82-87
+    fr4_contacts: string | null;  // IMGT 101-103
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -860,3 +893,75 @@ export const setConcurrencyLimit = (modelType: string, limit: number | null) =>
 
 export const deleteConcurrencyLimit = (modelType: string) =>
     api.delete(`/api/system/concurrency-limits/${modelType}`);
+
+// ============================================================
+// FRAMEWORK LIBRARY API (SAbDab Integration)
+// ============================================================
+
+export interface SAbDabSearchResult {
+    pdb_code: string;
+    h_chain: string;
+    l_chain: string | null;
+    resolution: number | null;
+    method: string;
+    species: string | null;
+    cdr_h3_length: number | null;
+    antigen_type: string | null;
+}
+
+export interface FrameworkDownloadResponse {
+    pdb_code: string;
+    scheme: string;
+    cached: boolean;
+    file_path: string | null;
+    pdb_content: string | null;
+}
+
+export interface CachedFramework {
+    pdb_code: string;
+    scheme: string;
+    file_path: string;
+    size_bytes: number;
+}
+
+export interface FrameworkLibraryResponse {
+    frameworks: CachedFramework[];
+    total: number;
+    cache_dir: string;
+}
+
+export interface SAbDabAttribution {
+    source: string;
+    citation: string;
+    license: string;
+    license_url: string;
+    website: string;
+}
+
+export const searchSabdabFrameworks = (params: {
+    species?: string;
+    resolution_max?: number;
+    cdr_h3_min?: number;
+    cdr_h3_max?: number;
+    antigen_type?: string;
+    limit?: number;
+}) => api.get<SAbDabSearchResult[]>('/api/frameworks/sabdab/search', { params });
+
+export const downloadSabdabFramework = (pdbCode: string, params?: {
+    scheme?: string;
+    include_content?: boolean;
+    convert_hlt?: boolean;
+}) => api.get<FrameworkDownloadResponse>(`/api/frameworks/sabdab/${pdbCode}/download`, { params });
+
+export const getFrameworkSummary = (pdbCode: string) =>
+    api.get<Record<string, string>>(`/api/frameworks/sabdab/${pdbCode}/summary`);
+
+export const listCachedFrameworks = () =>
+    api.get<FrameworkLibraryResponse>('/api/frameworks/library');
+
+export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
+    api.delete(`/api/frameworks/library/${pdbCode}`, { params: { scheme } });
+
+export const getSabdabAttribution = () =>
+    api.get<SAbDabAttribution>('/api/frameworks/attribution');
+

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile } from '../lib/api';
+import { submitJob, uploadFile, extractChain } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -9,6 +9,8 @@ import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
 import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
 import { TemplateManagerModal } from './TemplateManagerModal';
+import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
+import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -47,22 +49,35 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(PRESETS.balanced);
 
-    // Framework selection - preset or custom
-    type FrameworkType = 'standard-fv' | 'nanobody' | 'custom';
+    // Framework selection - preset, custom, or SAbDab
+    type FrameworkType = 'standard-fv' | 'nanobody' | 'custom' | 'sabdab';
     const [frameworkType, setFrameworkType] = useState<FrameworkType>('standard-fv');
     const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
     const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
+    const [sabdabFramework, setSabdabFramework] = useState<SelectedFramework | null>(null);
+
+    // Framework protection settings
+    const [frameworkProtection, setFrameworkProtection] = useState<FrameworkEditorState>({
+        protectedPositions: [],
+        protectTetrad: true,
+        protectDisulfides: true,
+        protectFrContacts: false
+    });
 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
 
-    // PDB parsing state
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [selectedChain, setSelectedChain] = useState<string | null>(null);
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
     const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
+
+    // Viewer mode - toggle between target and framework preview
+    type ViewerMode = 'target' | 'framework';
+    const [viewerMode, setViewerMode] = useState<ViewerMode>('target');
+    const [frameworkPdbUrl, setFrameworkPdbUrl] = useState<string | null>(null);
 
     // Optional DNA/RNA sequence for complex prediction (when protein binds nucleic acid)
     const [targetDnaSeq, setTargetDnaSeq] = useState<string>('');
@@ -269,6 +284,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 return;
             }
 
+            // Step 1b: Extract selected chain if multi-chain PDB with specific chain selected
+            // This ensures only the target chain is sent to design pipelines
+            if (selectedChain && parsedChains.length > 1) {
+                console.log(`[ANTIBODY_DENOVO] Extracting chain ${selectedChain} from multi-chain PDB`);
+                try {
+                    const extractResult = await extractChain(pdbPath, selectedChain);
+                    pdbPath = extractResult.data.output_path;
+                    console.log(`[ANTIBODY_DENOVO] Extracted chain to: ${pdbPath}`);
+                } catch (err) {
+                    console.error('[ANTIBODY_DENOVO] Chain extraction failed:', err);
+                    alert(`Failed to extract chain ${selectedChain}: ${err}`);
+                    return;
+                }
+            }
+
             // Format selected residues for backend
             const epitopeString = Array.from(selectedResidues).sort().join(',');
 
@@ -358,6 +388,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     af2_backprop_loss_plddt: qualitySettings.af2_backprop_loss_plddt,
                     af2_backprop_loss_pae: qualitySettings.af2_backprop_loss_pae,
                     af2_backprop_loss_contact: qualitySettings.af2_backprop_loss_contact,
+                    // Post-Boltz validation filtering (applied after Boltz-2 structure prediction)
+                    boltz_max_binder_rmsd: qualitySettings.boltz_max_binder_rmsd,
+                    boltz_min_ptm_interface: qualitySettings.boltz_min_ptm_interface,
                     // Orchestrator parallelism mode
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
@@ -535,11 +568,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 {/* Framework Selection */}
                 <div>
                     <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
-                    <div className="grid grid-cols-3 gap-3 mb-3">
+                    <div className="grid grid-cols-4 gap-3 mb-3">
                         {[
                             { id: 'standard-fv', name: 'Standard Fv', desc: 'hu-4D5-8 (Herceptin)', color: 'blue' },
                             { id: 'nanobody', name: 'Nanobody', desc: 'VHH single-domain', color: 'purple' },
-                            { id: 'custom', name: 'Custom', desc: 'Upload HLT format PDB', color: 'amber' },
+                            { id: 'sabdab', name: 'SAbDab', desc: 'Browse database', color: 'emerald' },
+                            { id: 'custom', name: 'Custom', desc: 'Upload HLT PDB', color: 'amber' },
                         ].map((fw) => (
                             <button
                                 key={fw.id}
@@ -549,7 +583,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         ? 'bg-blue-600/20 border-blue-500 text-blue-400'
                                         : fw.id === 'nanobody'
                                             ? 'bg-purple-600/20 border-purple-500 text-purple-400'
-                                            : 'bg-amber-600/20 border-amber-500 text-amber-400'
+                                            : fw.id === 'sabdab'
+                                                ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
+                                                : 'bg-amber-600/20 border-amber-500 text-amber-400'
                                     : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
                                     }`}
                             >
@@ -558,6 +594,28 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </button>
                         ))}
                     </div>
+
+                    {/* SAbDab Framework Browser */}
+                    {frameworkType === 'sabdab' && (
+                        <div className="mt-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700">
+                            <FrameworkBrowser
+                                onSelect={(fw) => {
+                                    setSabdabFramework(fw);
+                                    // Set framework PDB URL for 3D preview if pdbCode available
+                                    if (fw?.pdbCode) {
+                                        // Use RCSB PDB download URL for Mol* viewer
+                                        setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
+                                        setViewerMode('framework');
+                                        setShow3DViewer(true);
+                                    } else {
+                                        setFrameworkPdbUrl(null);
+                                    }
+                                }}
+                                selectedFramework={sabdabFramework}
+                                showCustomUpload={false}
+                            />
+                        </div>
+                    )}
 
                     {/* Custom framework upload */}
                     {frameworkType === 'custom' && (
@@ -579,6 +637,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <p className="mt-1 text-xs text-slate-500">
                         {frameworkType === 'standard-fv' && 'Standard humanized Fv framework - good for most applications'}
                         {frameworkType === 'nanobody' && 'Single-domain VHH antibody - smaller, better tissue penetration'}
+                        {frameworkType === 'sabdab' && 'Browse VHH structures from SAbDab database (CC-BY 4.0)'}
                         {frameworkType === 'custom' && 'Use your own HLT-formatted antibody framework'}
                     </p>
                 </div>
@@ -636,12 +695,35 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
 
                         {/* 3D Molstar Viewer for visualization - toggled */}
-                        {pdbBlobUrl && show3DViewer && (
+                        {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
                             <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                {/* Mode toggle if both are available */}
+                                {pdbBlobUrl && frameworkPdbUrl && (
+                                    <div className="flex gap-2 mb-2">
+                                        <button
+                                            onClick={() => setViewerMode('target')}
+                                            className={`px-3 py-1 text-xs rounded-lg transition-all ${viewerMode === 'target'
+                                                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/50'
+                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                                                }`}
+                                        >
+                                            🎯 Target Antigen
+                                        </button>
+                                        <button
+                                            onClick={() => setViewerMode('framework')}
+                                            className={`px-3 py-1 text-xs rounded-lg transition-all ${viewerMode === 'framework'
+                                                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
+                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                                                }`}
+                                        >
+                                            🧬 Framework Template
+                                        </button>
+                                    </div>
+                                )}
                                 <EpitopeMolstarViewer
-                                    structureUrl={pdbBlobUrl}
+                                    structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
                                     height={400}
-                                    selectedResidues={selectedResidues}
+                                    selectedResidues={viewerMode === 'target' ? selectedResidues : new Set<string>()}
                                 />
                             </div>
                         )}
@@ -716,6 +798,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     onProtectTetradChange={setProtectTetrad}
                     frameworkType={frameworkType}
                 />
+
+                {/* Framework Editor - shown for framework_allowed and full_design modes */}
+                {(designMode === 'framework_allowed' || designMode === 'full_design') && (
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                        <FrameworkEditor
+                            state={frameworkProtection}
+                            onChange={setFrameworkProtection}
+                            frameworkType={frameworkType}
+                            compact={true}
+                        />
+                        <p className="mt-2 text-xs text-slate-500">
+                            Configure which framework positions should remain fixed during sequence design.
+                            Protected positions will not be mutated by FAMPNN/ProteinMPNN.
+                        </p>
+                    </div>
+                )}
 
                 {/* Quality Settings Panel */}
                 <QualitySettingsPanel
@@ -1048,6 +1146,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     design_mode: designMode,
                     selected_cdr_loops: Array.from(selectedCDRLoops),
                     protect_tetrad: protectTetrad,
+                    // Framework protection (for framework_allowed and full_design modes)
+                    protected_positions: frameworkProtection.protectedPositions.join(','),
+                    protect_disulfides: frameworkProtection.protectDisulfides,
+                    protect_fr_contacts: frameworkProtection.protectFrContacts,
                     // Target info (path only - file must exist at path)
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,
