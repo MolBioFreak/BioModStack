@@ -678,48 +678,48 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 </span>
                             </label>
 
-                            {/* Toggle 3D Viewer Button */}
-                            {pdbBlobUrl && (
-                                <button
-                                    type="button"
-                                    onClick={() => setShow3DViewer(!show3DViewer)}
-                                    className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer
-                                        ? 'bg-blue-600/20 text-blue-400 border border-blue-600/40'
-                                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
-                                        }`}
-                                >
-                                    <span>{show3DViewer ? '🔍' : '🧬'}</span>
-                                    3D Structure Preview
-                                </button>
-                            )}
+                            {/* Explicit Toggle Buttons for Target and Framework Viewers */}
+                            <div className="flex gap-2">
+                                {pdbBlobUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setViewerMode('target');
+                                            setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
+                                        }}
+                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'target'
+                                            ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/50'
+                                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                            }`}
+                                    >
+                                        🎯 Target 3D
+                                    </button>
+                                )}
+                                {frameworkPdbUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setViewerMode('framework');
+                                            setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
+                                        }}
+                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'framework'
+                                            ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
+                                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                            }`}
+                                    >
+                                        🧬 Framework 3D
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         {/* 3D Molstar Viewer for visualization - toggled */}
                         {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
                             <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                                {/* Mode toggle if both are available */}
-                                {pdbBlobUrl && frameworkPdbUrl && (
-                                    <div className="flex gap-2 mb-2">
-                                        <button
-                                            onClick={() => setViewerMode('target')}
-                                            className={`px-3 py-1 text-xs rounded-lg transition-all ${viewerMode === 'target'
-                                                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/50'
-                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                                                }`}
-                                        >
-                                            🎯 Target Antigen
-                                        </button>
-                                        <button
-                                            onClick={() => setViewerMode('framework')}
-                                            className={`px-3 py-1 text-xs rounded-lg transition-all ${viewerMode === 'framework'
-                                                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
-                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                                                }`}
-                                        >
-                                            🧬 Framework Template
-                                        </button>
-                                    </div>
-                                )}
+                                {/* Label showing current view */}
+                                <div className="text-xs text-slate-500 mb-2">
+                                    {viewerMode === 'framework' ? '🧬 Framework Template Preview' : '🎯 Target Antigen Preview'}
+                                </div>
                                 <EpitopeMolstarViewer
                                     structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
                                     height={400}
