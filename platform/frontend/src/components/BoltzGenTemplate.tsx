@@ -373,7 +373,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
         // Inverse folding parameters - cysteine avoidance
         if (avoidCysteine) {
             // Merge with any custom avoid residues
-            const avoidSet = new Set(inverseFoldAvoid.split('').filter(c => c.match(/[A-Z]/)));
+            const avoidSet = new Set(inverseFoldAvoid.split('').filter((c: string) => c.match(/[A-Z]/)));
             avoidSet.add('C');
             params.boltzgen_inverse_fold_avoid = Array.from(avoidSet).join('');
         } else if (inverseFoldAvoid.trim()) {

@@ -7,7 +7,7 @@ interface DesignModeSelectorProps {
     onLoopsChange: (loops: Set<string>) => void;
     protectTetrad: boolean;
     onProtectTetradChange: (protect: boolean) => void;
-    frameworkType: 'standard-fv' | 'nanobody' | 'custom';
+    frameworkType: 'standard-fv' | 'nanobody' | 'custom' | 'sabdab';
 }
 
 const DESIGN_MODES = [
@@ -55,7 +55,7 @@ export const DesignModeSelector: React.FC<DesignModeSelectorProps> = ({
     onProtectTetradChange,
     frameworkType
 }) => {
-    const isVHH = frameworkType === 'nanobody';
+    const isVHH = frameworkType === 'nanobody' || frameworkType === 'sabdab';
     const availableLoops = isVHH ? CDR_LOOPS.heavy : [...CDR_LOOPS.heavy, ...CDR_LOOPS.light];
 
     const toggleLoop = (loop: string) => {
@@ -109,8 +109,8 @@ export const DesignModeSelector: React.FC<DesignModeSelectorProps> = ({
                             key={m.id}
                             onClick={() => onModeChange(m.id)}
                             className={`p-3 rounded-lg border transition-all text-left ${mode === m.id
-                                    ? colorClasses[m.color].selected
-                                    : colorClasses[m.color].unselected
+                                ? colorClasses[m.color].selected
+                                : colorClasses[m.color].unselected
                                 }`}
                         >
                             <div className="text-sm font-medium">{m.name}</div>
@@ -155,8 +155,8 @@ export const DesignModeSelector: React.FC<DesignModeSelectorProps> = ({
                                     key={loop}
                                     onClick={() => toggleLoop(loop)}
                                     className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedLoops.has(loop)
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
                                     {loop}
@@ -175,8 +175,8 @@ export const DesignModeSelector: React.FC<DesignModeSelectorProps> = ({
                                         key={loop}
                                         onClick={() => toggleLoop(loop)}
                                         className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedLoops.has(loop)
-                                                ? 'bg-purple-600 text-white'
-                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            ? 'bg-purple-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                             }`}
                                     >
                                         {loop}
