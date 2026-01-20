@@ -18,6 +18,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { parsePDBFile, parsePDB, type Chain, formatSelectedResidues } from '../utils/pdbUtils';
 import { TemplateManagerModal } from './TemplateManagerModal';
+import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 
 // NTP Templates - pre-defined nucleotide SMILES
 const NTP_TEMPLATES = [
@@ -89,6 +90,10 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     const [cdrH3Length, setCdrH3Length] = useState(initialValues?.boltzgen_cdr_h3_length || '12-18');
     const [cdrH1Length, setCdrH1Length] = useState(initialValues?.boltzgen_cdr_h1_length || '5-8');
     const [cdrH2Length, setCdrH2Length] = useState(initialValues?.boltzgen_cdr_h2_length || '6-10');
+    const [selectedFramework, setSelectedFramework] = useState<SelectedFramework | null>(null);
+    const [frameworkPdbUrl, setFrameworkPdbUrl] = useState<string | null>(null);
+    const [viewerMode, setViewerMode] = useState<'target' | 'framework'>('target');
+    const [showFrameworkBrowser, setShowFrameworkBrowser] = useState(false);
 
     // Target selection (for nanobody/antibody modes)
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string; file?: File } | null>(null);
@@ -623,17 +628,73 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
 
                         {/* Framework Sequence (when using template) */}
                         {useFrameworkTemplate && (
-                            <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
-                                    VHH Framework Sequence
-                                </label>
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <label className="block text-sm font-medium text-slate-300">
+                                        VHH Framework Sequence
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowFrameworkBrowser(!showFrameworkBrowser)}
+                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-1.5 ${showFrameworkBrowser
+                                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50'
+                                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                            }`}
+                                    >
+                                        📚 {showFrameworkBrowser ? 'Hide Browser' : 'Browse SAbDab'}
+                                    </button>
+                                </div>
+
+                                {/* Selected Framework Badge */}
+                                {selectedFramework && (
+                                    <div className="flex items-center gap-2 text-xs">
+                                        <span className="px-2 py-1 bg-amber-500/20 text-amber-400 rounded border border-amber-500/30">
+                                            {selectedFramework.pdbCode || selectedFramework.name}
+                                        </span>
+                                        <button
+                                            onClick={() => {
+                                                setSelectedFramework(null);
+                                                setFrameworkPdbUrl(null);
+                                                setNanobodyFramework(DEFAULT_VHH_FRAMEWORK);
+                                            }}
+                                            className="text-slate-500 hover:text-red-400"
+                                        >
+                                            ✕ Clear
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Framework Browser */}
+                                {showFrameworkBrowser && (
+                                    <div className="bg-slate-900/50 rounded-lg border border-slate-700 p-3">
+                                        <FrameworkBrowser
+                                            onSelect={(fw) => {
+                                                setSelectedFramework(fw);
+                                                if (fw?.sequence) {
+                                                    setNanobodyFramework(fw.sequence);
+                                                }
+                                                // Set framework PDB URL for 3D preview
+                                                if (fw?.pdbCode) {
+                                                    setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
+                                                    setViewerMode('framework');
+                                                    setShow3DViewer(true);
+                                                }
+                                                setShowFrameworkBrowser(false);
+                                            }}
+                                            selectedFramework={selectedFramework}
+                                            showCustomUpload={false}
+                                        />
+                                    </div>
+                                )}
+
+                                {/* Editable Sequence */}
                                 <textarea
                                     value={nanobodyFramework}
                                     onChange={e => setNanobodyFramework(e.target.value)}
                                     rows={3}
                                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white font-mono text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                                 />
-                                <p className="text-xs text-slate-500 mt-1">
+                                <p className="text-xs text-slate-500">
                                     X marks CDR loop positions that BoltzGen will design. Edit framework if needed.
                                 </p>
                             </div>
@@ -711,33 +772,65 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                         {/* Epitope Selection (when target is loaded) */}
                         {parsedChains.length > 0 && (
                             <div className="space-y-4">
-                                {/* Header with 3D Viewer Toggle */}
+                                {/* Header with Target/Framework 3D Toggle Buttons */}
                                 <div className="flex items-center justify-between">
                                     <label className="block text-sm font-medium text-slate-300">
                                         Epitope Selection
                                     </label>
-                                    {pdbBlobUrl && (
-                                        <button
-                                            type="button"
-                                            onClick={() => setShow3DViewer(!show3DViewer)}
-                                            className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-2 ${show3DViewer
-                                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
-                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
-                                                }`}
-                                        >
-                                            <span>{show3DViewer ? '🔍' : '🧬'}</span>
-                                            3D Structure View
-                                        </button>
-                                    )}
+                                    <div className="flex items-center gap-2">
+                                        {/* Target 3D Button */}
+                                        {pdbBlobUrl && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (viewerMode === 'target' && show3DViewer) {
+                                                        setShow3DViewer(false);
+                                                    } else {
+                                                        setViewerMode('target');
+                                                        setShow3DViewer(true);
+                                                    }
+                                                }}
+                                                className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'target' && show3DViewer
+                                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
+                                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                                    }`}
+                                            >
+                                                🎯 Target 3D
+                                            </button>
+                                        )}
+                                        {/* Framework 3D Button */}
+                                        {frameworkPdbUrl && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (viewerMode === 'framework' && show3DViewer) {
+                                                        setShow3DViewer(false);
+                                                    } else {
+                                                        setViewerMode('framework');
+                                                        setShow3DViewer(true);
+                                                    }
+                                                }}
+                                                className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'framework' && show3DViewer
+                                                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                                    }`}
+                                            >
+                                                🧬 Framework 3D
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
 
-                                {/* 3D Molstar Viewer (toggled) */}
-                                {pdbBlobUrl && show3DViewer && (
+                                {/* 3D Molstar Viewer (toggled, with viewer mode) */}
+                                {show3DViewer && (pdbBlobUrl || frameworkPdbUrl) && (
                                     <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div className="text-xs text-slate-500 mb-2">
+                                            {viewerMode === 'target' ? '🎯 Target Antigen Preview' : '🧬 Framework Template Preview'}
+                                        </div>
                                         <EpitopeMolstarViewer
-                                            structureUrl={pdbBlobUrl}
+                                            structureUrl={viewerMode === 'target' ? pdbBlobUrl! : frameworkPdbUrl!}
                                             height={350}
-                                            selectedResidues={selectedEpitopeResidues}
+                                            selectedResidues={viewerMode === 'target' ? selectedEpitopeResidues : new Set<string>()}
                                         />
                                     </div>
                                 )}
