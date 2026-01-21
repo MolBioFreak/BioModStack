@@ -37,6 +37,7 @@ export default defineConfig({
     }
   },
   server: {
+    host: '0.0.0.0',
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files
     watch: {

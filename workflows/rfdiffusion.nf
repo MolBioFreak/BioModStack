@@ -17,14 +17,14 @@ workflow RFDiffusionWorkflow {
         .fromList((0..<numDesigns).collate(batchSize))
         .map { batch ->
             def batchId = batch.isEmpty() ? 0 : (batch[0] / batchSize).intValue()
-            def designStartnum = batch.min()
+            def designStartnum = batch ? batch.min() : 0
             tuple(
                 rfdCommand,
                 batchId,
-                batchSize,
+                batch.size(),
                 designStartnum,
                 mode,
-                inputFiles,
+                inputFiles
             )
         }
 
@@ -35,4 +35,3 @@ workflow RFDiffusionWorkflow {
     pdbs = RunRFDiffusion.out.pdbs
     pdbs_jsons = RunRFDiffusion.out.pdbs_jsons
 }
-

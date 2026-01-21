@@ -13,7 +13,13 @@ nextflow.enable.dsl = 2
 
 // Import modules
 include { PrepBindCraftInput ; RunBindCraft ; FilterBindCraft } from '../modules/bindcraft'
-include { BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
+include { PrepBoltz ; RunBoltz } from '../modules/boltz'
+include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
+
+// Helper: preserve explicit false values (avoid ?: swallowing false)
+def paramOrDefault(val, deflt) {
+    val != null ? val : deflt
+}
 
 // =============================================================================
 // SWA ORCHESTRATOR PROCESSES
@@ -45,26 +51,26 @@ process SpawnBindCraftJobs {
             num_final_designs: params.bindcraft_num_final_designs ?: 100,
             design_algorithm: params.bindcraft_design_algorithm ?: '4stage',
             chains: params.bindcraft_chains ?: 'A',
-            use_multimer_design: params.bindcraft_use_multimer_design ?: true,
+            use_multimer_design: paramOrDefault(params.bindcraft_use_multimer_design, true),
             num_recycles_design: params.bindcraft_num_recycles_design ?: 3,
             num_recycles_validation: params.bindcraft_num_recycles_validation ?: 3,
             mpnn_weights: params.bindcraft_mpnn_weights ?: 'soluble',
             num_mpnn_sequences: params.bindcraft_num_mpnn_sequences ?: 8,
             min_iptm: params.bindcraft_min_iptm ?: 0.6,
             max_hotspot_rmsd: params.bindcraft_max_hotspot_rmsd ?: 3.0,
-            zip_animations: params.bindcraft_zip_animations ?: true,
-            zip_plots: params.bindcraft_zip_plots ?: true,
-            remove_unrelaxed_trajectory: params.bindcraft_remove_unrelaxed_trajectory ?: true,
-            remove_unrelaxed_complex: params.bindcraft_remove_unrelaxed_complex ?: true,
-            remove_binder_monomer: params.bindcraft_remove_binder_monomer ?: true,
-            save_trajectory_pickle: params.bindcraft_save_trajectory_pickle ?: false,
+            zip_animations: paramOrDefault(params.bindcraft_zip_animations, true),
+            zip_plots: paramOrDefault(params.bindcraft_zip_plots, true),
+            remove_unrelaxed_trajectory: paramOrDefault(params.bindcraft_remove_unrelaxed_trajectory, true),
+            remove_unrelaxed_complex: paramOrDefault(params.bindcraft_remove_unrelaxed_complex, true),
+            remove_binder_monomer: paramOrDefault(params.bindcraft_remove_binder_monomer, true),
+            save_trajectory_pickle: paramOrDefault(params.bindcraft_save_trajectory_pickle, false),
             mask_mode: params.bindcraft_mask_mode ?: 'none',
             redesign_ranges: params.bindcraft_redesign_ranges ?: '',
-            rm_template_seq_design: params.bindcraft_rm_template_seq_design ?: false,
-            rm_template_sc_design: params.bindcraft_rm_template_sc_design ?: false,
-            predict_initial_guess: params.bindcraft_predict_initial_guess ?: false,
-            use_termini_distance_loss: params.bindcraft_use_termini_distance_loss ?: false,
-            cdr_sampling_enabled: params.bindcraft_cdr_sampling_enabled ?: false,
+            rm_template_seq_design: paramOrDefault(params.bindcraft_rm_template_seq_design, false),
+            rm_template_sc_design: paramOrDefault(params.bindcraft_rm_template_sc_design, false),
+            predict_initial_guess: paramOrDefault(params.bindcraft_predict_initial_guess, false),
+            use_termini_distance_loss: paramOrDefault(params.bindcraft_use_termini_distance_loss, false),
+            cdr_sampling_enabled: paramOrDefault(params.bindcraft_cdr_sampling_enabled, false),
             cdr_sampling_count: params.bindcraft_cdr_sampling_count ?: 5,
         ]
     )
@@ -188,13 +194,16 @@ workflow BINDCRAFT_DESIGN {
     }
 
     target_pdb = file(params.bindcraft_target_pdb)
+    if (!target_pdb.exists()) {
+        error("Target PDB not found: ${params.bindcraft_target_pdb}")
+    }
     job_id = params.job_id ?: UUID.randomUUID().toString().take(8)
     batch_name = params.batch_name ?: "bindcraft_${job_id}"
 
     // Check if running in SWA mode (multiple GPUs / high trajectory count)
     total_trajectories = params.bindcraft_total_trajectories ?: 100
     trajectories_per_job = params.bindcraft_trajectories_per_job ?: 25
-    use_swa = params.bindcraft_use_swa ?: (total_trajectories > trajectories_per_job)
+    use_swa = params.bindcraft_use_swa != null ? params.bindcraft_use_swa : (total_trajectories > trajectories_per_job)
 
     if (use_swa) {
         // =====================================================================
@@ -232,6 +241,10 @@ workflow BINDCRAFT_DESIGN {
         // =====================================================================
 
         // 1. Prepare configuration files
+        def scaffold_pdb = params.bindcraft_scaffold_pdb
+            ? file(params.bindcraft_scaffold_pdb)
+            : file("${projectDir}/lib/NO_TARGET_PDB")
+
         PrepBindCraftInput(
             target_pdb,
             params.bindcraft_hotspot_residues ?: '',
@@ -241,28 +254,28 @@ workflow BINDCRAFT_DESIGN {
             params.bindcraft_chains ?: 'A',
             params.binder_name ?: 'binder',
             params.bindcraft_design_mode ?: 'denovo',
-            params.bindcraft_scaffold_pdb ? file(params.bindcraft_scaffold_pdb) : file('null'),
+            scaffold_pdb,
             params.bindcraft_binder_chain ?: 'B',
-            params.bindcraft_use_multimer_design ?: true,
+            paramOrDefault(params.bindcraft_use_multimer_design, true),
             params.bindcraft_num_recycles_design ?: 3,
             params.bindcraft_num_recycles_validation ?: 3,
             params.bindcraft_mpnn_weights ?: 'soluble',
             params.bindcraft_num_mpnn_sequences ?: 8,
             params.bindcraft_min_iptm ?: 0.6,
             params.bindcraft_max_hotspot_rmsd ?: 3.0,
-            params.bindcraft_zip_animations ?: true,
-            params.bindcraft_zip_plots ?: true,
-            params.bindcraft_remove_unrelaxed_trajectory ?: true,
-            params.bindcraft_remove_unrelaxed_complex ?: true,
-            params.bindcraft_remove_binder_monomer ?: true,
-            params.bindcraft_save_trajectory_pickle ?: false,
+            paramOrDefault(params.bindcraft_zip_animations, true),
+            paramOrDefault(params.bindcraft_zip_plots, true),
+            paramOrDefault(params.bindcraft_remove_unrelaxed_trajectory, true),
+            paramOrDefault(params.bindcraft_remove_unrelaxed_complex, true),
+            paramOrDefault(params.bindcraft_remove_binder_monomer, true),
+            paramOrDefault(params.bindcraft_save_trajectory_pickle, false),
             params.bindcraft_mask_mode ?: 'none',
             params.bindcraft_redesign_ranges ?: '',
-            params.bindcraft_rm_template_seq_design ?: false,
-            params.bindcraft_rm_template_sc_design ?: false,
-            params.bindcraft_predict_initial_guess ?: false,
-            params.bindcraft_use_termini_distance_loss ?: false,
-            params.bindcraft_cdr_sampling_enabled ?: false,
+            paramOrDefault(params.bindcraft_rm_template_seq_design, false),
+            paramOrDefault(params.bindcraft_rm_template_sc_design, false),
+            paramOrDefault(params.bindcraft_predict_initial_guess, false),
+            paramOrDefault(params.bindcraft_use_termini_distance_loss, false),
+            paramOrDefault(params.bindcraft_cdr_sampling_enabled, false),
             params.bindcraft_cdr_sampling_count ?: 5,
         )
 
@@ -288,11 +301,65 @@ workflow BINDCRAFT_DESIGN {
     )
 
     // 5. Optional: Boltz-2 validation (if enabled)
-    if (params.bindcraft_boltz_validation ?: false) {
+    def boltz_enabled = params.bindcraft_boltz_validation == true
+    if (boltz_enabled) {
+        boltz_input = FilterBindCraft.out.pdbs.collect()
+        PrepBoltz(boltz_input)
+        boltz_batches = PrepBoltz.out.yamls.map { yamls -> tuple(0, yamls) }
+        RunBoltz(boltz_batches)
+        validated_pdbs = RunBoltz.out.pdbs_jsons.map { pdbs, _jsons -> pdbs }
+    }
+    else {
+        validated_pdbs = FilterBindCraft.out.pdbs
+    }
+
+    // 6. Optional: OpenMM Physics Refinement (if enabled)
+    // Provides energy minimization and MM-GBSA scoring for binder designs
+    if (params.openmm_enabled == true) {
+        log.info("Running OpenMM physics refinement on BindCraft designs...")
+        log.info("  Compute tier: ${params.openmm_compute_tier ?: 'fast'}")
+
+        // Batch validated PDBs for GPU processing
+        openmm_batched = validated_pdbs
+            .flatten()
+            .buffer(size: 10, remainder: true)
+            .map { batch -> tuple("bindcraft_${batch.hashCode()}", batch) }
+
+        // Run energy minimization (no CDR-only for general binders)
+        OpenMMRelaxation(
+            openmm_batched,
+            params.openmm_compute_tier ?: 'fast',
+            false,
+            params.openmm_restraint_mode ?: 'none',
+            'B',
+            params.openmm_force_field ?: 'amber14sb',
+        )
+
+        // Run MM-GBSA if full tier or explicitly requested
+        if (params.openmm_compute_tier == 'full' || params.openmm_mmgbsa_mode != 'off') {
+            mmgbsa_batched = OpenMMRelaxation.out.relaxed_pdbs
+                .collect()
+                .flatten()
+                .buffer(size: 5, remainder: true)
+                .map { batch -> tuple("mmgbsa_${batch.hashCode()}", batch) }
+
+            OpenMMScore(
+                mmgbsa_batched,
+                params.openmm_mmgbsa_mode ?: 'interface',
+                'B',
+                'A',
+                params.openmm_force_field ?: 'amber14sb',
+            )
+        }
+
+        final_pdbs = OpenMMRelaxation.out.relaxed_pdbs
+    }
+    else {
+        final_pdbs = validated_pdbs
     }
 
     emit:
-    final_pdbs = FilterBindCraft.out.pdbs
+    final_pdbs = final_pdbs
     summary = FilterBindCraft.out.summary
 }
 
