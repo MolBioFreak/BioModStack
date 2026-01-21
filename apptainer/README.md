@@ -1,6 +1,6 @@
-# ProteinDJ Container Build System
+# BioModStack Container Build System
 
-This directory contains Apptainer definition files (`.def`) and build scripts for all ProteinDJ containers.
+This directory contains Apptainer definition files (`.def`) and build scripts for all BioModStack containers.
 
 ## Quick Start
 
@@ -349,7 +349,7 @@ Expected final container sizes:
 For issues with:
 - **Container builds:** Check logs in `/tmp/${USER}/apptainer_build/`
 - **Apptainer:** https://apptainer.org/docs/
-- **ProteinDJ:** https://github.com/PapenfussLab/proteindj
+- **BioModStack:** https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform
 
 ---
 
