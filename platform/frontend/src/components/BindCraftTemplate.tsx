@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 // Design algorithm options
 const DESIGN_ALGORITHMS = [
@@ -136,6 +137,9 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
     const [budget] = useState<number | null>(null);
     const [alpha] = useState<number>(0.01);
     const [boltzValidation] = useState<boolean>(false);
+
+    // Physics refinement settings (OpenMM)
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
 
     // ============================================================================
     // State: UI
@@ -335,6 +339,14 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             bindcraft_budget: budget,
             bindcraft_alpha: alpha,
             bindcraft_boltz_validation: boltzValidation,
+            // Physics refinement (OpenMM)
+            openmm_enabled: physicsSettings.enabled,
+            openmm_compute_tier: physicsSettings.computeTier,
+            openmm_cdr_only: physicsSettings.cdrOnly,
+            openmm_restraint_mode: physicsSettings.restraintMode,
+            openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+            openmm_force_field: physicsSettings.forceField,
+            openmm_top_n_percentage: physicsSettings.topNPercentage,
         };
 
         submitMutation.mutate(params);
@@ -930,6 +942,13 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                         </button>
                     ))}
                 </div>
+
+                {/* Physics Refinement Panel (OpenMM) */}
+                <PhysicsRefinementPanel
+                    settings={physicsSettings}
+                    onSettingsChange={setPhysicsSettings}
+                    isAntibody={designApproach === 'cdr_hallucination'}
+                />
 
                 {/* Advanced Settings Toggle */}
                 <button

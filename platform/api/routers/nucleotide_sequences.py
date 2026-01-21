@@ -87,6 +87,10 @@ class NucleotideSequenceResponse(BaseModel):
     accession: Optional[str]
     source_file: Optional[str]
     gc_content: Optional[float]
+    parent_id: Optional[str]
+    operation: Optional[str]
+    operation_params: Optional[dict]
+    version: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]
 
