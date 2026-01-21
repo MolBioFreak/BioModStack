@@ -145,7 +145,8 @@ process SpawnFAMPNNJobs {
     def params_json = groovy.json.JsonOutput.toJson([
         fampnn_temperature: params.fampnn_temperature ?: 0.0001,
         fampnn_num_steps: params.fampnn_num_steps ?: 500,
-        fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15
+        fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
+        fampnn_constraint_mode: params.fampnn_constraint_mode
     ])
     """
     python3 ${projectDir}/scripts/spawn_fampnn_children.py \\
@@ -545,6 +546,7 @@ if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturati
 if (!params.containsKey('exploration_mode') || params.exploration_mode == null) params.exploration_mode = false
 if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
 if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
+if (!params.containsKey('fampnn_constraint_mode')) params.fampnn_constraint_mode = 'antibody'
 
 // Orchestrator-based parallelism settings
 // 'standard' = Nextflow-internal parallelism (current behavior)

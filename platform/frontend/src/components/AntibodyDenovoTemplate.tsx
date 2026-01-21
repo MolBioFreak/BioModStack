@@ -414,6 +414,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
                     openmm_force_field: physicsSettings.forceField,
                     openmm_top_n_percentage: physicsSettings.topNPercentage,
+                    openmm_max_iterations: physicsSettings.maxIterations,
+                    openmm_tolerance: physicsSettings.tolerance,
+                    openmm_restraint_strength: physicsSettings.restraintStrength,
+                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
+                    openmm_platform: physicsSettings.platform,
                 }
             };
 

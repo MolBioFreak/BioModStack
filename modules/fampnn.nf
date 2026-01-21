@@ -14,6 +14,24 @@ process PrepFAMPNN {
     def designLoops = params.antibody_design_loops ?: 'H1,H2,H3,L1,L2,L3'
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
     def antibodyChains = params.antibody_chains ?: 'H,L'
+    def constraintMode = (params.fampnn_constraint_mode ?: 'generic').toString().trim().toLowerCase()
+    def useAntibodyConstraints = ['antibody', 'cdr', 'cdr_only', 'antibody_cdr', 'antibody_constraints'].contains(constraintMode)
+    def constraintCmd = useAntibodyConstraints ? """
+    # Generate CDR-aware constraints based on design mode
+    python /scripts/prep_antibody_constraints.py \\
+        --input_dir "./" \\
+        --out_fampnn "fampnn.csv" \\
+        --out_mpnn "mpnn_fixed_chains.json" \\
+        --design_mode "${designMode}" \\
+        --design_loops "${designLoops}" \\
+        --protect_tetrad "${protectTetrad}" \\
+        --antibody_chains "${antibodyChains}"
+    """ : """
+    # Generate generic constraints (no fixed residues)
+    python /scripts/prep_fampnn_constraints_generic.py \\
+        --input_dir "./" \\
+        --out_csv "fampnn.csv"
+    """
     
     """
     eval "\$(micromamba shell hook --shell bash)"
@@ -24,15 +42,7 @@ process PrepFAMPNN {
         --input_dir "./" \\
         --out_dir "fampnn_input"
     
-    # Generate CDR-aware constraints based on design mode
-    python /scripts/prep_antibody_constraints.py \\
-        --input_dir "./" \\
-        --out_fampnn "fampnn.csv" \\
-        --out_mpnn "mpnn_fixed_chains.json" \\
-        --design_mode "${designMode}" \\
-        --design_loops "${designLoops}" \\
-        --protect_tetrad "${protectTetrad}" \\
-        --antibody_chains "${antibodyChains}"
+    ${constraintCmd}
     """
 }
 
@@ -134,4 +144,3 @@ process FilterFAMPNN {
         2>&1 | tee filter_fampnn_${task.index}.log
     """
 }
-
