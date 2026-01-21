@@ -328,6 +328,6 @@ workflow OpenMMRefinement {
     relaxation_metrics = OpenMMRelaxation.out.metrics_json
     mmgbsa_scores = params.openmm_compute_tier == 'full' || mmgbsa_mode != 'off' 
         ? OpenMMScore.out.scores_json 
-        : Channel.empty()
+        : channel.empty()
     logs = OpenMMRelaxation.out.logs
 }
