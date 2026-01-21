@@ -117,21 +117,55 @@ def get_msa_for_sequence(sequence, name, args):
     return None
 
 
+def is_nucleic_acid_sequence(sequence):
+    """Check if a sequence is DNA/RNA based on content"""
+    nucleotide_chars = set('ATGCU')
+    sequence_upper = sequence.upper().replace('X', '')
+    if not sequence_upper:
+        return None
+    nucleotide_ratio = sum(1 for c in sequence_upper if c in nucleotide_chars) / len(sequence_upper)
+    if nucleotide_ratio > 0.8:
+        # Check for U (RNA) vs T (DNA)
+        if 'U' in sequence_upper and 'T' not in sequence_upper:
+            return 'rna'
+        return 'dna'
+    return None
+
 def generate_yaml_with_msa(pdb_filename, chain_groups, msa_paths):
-    """Create YAML config with MSA paths for each chain group"""
+    """Create YAML config with MSA paths for each chain group, detecting nucleic acids"""
     sequences = []
     for sequence, chain_ids in chain_groups.items():
-        entry = {
-            'protein': {
-                'id': sorted(chain_ids),
-                'sequence': sequence
+        mol_type = is_nucleic_acid_sequence(sequence)
+        
+        if mol_type == 'dna':
+            # DNA chains - no MSA needed
+            entry = {
+                'dna': {
+                    'id': sorted(chain_ids),
+                    'sequence': sequence
+                }
             }
-        }
-        chain_key = f"{pdb_filename}_{chain_ids[0]}"
-        if chain_key in msa_paths and msa_paths[chain_key]:
-            entry['protein']['msa'] = msa_paths[chain_key]
+        elif mol_type == 'rna':
+            # RNA chains - no MSA needed
+            entry = {
+                'rna': {
+                    'id': sorted(chain_ids),
+                    'sequence': sequence
+                }
+            }
         else:
-            entry['protein']['msa'] = 'empty'
+            # Protein chain - include MSA if available
+            entry = {
+                'protein': {
+                    'id': sorted(chain_ids),
+                    'sequence': sequence
+                }
+            }
+            chain_key = f"{pdb_filename}_{chain_ids[0]}"
+            if chain_key in msa_paths and msa_paths[chain_key]:
+                entry['protein']['msa'] = msa_paths[chain_key]
+            else:
+                entry['protein']['msa'] = 'empty'
         sequences.append(entry)
     return {'sequences': sequences}
 
