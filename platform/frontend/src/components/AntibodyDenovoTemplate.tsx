@@ -26,6 +26,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
+    const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
     // explorationMode is now always true - parallelism controlled via parallelMode
@@ -129,6 +130,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             else if (initialValues.seq_design_antifold) setSeqDesigner('antifold');
             else if (initialValues.seq_design_proteinmpnn) setSeqDesigner('proteinmpnn');
             else if (initialValues.seq_designer) setSeqDesigner(initialValues.seq_designer); // Direct name
+            if (initialValues.fampnn_constraint_mode) {
+                setFampnnConstraintMode(initialValues.fampnn_constraint_mode);
+            }
 
             // Framework
             if (initialValues.framework_type) setFrameworkType(initialValues.framework_type);
@@ -374,6 +378,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
+                    fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
                     // Pre-Boltz filtering (saves compute)
                     fampnn_max_psce: qualitySettings.fampnn_max_psce,
                     fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
@@ -906,6 +911,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ))}
                     </div>
                 </div>
+
+                {seqDesigner === 'fampnn' && (
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">FAMPNN Constraints</label>
+                        <div className="flex gap-3">
+                            {(['generic', 'antibody'] as const).map((mode) => (
+                                <button
+                                    key={mode}
+                                    onClick={() => setFampnnConstraintMode(mode)}
+                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${fampnnConstraintMode === mode
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {mode === 'generic' ? 'GENERIC' : 'ANTIBODY (CDR)'}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Generic applies no fixed positions; Antibody uses CDR-aware constraints.
+                        </p>
+                    </div>
+                )}
 
                 {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
 

@@ -117,6 +117,15 @@ params:
     required: false
     default: false
 
+  - name: fampnn_constraint_mode
+    type: string
+    description: "Constraint mode: 'generic' (no fixed residues) or 'antibody' (CDR-aware constraints)"
+    required: false
+    default: "generic"
+    enum:
+      - generic
+      - antibody
+
   - name: fampnn_psce_threshold
     type: number
     description: "PSCE confidence threshold for sidechain filtering (0.0-1.0)"

@@ -183,6 +183,14 @@ params:
     minimum: 1
     maximum: 100
 
+  - name: fampnn_constraint_mode
+    type: string
+    description: FAMPNN constraint mode ('generic' or 'antibody')
+    default: antibody
+    enum:
+      - generic
+      - antibody
+
   - name: fampnn_temperature
     type: number
     description: FAMPNN sampling temperature
