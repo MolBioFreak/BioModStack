@@ -146,7 +146,14 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             ...predictorParams,
             // Pass base sequence for MSA sharing - all variants use WT MSA
             msa_reference_sequence: baseSequence,
-            ligands: ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+            // Include ALL fields from ligand entries - sequence is required for DNA/RNA!
+            ligands: ligands.map(l => ({
+                type: l.type,
+                id: l.id,
+                ccd: l.ccd,
+                smiles: l.smiles,
+                sequence: l.sequence  // CRITICAL: This was missing - DNA/RNA entries need their sequence
+            }))
         });
     };
 
