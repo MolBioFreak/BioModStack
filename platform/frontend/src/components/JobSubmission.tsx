@@ -615,7 +615,7 @@ export function JobSubmission() {
                                             boltz_use_potentials: predictorConfig.use_potentials,
                                             boltz_step_scale: predictorConfig.step_scale,
                                             pred_method: predictorConfig.predictor,
-                                            // Complex components if ligands present
+                                            // Complex components: ligands array now includes DNA/RNA with sequence field
                                             ...(predictorConfig.ligands?.length ? {
                                                 ligands: predictorConfig.ligands
                                             } : {})
