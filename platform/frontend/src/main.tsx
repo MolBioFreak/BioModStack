@@ -16,14 +16,21 @@ const queryClient = new QueryClient({
   },
 })
 
-createRoot(document.getElementById('root')!).render(
+const isDesigner = typeof window !== 'undefined' && window.location.pathname.startsWith('/designer')
+const AppTree = isDesigner ? (
+  <App />
+) : (
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-      </ThemeProvider>
-    </QueryClientProvider>
-  </StrictMode>,
+    <App />
+  </StrictMode>
+)
+
+createRoot(document.getElementById('root')!).render(
+  <QueryClientProvider client={queryClient}>
+    <ThemeProvider>
+      <BrowserRouter>
+        {AppTree}
+      </BrowserRouter>
+    </ThemeProvider>
+  </QueryClientProvider>,
 )

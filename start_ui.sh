@@ -40,7 +40,7 @@ start_services() {
     check_port 8000
     
     echo "   Starting API with uv..."
-    nohup uv run uvicorn main:app --reload --port 8000 --host 0.0.0.0 > "$API_LOG" 2>&1 &
+    nohup uv run uvicorn main:app --reload --port 8000 --host 127.0.0.1 > "$API_LOG" 2>&1 &
     API_PID=$!
     echo "   API started (PID: $API_PID) → http://localhost:8000"
     
@@ -52,7 +52,7 @@ start_services() {
     check_port 5173
     
     echo "   Starting Frontend..."
-    nohup npm run dev > "$FRONTEND_LOG" 2>&1 &
+    nohup npm run dev -- --host 127.0.0.1 --port 5173 > "$FRONTEND_LOG" 2>&1 &
     FRONTEND_PID=$!
     echo "   Frontend started (PID: $FRONTEND_PID) → http://localhost:5173"
     
