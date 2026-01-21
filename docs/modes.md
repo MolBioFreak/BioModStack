@@ -1,8 +1,8 @@
-[🏠 ProteinDJ](../README.md) > Design Modes Guide
+[🏠 BioModStack](../README.md) > Design Modes Guide
 
-# ProteinDJ Guide to Design Modes
+# BioModStack Guide to Design Modes
 
-Due to the creative nature of protein design and the complexity of RFdiffusion there are many ways you can use ProteinDJ. To help with delineating this, we have created eight RFdiffusion modes for ProteinDJ. Each mode is described in detail below, but for now, here's a quick summary of each one with a simple illustration of each mode in action:
+Due to the creative nature of protein design and the complexity of RFdiffusion there are many ways you can use BioModStack. To help with delineating this, we have created eight RFdiffusion modes for BioModStack. Each mode is described in detail below, but for now, here's a quick summary of each one with a simple illustration of each mode in action:
 
 [**Monomer design**](#monomerdesign)
 - [**monomer_denovo**](#mode-monomerdenovo) – diffusion of new monomers from noise
@@ -174,7 +174,7 @@ For more details on Partial Diffusion, see the official [RFdiffusion GitHub](htt
 
 ## Binder Design <a name="binderdesign"></a>
 
-To design binders with ProteinDJ, it is important to prepare your target structure. Ideally, your structure will be a high-resolution experimental structure or a high-confidence structural prediction. RFdiffusion will ignore ligands, but non-natural amino acids in protein chains will result in an error if included in your input residue ranges. Since the runtime of RFdiffusion scales exponentially with target size you might want to crop the size of your target to a minimal domain. See below for an example of how to prepare a structure. You should avoid exposing hydrophobic cores of your target domain as RFdiffusion will likely want to diffuse a binder there (since it has a bias towards hydrophobic patches).
+To design binders with BioModStack, it is important to prepare your target structure. Ideally, your structure will be a high-resolution experimental structure or a high-confidence structural prediction. RFdiffusion will ignore ligands, but non-natural amino acids in protein chains will result in an error if included in your input residue ranges. Since the runtime of RFdiffusion scales exponentially with target size you might want to crop the size of your target to a minimal domain. See below for an example of how to prepare a structure. You should avoid exposing hydrophobic cores of your target domain as RFdiffusion will likely want to diffuse a binder there (since it has a bias towards hydrophobic patches).
 
 <img src="../img/target_prep.png" width="700">
 
