@@ -373,7 +373,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
             {/* Physics Refinement Panel */}
             <PhysicsRefinementPanel
                 settings={physicsSettings}
-                onChange={setPhysicsSettings}
+                onSettingsChange={setPhysicsSettings}
+                isAntibody={false}
             />
 
             {/* Advanced Options */}
