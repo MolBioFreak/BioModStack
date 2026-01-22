@@ -2,7 +2,7 @@
 """
 Convert RFdiffusion contig parameters to RFD3 JSON input format.
 
-This script bridges the gap between ProteinDJ's RFD parameter style
+This script bridges the gap between BioModStack's RFD parameter style
 and RFdiffusion3's JSON specification format.
 """
 
