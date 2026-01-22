@@ -125,3 +125,8 @@ packages/bio-parsers/test/testData/**/*.dna
 work
 GPU orchestration*.md
 pdj_results
+
+# RFDpoly large assets (local only)
+containers/rfdpoly.sif
+models/rfdpoly/*.pt
+tools/RFDpoly/
