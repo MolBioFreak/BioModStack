@@ -16,10 +16,9 @@ process CombineMetadata {
     #!/bin/bash
     
     python /scripts/metadata_converter.py \
-        --input_file ${metadata_fold} ${metadata_fold_seq} \
+        --input_files ${metadata_fold} ${metadata_fold_seq} \
         --type csv \
         --output_file combined_metadata.csv \
         2>&1 | tee combined_metadata.log
     """
 }
-

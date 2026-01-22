@@ -31,7 +31,7 @@ async def ingest_job_results(
     
     Args:
         job_id: The job ID to associate designs with
-        output_dir: Path to the job's output directory (e.g., pdj_results/job_xxx)
+        output_dir: Path to the job's output directory (e.g., legacy pdj_results/job_xxx)
         session: Async database session
         
     Returns:

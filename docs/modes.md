@@ -54,7 +54,7 @@ Fold conditioning guides the RFdiffusion diffusion process by providing secondar
 
 <img src="../img/monomer_foldcond.png" width="400">
 
-To run fold conditioning you need a directory containing pytorch files (`rfd_scaffold_dir`) with secondary structure and block adjacency information for each scaffold e.g. scaffold1_ss.pt scaffold2_adj.pt. You can generate these from a pdb or directory of pdbs using `scripts/create_scaffolds.py` (note this script requires a python environment with pyrosetta and pytorch installed). RFdiffusion will select a random scaffold from the directory for each design during the backbone diffusion process. Here we will use a directory of assorted scaffolds in `proteindj/binderscaffolds/scaffolds_assorted`.
+To run fold conditioning you need a directory containing pytorch files (`rfd_scaffold_dir`) with secondary structure and block adjacency information for each scaffold e.g. scaffold1_ss.pt scaffold2_adj.pt. You can generate these from a pdb or directory of pdbs using `scripts/create_scaffolds.py` (note this script requires a python environment with pyrosetta and pytorch installed). RFdiffusion will select a random scaffold from the directory for each design during the backbone diffusion process. Here we will use a directory of assorted scaffolds in `binderscaffolds/scaffolds_assorted`.
 
 ```
 monomer_foldcond {

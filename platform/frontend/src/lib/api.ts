@@ -274,6 +274,7 @@ export interface Design {
     num_helices: number | null;
     num_strands: number | null;
     rog: number | null;
+    rfd_rog: number | null;
     mpnn_score: number | null;
     plddt_overall: number | null;
     plddt_binder: number | null;
@@ -317,8 +318,12 @@ export interface DesignFilters {
     plddt_min?: number;
     pae_max?: number;
     iptm_min?: number;
+    rog_min?: number;
+    rog_max?: number;
+    rfd_rog_min?: number;
+    rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'backbone';
+    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
@@ -964,4 +969,3 @@ export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
 
 export const getSabdabAttribution = () =>
     api.get<SAbDabAttribution>('/api/frameworks/attribution');
-
