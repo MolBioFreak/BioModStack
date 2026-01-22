@@ -150,6 +150,33 @@ workflow {
     }
 
     /////////////////////////////
+    // OLIGO DESIGNER          //
+    /////////////////////////////
+    // Multi-polymer design (DNA, RNA, protein) using RFDpoly
+    if (params.rfd_mode == 'oligo_design' || params.rfdpoly_enabled) {
+        println("Running Oligo Designer (RFDpoly + Boltz-2)")
+        println("* Contigs: ${params.rfdpoly_contigs}")
+        println("* Polymer chains: ${params.rfdpoly_polymer_chains}")
+        println("* Num designs: ${params.rfdpoly_num_designs}")
+        println("* Checkpoint: ${params.rfdpoly_checkpoint}")
+        println("* Validate with Boltz: ${params.oligo_validate_boltz}")
+
+        // Prepare input PDB channel (optional)
+        def input_pdb = params.rfdpoly_input_pdb 
+            ? channel.fromPath(params.rfdpoly_input_pdb)
+            : channel.of(file("${projectDir}/NO_FILE"))
+
+        OLIGO_DESIGNER(
+            channel.of(params.design_id ?: 'oligo_design'),
+            channel.of(params.rfdpoly_contigs),
+            channel.of(params.rfdpoly_polymer_chains),
+            input_pdb
+        )
+
+        return null
+    }
+
+    /////////////////////////////
     // RFANTIBODY STANDALONE    //
     /////////////////////////////
     // Standalone RFantibody backbone generation for orchestrator-spawned child jobs
