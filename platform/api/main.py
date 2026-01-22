@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -127,6 +127,7 @@ app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
 app.include_router(molbio_ops.router)
 app.include_router(msa.router)
+app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
 
 
 @app.get("/api/health")

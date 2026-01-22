@@ -79,6 +79,10 @@ export function ResultsViewer() {
     const [plddtMin, setPlddtMin] = useState<number>(0);
     const [iptmMin, setIptmMin] = useState<number>(0);
     const [contactsMin, setContactsMin] = useState<number>(0);
+    const [rogMin, setRogMin] = useState<string>('');
+    const [rogMax, setRogMax] = useState<string>('');
+    const [rfdRogMin, setRfdRogMin] = useState<string>('');
+    const [rfdRogMax, setRfdRogMax] = useState<string>('');
     // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
@@ -116,15 +120,24 @@ export function ResultsViewer() {
         else navigate('/designs');
     };
 
+    const rogMinValue = rogMin.trim() === '' ? undefined : Number(rogMin);
+    const rogMaxValue = rogMax.trim() === '' ? undefined : Number(rogMax);
+    const rfdRogMinValue = rfdRogMin.trim() === '' ? undefined : Number(rfdRogMin);
+    const rfdRogMaxValue = rfdRogMax.trim() === '' ? undefined : Number(rfdRogMax);
+
     const { data: designsData, isLoading: designsLoading } = useQuery({
-        queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId],
+        queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue],
         queryFn: () => fetchDesigns({
             job_id: selectedJobId,
             limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
             offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
-            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'backbone' | undefined,
+            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | undefined,
             sort_desc: sortDir === 'desc',
             backbone_id: selectedBackboneId ?? undefined,
+            rog_min: rogMinValue,
+            rog_max: rogMaxValue,
+            rfd_rog_min: rfdRogMinValue,
+            rfd_rog_max: rfdRogMaxValue,
         }),
         enabled: !!selectedJobId,
     });
@@ -216,6 +229,19 @@ export function ResultsViewer() {
         if (contactsMin > 0) {
             filtered = filtered.filter(d => (d.epitope_contact_count ?? 0) >= contactsMin);
         }
+        // RoG filter
+        if (rogMinValue !== undefined) {
+            filtered = filtered.filter(d => (d.rog ?? 0) >= rogMinValue);
+        }
+        if (rogMaxValue !== undefined) {
+            filtered = filtered.filter(d => (d.rog ?? 0) <= rogMaxValue);
+        }
+        if (rfdRogMinValue !== undefined) {
+            filtered = filtered.filter(d => (d.rfd_rog ?? 0) >= rfdRogMinValue);
+        }
+        if (rfdRogMaxValue !== undefined) {
+            filtered = filtered.filter(d => (d.rfd_rog ?? 0) <= rfdRogMaxValue);
+        }
         // Text filter
         if (filterText) {
             const lower = filterText.toLowerCase();
@@ -234,7 +260,7 @@ export function ResultsViewer() {
             }
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin]);
+    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
 
     // Fetch PDB content when design selected
     // Note: MolstarViewer now fetches structure directly from API URL
@@ -842,6 +868,50 @@ export function ResultsViewer() {
                                                             />
                                                             <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
                                                         </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs text-slate-500">RoG</span>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.1"
+                                                                value={rogMin}
+                                                                onChange={(e) => setRogMin(e.target.value)}
+                                                                placeholder="min"
+                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                            />
+                                                            <span className="text-xs text-slate-500">–</span>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.1"
+                                                                value={rogMax}
+                                                                onChange={(e) => setRogMax(e.target.value)}
+                                                                placeholder="max"
+                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs text-slate-500">RFD RoG</span>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.1"
+                                                                value={rfdRogMin}
+                                                                onChange={(e) => setRfdRogMin(e.target.value)}
+                                                                placeholder="min"
+                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                            />
+                                                            <span className="text-xs text-slate-500">–</span>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.1"
+                                                                value={rfdRogMax}
+                                                                onChange={(e) => setRfdRogMax(e.target.value)}
+                                                                placeholder="max"
+                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                            />
+                                                        </div>
                                                         <span className="text-xs text-slate-500 ml-auto">
                                                             Page {currentPage} • Showing {sortedDesigns.length} of {totalDesigns.toLocaleString()} designs
                                                         </span>
@@ -902,6 +972,7 @@ export function ResultsViewer() {
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'RMSD' },
                                                                 { key: 'rog', label: 'RoG' },
+                                                                { key: 'rfd_rog', label: 'RFD RoG' },
                                                                 { key: 'fr2_contacts', label: 'FR2' },
                                                                 { key: 'is_favorite', label: '★' },
                                                             ].map(col => (
@@ -998,6 +1069,7 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-purple-400" title={`FR2: ${d.fr2_contacts || '—'}`}>
                                                                     {d.fr2_contacts || '—'}
                                                                 </td>

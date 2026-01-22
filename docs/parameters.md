@@ -15,7 +15,7 @@ These parameters are required for BioModStack and are used by every mode.
 | `rfd_mode`        | null            | Pipeline mode. Choose from: `monomer_denovo`, `monomer_foldcond`, `monomer_motifscaff`, `monomer_partialdiff`, `binder_denovo`, `binder_foldcond`, `binder_motifscaff`, or `binder_partialdiff` |
 | `rfd_num_designs` | 8               | Number of designs to generate using RFdiffusion                                                                                                                                                 |
 | `seqs_per_design` | 8               | Number of sequences to generate per RFdiffusion design                                                                                                                                          |
-| `out_dir`         | `./pdj_results` | Output directory for results. Existing results will be overwritten                                                                                                                              |
+| `out_dir`         | `./pdj_results` | Output directory for results (legacy default name). Existing results will be overwritten                                                                                                          |
 
 ---
 
