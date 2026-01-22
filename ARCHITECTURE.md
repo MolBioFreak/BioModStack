@@ -111,9 +111,13 @@ Protein-De-Novo-Modification-and-Design-Platform/
 │   └── chai1/                   # [ADD] Chai-1 weights
 │
 └── docs/                         # Documentation
-    ├── PROJECT_STATUS.md        # This project status
-    ├── ARCHITECTURE.md          # This architecture doc
-    └── PROTEINDJ_TECHNICAL.md   # ProteinDJ breakdown
+    ├── installation.md          # Installation guide
+    ├── modes.md                 # Design modes guide
+    ├── parameters.md            # Parameter reference
+    ├── metrics.md               # Metrics and metadata guide
+    ├── scaffolds.md             # Scaffold generation guide
+    ├── WORKSTATION_SETUP.md     # Workstation setup
+    └── OpenMM_Integration_Plan.md # OpenMM integration plan
 ```
 
 ## Configuration System
@@ -246,10 +250,10 @@ apptainer/
 Use local Docker images:
 ```
 images/
-├── rfdiffusion/     (keep ProteinDJ version)
+├── rfdiffusion/     (keep baseline version)
 ├── genie2/          (new)
-├── proteinmpnn/     (keep ProteinDJ version)
-├── fampnn/          (keep ProteinDJ version)
+├── proteinmpnn/     (keep baseline version)
+├── fampnn/          (keep baseline version)
 ├── ligandmpnn/      (new)
 ├── boltz2/          (your existing Boltz-2)
 ├── chai1/           (your existing Chai-1)

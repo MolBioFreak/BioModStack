@@ -3,6 +3,8 @@
  * De novo design of DNA, RNA, proteins, and mixed nucleoprotein assemblies
  * 
  * Pipeline: RFDpoly → Boltz-2 Validation → Filter → Results
+ * 
+ * Phase 5: Added target_pdb support for protein-binding aptamer design
  */
 
 include { RFDPolyDesign ; PrepBoltzOligo ; OLIGO_DESIGN } from '../modules/rfdpoly.nf'
@@ -16,7 +18,8 @@ workflow OLIGO_DESIGNER {
     design_id
     contigs
     polymer_chains
-    input_pdb
+    input_pdb // Scaffold PDB for redesign (optional)
+    target_pdb // Target protein for binding design (optional)
 
     main:
     // Stage 1: Run OLIGO_DESIGN sub-workflow (RFDpoly)
@@ -25,6 +28,7 @@ workflow OLIGO_DESIGNER {
         contigs,
         polymer_chains,
         input_pdb,
+        target_pdb,
     )
 
     // Stage 2: Boltz-2 validation (if enabled)
