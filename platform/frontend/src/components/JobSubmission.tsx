@@ -11,6 +11,7 @@ import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 import { BoltzGenTemplate } from './BoltzGenTemplate';
 import { BindCraftTemplate } from './BindCraftTemplate';
+import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -328,7 +329,7 @@ export function JobSubmission() {
     });
 
     // Hardcoded templates that use dedicated components instead of API-driven config
-    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft'];
+    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
 
     const { data: selectedTemplateData } = useQuery({
         queryKey: ['template', selectedTemplateId],
@@ -664,6 +665,14 @@ export function JobSubmission() {
                                     }}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'oligo_design' ? (
+                                <OligoDesignerTemplate
+                                    onBack={() => {
+                                        setSelectedTemplateId(null);
+                                        setClonedValues(undefined);
+                                    }}
+                                    initialValues={clonedValues}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
@@ -725,6 +734,19 @@ export function JobSubmission() {
                                                 stages: [
                                                     { tool: 'AF2 Hallucination' },
                                                     { tool: 'MPNN' },
+                                                    { tool: 'Filtering' }
+                                                ]
+                                            },
+                                            // Oligo Designer (Multi-Polymer Design)
+                                            {
+                                                id: 'oligo_design',
+                                                name: 'Oligo Designer',
+                                                description: 'Design DNA, RNA, proteins, and mixed nucleoprotein assemblies using RFDpoly diffusion with Boltz-2 validation.',
+                                                icon: 'dna',
+                                                color: '#6366F1', // Indigo
+                                                stages: [
+                                                    { tool: 'RFDpoly' },
+                                                    { tool: 'Boltz-2' },
                                                     { tool: 'Filtering' }
                                                 ]
                                             }
