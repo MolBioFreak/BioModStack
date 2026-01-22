@@ -107,7 +107,31 @@ Complex systems with multiple polymer types:
 | `rfdpoly_temperature` | float | `1.0` | Sampling temperature |
 | `rfdpoly_seed` | int | random | Random seed for reproducibility |
 | `rfdpoly_symmetry` | string | - | Symmetry constraints (C2, C3, etc.) |
-| `rfdpoly_output_format` | enum | `pdb` | `pdb`, `cif` |
+
+### Checkpoint Mapping (Addendum Fix #1)
+
+| UI Label | Filename | Use Case |
+|----------|----------|----------|
+| `generalized` | `train_session2024-07-08_1720455712_BFF_3.00.pt` | All polymer types |
+| `rna_optimized` | `train_session2024-06-27_1719522052_BFF_7.00.pt` | RNA-only design |
+
+### RFDpoly CLI Mapping (Addendum Fix #4)
+
+The Nextflow module must translate BioModStack params to RFDpoly Hydra keys:
+
+| BioModStack Param | RFDpoly Hydra Key | Example |
+|-------------------|-------------------|---------|
+| `rfdpoly_diffusion_steps` | `diffuser.T` | `diffuser.T=50` |
+| `rfdpoly_num_designs` | `inference.num_designs` | `inference.num_designs=4` |
+| `rfdpoly_contigs` | `contigmap.contigs` | `contigmap.contigs=['33 75']` |
+| `rfdpoly_polymer_chains` | `contigmap.polymer_chains` | `contigmap.polymer_chains=['dna','protein']` |
+| `rfdpoly_weights_path` | `inference.ckpt_path` | `inference.ckpt_path=/path/to/weights.pt` |
+| `rfdpoly_input_pdb` | `inference.input_pdb` | `inference.input_pdb=/path/to/template.pdb` |
+| (output prefix) | `inference.output_prefix` | `inference.output_prefix=./design_001` |
+
+**Required config flag (Addendum Fix #2):** Always pass `--config-name=multi_polymer`
+
+**Default input PDB (Addendum Fix #3):** Provide `tools/RFDpoly/rf_diffusion/test_data/DBP035.pdb` as fallback
 
 ---
 
@@ -130,6 +154,42 @@ All designs are validated with Boltz-2 structure prediction:
 | `oligo_refine_openmm` | bool | `false` | Enable physics relaxation |
 | `oligo_openmm_tier` | enum | `standard` | `fast`, `standard`, `full` |
 | `oligo_implicit_solvent` | bool | `true` | Use implicit solvent model |
+
+### Chain Type Serialization (Addendum Fix #7)
+
+UI must serialize chain types exactly as RFDpoly expects:
+- Allowed values: `dna`, `rna`, `protein` (lowercase only)
+- Format: `['dna','protein']` (single quotes, comma-separated, bracketed)
+- Nextflow module enforces this format before CLI construction
+
+### Downstream Compatibility (Addendum Fix #8)
+
+**RFDpoly → Boltz-2 Conversion:**
+- RFDpoly outputs PDB with chain IDs
+- `prep_boltz_oligo.py` detects polymer type per chain:
+  - DNA: residues DA/DT/DG/DC
+  - RNA: residues A/U/G/C (or RA/RU/RG/RC)
+  - Protein: standard amino acids
+- Generates Boltz-2 YAML with correct `dna`/`rna`/`protein` blocks
+
+**RFDpoly → OpenMM Compatibility:**
+- OpenMM supports nucleic acids via AMBER force fields (`ff14SB` for NA)
+- Implicit solvent (`OBC2`) works for RNA/DNA
+- MM-GBSA scoring NOT validated for NA — disable for oligo runs
+
+### NA-Aware Metrics (Addendum Fix #6)
+
+Protein-centric metrics (SS count, RoG) are invalid for nucleic acids. Use:
+
+| Metric | Protein | RNA/DNA | Notes |
+|--------|---------|---------|-------|
+| pLDDT | ✅ | ✅ | Per-residue confidence (Boltz-2) |
+| pTM | ✅ | ✅ | Global fold quality |
+| PAE | ✅ | ✅ | Pairwise alignment error |
+| Secondary Structure | ✅ | ❌ | Skip for NA-only |
+| Radius of Gyration | ⚠️ | ⚠️ | Valid but interpret differently |
+| Clash Score | ✅ | ✅ | OpenMM steric check |
+| Base Pairing | ❌ | ✅ | Future: RNA/DNA-specific |
 
 ---
 
@@ -386,3 +446,68 @@ After structural generation, optimize nucleic acid sequences:
 - [Preprint: De novo design of RNA and nucleoprotein complexes](https://www.biorxiv.org/content/10.1101/2025.10.01.679929v1)
 - [Boltz-2 Nucleic Acid Support](https://github.com/jwohlwend/boltz)
 - [OpenMM Nucleic Acid Force Fields](https://docs.openmm.org/)
+
+---
+
+## Addendum: Critical Alignment With RFDpoly Docs ✅ RESOLVED
+
+This addendum lists concerns found while cross‑checking the plan against the RFDpoly README and official documentation. **All issues have been addressed inline above.**
+
+### 1) **Checkpoint naming is not aligned to actual weights**
+**Concern:** The plan uses abstract labels (`generalized`, `rna_optimized`) without mapping to the actual checkpoint filenames that RFDpoly expects via `inference.ckpt_path`.  
+**Why it matters:** Users may select a checkpoint in UI that does not exist on disk, causing runtime failures.  
+**Recommendation:** Add a mapping table from UI labels to concrete filenames, and store those paths in `nextflow.config`.  
+**Docs:** RFDpoly README lists specific checkpoints and uses `inference.ckpt_path` for selection.  
+- https://github.com/RosettaCommons/RFDpoly
+- https://rosettacommons.github.io/RFDpoly/
+
+### 2) **Missing `--config-name=multi_polymer` requirement**
+**Concern:** The plan doesn’t specify the required config selection shown in the README examples.  
+**Why it matters:** RFDpoly uses Hydra configs; wrong config means wrong defaults and possible schema errors.  
+**Recommendation:** Hardcode `--config-name=multi_polymer` in the Nextflow module unless a user overrides it explicitly.  
+**Docs:** README demo uses `--config-name=multi_polymer`.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 3) **Unconditional runs may still require `inference.input_pdb`**
+**Concern:** README notes failures can occur unless a real input PDB is provided, even for “unconditional” runs.  
+**Why it matters:** The pipeline could appear broken for users with no input PDB.  
+**Recommendation:** Provide a default PDB (e.g., repo test_data) and document it in config, with a clear override option.  
+**Docs:** README troubleshooting note recommends setting `inference.input_pdb`.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 4) **Parameter names don’t map to RFDpoly’s actual CLI**
+**Concern:** Plan parameters (e.g., `rfdpoly_diffusion_steps`, `rfdpoly_polymer_chains`) are not mapped to the actual RFDpoly Hydra keys (e.g., `diffuser.T`, `contigmap.contigs`, `contigmap.polymer_chains`).  
+**Why it matters:** Without explicit mapping, parameters will be ignored or misrouted.  
+**Recommendation:** Add a CLI mapping section and implement exact key translation in the Nextflow module.  
+**Docs:** README example uses `diffuser.T`, `contigmap.contigs`, `contigmap.polymer_chains`, `inference.output_prefix`.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 5) **Output format assumptions are unverified**
+**Concern:** The plan adds `rfdpoly_output_format` (pdb/cif) but RFDpoly docs do not confirm a switchable output format.  
+**Why it matters:** UI options could mislead users or fail silently.  
+**Recommendation:** Verify supported outputs in the repo/docs; only expose UI toggles that are real.  
+**Docs:** README shows output prefix and PDB examples but no explicit format toggle.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 6) **Backbone metrics are protein-centric**
+**Concern:** Current SS/RoG filters in BioModStack are peptide‑backbone‑centric and may be invalid for DNA/RNA.  
+**Why it matters:** Filtering could remove valid nucleic acid designs or produce nonsensical metrics.  
+**Recommendation:** Add NA‑aware metrics (or disable protein‑centric filters for NA‑only runs).  
+**Docs:** RFDpoly focuses on multi‑polymer outputs (DNA/RNA/protein), so metrics must match the polymer type.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 7) **Chain type serialization must match RFDpoly expectations**
+**Concern:** The plan’s UI needs to serialize chain types exactly as `['dna','rna','protein']` for `contigmap.polymer_chains`.  
+**Why it matters:** Mismatched strings or formatting will break RFDpoly input parsing.  
+**Recommendation:** Enforce exact allowed values and output formatting in the UI and in the Nextflow module.  
+**Docs:** README example uses `contigmap.polymer_chains=['dna','protein']` syntax.  
+- https://github.com/RosettaCommons/RFDpoly
+
+### 8) **Plan assumes downstream validation compatibility without explicit checks**
+**Concern:** The plan assumes Boltz‑2 and OpenMM can handle multi‑polymer outputs with no extra conversion or flags.  
+**Why it matters:** Mixed polymer topologies can require format conversion or specific templates.  
+**Recommendation:** Add a compatibility checkpoint: “RFDpoly output → Boltz‑2/OpenMM input” with explicit conversion rules and tested examples.  
+**Docs:** RFDpoly README provides output expectations; Boltz/OpenMM docs should be checked for NA compatibility.  
+- https://github.com/RosettaCommons/RFDpoly
+- https://github.com/jwohlwend/boltz
+- https://docs.openmm.org/
