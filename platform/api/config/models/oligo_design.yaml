@@ -1,0 +1,93 @@
+# Oligo Designer Model Configuration
+# Multi-polymer design using RFDpoly diffusion + Boltz-2 validation
+
+id: oligo_design
+name: Oligo Designer
+description: Design DNA, RNA, proteins, and mixed nucleoprotein assemblies
+
+modes:
+  - id: oligo_design
+    name: Oligo Design
+    description: De novo multi-polymer design
+    params:
+      - rfdpoly_enabled
+      - rfdpoly_contigs
+      - rfdpoly_polymer_chains
+      - rfdpoly_num_designs
+      - rfdpoly_diffusion_steps
+      - rfdpoly_checkpoint
+      - oligo_validate_boltz
+      - oligo_min_plddt
+      - boltz_min_plddt
+      - openmm_enabled
+      - openmm_compute_tier
+
+params:
+  - name: rfdpoly_enabled
+    description: Enable RFDpoly workflow
+    type: boolean
+    default: true
+    hidden: true
+
+  - name: rfdpoly_contigs
+    description: Chain lengths (space-separated)
+    type: string
+    required: true
+    ui_placeholder: "40"
+
+  - name: rfdpoly_polymer_chains
+    description: Polymer types per chain (comma-separated)
+    type: string
+    required: true
+    ui_placeholder: "rna"
+
+  - name: rfdpoly_num_designs
+    description: Number of designs to generate
+    type: integer
+    default: 4
+    minimum: 1
+    maximum: 64
+
+  - name: rfdpoly_diffusion_steps
+    description: Diffusion timesteps (quality)
+    type: integer
+    default: 50
+    minimum: 10
+    maximum: 200
+
+  - name: rfdpoly_checkpoint
+    description: Model checkpoint
+    type: string
+    enum:
+      - generalized
+      - rna_optimized
+    default: generalized
+
+  - name: oligo_validate_boltz
+    description: Enable Boltz-2 validation
+    type: boolean
+    default: true
+
+  - name: oligo_min_plddt
+    description: Minimum pLDDT threshold
+    type: number
+    default: 70.0
+
+  - name: boltz_min_plddt
+    description: Boltz pLDDT threshold (mapped from oligo_min_plddt)
+    type: number
+    default: 70.0
+
+  - name: openmm_enabled
+    description: Enable physics refinement
+    type: boolean
+    default: false
+
+  - name: openmm_compute_tier
+    description: Physics compute tier
+    type: string
+    enum:
+      - fast
+      - standard
+      - full
+    default: fast
