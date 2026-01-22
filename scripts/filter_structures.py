@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unified structure filtering script for ProteinDJ.
+Unified structure filtering script for BioModStack.
 
 Replaces 7 separate filter scripts with a single configurable tool.
 
@@ -128,7 +128,7 @@ def parse_thresholds(args, stage: str) -> Dict[str, tuple]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Unified structure filtering for ProteinDJ'
+        description='Unified structure filtering for BioModStack'
     )
     subparsers = parser.add_subparsers(dest='stage', required=True)
     

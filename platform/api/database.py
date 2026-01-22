@@ -1,5 +1,5 @@
 """
-Database models and initialization for ProteinDJ Control Platform.
+Database models and initialization for BioModStack Control Platform.
 
 Uses SQLAlchemy with async SQLite.
 """
