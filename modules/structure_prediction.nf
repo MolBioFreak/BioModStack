@@ -24,6 +24,7 @@ process GenerateLocalMSA {
     def threads = params.msa_threads ?: 32
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
+    def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
     """
     python3 ${projectDir}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
@@ -34,6 +35,7 @@ process GenerateLocalMSA {
         --threads ${threads} \\
         ${useGpu} \\
         ${refSeq} \\
+        ${forceRefresh} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }
@@ -61,6 +63,7 @@ process BatchMSAGeneration {
     def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
     def maxParallel = params.msa_max_parallel ?: 4
     def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
+    def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
     """
     python3 ${projectDir}/scripts/batch_msa.py \\
         --sequences '${sequences_json}' \\
@@ -69,6 +72,7 @@ process BatchMSAGeneration {
         --cache_dir ${cacheDir} \\
         --max_parallel ${maxParallel} \\
         ${refSeqArg} \\
+        ${forceRefresh} \\
         2>&1 | tee batch_msa.log
     """
 }
@@ -99,6 +103,7 @@ process BoltzFromSequence {
     def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
     def msaThreads = params.msa_threads ?: 32
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
+    def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     """
     # Setup temp directories for containerized execution
     mkdir -p tmp yamls predictions msa
@@ -392,7 +397,16 @@ binder_chain = None
 msa_db_path = "${msaDbPath}"
 msa_threads = int("${msaThreads}")
 use_msa = "${useMsa}" == "true"
+force_refresh = "${msaForceRefresh}" == "true"
 complex_name = "${complex_name}"
+msa_fallback_path = "${msa_files}"
+fallback_msa = None
+try:
+    msa_path_obj = Path(msa_fallback_path)
+    if msa_path_obj.exists() and msa_path_obj.name != "NO_MSA":
+        fallback_msa = str(msa_path_obj.resolve())
+except Exception:
+    fallback_msa = None
 
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
@@ -406,6 +420,8 @@ for comp in complex_def.get("components", []):
         msa_path = comp.get("msa_path")
         if msa_path and Path(msa_path).exists():
             entry["protein"]["msa"] = str(Path(msa_path).resolve())
+        elif fallback_msa:
+            entry["protein"]["msa"] = fallback_msa
         elif use_msa and sequence:
             # Generate MSA using run_local_msa.py with file-based locking to prevent parallel OOM
             chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
@@ -434,6 +450,8 @@ for comp in complex_def.get("components", []):
                 ]
                 if ref_seq:
                     cmd.extend(["--reference-sequence", ref_seq])
+                if force_refresh:
+                    cmd.append("--force_refresh")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
                 if result.returncode != 0:
@@ -660,30 +678,48 @@ workflow structure_prediction_wf {
     def need_msa = (pred_method in ['boltz', 'both'] && boltz_use_msa) || (pred_method in ['rf3', 'both'] && rf3_use_msa)
 
     if (need_msa) {
-        // STEP 1: Generate MSA ONCE per unique sequence
-        // Extract base sequence (first item if all are same sequence with different job IDs)
-        def base_seq = input_ch
-            .first()
-            .map { seq, _name -> tuple(seq, "base_msa") }
+        def provided_msa = params.msa_path ? file(params.msa_path) : null
+        def hasProvidedMsa = provided_msa && provided_msa.exists()
 
-        GenerateLocalMSA(base_seq)
+        if (hasProvidedMsa) {
+            // Use precomputed MSA (e.g., from MSA batch job)
+            def inputs_with_msa = input_ch.map { seq, name -> tuple(seq, name, provided_msa) }
 
-        // STEP 2: Combine the single MSA with all job inputs
-        // GenerateLocalMSA.out.msa = [sequence, "base_msa", path(msa)]
-        def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
+            if (pred_method == 'boltz' || pred_method == 'both') {
+                BoltzFromSequenceWithMSA(inputs_with_msa)
+                structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
+            }
 
-        def inputs_with_msa = input_ch.combine(msa_ch)
-        // Now: [sequence, job_name, msa_file]
+            if (pred_method == 'rf3' || pred_method == 'both') {
+                RF3FromSequence(inputs_with_msa)
+                structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            }
+        } else {
+            // STEP 1: Generate MSA ONCE per unique sequence
+            // Extract base sequence (first item if all are same sequence with different job IDs)
+            def base_seq = input_ch
+                .first()
+                .map { seq, _name -> tuple(seq, "base_msa") }
 
-        // STEP 3: Run predictions with cached MSA (no rate limiting!)
-        if (pred_method == 'boltz' || pred_method == 'both') {
-            BoltzFromSequenceWithMSA(inputs_with_msa)
-            structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
-        }
+            GenerateLocalMSA(base_seq)
 
-        if (pred_method == 'rf3' || pred_method == 'both') {
-            RF3FromSequence(inputs_with_msa)
-            structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            // STEP 2: Combine the single MSA with all job inputs
+            // GenerateLocalMSA.out.msa = [sequence, "base_msa", path(msa)]
+            def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
+
+            def inputs_with_msa = input_ch.combine(msa_ch)
+            // Now: [sequence, job_name, msa_file]
+
+            // STEP 3: Run predictions with cached MSA (no rate limiting!)
+            if (pred_method == 'boltz' || pred_method == 'both') {
+                BoltzFromSequenceWithMSA(inputs_with_msa)
+                structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
+            }
+
+            if (pred_method == 'rf3' || pred_method == 'both') {
+                RF3FromSequence(inputs_with_msa)
+                structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            }
         }
     }
     else {

@@ -233,13 +233,14 @@ def run_local_mmseqs2(
         
         # CRITICAL: Re-check cache after acquiring lock
         # Another job may have generated the MSA while we were waiting
-        cached = check_cache(cache_dir, seq_hash, max_age_days)
-        if cached:
-            print(f"CACHE HIT (after lock): {seq_hash[:16]}... (loading from {cached})", flush=True)
-            load_from_cache(cached, final_a3m)
-            release_msa_lock(lock_fd)
-            print(f"Loaded cached MSA to {final_a3m}", flush=True)
-            return
+        if not force_refresh:
+            cached = check_cache(cache_dir, seq_hash, max_age_days)
+            if cached:
+                print(f"CACHE HIT (after lock): {seq_hash[:16]}... (loading from {cached})", flush=True)
+                load_from_cache(cached, final_a3m)
+                release_msa_lock(lock_fd)
+                print(f"Loaded cached MSA to {final_a3m}", flush=True)
+                return
     
     print(f"CACHE MISS: {seq_hash[:16]}... (running local MMseqs2)", flush=True)
     

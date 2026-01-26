@@ -7,7 +7,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
-import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
+import { PPIFlowSettingsFields, QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
@@ -29,6 +29,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
+    const [runFrustrampnn, setRunFrustrampnn] = useState(false);
     // explorationMode is now always true - parallelism controlled via parallelMode
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
 
@@ -121,6 +122,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // Booleans
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
             if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
+            if (initialValues.run_frustrampnn !== undefined) setRunFrustrampnn(initialValues.run_frustrampnn);
             // Handling renamed/mapped boolean params if any
             if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
             if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
@@ -312,6 +314,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Determine pipeline steps
             const pipelineSteps = ['rfantibody', seqDesigner];
+            if (qualitySettings.run_maturation) pipelineSteps.push('ppiflow');
             if (useAntiberty) pipelineSteps.push('antiberty');
             if (useThermoMPNN) pipelineSteps.push('thermompnn');
             pipelineSteps.push('boltz2'); // Boltz2 is always run last for structure validation
@@ -351,6 +354,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true, // Boltz2 is always run
+                    run_frustrampnn: runFrustrampnn,
                     exploration_mode: true, // Always parallel - granularity controlled via parallel_mode
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                     // Optional DNA sequence for complex prediction
@@ -379,6 +383,26 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
                     fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
+                    // PPIFlow maturation settings
+                    run_maturation: qualitySettings.run_maturation,
+                    ppiflow_start_t: qualitySettings.ppiflow_start_t,
+                    ppiflow_samples_per_target: qualitySettings.ppiflow_samples_per_target,
+                    ppiflow_retry_limit: qualitySettings.ppiflow_retry_limit,
+                    ppiflow_config: qualitySettings.ppiflow_config,
+                    ppiflow_weights_dir: qualitySettings.ppiflow_weights_dir,
+                    ppiflow_checkpoint_path: qualitySettings.ppiflow_checkpoint_path,
+                    maturation_anchor_threshold: qualitySettings.maturation_anchor_threshold,
+                    maturation_anchor_distance_cutoff: qualitySettings.maturation_anchor_distance_cutoff,
+                    maturation_min_improvement: qualitySettings.maturation_min_improvement,
+                    maturation_redesign_temp: qualitySettings.maturation_redesign_temp,
+                    maturation_redesign_steps: qualitySettings.maturation_redesign_steps,
+                    maturation_design_mode: qualitySettings.maturation_design_mode,
+                    maturation_designs_per_job: qualitySettings.maturation_designs_per_job,
+                    maturation_filter_percentile: qualitySettings.maturation_filter_percentile,
+                    ppiflow_checkpoint: qualitySettings.ppiflow_checkpoint,
+                    ppiflow_antigen_chain: qualitySettings.ppiflow_antigen_chain,
+                    ppiflow_heavy_chain: qualitySettings.ppiflow_heavy_chain,
+                    ppiflow_light_chain: qualitySettings.ppiflow_light_chain,
                     // Pre-Boltz filtering (saves compute)
                     fampnn_max_psce: qualitySettings.fampnn_max_psce,
                     fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
@@ -463,13 +487,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             purple: 'bg-purple-500/20 text-purple-400',
                             amber: 'bg-amber-500/20 text-amber-400',
                             rose: 'bg-rose-500/20 text-rose-400',
+                            teal: 'bg-teal-500/20 text-teal-400',
                         };
 
                         const steps: Array<{ name: string; colorKey: string }> = [
                             { name: 'RFantibody', colorKey: 'emerald' },
                             { name: seqDesigner.toUpperCase(), colorKey: 'blue' },
-                            { name: 'Boltz2', colorKey: 'purple' },
                         ];
+                        if (qualitySettings.run_maturation) {
+                            steps.push({ name: 'PPIFlow', colorKey: 'teal' });
+                        }
+                        steps.push({ name: 'Boltz2', colorKey: 'purple' });
                         if (useAntiberty) steps.push({ name: 'AntiBERTy', colorKey: 'amber' });
                         if (useThermoMPNN) steps.push({ name: 'ThermoMPNN', colorKey: 'rose' });
 
@@ -837,6 +865,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 )}
 
+                {/* PPIFlow Maturation (Main Panel) */}
+                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                    <PPIFlowSettingsFields
+                        settings={qualitySettings}
+                        onSettingsChange={setQualitySettings}
+                    />
+                    <p className="mt-2 text-xs text-slate-500">
+                        These settings apply when PPIFlow maturation is enabled.
+                    </p>
+                </div>
+
                 {/* Quality Settings Panel */}
                 <QualitySettingsPanel
                     settings={qualitySettings}
@@ -851,6 +890,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     onSettingsChange={setPhysicsSettings}
                     isAntibody={true}
                 />
+
+                {/* FrustraMPNN QC */}
+                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Annotate final candidates with local frustration (post‑pipeline, FIO only).
+                            </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-slate-300">
+                            <input
+                                type="checkbox"
+                                checked={runFrustrampnn}
+                                onChange={(e) => setRunFrustrampnn(e.target.checked)}
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                            />
+                            Enable
+                        </label>
+                    </div>
+                </div>
 
                 {/* Number of Backbones */}
                 <div>
@@ -1161,6 +1221,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (p.seqs_per_design) setSeqsPerDesign(p.seqs_per_design);
                         if (typeof p.run_immunogenicity_scoring === 'boolean') setUseAntiberty(p.run_immunogenicity_scoring);
                         if (typeof p.run_stability_scoring === 'boolean') setUseThermoMPNN(p.run_stability_scoring);
+                        if (typeof p.run_frustrampnn === 'boolean') setRunFrustrampnn(p.run_frustrampnn);
                         if (p.parallel_mode) setParallelMode(p.parallel_mode);
                         if (p.designs_per_job) setDesignsPerJob(p.designs_per_job);
                         if (p.pdbs_per_job) setPdBsPerJob(p.pdbs_per_job);
@@ -1174,7 +1235,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (Array.isArray(p.selected_residues)) setSelectedResidues(new Set(p.selected_residues));
                         // Quality settings - check both old and new field names
                         const qualityS = p.quality_settings || p.qualitySettings;
-                        if (qualityS) setQualitySettings(qualityS);
+                        if (qualityS) {
+                            setQualitySettings({ ...PRESETS.balanced, ...qualityS });
+                        }
                         if (p.quality_preset) setQualityPreset(p.quality_preset);
                         console.log('[TEMPLATE_LOAD] Successfully loaded template');
                     } catch (err) {
@@ -1190,6 +1253,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     seqs_per_design: seqsPerDesign,
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
+                    run_frustrampnn: runFrustrampnn,
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
                     pdbs_per_job: pdBsPerJob,

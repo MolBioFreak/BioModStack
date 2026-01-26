@@ -76,6 +76,7 @@ include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structu
 include { ANARCI } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
+include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
 
 // =============================================================================
 // ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
@@ -341,6 +342,131 @@ process CollectFAMPNNOutputs {
         json.dump(manifest, f, indent=2)
     
     print(f"Collected {len(collected_pdbs)} PDBs and {len(collected_jsons)} JSONs from {len(output_dirs)} FAMPNN child jobs")
+    """
+}
+
+// =============================================================================
+// PPIFlow maturation spawn/wait/collect helpers
+// =============================================================================
+process StageMaturationInputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/ppiflow/input_pdbs", mode: 'copy', pattern: "*.pdb"
+
+    input:
+    path pdbs
+
+    output:
+    path "input_pdbs", emit: pdb_dir
+
+    script:
+    """
+    mkdir -p input_pdbs
+    cp ${pdbs} input_pdbs/ 2>/dev/null || true
+    """
+}
+
+process SpawnMaturationJobs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
+
+    input:
+    path pdb_dir
+    val designs_per_job
+    val parent_job_id
+    val batch_name
+
+    output:
+    path "spawn_maturation_result.json", emit: result
+
+    script:
+    def params_json = groovy.json.JsonOutput.toJson([
+        antibody_chains: params.antibody_chains,
+        antigen_chains: params.antigen_chains,
+        epitope_residues: params.epitope_residues ?: "",
+        ppiflow_start_t: params.ppiflow_start_t ?: 0.8,
+        ppiflow_samples_per_target: params.ppiflow_samples_per_target ?: 1,
+        ppiflow_retry_limit: params.ppiflow_retry_limit ?: 10,
+        ppiflow_config: params.ppiflow_config,
+        ppiflow_checkpoint: params.ppiflow_checkpoint,
+        ppiflow_checkpoint_path: params.ppiflow_checkpoint_path,
+        ppiflow_weights_dir: params.ppiflow_weights_dir,
+        ppiflow_antigen_chain: params.ppiflow_antigen_chain,
+        ppiflow_heavy_chain: params.ppiflow_heavy_chain,
+        ppiflow_light_chain: params.ppiflow_light_chain,
+        maturation_anchor_threshold: params.maturation_anchor_threshold ?: -5.0,
+        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 8.0,
+        maturation_min_improvement: params.maturation_min_improvement ?: -1.0,
+        maturation_filter_percentile: params.maturation_filter_percentile,
+        maturation_redesign_temp: params.maturation_redesign_temp,
+        maturation_redesign_steps: params.maturation_redesign_steps,
+        maturation_design_mode: params.maturation_design_mode,
+        fampnn_psce_threshold: params.fampnn_psce_threshold,
+        fampnn_exclude_cys: params.fampnn_exclude_cys,
+        fampnn_repack_last: params.fampnn_repack_last,
+        fampnn_seq_only: params.fampnn_seq_only,
+        fampnn_extra_config: params.fampnn_extra_config
+    ])
+    """
+    python3 ${projectDir}/scripts/spawn_maturation_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --pdb_dir "${pdb_dir}" \\
+        --designs_per_job ${designs_per_job} \\
+        --batch_name "${batch_name}" \\
+        --params_json '${params_json}' \\
+        --api_url "http://localhost:8000" \\
+        --output spawn_maturation_result.json \\
+        2>&1 | tee spawn_maturation.log
+    """
+}
+
+process WaitForMaturationChildren {
+    label 'process_low'
+
+    input:
+    val parent_job_id
+    val stage_name
+    val poll_interval_seconds
+    val batch_name
+
+    output:
+    path "child_outputs.json", emit: child_outputs
+
+    script:
+    """
+    python3 ${projectDir}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "${stage_name}" \\
+        --poll_interval ${poll_interval_seconds} \\
+        --batch_name "${batch_name}" \\
+        --api_url "http://localhost:8000" \\
+        --output child_outputs.json
+    """
+}
+
+process CollectMaturationOutputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+
+    input:
+    path child_outputs_json
+    val stage_name
+
+    output:
+    path "*.pdb", emit: pdbs, optional: true
+    path "*.json", emit: jsons, optional: true
+    path "collection_manifest.json", emit: manifest
+
+    script:
+    """
+    python3 ${projectDir}/scripts/collect_maturation_outputs.py \\
+        --child_outputs_json "${child_outputs_json}" \\
+        --stage_name "${stage_name}" \\
+        --manifest collection_manifest.json
     """
 }
 
@@ -865,6 +991,74 @@ workflow ANTIBODY_DENOVO {
         } // End of else block (standard FAMPNN mode)
     }
 
+    // =====================================================================
+    // Step 2.4: PPIFlow Maturation (Interface Rotamer Enrichment + Partial Flow)
+    // Applies only to the FAMPNN branch
+    // =====================================================================
+    maturation_seqs = Channel.empty()
+    if (params.run_maturation == true) {
+        if (!run_fampnn) {
+            log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
+            maturation_seqs = fampnn_seqs
+        } else {
+            log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
+            log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+
+            // Stage inputs into a stable directory for child jobs
+            maturation_inputs = fampnn_seqs
+                .map { meta, pdbs -> pdbs }
+                .flatten()
+                .collect()
+
+            StageMaturationInputs(maturation_inputs)
+
+            SpawnMaturationJobs(
+                StageMaturationInputs.out.pdb_dir,
+                params.maturation_designs_per_job ?: 4,
+                params.job_id ?: "unknown",
+                params.name ?: "antibody_batch"
+            )
+
+            // Wait for all maturation children to complete
+            maturation_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+            maturation_batch_name = params.name ?: "antibody_batch"
+
+            WaitForMaturationChildren(
+                maturation_wait_trigger,
+                "maturation",
+                30,
+                maturation_batch_name
+            )
+
+            CollectMaturationOutputs(
+                WaitForMaturationChildren.out.child_outputs,
+                "maturation"
+            )
+
+            // REPORT STAGE: maturation
+            CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
+                try {
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def count = file_list.size()
+                    log.info("  PPIFlow maturation: Collected ${count} PDBs from child jobs")
+                    def report_files = count > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "maturation", "complete"] + report_files.collect { it.toString() }
+                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage maturation: ${e.message}"
+                }
+            }
+
+            maturation_seqs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
+                def meta = [id: "ppiflow_maturation"]
+                [meta, pdbs]
+            }
+        }
+    } else {
+        maturation_seqs = fampnn_seqs
+    }
+
     // AntiFold branch (requires IMGT numbering)
     if (run_antifold) {
         log.info("  Running AntiFold...")
@@ -913,7 +1107,7 @@ workflow ANTIBODY_DENOVO {
 
     // Collect all designed sequences for downstream
     // Merge into unified format: [meta, fasta/pdb]
-    all_sequences = fampnn_seqs
+    all_sequences = maturation_seqs
         .mix(antifold_seqs) 
         .mix(proteinmpnn_seqs)
 
@@ -1350,6 +1544,14 @@ workflow ANTIBODY_DENOVO {
     else {
         final_designs = stable_designs
         mutations = Channel.empty()
+    }
+
+    // Step 4.x: FrustraMPNN QC (Post-pipeline annotation)
+    if (params.run_frustrampnn == true) {
+        log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
+        frustrampnn_input = final_designs.map { meta, pdb -> [meta, pdb] }
+        FrustrampnnQC(frustrampnn_input)
+        AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
     }
 
     emit:
