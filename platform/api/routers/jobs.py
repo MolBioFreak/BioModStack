@@ -5,7 +5,9 @@ Jobs API router - Create, list, cancel pipeline jobs.
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import OperationalError
 from typing import Optional, List
+import asyncio
 import uuid
 import os
 import logging
@@ -653,53 +655,69 @@ async def reingest_job_results(
     from sqlalchemy import delete
     from services.result_ingester import ingest_job_results
     
-    # Fetch job
-    result = await session.execute(select(Job).where(Job.id == job_id))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    async def delete_with_retry(job_id_to_delete: str, retries: int = 3) -> int:
+        for attempt in range(1, retries + 1):
+            try:
+                existing_count = (await session.execute(
+                    select(func.count(Design.id)).where(Design.job_id == job_id_to_delete)
+                )).scalar()
+                await session.execute(delete(Design).where(Design.job_id == job_id_to_delete))
+                await session.commit()
+                return existing_count or 0
+            except OperationalError as e:
+                await session.rollback()
+                if "locked" in str(e).lower() and attempt < retries:
+                    logger.warning(f"[REINGEST] DB locked, retrying delete ({attempt}/{retries}) for {job_id_to_delete}")
+                    await asyncio.sleep(0.5 * attempt)
+                    continue
+                raise
 
-    # Build job list (parent + children)
-    job_ids = [job_id]
-    jobs_to_ingest = {job_id: job}
-    if include_children:
-        child_result = await session.execute(select(Job).where(Job.parent_job_id == job_id))
-        child_jobs = child_result.scalars().all()
-        for child in child_jobs:
-            job_ids.append(child.id)
-            jobs_to_ingest[child.id] = child
-    
-    total_deleted = 0
-    total_created = 0
-    
-    for jid in job_ids:
-        target_job = jobs_to_ingest.get(jid)
-        if not target_job or not target_job.output_dir:
-            logger.warning(f"[REINGEST] Skipping job {jid}: no output_dir")
-            continue
+    try:
+        # Fetch job
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        job = result.scalar_one_or_none()
         
-        existing_count = (await session.execute(
-            select(func.count(Design.id)).where(Design.job_id == jid)
-        )).scalar()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Build job list (parent + children)
+        job_ids = [job_id]
+        jobs_to_ingest = {job_id: job}
+        if include_children:
+            child_result = await session.execute(select(Job).where(Job.parent_job_id == job_id))
+            child_jobs = child_result.scalars().all()
+            for child in child_jobs:
+                job_ids.append(child.id)
+                jobs_to_ingest[child.id] = child
         
-        await session.execute(delete(Design).where(Design.job_id == jid))
-        await session.commit()
-        total_deleted += existing_count or 0
+        total_deleted = 0
+        total_created = 0
         
-        try:
-            new_count = await ingest_job_results(jid, target_job.output_dir, session)
-            total_created += new_count
-            logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {jid}")
-        except Exception as e:
-            logger.error(f"[REINGEST] Error re-ingesting job {jid}: {e}")
-    
-    return {
-        "message": f"Re-ingested {total_created} designs (deleted {total_deleted} old entries)",
-        "job_id": job_id,
-        "designs_deleted": total_deleted,
-        "designs_created": total_created
-    }
+        for jid in job_ids:
+            target_job = jobs_to_ingest.get(jid)
+            if not target_job or not target_job.output_dir:
+                logger.warning(f"[REINGEST] Skipping job {jid}: no output_dir")
+                continue
+            
+            deleted_count = await delete_with_retry(jid)
+            total_deleted += deleted_count
+            
+            try:
+                new_count = await ingest_job_results(jid, target_job.output_dir, session)
+                total_created += new_count
+                logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {jid}")
+            except Exception as e:
+                logger.error(f"[REINGEST] Error re-ingesting job {jid}: {e}")
+        
+        return {
+            "message": f"Re-ingested {total_created} designs (deleted {total_deleted} old entries)",
+            "job_id": job_id,
+            "designs_deleted": total_deleted,
+            "designs_created": total_created
+        }
+    except Exception as e:
+        logger.exception(f"[REINGEST] Failed for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{job_id}/annotate-cdrs")
