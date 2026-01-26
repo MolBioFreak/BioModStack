@@ -153,6 +153,116 @@
                     "description": "Path to input files when skipping stages e.g. './rfd_results'",
                     "format": "directory-path",
                     "hidden": true
+                },
+                "run_maturation": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable PPIFlow maturation after FAMPNN.",
+                    "hidden": true
+                },
+                "maturation_designs_per_job": {
+                    "type": "integer",
+                    "default": 4,
+                    "description": "Number of designs per PPIFlow child job.",
+                    "hidden": true
+                },
+                "maturation_anchor_threshold": {
+                    "type": "number",
+                    "default": -5.0,
+                    "description": "Anchor residue energy threshold (REU).",
+                    "hidden": true
+                },
+                "maturation_anchor_distance_cutoff": {
+                    "type": "number",
+                    "default": 8.0,
+                    "description": "Distance cutoff (A) for interface anchors.",
+                    "hidden": true
+                },
+                "maturation_min_improvement": {
+                    "type": "number",
+                    "default": -1.0,
+                    "description": "Minimum delta interface score required to pass.",
+                    "hidden": true
+                },
+                "maturation_filter_percentile": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Optional percentile threshold for maturation filtering.",
+                    "hidden": true
+                },
+                "maturation_design_mode": {
+                    "type": "string",
+                    "default": "full_design",
+                    "description": "Design mode for maturation redesign constraints.",
+                    "hidden": true
+                },
+                "maturation_redesign_temp": {
+                    "type": "number",
+                    "default": 0.1,
+                    "description": "FAMPNN temperature for maturation redesign.",
+                    "hidden": true
+                },
+                "maturation_redesign_steps": {
+                    "type": "integer",
+                    "default": 100,
+                    "description": "FAMPNN denoising steps for maturation redesign.",
+                    "hidden": true
+                },
+                "ppiflow_start_t": {
+                    "type": "number",
+                    "default": 0.5,
+                    "description": "Partial flow start t for PPIFlow.",
+                    "hidden": true
+                },
+                "ppiflow_samples_per_target": {
+                    "type": "integer",
+                    "default": 3,
+                    "description": "Samples per target for PPIFlow partial flow.",
+                    "hidden": true
+                },
+                "ppiflow_retry_limit": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "Retry limit for PPIFlow sampling.",
+                    "hidden": true
+                },
+                "ppiflow_config": {
+                    "type": "string",
+                    "default": "/app/ppiflow/configs/inference_nanobody.yaml",
+                    "description": "PPIFlow config path inside container.",
+                    "hidden": true
+                },
+                "ppiflow_checkpoint": {
+                    "type": "string",
+                    "default": "antibody",
+                    "description": "PPIFlow checkpoint name (without extension).",
+                    "hidden": true
+                },
+                "ppiflow_checkpoint_path": {
+                    "type": "string",
+                    "description": "Explicit PPIFlow checkpoint path.",
+                    "hidden": true
+                },
+                "ppiflow_weights_dir": {
+                    "type": "string",
+                    "default": "/mnt/BioModStack/weights/ppiflow",
+                    "description": "Host directory with PPIFlow weights.",
+                    "hidden": true
+                },
+                "ppiflow_heavy_chain": {
+                    "type": "string",
+                    "description": "Override heavy chain ID for PPIFlow.",
+                    "hidden": true
+                },
+                "ppiflow_light_chain": {
+                    "type": "string",
+                    "description": "Override light chain ID for PPIFlow.",
+                    "hidden": true
+                },
+                "ppiflow_antigen_chain": {
+                    "type": "string",
+                    "description": "Override antigen chain ID for PPIFlow.",
+                    "hidden": true
                 }
             }
         },

@@ -314,6 +314,7 @@ export interface DesignListResponse {
 
 export interface DesignFilters {
     job_id?: string;
+    include_children?: boolean;
     backbone_id?: number;
     plddt_min?: number;
     pae_max?: number;
