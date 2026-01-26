@@ -324,7 +324,7 @@ export interface DesignFilters {
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone';
+    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
@@ -951,6 +951,8 @@ export const searchSabdabFrameworks = (params: {
     cdr_h3_max?: number;
     antigen_type?: string;
     limit?: number;
+    sort_by?: 'resolution' | 'cdr_h3_length' | 'species' | 'pdb_code';
+    sort_desc?: boolean;
 }) => api.get<SAbDabSearchResult[]>('/api/frameworks/sabdab/search', { params });
 
 export const downloadSabdabFramework = (pdbCode: string, params?: {
