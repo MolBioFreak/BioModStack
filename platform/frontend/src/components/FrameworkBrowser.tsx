@@ -99,6 +99,8 @@ export function FrameworkBrowser({
     const [resolutionMax, setResolutionMax] = useState(2.5);
     const [cdrH3Min, setCdrH3Min] = useState<number | ''>('');
     const [cdrH3Max, setCdrH3Max] = useState<number | ''>('');
+    const [sortBy, setSortBy] = useState<'resolution' | 'cdr_h3_length' | 'species' | 'pdb_code'>('resolution');
+    const [sortDesc, setSortDesc] = useState(false);
     const [searchTriggered, setSearchTriggered] = useState(false);
     const [downloadingPdb, setDownloadingPdb] = useState<string | null>(null);
 
@@ -106,13 +108,15 @@ export function FrameworkBrowser({
 
     // Search SAbDab
     const { data: searchResults, isLoading: searchLoading, error: searchError } = useQuery({
-        queryKey: ['sabdab-search', species, resolutionMax, cdrH3Min, cdrH3Max],
+        queryKey: ['sabdab-search', species, resolutionMax, cdrH3Min, cdrH3Max, sortBy, sortDesc],
         queryFn: () => searchSabdabFrameworks({
             species: species || undefined,
             resolution_max: resolutionMax,
             cdr_h3_min: cdrH3Min || undefined,
             cdr_h3_max: cdrH3Max || undefined,
-            limit: 50
+            limit: 50,
+            sort_by: sortBy,
+            sort_desc: sortDesc
         }),
         enabled: searchTriggered && activeTab === 'sabdab',
     });
@@ -332,6 +336,31 @@ export function FrameworkBrowser({
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-white"
                                 />
                             </div>
+                        </div>
+
+                        {/* Sort controls */}
+                        <div className="flex items-center gap-2">
+                            <label className="text-xs text-slate-500">Sort by:</label>
+                            <select
+                                value={sortBy}
+                                onChange={e => setSortBy(e.target.value as any)}
+                                className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-white"
+                            >
+                                <option value="resolution">Resolution (best first)</option>
+                                <option value="cdr_h3_length">CDR-H3 Length</option>
+                                <option value="species">Species</option>
+                                <option value="pdb_code">PDB Code</option>
+                            </select>
+                            <button
+                                onClick={() => setSortDesc(!sortDesc)}
+                                className={`px-2 py-1.5 text-xs rounded border ${sortDesc
+                                        ? 'bg-purple-500/20 border-purple-500/50 text-purple-300'
+                                        : 'bg-slate-900 border-slate-700 text-slate-400'
+                                    }`}
+                                title={sortDesc ? 'Sort descending' : 'Sort ascending'}
+                            >
+                                {sortDesc ? '↓ DESC' : '↑ ASC'}
+                            </button>
                         </div>
 
                         <button
