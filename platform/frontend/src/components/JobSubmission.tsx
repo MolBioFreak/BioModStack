@@ -589,20 +589,18 @@ export function JobSubmission() {
                                 <MutagenesisTemplate
                                     onBack={() => setSelectedTemplateId(null)}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
-                                        // PHASED MSA BATCH: Single API call with all variants
-                                        // This triggers:
-                                        // 1. Creation of 1 MSA batch job (runs first)
-                                        // 2. Creation of N inference jobs (pending_msa status)
-                                        // 3. CPU orchestrator schedules MSA job to GPU
-                                        // 4. When MSA completes, inference jobs become schedulable
+                                        // MUTAGENESIS BATCH: Single API call with all variants
+                                        // Each variant regenerates its own MSA (no shared reference MSA)
 
                                         console.log('[MUTAGENESIS BATCH] Submitting', variants.length, 'variants as single batch');
-                                        console.log('[MUTAGENESIS BATCH] Reference sequence:', predictorConfig.msa_reference_sequence?.slice(0, 30) + '...');
+                                        if (predictorConfig.msa_reference_sequence) {
+                                            console.log('[MUTAGENESIS BATCH] Ignoring reference MSA (mutants regenerate MSAs)');
+                                        }
 
                                         // Build params with mutagenesis_variants array
                                         const batchParams = {
-                                            // MSA Reference sequence for cache sharing
-                                            msa_reference_sequence: predictorConfig.msa_reference_sequence,
+                                            // Always regenerate MSAs for mutants (no shared reference MSA)
+                                            msa_force_refresh: true,
                                             // Array of variants (each with name + sequence)
                                             mutagenesis_variants: variants.map(v => ({
                                                 name: v.name,
@@ -616,6 +614,7 @@ export function JobSubmission() {
                                             boltz_use_potentials: predictorConfig.use_potentials,
                                             boltz_step_scale: predictorConfig.step_scale,
                                             pred_method: predictorConfig.predictor,
+                                            run_frustrampnn: predictorConfig.run_frustrampnn,
                                             // Complex components: ligands array now includes DNA/RNA with sequence field
                                             ...(predictorConfig.ligands?.length ? {
                                                 ligands: predictorConfig.ligands
