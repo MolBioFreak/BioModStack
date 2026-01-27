@@ -1,7 +1,8 @@
 #!/bin/bash
 # BioModStack RESTART API - Restart only the uvicorn/API backend
 
-PROJECT_DIR="/home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
 API_LOG="/tmp/biomodstack_api.log"
 
 # Load uv PATH

@@ -29,6 +29,9 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
+DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
+
 
 def compute_sequence_hash(sequence: str) -> str:
     """Compute SHA256 hash of sequence for cache key."""
@@ -329,9 +332,9 @@ if __name__ == "__main__":
                        help="JSON array of {name, sequence} objects")
     parser.add_argument("--output_dir", required=True,
                        help="Output directory for MSA files")
-    parser.add_argument("--db_path", default="/mnt/BioModStack/colabfold_db",
+    parser.add_argument("--db_path", default=DEFAULT_DB_PATH,
                        help="Path to ColabFold database")
-    parser.add_argument("--cache_dir", default="/mnt/BioModStack/msa_cache",
+    parser.add_argument("--cache_dir", default=DEFAULT_CACHE_DIR,
                        help="Path to MSA cache directory")
     parser.add_argument("--force_refresh", action="store_true",
                        help="Bypass cache and regenerate MSAs")

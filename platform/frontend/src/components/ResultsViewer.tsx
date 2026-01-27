@@ -627,7 +627,7 @@ export function ResultsViewer() {
                                                                 try {
                                                                     const btn = document.getElementById('cdr-annotate-btn');
                                                                     if (btn) {
-                                                                        btn.textContent = '⏳ Annotating...';
+                                                                        btn.textContent = 'Annotating...';
                                                                         btn.setAttribute('disabled', 'true');
                                                                     }
                                                                     const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
@@ -640,7 +640,7 @@ export function ResultsViewer() {
                                                             id="cdr-annotate-btn"
                                                             className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
                                                         >
-                                                            🔁 Re-run ANARCII
+                                                            Re-run ANARCII
                                                         </button>
                                                     </div>
                                                 )}
@@ -671,7 +671,7 @@ export function ResultsViewer() {
                                                 <div className="flex flex-col items-center justify-center py-20 text-slate-500">
                                                     <div className="text-4xl mb-4">🧬</div>
                                                     <p>Select an antibody design to view analysis.</p>
-                                                    <p className="text-xs mt-2 opacity-60">If this is an antibody job, ensure ANARCI processing succeeded.</p>
+                                                    <p className="text-xs mt-2 opacity-60">If this is an antibody job, ensure ANARCII processing succeeded.</p>
                                                 </div>
                                             ) : (
                                                 <>
