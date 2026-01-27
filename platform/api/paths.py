@@ -39,32 +39,37 @@ def get_work_dir() -> Path:
     return get_data_root() / "work"
 
 
+def _get_default_data_root() -> Path:
+    """Return user-space default data root for portability."""
+    return Path.home() / ".biomodstack"
+
+
 def get_weights_root() -> Path:
     env = os.getenv("BMS_WEIGHTS")
     if env:
         return _resolve_path(env)
-    return Path("/mnt/BioModStack/weights")
+    return _get_default_data_root() / "weights"
 
 
 def get_colabfold_db() -> Path:
     env = os.getenv("BMS_COLABFOLD_DB")
     if env:
         return _resolve_path(env)
-    return Path("/mnt/BioModStack/colabfold_db")
+    return _get_default_data_root() / "colabfold_db"
 
 
 def get_msa_cache_dir() -> Path:
     env = os.getenv("BMS_MSA_CACHE")
     if env:
         return _resolve_path(env)
-    return Path("/mnt/BioModStack/msa_cache")
+    return _get_default_data_root() / "msa_cache"
 
 
 def get_sabdab_cache_dir() -> Path:
     env = os.getenv("BMS_SABDAB_CACHE")
     if env:
         return _resolve_path(env)
-    return Path("/mnt/BioModStack/sabdab_cache")
+    return _get_default_data_root() / "sabdab_cache"
 
 
 def _sqlite_path_from_url(db_url: str) -> Path | None:
