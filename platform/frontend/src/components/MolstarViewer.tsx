@@ -265,6 +265,7 @@ export default function MolstarViewer({
                 </div>
             )}
             {React.createElement('pdbe-molstar', {
+                key: absoluteUrl, // Force re-mount when URL changes
                 ref: (el: HTMLElement) => { viewerRef.current = el; },
                 'custom-data-url': absoluteUrl,
                 'custom-data-format': format,
