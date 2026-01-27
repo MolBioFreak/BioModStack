@@ -319,14 +319,14 @@ const GPU_NAMES: Record<number, string> = {
     3: 'RTX 3090 #2',
 };
 
+const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen', 'diffdock', 'rfdiffusion', 'unidock', 'msa_batch'];
+
 // Workflow Pinning Section Component
 function WorkflowPinningSection() {
     const [workflowPins, setWorkflowPins] = useState<Record<string, number>>({});
     const [gpuLocks, setGpuLocks] = useState<Record<string, number>>({});
     const [expanded, setExpanded] = useState(false);
     const [saving, setSaving] = useState(false);
-
-    const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen', 'diffdock', 'rfdiffusion'];
 
     // Fetch workflow pins and GPU locks
     useEffect(() => {
@@ -437,6 +437,110 @@ function WorkflowPinningSection() {
                             ))}
                         </div>
                     )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ConcurrencyLimitsSection() {
+    const [limits, setLimits] = useState<Record<string, number | null>>({});
+    const [localValues, setLocalValues] = useState<Record<string, string>>({});
+    const [loading, setLoading] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+
+    const refreshLimits = async () => {
+        try {
+            const res = await fetch('/api/gpu/concurrency-limits');
+            if (!res.ok) return;
+            const data = await res.json();
+            const nextLimits = data.concurrency_limits || {};
+            setLimits(nextLimits);
+            setLocalValues(prev => {
+                const next: Record<string, string> = { ...prev };
+                Object.keys(nextLimits).forEach(key => {
+                    next[key] = nextLimits[key] == null ? '' : String(nextLimits[key]);
+                });
+                return next;
+            });
+        } catch (error) {
+            console.error('Failed to load concurrency limits:', error);
+        }
+    };
+
+    useEffect(() => {
+        refreshLimits();
+    }, []);
+
+    const updateLimit = async (modelType: string) => {
+        const raw = (localValues[modelType] ?? '').trim();
+        let limit: number | null;
+        if (raw === '') {
+            limit = null;
+        } else {
+            const parsed = Number(raw);
+            if (!Number.isFinite(parsed) || parsed < 1) return;
+            limit = Math.floor(parsed);
+        }
+
+        setLoading(true);
+        try {
+            const res = await fetch('/api/gpu/concurrency-limits', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_type: modelType, limit })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setLimits(data.concurrency_limits || {});
+                setLocalValues(prev => ({ ...prev, [modelType]: limit == null ? '' : String(limit) }));
+            }
+        } catch (error) {
+            console.error('Failed to update concurrency limit:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const models = Array.from(new Set([...WORKFLOWS, ...Object.keys(limits)])).sort();
+
+    return (
+        <div className="border-t border-slate-700 pt-4">
+            <button
+                onClick={() => setExpanded(!expanded)}
+                className="w-full flex items-center justify-between text-left"
+            >
+                <div className="text-sm font-medium text-slate-200">Concurrency Limits</div>
+                <span className="text-slate-500">{expanded ? '▲' : '▼'}</span>
+            </button>
+
+            {expanded && (
+                <div className="mt-3 space-y-2">
+                    <p className="text-xs text-slate-500">
+                        Set max concurrent jobs per model type (blank = unlimited).
+                    </p>
+                    {models.map(model => (
+                        <div key={model} className="flex items-center justify-between bg-slate-700/30 rounded px-2 py-1.5">
+                            <span className="text-xs text-slate-300 capitalize">{model}</span>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    min="1"
+                                    placeholder="auto"
+                                    value={localValues[model] ?? (limits[model] == null ? '' : String(limits[model]))}
+                                    onChange={(e) => setLocalValues(prev => ({ ...prev, [model]: e.target.value }))}
+                                    className="w-20 bg-slate-800/60 border border-slate-600/50 rounded px-2 py-1 text-xs text-slate-200"
+                                />
+                                <button
+                                    onClick={() => updateLimit(model)}
+                                    disabled={loading}
+                                    className="px-2 py-1 rounded text-xs font-medium bg-slate-600/60 text-slate-200 hover:bg-slate-500/60 disabled:opacity-50"
+                                >
+                                    Save
+                                </button>
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
         </div>
@@ -753,6 +857,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
                     {/* Workflow GPU Pinning Section */}
                     <WorkflowPinningSection />
+
+                    {/* Concurrency Limits Section */}
+                    <ConcurrencyLimitsSection />
 
                     {/* GPU Priority Weights Section */}
                     <div className="border-t border-slate-700 pt-4">
