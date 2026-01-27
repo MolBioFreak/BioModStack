@@ -63,6 +63,8 @@ Workflow and UI Changes (Consolidated)
   environment-driven ColabFold DB/cache paths in scripts and workflows.
 - Workflow API calls now use `params.api_url` instead of hardcoded
   `http://localhost:8000` for portable deployments.
+- Standardized orchestration mode via `params.parallel_mode` for BoltzGen
+  and BindCraft SWA paths, with legacy flags as fallback.
 - ANARCII: auto-annotation after antibody jobs and updated UI copy to
   reflect automatic post-run annotation behavior.
 - Re-ingestion: recursive output scanning, include-children support,
