@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel
 from collections import deque
 from pathlib import Path
+import os
 import subprocess
 import json
 import asyncio
@@ -191,6 +192,53 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
             except pynvml.NVMLError:
                 clock_graphics = clock_memory = clock_max_graphics = clock_max_memory = 0
             
+            def _infer_process_label(proc_name: str, cmdline: Optional[List[str]]) -> str:
+                """Infer a human-friendly label from process name/cmdline."""
+                base_name = proc_name or ""
+                cmdline_list = cmdline or []
+                cmdline_str = " ".join(cmdline_list)
+                haystack = f"{base_name} {cmdline_str}".lower()
+
+                # Order matters: more specific first to avoid false matches
+                patterns = [
+                    ("fampnn", "FAMPNN"),
+                    ("seq_design.py", "FAMPNN"),
+                    ("thermompnn", "ThermoMPNN"),
+                    ("ppiflow", "PPIFlow"),
+                    ("rfdiffusion_inference.py", "RFantibody"),
+                    ("rfantibody", "RFantibody"),
+                    ("boltzgen", "BoltzGen"),
+                    ("boltz", "Boltz-2"),
+                    ("af2_backprop", "AF2 Backprop"),
+                    ("alphafold", "AlphaFold2"),
+                    ("af2", "AlphaFold2"),
+                    ("diffdock", "DiffDock"),
+                    ("unidock", "Uni-Dock"),
+                    ("proteinmpnn", "ProteinMPNN"),
+                    ("mpnn", "ProteinMPNN"),
+                    ("rfd3", "RFdiffusion3"),
+                    ("rfdiffusion", "RFdiffusion"),
+                    ("rf3", "RoseTTAFold3"),
+                    ("openmm", "OpenMM"),
+                    ("antiberty", "AntiBERTy"),
+                    ("anarcii", "ANARCII"),
+                    ("immunebuilder", "ImmuneBuilder"),
+                ]
+                for key, label in patterns:
+                    if key in haystack:
+                        return label
+
+                # If it's a generic python process, try to show the script name
+                if base_name.lower() in ["python", "python3", "python3.10", "python3.11"]:
+                    if cmdline_list and len(cmdline_list) > 1:
+                        script_idx = 1
+                        if cmdline_list[1] == "-m" and len(cmdline_list) > 2:
+                            script_idx = 2
+                        script = os.path.basename(cmdline_list[script_idx])
+                        if script:
+                            return script
+                return base_name
+
             # Processes
             processes = []
             try:
@@ -200,6 +248,8 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                         import psutil
                         p = psutil.Process(proc.pid)
                         proc_name = p.name()
+                        cmdline = p.cmdline()
+                        proc_name = _infer_process_label(proc_name, cmdline)
                     except:
                         proc_name = f"PID {proc.pid}"
                     
