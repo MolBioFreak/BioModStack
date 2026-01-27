@@ -71,3 +71,5 @@ Workflow and UI Changes (Consolidated)
   and improved error handling for large/nested outputs.
 - Design sorting: added `ptm`, `pae`, and `conf_score` sorting options
   end-to-end (API and frontend).
+- GPU dashboard: added concurrency limit controls per model type and
+  expanded workflow pinning list.
