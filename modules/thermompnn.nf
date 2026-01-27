@@ -19,21 +19,34 @@ import sys
 import os
 import glob
 import shutil
+from pathlib import Path
 
 pdb_path = sys.argv[1]
 out_file = sys.argv[2]
 
 # ThermoMPNN inference script location
 script_path = "/opt/ThermoMPNN/analysis/custom_inference.py"
-model_path = "/opt/ThermoMPNN/models/thermoMPNN_default.pt"
+default_model_path = "/opt/ThermoMPNN/models/thermoMPNN_default.pt"
+model_path = default_model_path
 
 if not os.path.exists(script_path):
     print(f"Error: custom_inference.py not found at {script_path}")
     sys.exit(1)
 
 if not os.path.exists(model_path):
-    print(f"Warning: Default model not found at {model_path}, using relative path")
-    model_path = "../models/thermoMPNN_default.pt"
+    print(f"Warning: Default model not found at {default_model_path}, using BMS weights if available")
+    weights_root = (
+        os.environ.get("BMS_THERMOMPNN_WEIGHTS")
+        or os.environ.get("BMS_WEIGHTS")
+        or "${params.weights_root}"
+    )
+    candidate = Path(weights_root) / "thermompnn" / "thermoMPNN_default.pt"
+    if candidate.exists():
+        model_path = str(candidate)
+        print(f"Using ThermoMPNN weights from {model_path}")
+    else:
+        print(f"Error: ThermoMPNN model not found at {default_model_path} or {candidate}")
+        sys.exit(1)
 
 # Run inference
 cmd = [

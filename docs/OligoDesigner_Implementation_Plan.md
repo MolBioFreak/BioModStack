@@ -131,7 +131,7 @@ The Nextflow module must translate BioModStack params to RFDpoly Hydra keys:
 
 **Required config flag (Addendum Fix #2):** Always pass `--config-name=multi_polymer`
 
-**Default input PDB (Addendum Fix #3):** Provide `tools/RFDpoly/rf_diffusion/test_data/DBP035.pdb` as fallback
+**Default input PDB (Addendum Fix #3):** Provide `${BMS_RFDPOLY_DIR}/rf_diffusion/test_data/DBP035.pdb` as fallback
 
 ---
 
@@ -359,7 +359,7 @@ Protein-centric metrics (SS count, RoG) are invalid for nucleic acids. Use:
 ### Phase 1: Foundation (Day 1)
 - [ ] Download RFDpoly container (SE3nv.sif)
 - [ ] Download model weights (generalized + RNA-optimized)
-- [ ] Clone RFDpoly repository to `tools/`
+- [ ] Clone RFDpoly repository to `${BMS_RFDPOLY_DIR}` (or `$BMS_TOOLS/RFDpoly`)
 - [ ] Test container execution manually
 
 ### Phase 2: Nextflow Module (Day 1-2)
@@ -392,8 +392,8 @@ Protein-centric metrics (SS count, RoG) are invalid for nucleic acids. Use:
 
 | File | Status | Description |
 |------|--------|-------------|
-| `containers/rfdpoly.sif` | NEW | Pre-built container from IPD |
-| `tools/RFDpoly/` | NEW | Cloned repository |
+| `container_dir/rfdpoly.sif` | NEW | Pre-built container (local or object store) |
+| `$BMS_RFDPOLY_DIR/` | NEW | Cloned repository |
 | `$BMS_WEIGHTS/rfdpoly/*.pt` | NEW | Model checkpoints |
 | `modules/rfdpoly.nf` | NEW | Nextflow module |
 | `workflows/oligo_design.nf` | NEW | Workflow definition |
