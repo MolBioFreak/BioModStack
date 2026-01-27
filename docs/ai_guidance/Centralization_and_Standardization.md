@@ -43,6 +43,8 @@ Frontend UI Defaults
 - Avoid hardcoded host paths in placeholders or defaults.
 - Use env-style placeholders like `BMS_WEIGHTS/ppiflow` or
   `BMS_DATA/results/...` to indicate configurable locations.
+- The UI base path is `/bms/` (see `platform/frontend/vite.config.ts`).
+  If changed, update any reverse proxy or launcher links.
 
 Documentation
 -------------

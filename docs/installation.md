@@ -61,6 +61,18 @@ local install.
 
 ---
 
+## UI Base Path and Launcher (Local)
+
+The frontend is served at the `/bms/` base path:
+`http://localhost:5173/bms/`
+
+If you use the desktop launcher, update the `.desktop` entries when you move
+the repo:
+- App menu: `~/.local/share/applications/biomodstack.desktop`
+- Autostart: `~/.config/autostart/biomodstack-panel.desktop`
+
+---
+
 ## Step 2: Install Dependencies
 
 BioModStack requires two key dependencies to be installed and accessible in your PATH. These are common software packages so they may already be implemented in your HPC environment (e.g. module load apptainer nextflow):
