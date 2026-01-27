@@ -2,6 +2,7 @@
 import sys
 import os
 import argparse
+import shutil
 from pathlib import Path
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
@@ -56,22 +57,27 @@ def main():
             project_root = os.environ.get("PROJECT_ROOT") or os.environ.get("FOUNDRY_PROJECT_ROOT")
             
             if not project_root:
-                # Use foundry's install location as project root if not set
-                # The rc-foundry package IS the project when pip-installed
-                project_root = "/usr/local/lib/python3.12/dist-packages"
+                # Use a writable default for staging RF3 configs
+                project_root = "/tmp/rf3_project"
                 os.environ["PROJECT_ROOT"] = project_root
-                
-                # Ensure the expected directory structure exists
-                # RF3 looks for PROJECT_ROOT/models/rf3/configs
-                rf3_models_path = Path(project_root) / "models" / "rf3"
-                rf3_models_path.mkdir(parents=True, exist_ok=True)
-                
-                # Symlink configs if not already present
-                configs_symlink = rf3_models_path / "configs"
-                if not configs_symlink.exists():
-                    real_configs = Path("/usr/local/lib/python3.12/dist-packages/rf3/configs")
-                    if real_configs.exists():
+            
+            # Ensure the expected directory structure exists
+            # RF3 looks for PROJECT_ROOT/models/rf3/configs
+            rf3_models_path = Path(project_root) / "models" / "rf3"
+            rf3_models_path.mkdir(parents=True, exist_ok=True)
+            
+            # Symlink configs if not already present (fallback to copy)
+            configs_symlink = rf3_models_path / "configs"
+            if not configs_symlink.exists():
+                real_configs = Path(config_path)
+                if real_configs.exists():
+                    try:
                         os.symlink(real_configs, configs_symlink)
+                    except Exception:
+                        try:
+                            shutil.copytree(real_configs, configs_symlink)
+                        except Exception as copy_err:
+                            print(f"Warning: Unable to stage RF3 configs at {configs_symlink}: {copy_err}")
             
             # Mock rootutils to prevent it from interfering
             try:
