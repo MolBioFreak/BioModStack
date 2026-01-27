@@ -79,9 +79,11 @@ class SAbDabEntry:
             resolution=safe_float(row.get("resolution")),
             method=row.get("method", ""),
             scfv=row.get("scfv", "").lower() == "true",
-            species=row.get("species") if row.get("species") != "NA" else None,
+            # SAbDab uses "heavy_species" not "species"
+            species=row.get("heavy_species") if row.get("heavy_species") != "NA" else None,
             affinity=safe_float(row.get("affinity")),
-            cdr_h3_length=safe_int(row.get("H3")),
+            # Note: CDR-H3 length is NOT in the summary file, would need per-structure fetch
+            cdr_h3_length=None,
         )
 
 
