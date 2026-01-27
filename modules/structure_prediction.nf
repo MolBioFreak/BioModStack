@@ -2,7 +2,7 @@
 // Modules for predicting 3D protein structure directly from amino acid sequence
 
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
-// Uses full ColabFold database at /mnt/BioModStack/colabfold_db
+// Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
 process GenerateLocalMSA {
     label 'CPU'
@@ -19,8 +19,8 @@ process GenerateLocalMSA {
     path "*.log"
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
@@ -59,8 +59,8 @@ process BatchMSAGeneration {
     path "*.log"
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def maxParallel = params.msa_max_parallel ?: 4
     def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
@@ -100,8 +100,8 @@ process BoltzFromSequence {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
-    def msaCacheDir = params.msa_cache_dir ?: '/mnt/BioModStack/msa_cache'
+    def msaDbPath = params.msa_local_db
+    def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
@@ -370,7 +370,7 @@ process BoltzFromComplex {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
+    def msaDbPath = params.msa_local_db
     def msaThreads = params.msa_threads ?: 32
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     """

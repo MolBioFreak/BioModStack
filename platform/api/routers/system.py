@@ -24,8 +24,8 @@ class CleanupResult(BaseModel):
 class DiskUsage(BaseModel):
     work_dir_size: str
     work_dir_files: int
-    pdj_results_size: str
-    pdj_results_files: int
+    results_size: str
+    results_files: int
 
 
 class DbInfo(BaseModel):
@@ -64,8 +64,8 @@ async def get_disk_usage():
     return DiskUsage(
         work_dir_size=work_size,
         work_dir_files=work_files,
-        pdj_results_size=results_size,
-        pdj_results_files=results_files
+        results_size=results_size,
+        results_files=results_files
     )
 
 

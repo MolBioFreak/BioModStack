@@ -21,9 +21,6 @@ def paramOrDefault(val, deflt) {
     val != null ? val : deflt
 }
 
-// Parallelism mode (shared across workflows)
-if (!params.containsKey('parallel_mode')) params.parallel_mode = 'standard'
-
 // =============================================================================
 // SWA ORCHESTRATOR PROCESSES
 // =============================================================================
@@ -206,14 +203,12 @@ workflow BINDCRAFT_DESIGN {
     // Determine orchestration mode (prefer explicit parallel_mode, fallback to legacy SWA)
     total_trajectories = params.bindcraft_total_trajectories ?: 100
     trajectories_per_job = params.bindcraft_trajectories_per_job ?: 25
-    def use_orchestrator
-    if (params.containsKey('parallel_mode')) {
-        use_orchestrator = params.parallel_mode == 'full_orchestrator'
-    } else {
-        use_orchestrator = params.bindcraft_use_swa != null
+    def parallel_mode_set = params.containsKey('parallel_mode')
+    def use_orchestrator = parallel_mode_set
+        ? (params.parallel_mode == 'full_orchestrator')
+        : (params.bindcraft_use_swa != null
             ? params.bindcraft_use_swa
-            : (total_trajectories > trajectories_per_job)
-    }
+            : (total_trajectories > trajectories_per_job))
 
     if (use_orchestrator) {
         // =====================================================================

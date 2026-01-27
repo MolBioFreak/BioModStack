@@ -557,7 +557,7 @@ export function JobSubmission() {
                 </div>
             </header>
 
-            <main className="max-w-4xl mx-auto space-y-8">
+            <main className="max-w-6xl mx-auto space-y-8">
 
                 {/* 2. Mode Toggle: Templates vs Manual */}
                 <section>

@@ -8,6 +8,7 @@ Wraps the async service in platform/api/services/result_ingester.py.
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +21,8 @@ async def main():
     parser = argparse.ArgumentParser(description="Ingest job results into database")
     parser.add_argument("--job_id", required=True, help="Job ID to associate designs with")
     parser.add_argument("--results_dir", required=True, help="Path to job output directory")
-    parser.add_argument("--api_url", default="http://localhost:8000", help="API base URL (unused, for compat)")
+    parser.add_argument("--api_url", default=os.environ.get("API_BASE_URL", "http://localhost:8000"),
+                        help="API base URL (unused, for compat)")
     parser.add_argument("--epitope_residues", default=None, help="Comma-separated epitope residues (e.g., A111,A112)")
     args = parser.parse_args()
     

@@ -292,7 +292,7 @@ class NucleotideSequence(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
 
-# MSACache removed - now using file-based caching in /mnt/BioModStack/msa_cache
+# MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
 async def init_db():

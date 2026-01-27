@@ -44,7 +44,7 @@ export default defineConfig({
     watch: {
       ignored: [
         '**/work/**',
-        '**/pdj_results/**',
+        '**/bms_results/**',
         '**/models/**',
         '**/apptainer/**',
         '**/binderscaffolds/**',

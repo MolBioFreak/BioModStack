@@ -230,8 +230,9 @@ async def launch_msa_batch_job(
     force_refresh = params.get('msa_force_refresh', False)
     
     # Build batch_msa.py command
-    db_path = os.environ.get("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
-    cache_dir = os.environ.get("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
+    from paths import get_colabfold_db, get_msa_cache_dir
+    db_path = str(get_colabfold_db())
+    cache_dir = str(get_msa_cache_dir())
     script_path = PROJECT_ROOT / "scripts" / "batch_msa.py"
     cmd = [
         "python3", str(script_path),

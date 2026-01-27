@@ -11,10 +11,6 @@ FRONTEND_LOG="/tmp/biomodstack_frontend.log"
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# Load NVM if available to ensure correct Node version
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-
 # Add uv to PATH (usually in $HOME/.cargo/bin or $HOME/.local/bin)
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
@@ -55,7 +51,7 @@ start_services() {
     echo "   Starting Frontend..."
     nohup npm run dev -- --host 127.0.0.1 --port 5173 > "$FRONTEND_LOG" 2>&1 &
     FRONTEND_PID=$!
-    echo "   Frontend started (PID: $FRONTEND_PID) → http://localhost:5173"
+    echo "   Frontend started (PID: $FRONTEND_PID) → http://localhost:5173/bms/"
     
     echo "✅ Services started! Logs at: $API_LOG, $FRONTEND_LOG"
 }
