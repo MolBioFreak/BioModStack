@@ -101,6 +101,7 @@ process BoltzFromSequence {
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
+    def msaCacheDir = params.msa_cache_dir ?: '/mnt/BioModStack/msa_cache'
     def msaThreads = params.msa_threads ?: 32
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
@@ -395,6 +396,7 @@ boltz_yaml = {"version": 1, "sequences": []}
 binder_chain = None
 
 msa_db_path = "${msaDbPath}"
+cache_dir = "${msaCacheDir}"
 msa_threads = int("${msaThreads}")
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
@@ -427,8 +429,6 @@ for comp in complex_def.get("components", []):
             chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
             msa_dir = "msa"
             msa_file = f"msa/{complex_name}_{chain_id}.a3m"
-            cache_dir = "/mnt/BioModStack/msa_cache"
-            
             # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
             ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
             ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""

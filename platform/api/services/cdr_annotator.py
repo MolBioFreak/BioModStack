@@ -71,7 +71,8 @@ class CDRAnnotation:
 
 
 # Project root for container paths
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+from paths import get_code_root
+PROJECT_ROOT = get_code_root()
 
 
 def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> Dict[str, str]:

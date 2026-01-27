@@ -16,10 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import Design, Job
+from paths import get_data_root
 from .structure_utils import calculate_epitope_contacts
-
-# Project root (parent of platform directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 def parse_backbone_id(design_name: str) -> Optional[int]:
@@ -59,10 +57,10 @@ async def ingest_job_results(
     Returns:
         Number of designs ingested
     """
-    # Resolve relative paths to absolute using PROJECT_ROOT
+    # Resolve relative paths to absolute using data root
     output_path = Path(output_dir)
     if not output_path.is_absolute():
-        output_path = PROJECT_ROOT / output_dir
+        output_path = get_data_root() / output_dir
 
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")
@@ -444,43 +442,46 @@ async def ingest_loose_files(
             except Exception as e:
                 print(f"[Ingester] Error parsing RF3 file {json_file}: {e}")
                 
-    # If still no designs, try just finding PDBs (e.g. valid job but missing metadata)
+    # If still no designs, try just finding raw structures (e.g. valid job but missing metadata)
     if designs_created == 0:
-        print("[Ingester] No JSON metrics found. Scanning for raw PDB files...")
+        print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
-        for search_dir in search_paths:
-            if not search_dir.exists():
+        structure_paths = []
+        structure_paths.extend(list(output_path.rglob("*.pdb")))
+        structure_paths.extend(list(output_path.rglob("*.cif")))
+        structure_paths.extend(list(output_path.rglob("*.mmcif")))
+
+        if not structure_paths:
+            print(f"[Ingester] No raw structures found under {output_path}")
+
+        for structure_path in structure_paths:
+            design_name = structure_path.stem
+            if design_name in ingested_names:
                 continue
                 
-            pdb_iter = search_dir.rglob("*.pdb") if recursive_scan else search_dir.glob("*.pdb")
-            for pdb_file in pdb_iter:
-                design_name = pdb_file.stem
-                if design_name in ingested_names:
-                    continue
-                    
-                # Calculate pLDDT from structure
-                plddt, residue_plddt = extract_plddt_from_pdb(pdb_file)
-                    
-                design = Design(
-                    id=str(uuid.uuid4()),
-                    job_id=job_id,
-                    name=design_name,
-                    pdb_path=str(pdb_file),
-                    json_path=None,
-                    
-                    # Backbone grouping
-                    backbone_id=parse_backbone_id(design_name),
-                    
-                    # Store extracted pLDDT (both average and per-residue)
-                    plddt_overall=plddt,
-                    residue_plddt=residue_plddt,
-                    
-                    is_favorite=False,
-                    created_at=datetime.utcnow()
-                )
-                session.add(design)
-                designs_created += 1
-                ingested_names.add(design_name)
+            # Calculate pLDDT from structure (supports PDB/CIF)
+            plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                
+            design = Design(
+                id=str(uuid.uuid4()),
+                job_id=job_id,
+                name=design_name,
+                pdb_path=str(structure_path),
+                json_path=None,
+                
+                # Backbone grouping
+                backbone_id=parse_backbone_id(design_name),
+                
+                # Store extracted pLDDT (both average and per-residue)
+                plddt_overall=plddt,
+                residue_plddt=residue_plddt,
+                
+                is_favorite=False,
+                created_at=datetime.utcnow()
+            )
+            session.add(design)
+            designs_created += 1
+            ingested_names.add(design_name)
 
     if designs_created > 0:
         try:

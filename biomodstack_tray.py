@@ -36,15 +36,19 @@ except ImportError:
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-PROJECT_ROOT = Path(__file__).parent.parent
+API_ROOT = Path(__file__).parent / "platform" / "api"
+sys.path.insert(0, str(API_ROOT))
+from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+
+PROJECT_ROOT = get_code_root()
 API_PORT = 8000
 FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
 FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}"
 
 # Paths
-DB_PATH = PROJECT_ROOT / "platform" / "api" / "biomodstack.db"
-RESULTS_DIR = PROJECT_ROOT / "pdj_results"
+DB_PATH = get_db_path()
+RESULTS_DIR = get_results_dir()
 API_LOG = Path("/tmp/biomodstack_api.log")
 FRONTEND_LOG = Path("/tmp/biomodstack_frontend.log")
 ICON_PATH = PROJECT_ROOT / "platform" / "assets" / "icons" / "biomodstack_256.png"
@@ -116,7 +120,7 @@ def get_job_counts() -> Tuple[int, int, int]:
     try:
         if not DB_PATH.exists():
             return (0, 0, 0)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
         cur = conn.cursor()
         cur.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
         counts = dict(cur.fetchall())
@@ -135,7 +139,7 @@ def get_db_info() -> dict:
             return {"error": "Database not found"}
         
         size_mb = DB_PATH.stat().st_size / (1024 * 1024)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
         cur = conn.cursor()
         
         cur.execute("SELECT COUNT(*) FROM jobs")
@@ -144,13 +148,18 @@ def get_db_info() -> dict:
         cur.execute("SELECT COUNT(*) FROM designs")
         design_count = cur.fetchone()[0]
         
+        journal_mode = cur.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = cur.execute("PRAGMA busy_timeout").fetchone()[0]
+        
         conn.close()
         
         return {
             "size_mb": round(size_mb, 2),
             "jobs": job_count,
             "designs": design_count,
-            "path": str(DB_PATH)
+            "path": str(DB_PATH),
+            "journal_mode": journal_mode,
+            "busy_timeout": busy_timeout,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -287,7 +296,9 @@ def show_db_info():
             "Database Info",
             f"Size: {info['size_mb']} MB\n"
             f"Jobs: {info['jobs']}\n"
-            f"Designs: {info['designs']}"
+            f"Designs: {info['designs']}\n"
+            f"Journal: {info.get('journal_mode', '?')}\n"
+            f"Busy Timeout: {info.get('busy_timeout', '?')} ms"
         )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -453,6 +464,10 @@ class BioModStackTray:
                     lambda: show_db_info()
                 ),
                 Item(f"📦 Size: {db_info.get('size_mb', '?')} MB", lambda: show_db_info()),
+                Item(
+                    f"🩺 Health: {db_info.get('journal_mode', '?')} | busy {db_info.get('busy_timeout', '?')}ms",
+                    lambda: show_db_info()
+                ),
                 Menu.SEPARATOR,
                 Item("💾 Backup Database Now", lambda: backup_database()),
                 Item("📂 Open DB Location", lambda: open_db_location()),

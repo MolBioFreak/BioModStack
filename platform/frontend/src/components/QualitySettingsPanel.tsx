@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 export interface QualitySettings {
     // RFantibody settings (backbone diffusion)
@@ -39,6 +39,8 @@ export interface QualitySettings {
     maturation_design_mode: string;
     maturation_designs_per_job: number;
     maturation_filter_percentile: number;
+    maturation_redesign_enabled: boolean;
+    maturation_redesign_top_n: number;
     ppiflow_checkpoint: string;
     ppiflow_antigen_chain: string;
     ppiflow_heavy_chain: string;
@@ -105,9 +107,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_min_improvement: -1.0,
         maturation_redesign_temp: 0.1,
         maturation_redesign_steps: 100,
-        maturation_design_mode: 'full_design',
+        maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
         maturation_filter_percentile: 0,
+        maturation_redesign_enabled: true,
+        maturation_redesign_top_n: 0,
         ppiflow_checkpoint: 'antibody',
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
@@ -166,9 +170,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_min_improvement: -1.0,
         maturation_redesign_temp: 0.1,
         maturation_redesign_steps: 100,
-        maturation_design_mode: 'full_design',
+        maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
         maturation_filter_percentile: 0,
+        maturation_redesign_enabled: true,
+        maturation_redesign_top_n: 0,
         ppiflow_checkpoint: 'antibody',
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
@@ -216,20 +222,22 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.2,
         // PPIFlow maturation (enabled for quality)
         run_maturation: true,
-        ppiflow_start_t: 0.5,
-        ppiflow_samples_per_target: 3,
+        ppiflow_start_t: 0.8,
+        ppiflow_samples_per_target: 5,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
         ppiflow_checkpoint_path: '',
-        maturation_anchor_threshold: -5.0,
+        maturation_anchor_threshold: -6.0,
         maturation_anchor_distance_cutoff: 8.0,
-        maturation_min_improvement: -1.0,
-        maturation_redesign_temp: 0.1,
-        maturation_redesign_steps: 100,
-        maturation_design_mode: 'full_design',
+        maturation_min_improvement: -2.0,
+        maturation_redesign_temp: 0.05,
+        maturation_redesign_steps: 300,
+        maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
-        maturation_filter_percentile: 0,
+        maturation_filter_percentile: 20,
+        maturation_redesign_enabled: true,
+        maturation_redesign_top_n: 0,
         ppiflow_checkpoint: 'antibody',
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
@@ -277,20 +285,22 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         fampnn_psce_threshold: 0.15,
         // PPIFlow maturation (enabled for maximum)
         run_maturation: true,
-        ppiflow_start_t: 0.5,
-        ppiflow_samples_per_target: 3,
+        ppiflow_start_t: 0.9,
+        ppiflow_samples_per_target: 8,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
         ppiflow_checkpoint_path: '',
-        maturation_anchor_threshold: -5.0,
+        maturation_anchor_threshold: -7.0,
         maturation_anchor_distance_cutoff: 8.0,
-        maturation_min_improvement: -1.0,
-        maturation_redesign_temp: 0.1,
-        maturation_redesign_steps: 100,
-        maturation_design_mode: 'full_design',
+        maturation_min_improvement: -2.5,
+        maturation_redesign_temp: 0.01,
+        maturation_redesign_steps: 500,
+        maturation_design_mode: 'inherit',
         maturation_designs_per_job: 4,
-        maturation_filter_percentile: 0,
+        maturation_filter_percentile: 10,
+        maturation_redesign_enabled: true,
+        maturation_redesign_top_n: 0,
         ppiflow_checkpoint: 'antibody',
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
@@ -320,10 +330,10 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
 };
 
 const PRESET_INFO: Record<QualityPreset, { name: string; desc: string; time: string; color: string }> = {
-    speed: { name: '⚡ Speed', desc: 'Fast screening', time: '~5 min', color: 'cyan' },
-    balanced: { name: '⚖️ Balanced', desc: 'Default settings', time: '~15 min', color: 'blue' },
-    quality: { name: '✨ Quality', desc: 'Higher accuracy', time: '~45 min', color: 'purple' },
-    maximum: { name: '🔬 Maximum', desc: 'Best possible', time: '~2+ hrs', color: 'rose' },
+    speed: { name: 'Speed', desc: 'Fast screening', time: '~5 min', color: 'cyan' },
+    balanced: { name: 'Balanced', desc: 'Default settings', time: '~15 min', color: 'blue' },
+    quality: { name: 'Quality', desc: 'Higher accuracy', time: '~45 min', color: 'purple' },
+    maximum: { name: 'Maximum', desc: 'Best possible', time: '~2+ hrs', color: 'rose' },
 };
 
 interface QualitySettingsPanelProps {
@@ -348,14 +358,29 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
             [key]: value,
         });
     };
+    const updateSettings = (updates: Partial<QualitySettings>) => {
+        onSettingsChange({
+            ...settings,
+            ...updates,
+        });
+    };
 
     const defaultCheckpointPath = `/opt/ppiflow/ckpt/${settings.ppiflow_checkpoint}.ckpt`;
+    const overridesEnabled = Boolean(
+        settings.ppiflow_heavy_chain || settings.ppiflow_light_chain || settings.ppiflow_antigen_chain,
+    );
+    const [overrideEnabled, setOverrideEnabled] = useState(overridesEnabled);
+
+    useEffect(() => {
+        if (overridesEnabled && !overrideEnabled) {
+            setOverrideEnabled(true);
+        }
+    }, [overridesEnabled, overrideEnabled]);
 
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm font-medium text-teal-400">
-                    <span>🧩</span>
                     PPIFlow Maturation
                     <a
                         href="https://github.com/Mingchenchen/PPIFlow"
@@ -376,8 +401,19 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     <span className="text-sm text-slate-300">Enable</span>
                 </label>
             </div>
+            <p className="text-[11px] text-slate-500">
+                Quality presets adjust these settings automatically. Higher quality increases sampling and refinement.
+            </p>
 
-            <div className="grid grid-cols-2 gap-4">
+            {!settings.run_maturation && (
+                <div className="text-[10px] text-slate-600">
+                    Enable PPIFlow to reveal the full maturation controls.
+                </div>
+            )}
+
+            {settings.run_maturation && (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="block text-xs text-slate-500 mb-1">
                         Partial Flow Start t <span className="text-slate-600">({settings.ppiflow_start_t.toFixed(2)})</span>
@@ -396,6 +432,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>0.8</span>
                         <span>0.95 (refine)</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Higher t preserves input backbone; lower t increases exploration.
+                    </p>
                 </div>
 
                 <div>
@@ -416,6 +455,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>5</span>
                         <span>10</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        More samples improves odds of better refinements but costs GPU time.
+                    </p>
                 </div>
             </div>
 
@@ -438,6 +480,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>10</span>
                         <span>20</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Extra retries help recover from filter failures.
+                    </p>
                 </div>
 
                 <div>
@@ -458,6 +503,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>8</span>
                         <span>12</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Defines interface neighborhood for anchor detection.
+                    </p>
                 </div>
             </div>
 
@@ -480,6 +528,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>-5</span>
                         <span>0 (loose)</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        More negative = stricter anchor selection.
+                    </p>
                 </div>
 
                 <div>
@@ -500,6 +551,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>-1</span>
                         <span>0 (off)</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Filter threshold on delta interface score (more negative is better).
+                    </p>
                 </div>
             </div>
 
@@ -522,6 +576,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>0.01</span>
                         <span>1.0</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Lower temperature = more conservative redesign.
+                    </p>
                 </div>
 
                 <div>
@@ -542,6 +599,49 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>250</span>
                         <span>500</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        More steps increases refinement fidelity but costs time.
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                        <input
+                            type="checkbox"
+                            checked={settings.maturation_redesign_enabled}
+                            onChange={(e) => updateSetting('maturation_redesign_enabled', e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-teal-600 focus:ring-teal-500"
+                        />
+                        Redesign after partial flow
+                    </label>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Runs a second FAMPNN pass to refresh non-anchor residues.
+                    </p>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Redesign Top N <span className="text-slate-600">({settings.maturation_redesign_top_n})</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={0}
+                        max={50}
+                        step={1}
+                        value={settings.maturation_redesign_top_n}
+                        onChange={(e) => updateSetting('maturation_redesign_top_n', parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>0 (all)</span>
+                        <span>25</span>
+                        <span>50</span>
+                    </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Selects top designs by partial-flow interface improvement.
+                    </p>
                 </div>
             </div>
 
@@ -564,6 +664,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>25</span>
                         <span>50</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Keep only the top percentile of matured designs by score.
+                    </p>
                 </div>
 
                 <div>
@@ -573,11 +676,15 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         onChange={(e) => updateSetting('maturation_design_mode', e.target.value)}
                         className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                     >
+                        <option value="inherit">Inherit from workflow</option>
                         <option value="cdr_only">CDR Only</option>
                         <option value="cdr_selective">CDR Selective</option>
                         <option value="framework_allowed">Framework Allowed</option>
                         <option value="full_design">Full Design</option>
                     </select>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Inherit uses the main workflow design mode. Override only if needed.
+                    </p>
                 </div>
             </div>
 
@@ -600,6 +707,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>10</span>
                         <span>20</span>
                     </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Controls orchestration batching only.
+                    </p>
                 </div>
 
                 <div>
@@ -613,40 +723,71 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <option value="nanobody">Nanobody</option>
                         <option value="binder">Binder</option>
                     </select>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Selects which PPIFlow weights to use. Override below for a specific ckpt path.
+                    </p>
                 </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-                <div>
-                    <label className="block text-xs text-slate-500 mb-1">Heavy Chain Override</label>
+            <div className="space-y-2">
+                <label className="flex items-center gap-2 text-xs text-slate-400">
                     <input
-                        type="text"
-                        value={settings.ppiflow_heavy_chain}
-                        onChange={(e) => updateSetting('ppiflow_heavy_chain', e.target.value.toUpperCase())}
-                        placeholder="auto"
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
+                        type="checkbox"
+                    checked={overrideEnabled}
+                        onChange={(e) => {
+                        if (e.target.checked) {
+                            setOverrideEnabled(true);
+                            return;
+                        }
+                        setOverrideEnabled(false);
+                        updateSettings({
+                            ppiflow_heavy_chain: '',
+                            ppiflow_light_chain: '',
+                            ppiflow_antigen_chain: '',
+                        });
+                        }}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-teal-600 focus:ring-teal-500"
                     />
+                    Override chain IDs (leave unchecked for auto-detect)
+                </label>
+                <div className="grid grid-cols-3 gap-3">
+                    <div>
+                        <label className="block text-xs text-slate-500 mb-1">Heavy Chain Override</label>
+                        <input
+                            type="text"
+                            value={settings.ppiflow_heavy_chain}
+                            onChange={(e) => updateSetting('ppiflow_heavy_chain', e.target.value.toUpperCase())}
+                            placeholder="auto"
+                        disabled={!overrideEnabled}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-mono ${overrideEnabled ? 'text-slate-300' : 'text-slate-600 opacity-70'}`}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-slate-500 mb-1">Light Chain Override</label>
+                        <input
+                            type="text"
+                            value={settings.ppiflow_light_chain}
+                            onChange={(e) => updateSetting('ppiflow_light_chain', e.target.value.toUpperCase())}
+                            placeholder="auto"
+                        disabled={!overrideEnabled}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-mono ${overrideEnabled ? 'text-slate-300' : 'text-slate-600 opacity-70'}`}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-slate-500 mb-1">Antigen Chain Override</label>
+                        <input
+                            type="text"
+                            value={settings.ppiflow_antigen_chain}
+                            onChange={(e) => updateSetting('ppiflow_antigen_chain', e.target.value.toUpperCase())}
+                            placeholder="auto"
+                        disabled={!overrideEnabled}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-mono ${overrideEnabled ? 'text-slate-300' : 'text-slate-600 opacity-70'}`}
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label className="block text-xs text-slate-500 mb-1">Light Chain Override</label>
-                    <input
-                        type="text"
-                        value={settings.ppiflow_light_chain}
-                        onChange={(e) => updateSetting('ppiflow_light_chain', e.target.value.toUpperCase())}
-                        placeholder="auto"
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
-                    />
-                </div>
-                <div>
-                    <label className="block text-xs text-slate-500 mb-1">Antigen Chain Override</label>
-                    <input
-                        type="text"
-                        value={settings.ppiflow_antigen_chain}
-                        onChange={(e) => updateSetting('ppiflow_antigen_chain', e.target.value.toUpperCase())}
-                        placeholder="auto"
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
-                    />
-                </div>
+                <p className="text-[10px] text-slate-600">
+                    Auto-detect uses `antibody_chains` for heavy/light and infers antigen chains from the complex PDB.
+                </p>
             </div>
 
             <div className="space-y-3">
@@ -658,6 +799,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         onChange={(e) => updateSetting('ppiflow_weights_dir', e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
                     />
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Host path mounted into the PPIFlow container.
+                    </p>
                 </div>
                 <div>
                     <label className="block text-xs text-slate-500 mb-1">Checkpoint Override (optional)</label>
@@ -680,8 +824,13 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         onChange={(e) => updateSetting('ppiflow_config', e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
                     />
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        YAML config inside the container.
+                    </p>
                 </div>
             </div>
+            </div>
+            )}
         </div>
     );
 };
@@ -731,7 +880,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                 className="w-full flex items-center justify-between p-4 hover:bg-slate-800/30 transition-colors"
             >
                 <div className="flex items-center gap-3">
-                    <span className="text-lg">🎚️</span>
                     <div className="text-left">
                         <h3 className="text-sm font-medium text-slate-300">Quality Settings</h3>
                         <p className="text-xs text-slate-500">
@@ -772,7 +920,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     {/* RFantibody Settings */}
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-sm font-medium text-pink-400">
-                            <span>💉</span>
                             Backbone Design (RFantibody)
                         </div>
 
@@ -864,7 +1011,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     {/* Boltz-2 Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center gap-2 text-sm font-medium text-purple-400">
-                            <span>🧬</span>
                             Structure Prediction (Boltz-2)
                         </div>
 
@@ -975,7 +1121,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     {/* FAMPNN Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center gap-2 text-sm font-medium text-blue-400">
-                            <span>🔬</span>
                             Sequence Design (FAMPNN)
                         </div>
 
@@ -1309,7 +1454,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-cyan-400">
-                                🧪 AF2 Backprop
+                                AF2 Backprop
                                 <span className="text-xs text-slate-500 font-normal">(CDR refinement)</span>
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer">
@@ -1512,7 +1657,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     {settings.boltz_use_potentials && (
                         <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
                             <div className="flex items-start gap-2">
-                                <span className="text-purple-400">✨</span>
                                 <div>
                                     <div className="text-sm font-medium text-purple-400">Boltz-2x Mode Active</div>
                                     <p className="text-xs text-slate-400">

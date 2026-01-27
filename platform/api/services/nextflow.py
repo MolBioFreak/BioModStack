@@ -17,8 +17,10 @@ logger = logging.getLogger(__name__)
 # Track running processes
 _running_processes: Dict[str, subprocess.Popen] = {}
 
+from paths import get_code_root, get_db_path
+
 # Project root (parent of platform directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+PROJECT_ROOT = get_code_root()
 
 
 def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -> Optional[str]:
@@ -162,10 +164,7 @@ async def maybe_auto_annotate_cdrs(job, session) -> None:
     try:
         from database import Design, Job as JobModel
         from sqlalchemy import select
-        from services.cdr_annotator import batch_annotate_pdbs
-        import threading
-        import sqlite3
-        from pathlib import Path
+        from services.cdr_annotation_tasks import annotate_and_update_designs
 
         # Include child jobs (exploration mode)
         child_result = await session.execute(select(JobModel.id).where(JobModel.parent_job_id == job.id))
@@ -184,43 +183,9 @@ async def maybe_auto_annotate_cdrs(job, session) -> None:
             return
 
         logger.info(f"[CDR AUTO] Starting ANARCII for {len(pdb_paths)} designs (job {job.id})")
-
-        def run_annotation_sync():
-            annotations = batch_annotate_pdbs(pdb_paths, batch_size=500)
-            db_path = Path(__file__).parent.parent / "biomodstack.db"
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-
-            annotated = 0
-            for pdb_path, design_id in zip(pdb_paths, design_ids):
-                annot = annotations.get(pdb_path)
-                if annot:
-                    cursor.execute("""
-                        UPDATE designs SET
-                            antibody_type = ?,
-                            binder_length = ?,
-                            cdr_h1 = ?, cdr_h2 = ?, cdr_h3 = ?,
-                            cdr_l1 = ?, cdr_l2 = ?, cdr_l3 = ?,
-                            cdr_h1_length = ?, cdr_h2_length = ?, cdr_h3_length = ?,
-                            cdr_l1_length = ?, cdr_l2_length = ?, cdr_l3_length = ?,
-                            fr2_contacts = ?, de_loop = ?, fr3_contacts = ?, fr4_contacts = ?
-                        WHERE id = ?
-                    """, (
-                        annot.antibody_type, annot.binder_length,
-                        annot.cdr_h1, annot.cdr_h2, annot.cdr_h3,
-                        annot.cdr_l1, annot.cdr_l2, annot.cdr_l3,
-                        annot.cdr_h1_length, annot.cdr_h2_length, annot.cdr_h3_length,
-                        annot.cdr_l1_length, annot.cdr_l2_length, annot.cdr_l3_length,
-                        annot.fr2_contacts, annot.de_loop, annot.fr3_contacts, annot.fr4_contacts,
-                        design_id
-                    ))
-                    annotated += 1
-
-            conn.commit()
-            conn.close()
-            logger.info(f"[CDR AUTO] Completed: {annotated}/{len(pdb_paths)} annotated (job {job.id})")
-
-        threading.Thread(target=run_annotation_sync, daemon=True).start()
+        asyncio.create_task(
+            annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job.id))
+        )
     except Exception as e:
         logger.warning(f"[CDR AUTO] Failed to start ANARCII: {e}")
 
@@ -256,18 +221,24 @@ async def launch_msa_batch_job(
     
     # Get sequences JSON and GPU ID
     sequences_json = params.get('sequences_json', '[]')
-    gpu_id = params.get('gpu_id', 0)
+    raw_gpu_id = params.get('gpu_id', 0)
+    try:
+        gpu_id = int(raw_gpu_id)
+    except (TypeError, ValueError):
+        gpu_id = 0
     reference_sequence = params.get('reference_sequence', '')
     force_refresh = params.get('msa_force_refresh', False)
     
     # Build batch_msa.py command
+    db_path = os.environ.get("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
+    cache_dir = os.environ.get("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
     script_path = PROJECT_ROOT / "scripts" / "batch_msa.py"
     cmd = [
         "python3", str(script_path),
         "--sequences", sequences_json,
         "--output_dir", output_dir,
-        "--db_path", "/mnt/BioModStack/colabfold_db",
-        "--cache_dir", "/mnt/BioModStack/msa_cache",
+        "--db_path", db_path,
+        "--cache_dir", cache_dir,
         "--gpu_id", str(gpu_id),
     ]
     if reference_sequence:
@@ -440,14 +411,20 @@ async def launch_nextflow_job(
             # ═══════════════════════════════════════════════════════════════
             # Extract gpu_id from params (set by orchestrator)
             gpu_id = params.get('gpu_id')
-            
+
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
+            gpu_id_str = None
             if gpu_id is not None:
-                env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-                logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id} via CUDA_VISIBLE_DEVICES")
+                try:
+                    gpu_id_str = str(int(gpu_id))
+                except (TypeError, ValueError):
+                    gpu_id_str = None
+            if gpu_id_str is not None:
+                env["CUDA_VISIBLE_DEVICES"] = gpu_id_str
+                logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id_str} via CUDA_VISIBLE_DEVICES")
             else:
-                logger.warning(f"[GPU] Job {job_id} has no gpu_id - using default GPU selection")
+                logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
             
             # Run Nextflow with stdout piped for real-time monitoring
             process = await asyncio.create_subprocess_exec(

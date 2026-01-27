@@ -1,7 +1,8 @@
 #!/bin/bash
 # BioModStack STOP - Stop all services (API + Frontend)
 
-PROJECT_DIR="/home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
 
 notify-send "BioModStack" "🛑 Stopping ALL services..." -i dialog-warning
 

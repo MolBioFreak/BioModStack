@@ -16,9 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import Design, Job
-
-# Project root (parent of platform directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+from paths import get_data_root
 
 
 async def ingest_job_results(
@@ -37,10 +35,10 @@ async def ingest_job_results(
     Returns:
         Number of designs ingested
     """
-    # Resolve relative paths to absolute using PROJECT_ROOT
+    # Resolve relative paths to absolute using data root
     output_path = Path(output_dir)
     if not output_path.is_absolute():
-        output_path = PROJECT_ROOT / output_dir
+        output_path = get_data_root() / output_dir
     
     csv_path = output_path / "results" / "all_designs.csv"
     
