@@ -851,6 +851,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         )}
                     </div>
 
+                </div> {/* End LEFT COLUMN */}
+
+                {/* RIGHT COLUMN: Design Mode & Settings */}
+                <div className="space-y-5">
                     {/* Design Mode Selector */}
                     <DesignModeSelector
                         mode={designMode}
