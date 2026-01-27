@@ -4,9 +4,12 @@ Spawn PPIFlow maturation child jobs for parallel processing.
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 import requests
+DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
 
 
 def check_existing_children(parent_job_id, stage, api_url, batch_name=None):
@@ -146,7 +149,7 @@ def main():
                         help="PDBs per child job")
     parser.add_argument("--batch_name", required=True, help="Batch name")
     parser.add_argument("--params_json", default="", help="Additional params as JSON")
-    parser.add_argument("--api_url", default="http://localhost:8000",
+    parser.add_argument("--api_url", default=DEFAULT_API_URL,
                         help="API base URL")
     parser.add_argument("--output", default="spawn_maturation_result.json",
                         help="Output JSON file")

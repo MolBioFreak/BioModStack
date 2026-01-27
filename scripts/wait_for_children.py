@@ -7,9 +7,12 @@ Polls the API until all children finish, then outputs their result directories.
 """
 import argparse
 import json
+import os
 import sys
 import time
 import requests
+DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
 from pathlib import Path
 
 
@@ -18,7 +21,7 @@ def wait_for_children(
     stage: str,
     poll_interval: int = 10,
     timeout: int = 0,  # 0 = no timeout (disabled by default)
-    api_url: str = "http://localhost:8000",
+    api_url: str = DEFAULT_API_URL,
     batch_name: str = None  # For resume: find children by batch_name
 ):
     """
@@ -110,7 +113,7 @@ def main():
     parser.add_argument("--stage", default=None, help="Stage filter (rfantibody, fampnn, boltz2)")
     parser.add_argument("--poll_interval", type=int, default=10, help="Seconds between polls")
     parser.add_argument("--timeout", type=int, default=0, help="Max wait time in seconds (0 = no timeout)")
-    parser.add_argument("--api_url", default="http://localhost:8000", help="API URL")
+    parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--batch_name", default=None, help="Batch name for resume (find children by batch_name)")
     parser.add_argument("--output", default="child_outputs.json", help="Output JSON file")
     

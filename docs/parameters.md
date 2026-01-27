@@ -15,7 +15,7 @@ These parameters are required for BioModStack and are used by every mode.
 | `rfd_mode`        | null            | Pipeline mode. Choose from: `monomer_denovo`, `monomer_foldcond`, `monomer_motifscaff`, `monomer_partialdiff`, `binder_denovo`, `binder_foldcond`, `binder_motifscaff`, or `binder_partialdiff` |
 | `rfd_num_designs` | 8               | Number of designs to generate using RFdiffusion                                                                                                                                                 |
 | `seqs_per_design` | 8               | Number of sequences to generate per RFdiffusion design                                                                                                                                          |
-| `out_dir`         | `./pdj_results` | Output directory for results (legacy default name). Existing results will be overwritten                                                                                                          |
+| `out_dir`         | `./bms_results` | Output directory for results (BioModStack default). Existing results will be overwritten                                                                                                          |
 
 ---
 
@@ -236,9 +236,9 @@ The cluster parameters may need adjusting depending on your HPC setup and availa
 | Parameter       | Example Value                               | Description                                        |
 | --------------- | ------------------------------------------- | -------------------------------------------------- |
 | `container_dir` | `'./containers'`                            | Path to pipeline containers directory or cloud URI |
-| `rfd_models`    | `"${projectDir}/models/rfd"`                | Path to the RFdiffusion model checkpoints.         |
-| `af2_models `   | `"${projectDir}/models/af2"`                | Path to the AlphaFold2 models.                     |
-| `boltz_models`  | `"${projectDir}/models/boltz"`              | Path to the Boltz-2 models.                        |
+| `rfd_models`    | `"$BMS_WEIGHTS/rfd"`                        | Path to the RFdiffusion model checkpoints.         |
+| `af2_models `   | `"$BMS_WEIGHTS/alphafold/params"`           | Path to the AlphaFold2 models.                     |
+| `boltz_models`  | `"$BMS_WEIGHTS/boltz"`                      | Path to the Boltz-2 models.                        |
 | `gpu_model`     | `'A30'`                                     | GPU model to request, e.g., 'A30'.                 |
 | `gpus`          | Number of GPUs to request                   | `1`, `2`, `4`, `8`                                 |
 | `cpus_per_gpu`  | Number of CPUs to request per GPU           | `8`, `12`                                          |

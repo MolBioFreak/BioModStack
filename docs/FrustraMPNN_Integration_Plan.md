@@ -169,7 +169,7 @@ if (params.run_frustrampnn == true) {
 ```groovy
 params {
     run_frustrampnn = false  // Optional post-pipeline QC
-    container_dir = "/mnt/BioModStack/containers"
+    container_dir = "${BMS_HOME}/containers"
 }
 ```
 
