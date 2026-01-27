@@ -6,11 +6,11 @@ from pydantic import BaseModel
 from pathlib import Path
 import subprocess
 import shutil
+import sqlite3
+
+from paths import get_work_dir, get_results_dir, get_db_path
 
 router = APIRouter(prefix="/system", tags=["system"])
-
-# Get project root (two levels up from api directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 class CleanupResult(BaseModel):
@@ -28,11 +28,19 @@ class DiskUsage(BaseModel):
     pdj_results_files: int
 
 
+class DbInfo(BaseModel):
+    path: str
+    exists: bool
+    size_bytes: int
+    journal_mode: str | None
+    busy_timeout_ms: int | None
+
+
 @router.get("/disk-usage", response_model=DiskUsage)
 async def get_disk_usage():
     """Get disk usage for pipeline directories"""
-    work_dir = PROJECT_ROOT / "work"
-    results_dir = PROJECT_ROOT / "pdj_results"
+    work_dir = get_work_dir()
+    results_dir = get_results_dir()
     
     def get_dir_stats(path: Path) -> tuple:
         if not path.exists():
@@ -69,7 +77,7 @@ async def cleanup_work_directory(days: int = 30):
     Args:
         days: Delete files older than this many days. Use 0 for full purge.
     """
-    work_dir = PROJECT_ROOT / "work"
+    work_dir = get_work_dir()
     
     if not work_dir.exists():
         return CleanupResult(
@@ -144,3 +152,35 @@ async def cleanup_work_directory(days: int = 30):
             files_after=files_before,
             space_freed="0B"
         )
+
+
+@router.get("/db-info", response_model=DbInfo)
+async def get_db_info():
+    db_path = get_db_path()
+    if not db_path.exists():
+        return DbInfo(
+            path=str(db_path),
+            exists=False,
+            size_bytes=0,
+            journal_mode=None,
+            busy_timeout_ms=None,
+        )
+    
+    journal_mode = None
+    busy_timeout = None
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.close()
+    except Exception:
+        journal_mode = None
+        busy_timeout = None
+    
+    return DbInfo(
+        path=str(db_path),
+        exists=True,
+        size_bytes=db_path.stat().st_size,
+        journal_mode=journal_mode,
+        busy_timeout_ms=busy_timeout,
+    )

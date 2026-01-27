@@ -1,4 +1,4 @@
-project_root: /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform
+project_root: ""
 standard_paths:
   benchmarkdata:
     path: benchmarkdata
@@ -10,7 +10,7 @@ standard_paths:
     path: lib
     description: Library files and examples
   inputs:
-    path: platform/api/inputs
+    path: inputs
     description: Uploaded input files
 preset_directories:
 - id: all_polymerases

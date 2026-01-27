@@ -82,6 +82,8 @@ submission_log.txt
 NO_MSA
 verify_parsing.nf
 *.db
+*.db-wal
+*.db-shm
 !*.db.example
 
 # GPU state files (transient)

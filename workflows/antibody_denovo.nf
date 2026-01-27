@@ -73,7 +73,7 @@ include { MergeComplex ; AF2_BACKPROP } from '../modules/af2_backprop'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
 include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
-include { ANARCI } from '../modules/utils/anarci'
+include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
@@ -403,6 +403,8 @@ process SpawnMaturationJobs {
         maturation_redesign_temp: params.maturation_redesign_temp,
         maturation_redesign_steps: params.maturation_redesign_steps,
         maturation_design_mode: params.maturation_design_mode,
+        maturation_redesign_enabled: params.maturation_redesign_enabled,
+        maturation_redesign_top_n: params.maturation_redesign_top_n,
         fampnn_psce_threshold: params.fampnn_psce_threshold,
         fampnn_exclude_cys: params.fampnn_exclude_cys,
         fampnn_repack_last: params.fampnn_repack_last,
@@ -467,6 +469,29 @@ process CollectMaturationOutputs {
         --child_outputs_json "${child_outputs_json}" \\
         --stage_name "${stage_name}" \\
         --manifest collection_manifest.json
+    """
+}
+
+// =============================================================================
+// ANARCII Polishing (trigger API annotation)
+// =============================================================================
+process TriggerANARCIIAnnotation {
+    label 'process_low'
+
+    input:
+    val job_id
+    val include_children
+
+    output:
+    path "anarcii_trigger.log", emit: log
+
+    script:
+    """
+    python3 ${projectDir}/scripts/trigger_anarcii_annotation.py \\
+        --job_id "${job_id}" \\
+        --include_children "${include_children}" \\
+        --api_url "http://localhost:8000" \\
+        2>&1 | tee anarcii_trigger.log
     """
 }
 
@@ -1062,9 +1087,9 @@ workflow ANTIBODY_DENOVO {
     // AntiFold branch (requires IMGT numbering)
     if (run_antifold) {
         log.info("  Running AntiFold...")
-        // First number with ANARCI
-        ANARCI(backbone_designs)
-        ANTIFOLD(ANARCI.out.pdb_imgt)
+        // First number with ANARCII
+        ANARCII(backbone_designs)
+        ANTIFOLD(ANARCII.out.pdb_imgt)
         
         // AntiFold already emits [meta, sequences (fasta)] - wait, check module
         // Module emits: tuple val(meta), path("*_probs.csv"), emit: probabilities
@@ -1552,6 +1577,17 @@ workflow ANTIBODY_DENOVO {
         frustrampnn_input = final_designs.map { meta, pdb -> [meta, pdb] }
         FrustrampnnQC(frustrampnn_input)
         AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
+    }
+
+    // Step 4.y: ANARCII CDR annotation (post-pipeline polishing)
+    if (params.run_anarcii_post == true) {
+        if (!params.job_id) {
+            log.warn("ANARCII polishing requested but job_id is missing; skipping.")
+        } else {
+            def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
+            log.info("Step 4.y: Triggering ANARCII CDR annotation (include_children=${includeChildren})")
+            TriggerANARCIIAnnotation(params.job_id, includeChildren)
+        }
     }
 
     emit:

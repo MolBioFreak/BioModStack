@@ -1,7 +1,9 @@
 import sqlite3
 import os
 
-DB_PATH = "biomodstack.db"
+from paths import get_db_path
+
+DB_PATH = str(get_db_path())
 
 def migrate():
     if not os.path.exists(DB_PATH):
@@ -9,7 +11,9 @@ def migrate():
         return
 
     print(f"Migrating {DB_PATH}...")
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     cursor = conn.cursor()
     
     columns = [

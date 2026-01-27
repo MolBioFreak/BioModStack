@@ -19,6 +19,29 @@ These parameters are required for BioModStack and are used by every mode.
 
 ---
 
+## Path Overrides (Env + Params)
+
+BioModStack supports portable installs via environment variables and optional
+Nextflow params:
+
+Environment variables:
+- `BMS_HOME`: code root (optional)
+- `BMS_DATA`: data root (outputs/work/results)
+- `BMS_WEIGHTS`: weights root
+- `BMS_COLABFOLD_DB`: ColabFold DB location
+- `BMS_MSA_CACHE`: MSA cache location
+- `DATABASE_URL`: DB path override (SQLAlchemy URL)
+
+Nextflow params (optional):
+- `data_root`: output root (defaults to repo root if `BMS_DATA` is unset)
+- `weights_root`: base path for model weights
+- `msa_local_db`: ColabFold DB path
+- `msa_cache_dir`: MSA cache path
+
+Defaults preserve current behavior unless env vars are set.
+
+---
+
 ## Mode-Specific Parameters
 
 These parameters are used for some of the BioModStack modes.

@@ -4,19 +4,23 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from datetime import datetime
+from pathlib import Path
 import os
 
-# Database path - relative to project root
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "sqlite+aiosqlite:///./biomodstack.db"
-)
+from paths import get_db_path, get_db_url
 
-engine = create_async_engine(DATABASE_URL, echo=False)
+# Database path - resolved via paths helper (supports env overrides)
+DEFAULT_DB_PATH = get_db_path()
+DATABASE_URL = get_db_url()
+
+engine_kwargs = {"echo": False}
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"timeout": 30}
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 Base = declarative_base()
@@ -189,7 +193,7 @@ class Design(Base):
     fr4_contacts = Column(String(10), nullable=True)   # IMGT 101-103
     
     # Antibody Properties
-    humanness_score = Column(Float, nullable=True)  # OAS/ANARCI derived
+    humanness_score = Column(Float, nullable=True)  # OAS/ANARCII derived
     developability_flags = Column(JSON, nullable=True)  # TAP-like warnings
     
     # Stability / Inverse Folding Data
@@ -294,7 +298,58 @@ class NucleotideSequence(Base):
 async def init_db():
     """Create all tables if they don't exist."""
     async with engine.begin() as conn:
+        if engine.dialect.name == "sqlite":
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=30000"))
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_schema(conn)
+
+
+async def _ensure_schema(conn):
+    """Add missing columns for legacy SQLite databases."""
+    if engine.dialect.name != "sqlite":
+        return
+    
+    await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
+    await _ensure_table_columns(conn, "designs", Design.__table__.columns)
+
+
+async def _ensure_table_columns(conn, table_name: str, columns):
+    """Ensure all nullable columns exist in a SQLite table."""
+    pragma = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+    existing_cols = {row[1] for row in pragma.fetchall()}
+    
+    dialect = engine.dialect
+    
+    for col in columns:
+        if col.name in existing_cols:
+            continue
+        if col.primary_key:
+            continue
+        
+        # Only auto-add nullable columns or ones with explicit defaults
+        has_default = col.default is not None or col.server_default is not None
+        if not col.nullable and not has_default:
+            continue
+        
+        col_type = col.type.compile(dialect=dialect)
+        default_clause = ""
+        if col.server_default is not None:
+            default_clause = f" DEFAULT {col.server_default.arg}"
+        elif col.default is not None:
+            default_arg = getattr(col.default, "arg", None)
+            if default_arg is not None and not callable(default_arg):
+                if isinstance(default_arg, str):
+                    default_clause = f" DEFAULT '{default_arg}'"
+                elif isinstance(default_arg, bool):
+                    default_clause = f" DEFAULT {1 if default_arg else 0}"
+                else:
+                    default_clause = f" DEFAULT {default_arg}"
+        
+        null_clause = "" if col.nullable else " NOT NULL"
+        await conn.execute(
+            text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}{null_clause}{default_clause}')
+        )
 
 
 async def get_session() -> AsyncSession:

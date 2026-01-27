@@ -4,7 +4,7 @@ nextflow.enable.dsl = 2
 // Antibody Design Toolkit - Supports 4 modes
 // Consolidates all antibody pipeline logic into a single reusable workflow
 
-include { ANARCI } from '../modules/utils/anarci'
+include { ANARCII } from '../modules/utils/anarci'
 include { ANTIFOLD } from '../modules/antifold'
 include { IMMUNEBUILDER } from '../modules/immunebuilder'
 include { THERMOMPNN } from '../modules/thermompnn'
@@ -29,22 +29,22 @@ workflow ANTIBODY_DESIGN {
         designs_ch = IMMUNEBUILDER.out.structure
     }
     else if (mode == 'inverse_folding') {
-        ANARCI(input_ch)
-        ANTIFOLD(ANARCI.out.pdb_imgt)
+        ANARCII(input_ch)
+        ANTIFOLD(ANARCII.out.pdb_imgt)
         IMMUNEBUILDER(ANTIFOLD.out.sequences)
         THERMOMPNN(IMMUNEBUILDER.out.structure)
 
         designs_ch = IMMUNEBUILDER.out.structure
         stability_ch = THERMOMPNN.out.stability
         probs_ch = ANTIFOLD.out.probabilities
-        cdrs_ch = ANARCI.out.cdrs
+        cdrs_ch = ANARCII.out.cdrs
     }
     else if (mode == 'stability_prediction') {
-        ANARCI(input_ch)
-        THERMOMPNN(ANARCI.out.pdb_imgt)
+        ANARCII(input_ch)
+        THERMOMPNN(ANARCII.out.pdb_imgt)
 
         stability_ch = THERMOMPNN.out.stability
-        cdrs_ch = ANARCI.out.cdrs
+        cdrs_ch = ANARCII.out.cdrs
     }
     else if (mode == 'de_novo') {
         RFANTIBODY(input_ch)
