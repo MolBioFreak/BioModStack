@@ -557,7 +557,7 @@ export function JobSubmission() {
                 </div>
             </header>
 
-            <main className="w-full max-w-7xl mx-auto space-y-8">
+            <main className="max-w-4xl mx-auto space-y-8">
 
                 {/* 2. Mode Toggle: Templates vs Manual */}
                 <section>
@@ -675,7 +675,7 @@ export function JobSubmission() {
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
-                                    <div className="flex flex-row gap-4 flex-wrap">
+                                    <div className="grid grid-cols-2 gap-3">
                                         {[
                                             // Dynamic templates from API - filter out hidden/removed templates
                                             ...(templatesData?.data ?? []).filter((t: any) =>
@@ -755,16 +755,16 @@ export function JobSubmission() {
                                                 <div
                                                     key={template.id}
                                                     onClick={() => setSelectedTemplateId(template.id)}
-                                                    className={`cursor-pointer p-6 border-2 transition-all flex-1 min-w-[280px] 
+                                                    className={`cursor-pointer p-4 border-2 transition-all rounded-lg
                                                         ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
                                                         bg-[var(--card-bg)] text-[var(--text-primary)]`}
                                                     style={{
                                                         boxShadow: isSelected ? `0 8px 30px color-mix(in srgb, var(--accent-primary) 35%, transparent)` : undefined
                                                     }}
                                                 >
-                                                    <div className="flex items-center gap-4 mb-4">
+                                                    <div className="flex items-center gap-3 mb-2">
                                                         <div
-                                                            className="w-14 h-14 flex items-center justify-center text-xl font-bold"
+                                                            className="w-10 h-10 flex items-center justify-center text-sm font-bold rounded"
                                                             style={{ backgroundColor: `${template.color}20`, color: template.color }}
                                                         >
                                                             {template.icon === 'target' ? 'TG' :
@@ -772,25 +772,23 @@ export function JobSubmission() {
                                                                     template.icon === 'dna' ? 'MU' :
                                                                         template.icon === 'microscope' ? 'SP' :
                                                                             template.icon === 'pill' ? 'BG' :
-                                                                                template.icon === 'binder' ? 'BC' : 'WF'}
+                                                                                template.icon === 'binder' ? 'BC' : 'OL'}
                                                         </div>
-                                                        <div>
-                                                            <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
-                                                        </div>
+                                                        <h3 className="font-bold text-base" style={{ color: template.color }}>{template.name}</h3>
                                                     </div>
-                                                    <p className="text-sm opacity-70 mb-4 line-clamp-2">{template.description}</p>
-                                                    {/* Stage Pipeline Diagram */}
-                                                    <div className="flex items-center gap-1 flex-wrap">
+                                                    <p className="text-xs opacity-70 mb-2 line-clamp-2">{template.description}</p>
+                                                    {/* Stage Pipeline (compact) */}
+                                                    <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
                                                         {template.stages.map((stage: any, idx: number) => (
                                                             <div key={idx} className="flex items-center">
-                                                                <div
-                                                                    className="px-3 py-1.5 text-xs whitespace-nowrap font-medium"
-                                                                    style={{ backgroundColor: `${template.color}18`, color: template.color }}
+                                                                <span
+                                                                    className="px-1.5 py-0.5 font-medium rounded"
+                                                                    style={{ backgroundColor: `${template.color}15`, color: template.color }}
                                                                 >
                                                                     {stage.tool}
-                                                                </div>
+                                                                </span>
                                                                 {idx < template.stages.length - 1 && (
-                                                                    <span className="mx-1.5 text-lg opacity-50" style={{ color: template.color }}>→</span>
+                                                                    <span className="mx-0.5 opacity-40" style={{ color: template.color }}>→</span>
                                                                 )}
                                                             </div>
                                                         ))}
