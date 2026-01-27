@@ -14,6 +14,7 @@ Key Features:
 
 import asyncio
 import logging
+import math
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
@@ -141,6 +142,49 @@ def _normalize_pinned_gpus(raw_value: Any) -> Optional[List[int]]:
         except (TypeError, ValueError):
             continue
     return normalized or None
+
+
+def _median(values: List[int]) -> Optional[int]:
+    if not values:
+        return None
+    sorted_vals = sorted(values)
+    mid = len(sorted_vals) // 2
+    if len(sorted_vals) % 2 == 1:
+        return sorted_vals[mid]
+    return int((sorted_vals[mid - 1] + sorted_vals[mid]) / 2)
+
+
+def _compute_auto_limit(
+    model_id: str,
+    job_infos: List["JobInfo"],
+    gpu_stats: List[Any],
+    config: Dict[str, Any]
+) -> int:
+    """Compute a VRAM-based concurrency cap for a model."""
+    model_vrams = [j.vram_estimate_mb for j in job_infos if j.model_type == model_id]
+    vram_estimate = _median(model_vrams)
+    if vram_estimate is None:
+        vram_estimate = estimate_vram(model_id, 300)
+    vram_estimate = max(1, int(vram_estimate))
+
+    target_fill = config.get("global", {}).get("target_vram_fill", 0.85)
+    limit = 0
+    for gpu in gpu_stats:
+        if is_gpu_disabled(gpu.index, config):
+            continue
+        if model_id in HEAVY_MODELS:
+            gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
+            if not gpu_caps.get('supports_heavy', True):
+                continue
+
+        gpu_override = config.get("overrides", {}).get(str(gpu.index), {})
+        safety_margin = gpu_override.get("vram_safety_margin_mb", 500)
+        available = (gpu.memory_total_mb * target_fill) - gpu.memory_used_mb - safety_margin
+        if available <= 0:
+            continue
+        limit += max(0, math.floor(available / vram_estimate))
+
+    return max(0, limit)
 
 
 def is_gpu_disabled(gpu_index: int, config: Dict[str, Any]) -> bool:
@@ -517,45 +561,7 @@ class GPUOrchestrator:
             if not pending_jobs:
                 return  # Nothing to do
             
-            # ═══════════════════════════════════════════════════════════════════════
-            # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
-            # ═══════════════════════════════════════════════════════════════════════
-            concurrency_limits = config.get("concurrency_limits", {})
-            if concurrency_limits:
-                # Count running jobs per model type
-                running_by_model = {}
-                running_result = await session.execute(
-                    select(Job.model_id, func.count(Job.id)).where(
-                        Job.queue_status == "running"
-                    ).group_by(Job.model_id)
-                )
-                for model_id, count in running_result:
-                    running_by_model[model_id] = count
-                
-                # Filter pending jobs based on limits
-                filtered_jobs = []
-                skipped_by_limit = {}
-                for job in pending_jobs:
-                    limit = concurrency_limits.get(job.model_id)
-                    if limit is not None:
-                        running_count = running_by_model.get(job.model_id, 0)
-                        if running_count >= limit:
-                            skipped_by_limit[job.model_id] = skipped_by_limit.get(job.model_id, 0) + 1
-                            continue
-                        # Account for jobs we're about to add this cycle
-                        filtered_for_model = len([j for j in filtered_jobs if j.model_id == job.model_id])
-                        if running_count + filtered_for_model >= limit:
-                            skipped_by_limit[job.model_id] = skipped_by_limit.get(job.model_id, 0) + 1
-                            continue
-                    filtered_jobs.append(job)
-                
-                if skipped_by_limit:
-                    logger.info(f"[CONCURRENCY] Skipped jobs due to limits: {skipped_by_limit}")
-                
-                pending_jobs = filtered_jobs
-                
-                if not pending_jobs:
-                    return  # All jobs blocked by concurrency limits
+            # Concurrency limits applied later after GPU stats are available
             
             # Convert to JobInfo for packing
             job_infos = []
@@ -589,6 +595,58 @@ class GPUOrchestrator:
             if not gpu_stats:
                 logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
                 return
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
+            # ═══════════════════════════════════════════════════════════════════════
+            concurrency_limits = config.get("concurrency_limits", {})
+            if concurrency_limits:
+                # Count running jobs per model type
+                running_by_model = {}
+                running_result = await session.execute(
+                    select(Job.model_id, func.count(Job.id)).where(
+                        Job.queue_status == "running"
+                    ).group_by(Job.model_id)
+                )
+                for model_id, count in running_result:
+                    running_by_model[model_id] = count
+
+                # Precompute auto limits
+                auto_limits = {}
+                for model_id, limit in concurrency_limits.items():
+                    if isinstance(limit, str) and limit.lower() == "auto":
+                        auto_limit = _compute_auto_limit(model_id, job_infos, gpu_stats, config)
+                        auto_limits[model_id] = auto_limit
+
+                # Filter pending jobs based on limits
+                pending_by_id = {job.id: job for job in pending_jobs}
+                filtered_infos = []
+                skipped_by_limit = {}
+                for job_info in job_infos:
+                    limit = concurrency_limits.get(job_info.model_type)
+                    if isinstance(limit, str) and limit.lower() == "auto":
+                        limit = auto_limits.get(job_info.model_type)
+                    if isinstance(limit, str):
+                        limit = None
+                    if limit is not None:
+                        running_count = running_by_model.get(job_info.model_type, 0)
+                        if running_count >= limit:
+                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
+                            continue
+                        filtered_for_model = len([j for j in filtered_infos if j.model_type == job_info.model_type])
+                        if running_count + filtered_for_model >= limit:
+                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
+                            continue
+                    filtered_infos.append(job_info)
+
+                if skipped_by_limit:
+                    logger.info(f"[CONCURRENCY] Skipped jobs due to limits: {skipped_by_limit}")
+
+                job_infos = filtered_infos
+                pending_jobs = [pending_by_id[j.id] for j in job_infos]
+
+                if not job_infos:
+                    return  # All jobs blocked by concurrency limits
             
             # ═══════════════════════════════════════════════════════════════════════
             # CRITICAL: Include recently-launched jobs in VRAM projection

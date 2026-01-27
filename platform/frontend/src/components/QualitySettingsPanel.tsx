@@ -100,7 +100,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
-        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -5.0,
         maturation_anchor_distance_cutoff: 8.0,
@@ -163,7 +163,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
-        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -5.0,
         maturation_anchor_distance_cutoff: 8.0,
@@ -226,7 +226,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_samples_per_target: 5,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
-        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -6.0,
         maturation_anchor_distance_cutoff: 8.0,
@@ -289,7 +289,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_samples_per_target: 8,
         ppiflow_retry_limit: 10,
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
-        ppiflow_weights_dir: '/mnt/BioModStack/weights/ppiflow',
+        ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
         maturation_anchor_threshold: -7.0,
         maturation_anchor_distance_cutoff: 8.0,
@@ -800,7 +800,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300 font-mono"
                     />
                     <p className="text-[10px] text-slate-600 mt-1">
-                        Host path mounted into the PPIFlow container.
+                        Host path mounted into the PPIFlow container (leave blank to use BMS_WEIGHTS/ppiflow).
                     </p>
                 </div>
                 <div>

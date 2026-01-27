@@ -47,6 +47,9 @@ if ! command_exists tar; then
     exit 1
 fi
 
+# Root directory for model downloads
+MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+
 # Function to download with retry
 download_with_retry() {
     local url="$1"
@@ -93,7 +96,7 @@ print_status "This may take a while depending on your internet connection."
 # ============================================================================
 
 print_status "Downloading RFdiffusion models (~3.7 GB)..."
-mkdir -p models/rfd && cd models/rfd
+mkdir -p "$MODEL_ROOT/rfd" && cd "$MODEL_ROOT/rfd"
 
 # Array of RFdiffusion model URLs and filenames
 declare -a rfd_models=(
@@ -124,7 +127,7 @@ print_success "RFdiffusion models download completed!"
 # ============================================================================
 
 print_status "Downloading AlphaFold2 models (~5.2 GB)..."
-mkdir -p models/af2 && cd models/af2
+mkdir -p "$MODEL_ROOT/alphafold/params" && cd "$MODEL_ROOT/alphafold/params"
 
 AF2_URL="https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar"
 AF2_FILE="alphafold_params_2022-12-06.tar"
@@ -154,7 +157,7 @@ print_success "AlphaFold2 models download completed!"
 # ============================================================================
 
 print_status "Downloading Boltz-2 models (~6.0 GB)..."
-mkdir -p models/boltz && cd models/boltz
+mkdir -p "$MODEL_ROOT/boltz" && cd "$MODEL_ROOT/boltz"
 
 # Array of Boltz-2 model URLs and filenames
 declare -a boltz_models=(
@@ -195,7 +198,7 @@ print_status "Verifying downloads..."
 
 # Check RFdiffusion models
 print_status "Checking RFdiffusion models..."
-rfd_count=$(ls -1 models/rfd/*.pt 2>/dev/null | wc -l)
+rfd_count=$(ls -1 "$MODEL_ROOT/rfd"/*.pt 2>/dev/null | wc -l)
 if [ "$rfd_count" -eq 8 ]; then
     print_success "RFdiffusion: Found all 8 required .pt files"
 else
@@ -204,7 +207,7 @@ fi
 
 # Check AlphaFold2 models
 print_status "Checking AlphaFold2 models..."
-af2_count=$(ls -1 models/af2/params_model_1*.npz 2>/dev/null | wc -l)
+af2_count=$(ls -1 "$MODEL_ROOT/alphafold/params"/params_model_1*.npz 2>/dev/null | wc -l)
 if [ "$af2_count" -eq 3 ]; then
     print_success "AlphaFold2: Found all 3 params files"
 else
@@ -213,8 +216,8 @@ fi
 
 # Check Boltz-2 models
 print_status "Checking Boltz-2 models..."
-boltz_ckpt_count=$(ls -1 models/boltz/*.ckpt 2>/dev/null | wc -l)
-if [ "$boltz_ckpt_count" -ge 2 ] && [ -d "models/boltz/mols" ]; then
+boltz_ckpt_count=$(ls -1 "$MODEL_ROOT/boltz"/*.ckpt 2>/dev/null | wc -l)
+if [ "$boltz_ckpt_count" -ge 2 ] && [ -d "$MODEL_ROOT/boltz/mols" ]; then
     print_success "Boltz-2: Found .ckpt files and mols directory"
 else
     print_error "Boltz-2: Missing required files (.ckpt files or mols directory)"
@@ -222,13 +225,13 @@ fi
 
 # Final summary
 print_status "Download Summary:"
-echo "  - RFdiffusion models: $(du -sh models/rfd 2>/dev/null | cut -f1 || echo 'N/A')"
-echo "  - AlphaFold2 models:  $(du -sh models/af2 2>/dev/null | cut -f1 || echo 'N/A')"
-echo "  - Boltz-2 models:     $(du -sh models/boltz 2>/dev/null | cut -f1 || echo 'N/A')"
-echo "  - Total size:         $(du -sh models/ 2>/dev/null | tail -1 | cut -f1 || echo 'N/A')"
+echo "  - RFdiffusion models: $(du -sh "$MODEL_ROOT/rfd" 2>/dev/null | cut -f1 || echo 'N/A')"
+echo "  - AlphaFold2 models:  $(du -sh "$MODEL_ROOT/alphafold/params" 2>/dev/null | cut -f1 || echo 'N/A')"
+echo "  - Boltz-2 models:     $(du -sh "$MODEL_ROOT/boltz" 2>/dev/null | cut -f1 || echo 'N/A')"
+echo "  - Total size:         $(du -sh "$MODEL_ROOT" 2>/dev/null | tail -1 | cut -f1 || echo 'N/A')"
 
 print_success "Model download script completed!"
 print_status "Remember to update your nextflow.config file with the model paths:"
-echo "  - models/rfd = './models/rfd'"
-echo "  - models/af2 = './models/af2'"
-echo "  - models/boltz = './models/boltz'"
+echo "  - rfd_models = \"${MODEL_ROOT}/rfd\""
+echo "  - af2_models = \"${MODEL_ROOT}/alphafold/params\""
+echo "  - boltz_models = \"${MODEL_ROOT}/boltz\""
