@@ -371,7 +371,9 @@ process BoltzFromComplex {
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def msaDbPath = params.msa_local_db
+    def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
+    def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     """
     mkdir -p tmp yamls predictions msa

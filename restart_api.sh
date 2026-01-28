@@ -8,6 +8,11 @@ API_LOG="/tmp/biomodstack_api.log"
 # Load uv PATH
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+# Load BMS environment variables (paths for MSA databases, weights, etc.)
+if [ -f "$HOME/.bashrc" ]; then
+    source "$HOME/.bashrc"
+fi
+
 notify-send "BioModStack" "🔄 Restarting API backend (uvicorn)..." -i view-refresh
 
 # Stop API only

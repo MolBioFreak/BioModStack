@@ -69,7 +69,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [mutationCountMode, setMutationCountMode] = useState<'range' | 'exact' | 'set'>('range');
     const [mutationCountExact, setMutationCountExact] = useState(1);
     const [mutationCountSetInput, setMutationCountSetInput] = useState('1,2,3');
-    const [excludedPositions, setExcludedPositions] = useState<Set<number>>(new Set());
+    // Target Positions: positive selection (positions TO mutate)
+    const [selectedPositions, setSelectedPositions] = useState<Set<number>>(new Set());
+    const [lastClickedPos, setLastClickedPos] = useState<number | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
     const [excludeResiduesInput, setExcludeResiduesInput] = useState('');
     const [allowedAAsInput, setAllowedAAsInput] = useState('');
     const [blockedAAsInput, setBlockedAAsInput] = useState('');
@@ -87,11 +90,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // Preview
     const regions = useMemo(() => parseRegions(regionInput), [regionInput]);
-    const excludedPositionsList = useMemo(() => {
-        return Array.from(excludedPositions)
+    // Selected positions for Library Generator (positive selection)
+    const selectedPositionsList = useMemo(() => {
+        return Array.from(selectedPositions)
             .filter(pos => pos > 0 && pos <= baseSequence.length)
             .sort((a, b) => a - b);
-    }, [excludedPositions, baseSequence.length]);
+    }, [selectedPositions, baseSequence.length]);
+    // Note: excludedPositions state kept for future Affinity Maturation enhancements
     const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
 
     // Predictor Config
@@ -142,17 +147,48 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         return positions;
     }, [mode, regions, manualMutations, selectedChainId]);
 
-    // Handlers
-    const toggleExcludedPosition = (pos: number) => {
-        setExcludedPositions(prev => {
-            const next = new Set(prev);
-            if (next.has(pos)) {
-                next.delete(pos);
-            } else {
-                next.add(pos);
-            }
-            return next;
-        });
+    // Handlers for Target Positions selector (positive selection with shift+click/drag)
+    const handlePositionClick = (pos: number, event: React.MouseEvent) => {
+        if (event.shiftKey && lastClickedPos !== null) {
+            // Shift+Click: select range from lastClickedPos to pos
+            const start = Math.min(lastClickedPos, pos);
+            const end = Math.max(lastClickedPos, pos);
+            setSelectedPositions(prev => {
+                const next = new Set(prev);
+                for (let i = start; i <= end; i++) {
+                    next.add(i);
+                }
+                return next;
+            });
+        } else {
+            // Normal click: toggle single position
+            setSelectedPositions(prev => {
+                const next = new Set(prev);
+                if (next.has(pos)) {
+                    next.delete(pos);
+                } else {
+                    next.add(pos);
+                }
+                return next;
+            });
+        }
+        setLastClickedPos(pos);
+    };
+
+    const handleDragStart = (pos: number) => {
+        setIsDragging(true);
+        setSelectedPositions(prev => new Set(prev).add(pos));
+        setLastClickedPos(pos);
+    };
+
+    const handleDragMove = (pos: number) => {
+        if (isDragging) {
+            setSelectedPositions(prev => new Set(prev).add(pos));
+        }
+    };
+
+    const handleDragEnd = () => {
+        setIsDragging(false);
     };
 
     const handleGeneratePreview = () => {
@@ -166,9 +202,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 .split(',')
                 .map(v => parseInt(v.trim()))
                 .filter(v => Number.isFinite(v) && v > 0);
+
+            // Merge text-based regions with clicked selectedPositions
+            const mergedPositions = new Set<number>(selectedPositions);
+            for (const region of regions) {
+                for (let i = region.start; i <= region.end; i++) {
+                    if (i > 0 && i <= baseSequence.length) {
+                        mergedPositions.add(i);
+                    }
+                }
+            }
+
+            // Convert to regions format for generateLibrary (contiguous ranges)
+            const sortedPositions = Array.from(mergedPositions).sort((a, b) => a - b);
+            const mergedRegions: { id: string; start: number; end: number; enabled: boolean }[] = [];
+            if (sortedPositions.length > 0) {
+                let start = sortedPositions[0];
+                let end = sortedPositions[0];
+                for (let i = 1; i <= sortedPositions.length; i++) {
+                    const pos = sortedPositions[i];
+                    if (pos === end + 1) {
+                        end = pos;
+                    } else {
+                        mergedRegions.push({ id: `merged_${mergedRegions.length}`, start, end, enabled: true });
+                        start = pos;
+                        end = pos;
+                    }
+                }
+            }
+
             const variants = generateLibrary(
                 baseSequence,
-                regions,
+                mergedRegions, // Use merged regions from clicks + text input
                 strategy,
                 numVariants,
                 mutationsPerVariant,
@@ -177,7 +242,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     allowedAAs,
                     blockedAAs,
                     excludeFromResidues: excludeResidues,
-                    excludedPositions: excludedPositionsList,
+                    excludedPositions: [], // No longer using exclusion in standard mode
                     mutationCountMode,
                     mutationCount: mutationCountExact,
                     mutationCountSet,
@@ -436,50 +501,68 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         {/* Mutation Rules */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-1">Exclude Positions</label>
-                                <p className="text-xs text-slate-500 mb-2">Click residues to blacklist within your mutation region.</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1">Target Positions</label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    Click to select positions to mutate. <span className="text-emerald-400">Shift+Click</span> for range. <span className="text-cyan-400">Drag</span> to paint.
+                                </p>
                                 {baseSequence ? (
                                     <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
                                         <div className="flex items-center justify-between mb-2">
-                                            <span className="text-[11px] text-slate-500">
-                                                Excluded: {excludedPositionsList.length}
-                                                {excludedPositionsList.length > 0 ? ` (${excludedPositionsList.join(', ')})` : ''}
+                                            <span className="text-[11px] text-emerald-400">
+                                                Selected: {selectedPositionsList.length} positions
+                                                {selectedPositionsList.length > 0 && selectedPositionsList.length <= 10
+                                                    ? ` (${selectedPositionsList.join(', ')})`
+                                                    : selectedPositionsList.length > 10
+                                                        ? ` (${selectedPositionsList.slice(0, 5).join(', ')}...${selectedPositionsList.slice(-3).join(', ')})`
+                                                        : ''}
                                             </span>
                                             <button
-                                                onClick={() => setExcludedPositions(new Set())}
+                                                onClick={() => setSelectedPositions(new Set())}
                                                 className="text-[11px] text-slate-400 hover:text-white"
-                                                disabled={excludedPositionsList.length === 0}
+                                                disabled={selectedPositionsList.length === 0}
                                             >
                                                 Clear
                                             </button>
                                         </div>
-                                        <div className="flex flex-wrap gap-1 font-mono text-xs leading-none max-h-[160px] overflow-y-auto">
+                                        <div
+                                            className="flex flex-wrap gap-1 font-mono text-xs leading-none max-h-[160px] overflow-y-auto select-none"
+                                            onMouseUp={handleDragEnd}
+                                            onMouseLeave={handleDragEnd}
+                                        >
                                             {baseSequence.split('').map((aa, idx) => {
                                                 const pos = idx + 1;
-                                                const isExcluded = excludedPositions.has(pos);
+                                                const isSelected = selectedPositions.has(pos);
+                                                const isInRegion = regions.some(r => pos >= r.start && pos <= r.end);
                                                 return (
                                                     <button
                                                         key={pos}
-                                                        onClick={() => toggleExcludedPosition(pos)}
-                                                        className={`w-7 h-7 rounded border transition-colors ${isExcluded
-                                                            ? 'bg-red-600/30 border-red-400 text-red-200 line-through'
-                                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                                        onClick={(e) => handlePositionClick(pos, e)}
+                                                        onMouseDown={() => handleDragStart(pos)}
+                                                        onMouseEnter={() => handleDragMove(pos)}
+                                                        className={`w-7 h-7 rounded border transition-colors ${isSelected
+                                                            ? 'bg-emerald-600/40 border-emerald-400 text-emerald-200 font-bold'
+                                                            : isInRegion
+                                                                ? 'bg-purple-500/20 border-purple-400 text-purple-200'
+                                                                : 'bg-slate-900 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-200'
                                                             }`}
-                                                        title={`Pos ${pos}: ${aa}${isExcluded ? ' (excluded)' : ''}`}
+                                                        title={`Pos ${pos}: ${aa}${isSelected ? ' (target)' : isInRegion ? ' (in region)' : ''}`}
                                                     >
                                                         {aa}
                                                     </button>
                                                 );
                                             })}
                                         </div>
+                                        <div className="mt-2 text-[10px] text-slate-600">
+                                            Tip: Regions input above is merged with clicked selections
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="text-xs text-slate-600 bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                                        Load a sequence to enable position exclusion.
+                                        Load a sequence to select target positions.
                                     </div>
                                 )}
-                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Exclude Residues</label>
-                                <p className="text-xs text-slate-500 mb-2">Do not mutate positions with these WT residues (e.g., "CP")</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Exclude Residue Types</label>
+                                <p className="text-xs text-slate-500 mb-2">Skip positions with these WT residues (e.g., "CP" for cysteines &amp; prolines)</p>
                                 <input
                                     type="text"
                                     value={excludeResiduesInput}
@@ -672,7 +755,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <h3 className="text-sm font-semibold text-slate-300">Preview</h3>
                                 <button
                                     onClick={handleGeneratePreview}
-                                    disabled={!baseSequence || regions.length === 0}
+                                    disabled={!baseSequence || (regions.length === 0 && selectedPositions.size === 0)}
                                     className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
                                 >
                                     Generate Preview
