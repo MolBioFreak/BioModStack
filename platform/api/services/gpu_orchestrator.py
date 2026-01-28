@@ -74,10 +74,17 @@ VRAM_PROFILES = {
     'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
     'rfantibody': {'base': 6000, 'scale': 25},  # RFantibody antibody generation
     'rfantibody_child': {'base': 6000, 'scale': 25},  # RFantibody child (same as parent)
-    'fampnn': {'base': 3000, 'scale': 10},      # FAMPNN sequence design (CDR loops) - lighter than structure pred
-    'fampnn_child': {'base': 3000, 'scale': 10},  # FAMPNN child: VHH ~3200MB, full Ab ~3800MB
-    'mpnn': {'base': 2000, 'scale': 5},         # ProteinMPNN (light)
-    'proteinmpnn': {'base': 2000, 'scale': 5},  # Alias
+    # ──────────────────────────────────────────────────────────────────────────
+    # MPNN VARIANTS - All share similar lightweight architecture (~2-4GB)
+    # ──────────────────────────────────────────────────────────────────────────
+    'fampnn': {'base': 3000, 'scale': 10},      # FAMPNN sequence design (CDR-focused)
+    'fampnn_child': {'base': 3000, 'scale': 10},# FAMPNN child jobs
+    'proteinmpnn': {'base': 2000, 'scale': 5},  # ProteinMPNN (vanilla)
+    'mpnn': {'base': 2000, 'scale': 5},         # Alias for ProteinMPNN
+    'ligandmpnn': {'base': 2500, 'scale': 8},   # LigandMPNN (ligand-aware sequence design)
+    'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
+    'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
+    # ──────────────────────────────────────────────────────────────────────────
     'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
     'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)

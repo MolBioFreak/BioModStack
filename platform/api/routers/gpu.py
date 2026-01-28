@@ -214,8 +214,14 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                     ("af2", "AlphaFold2"),
                     ("diffdock", "DiffDock"),
                     ("unidock", "Uni-Dock"),
+                    # MPNN variants - specific first, generic last
+                    ("fampnn", "FAMPNN"),
+                    ("frustrampnn", "FrustraMPNN"),
+                    ("frustra", "FrustraMPNN"),
+                    ("ligandmpnn", "LigandMPNN"),
+                    ("thermompnn", "ThermoMPNN"),
                     ("proteinmpnn", "ProteinMPNN"),
-                    ("mpnn", "ProteinMPNN"),
+                    ("mpnn", "ProteinMPNN"),  # Generic fallback
                     ("rfd3", "RFdiffusion3"),
                     ("rfdiffusion", "RFdiffusion"),
                     ("rf3", "RoseTTAFold3"),
@@ -272,12 +278,16 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 
                 # Create display name
                 if model_types:
-                    # Map model types to display names
+                    # Map model types to display names - MPNN variants explicitly listed
                     MODEL_DISPLAY = {
                         'boltz': 'Boltz-2', 'boltz_batch': 'Boltz-2 Batch',
                         'rf3': 'RoseTTAFold3', 'af2': 'AlphaFold2',
                         'rfdiffusion': 'RFdiffusion', 'rfantibody': 'RFantibody',
-                        'fampnn': 'FAMPNN', 'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
+                        # MPNN variants
+                        'fampnn': 'FAMPNN', 'frustrampnn': 'FrustraMPNN',
+                        'ligandmpnn': 'LigandMPNN', 'thermompnn': 'ThermoMPNN',
+                        'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
+                        # Other
                         'diffdock': 'DiffDock', 'unidock': 'Uni-Dock',
                         'boltzgen': 'BoltzGen', 'antibody_child': 'Antibody Validation',
                     }
