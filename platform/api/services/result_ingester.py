@@ -10,7 +10,7 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, List, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -18,6 +18,103 @@ from sqlalchemy import select
 from database import Design, Job
 from paths import get_data_root
 from .structure_utils import calculate_epitope_contacts
+
+
+def parse_frustration_csv(csv_path: Path) -> Optional[Dict[str, Any]]:
+    """
+    Parse FrustraMPNN output CSV into structured frustration data.
+    
+    CSV format: position,chain,frustration_pred (multiple rows per position due to ensemble)
+    
+    Returns:
+        dict with keys:
+            - high_count: int (residues with frust <= -1.0)
+            - min_count: int (residues with frust >= 0.58)
+            - pct_high: float (percent highly frustrated)
+            - residues: list of dicts with {pos, chain, frust, frustClass}
+    """
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        
+        # Average frustration per position (ensemble averaging)
+        pos_avg = df.groupby(['position', 'chain'])['frustration_pred'].mean()
+        
+        # Classify residues
+        high_frust = (pos_avg <= -1.0).sum()
+        min_frust = (pos_avg >= 0.58).sum()
+        total = len(pos_avg)
+        pct_high = round(high_frust / total * 100, 1) if total > 0 else 0.0
+        
+        # Create per-residue list
+        residues = []
+        for (position, chain), frust in pos_avg.items():
+            if frust <= -1.0:
+                frust_class = 'high'
+            elif frust >= 0.58:
+                frust_class = 'min'
+            else:
+                frust_class = 'neutral'
+            residues.append({
+                'pos': int(position),
+                'chain': chain,
+                'frust': round(float(frust), 3),
+                'frustClass': frust_class
+            })
+        
+        return {
+            'high_count': int(high_frust),
+            'min_count': int(min_frust),
+            'pct_high': pct_high,
+            'residues': residues
+        }
+    except ImportError:
+        # Fallback without pandas
+        try:
+            with open(csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                pos_values = {}
+                for row in reader:
+                    key = (int(row['position']), row['chain'])
+                    if key not in pos_values:
+                        pos_values[key] = []
+                    pos_values[key].append(float(row['frustration_pred']))
+                
+                residues = []
+                high_count = 0
+                min_count = 0
+                for (pos, chain), values in pos_values.items():
+                    frust = sum(values) / len(values)
+                    if frust <= -1.0:
+                        frust_class = 'high'
+                        high_count += 1
+                    elif frust >= 0.58:
+                        frust_class = 'min'
+                        min_count += 1
+                    else:
+                        frust_class = 'neutral'
+                    residues.append({
+                        'pos': pos,
+                        'chain': chain,
+                        'frust': round(frust, 3),
+                        'frustClass': frust_class
+                    })
+                
+                total = len(pos_values)
+                pct_high = round(high_count / total * 100, 1) if total > 0 else 0.0
+                
+                return {
+                    'high_count': high_count,
+                    'min_count': min_count,
+                    'pct_high': pct_high,
+                    'residues': residues
+                }
+        except Exception as e:
+            print(f"[Ingester] Error parsing frustration CSV without pandas: {e}")
+            return None
+    except Exception as e:
+        print(f"[Ingester] Error parsing frustration CSV: {e}")
+        return None
 
 
 def parse_backbone_id(design_name: str) -> Optional[int]:
@@ -159,7 +256,87 @@ async def ingest_job_results(
         print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
         designs_created = await ingest_loose_files(job_id, output_path, session)
 
+    # Post-ingestion: Check for FrustraMPNN results and attach to designs
+    if designs_created > 0:
+        await ingest_frustration_data(job_id, output_path, session)
+
     return designs_created
+
+
+async def ingest_frustration_data(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession
+) -> int:
+    """
+    Parse FrustraMPNN output CSVs and update matching designs with frustration data.
+    
+    FrustraMPNN outputs are in {output_dir}/frustration/{design_name}_frustration.csv
+    """
+    frustration_dir = output_path / "frustration"
+    if not frustration_dir.exists():
+        print(f"[Ingester] No frustration directory found at {frustration_dir}")
+        return 0
+    
+    # Find all frustration CSVs
+    frustration_csvs = list(frustration_dir.glob("*_frustration.csv"))
+    if not frustration_csvs:
+        print(f"[Ingester] No frustration CSV files found in {frustration_dir}")
+        return 0
+    
+    print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
+    
+    updated_count = 0
+    
+    for csv_path in frustration_csvs:
+        # Extract design name: "designname_frustration.csv" -> "designname"
+        design_name = csv_path.stem.replace("_frustration", "")
+        
+        # Find matching design in DB
+        result = await session.execute(
+            select(Design).where(
+                Design.job_id == job_id,
+                Design.name == design_name
+            )
+        )
+        design = result.scalar_one_or_none()
+        
+        if not design:
+            # Try partial match (design name might have different suffixes)
+            result = await session.execute(
+                select(Design).where(
+                    Design.job_id == job_id,
+                    Design.name.like(f"{design_name}%")
+                )
+            )
+            design = result.scalars().first()
+        
+        if not design:
+            print(f"[Ingester] No matching design for frustration file: {design_name}")
+            continue
+        
+        # Parse the frustration CSV
+        frust_data = parse_frustration_csv(csv_path)
+        if not frust_data:
+            print(f"[Ingester] Failed to parse frustration CSV: {csv_path}")
+            continue
+        
+        # Update design with frustration data
+        design.frustration_high_count = frust_data['high_count']
+        design.frustration_min_count = frust_data['min_count']
+        design.frustration_pct_high = frust_data['pct_high']
+        design.frustration_residues = frust_data['residues']
+        design.frustration_csv_path = str(csv_path)
+        
+        updated_count += 1
+        print(f"[Ingester] Updated {design_name} with frustration data: "
+              f"{frust_data['high_count']} high, {frust_data['min_count']} min")
+    
+    if updated_count > 0:
+        await session.commit()
+        print(f"[Ingester] Updated {updated_count} designs with frustration data")
+    
+    return updated_count
 
 
 async def ingest_loose_files(

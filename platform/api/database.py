@@ -199,6 +199,15 @@ class Design(Base):
     # Stability / Inverse Folding Data
     stability_data = Column(JSON, nullable=True)  # ThermoMPNN ddG matrix
     antifold_logits_path = Column(String(500), nullable=True)  # Path to probabilities.csv for heatmap
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # FRUSTRATION ANALYSIS (FrustraMPNN)
+    # ═══════════════════════════════════════════════════════════════════════════
+    frustration_high_count = Column(Integer, nullable=True)    # Residues with frust <= -1.0
+    frustration_min_count = Column(Integer, nullable=True)     # Residues with frust >= 0.58
+    frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
+    frustration_residues = Column(JSON, nullable=True)         # Per-residue: [{pos, chain, frust, class}]
+    frustration_csv_path = Column(String(500), nullable=True)  # Path to full CSV
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
