@@ -142,6 +142,7 @@ export const fetchJobs = (params?: {
     q?: string;
     limit?: number;
     offset?: number;
+    include_children?: boolean;
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
