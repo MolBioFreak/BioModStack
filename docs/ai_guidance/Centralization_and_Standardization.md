@@ -25,6 +25,26 @@ Pathing Rules
 - For cache mounts in containers, use `XDG_CACHE_HOME` or `${HOME}/.cache`.
 - If a fallback is required, document it as a **last resort**.
 
+Workstation Data Layout
+-----------------------
+This workstation uses a dedicated 4TB NVMe mounted at `/mnt/BioModStack` for
+large data files. Key directories:
+
+- `/mnt/BioModStack/bms_results/` - Job outputs (symlinked from repo)
+- `/mnt/BioModStack/weights/` - Model weights (AlphaFold, Boltz, RFD, etc.)
+- `/mnt/BioModStack/colabfold_db/` - MMseqs2 databases for MSA
+- `/mnt/BioModStack/msa_cache/` - Cached MSA results
+- `/mnt/BioModStack/sabdab_cache/` - SAbDab framework cache
+
+Environment variables in `~/.bashrc`:
+```bash
+export BMS_DATA="/mnt/BioModStack"
+export BMS_WEIGHTS="/mnt/BioModStack/weights"
+export BMS_COLABFOLD_DB="/mnt/BioModStack/colabfold_db"
+export BMS_MSA_CACHE="/mnt/BioModStack/msa_cache"
+export BMS_SABDAB_CACHE="/mnt/BioModStack/sabdab_cache"
+```
+
 Workflow Standardization
 ------------------------
 - Use `params.api_url` for spawn/wait/ingest scripts in workflows.
