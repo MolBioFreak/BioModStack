@@ -22,11 +22,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [mode, setMode] = useState<'library' | 'manual' | 'affinityMaturation'>('library');
 
     // Affinity Maturation State
+    // FrustraMPNN output: frustration index with thresholds <= -1.0 (highly), >= 0.58 (minimally)
     const [frustrampnnResults, setFrustrampnnResults] = useState<Array<{
-        position: number;
-        aa: string;
-        frustration: number;
-        suggestedAAs: string[];
+        position: number;       // 1-indexed for display
+        aa: string;             // Wildtype residue
+        frustration: number;    // Frustration index (typically -3 to +3)
+        frustrationClass: 'highly' | 'neutral' | 'minimally';  // Classification
+        chain: string;
         selected: boolean;
     }>>([]);
     const [frustrampnnLoading, setFrustrampnnLoading] = useState(false);
@@ -42,13 +44,18 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         setFrustrampnnResults([]);
     }, [baseSequence]);
 
-    // Helper: Convert frustration score (0-1) to RGB color (green→red)
+    // Official FrustraMPNN thresholds from constants.py
+    const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 };
+
+    // Helper: Convert frustration score to RGB color matching FrustraMPNN color scheme
     const frustrationToColor = (frustration: number): { r: number; g: number; b: number } => {
-        // 0.0 = green (low frustration), 1.0 = red (high frustration)
-        const r = Math.round(255 * frustration);
-        const g = Math.round(255 * (1 - frustration));
-        const b = 0;
-        return { r, g, b };
+        // Official colors: red (highly) <= -1.0, gray (neutral), green (minimally) >= 0.58
+        if (frustration <= FRUSTRATION_THRESHOLDS.highly) {
+            return { r: 239, g: 68, b: 68 };    // Red: highly frustrated
+        } else if (frustration >= FRUSTRATION_THRESHOLDS.minimally) {
+            return { r: 34, g: 197, b: 94 };    // Green: minimally frustrated
+        }
+        return { r: 156, g: 163, b: 175 };      // Gray: neutral
     };
 
     // Build frustration color map for Molstar viewer
@@ -561,13 +568,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         Load a sequence to select target positions.
                                     </div>
                                 )}
-                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Exclude Residue Types</label>
-                                <p className="text-xs text-slate-500 mb-2">Skip positions with these WT residues (e.g., "CP" for cysteines &amp; prolines)</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Protect WT Residue Types</label>
+                                <p className="text-xs text-slate-500 mb-2">Don't mutate positions where the wildtype is one of these (e.g., "CP" preserves all cysteines/prolines)</p>
                                 <input
                                     type="text"
                                     value={excludeResiduesInput}
                                     onChange={(e) => setExcludeResiduesInput(e.target.value.toUpperCase())}
-                                    placeholder="e.g., C, P"
+                                    placeholder="e.g., C, P (keep existing cysteines/prolines)"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>
@@ -581,13 +588,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     placeholder="e.g., AST"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
-                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Blocked AAs (Blacklist)</label>
-                                <p className="text-xs text-slate-500 mb-2">Exclude these AAs from substitutions/insertions</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Never Substitute TO These AAs</label>
+                                <p className="text-xs text-slate-500 mb-2">When mutating, don't introduce these amino acids as replacements</p>
                                 <input
                                     type="text"
                                     value={blockedAAsInput}
                                     onChange={(e) => setBlockedAAsInput(e.target.value.toUpperCase())}
-                                    placeholder="e.g., C, P"
+                                    placeholder="e.g., C, M (avoid creating new cysteines/methionines)"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>
@@ -863,45 +870,57 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             <div className="flex justify-between items-center mb-4">
                                 <h4 className="text-sm font-semibold text-slate-300">FrustraMPNN Analysis</h4>
                                 <button
-                                    onClick={() => {
+                                    onClick={async () => {
+                                        if (!pdbBlobUrl) {
+                                            console.error('No PDB loaded for FrustraMPNN analysis');
+                                            return;
+                                        }
+
                                         setFrustrampnnLoading(true);
-                                        // Mock: Generate results based on actual sequence
-                                        // In production, this would call the FrustraMPNN API
-                                        setTimeout(() => {
-                                            if (!baseSequence || baseSequence.length === 0) {
-                                                setFrustrampnnLoading(false);
-                                                return;
+
+                                        try {
+                                            // Fetch the PDB blob from the URL
+                                            const pdbResponse = await fetch(pdbBlobUrl);
+                                            const pdbBlob = await pdbResponse.blob();
+
+                                            // Call the FrustraMPNN API
+                                            const formData = new FormData();
+                                            formData.append('pdb_file', pdbBlob, 'structure.pdb');
+                                            if (selectedChainId) {
+                                                formData.append('chain', selectedChainId);
                                             }
-                                            // Generate 3-5 "frustrated" positions from the actual sequence
-                                            const numResults = Math.min(3 + Math.floor(Math.random() * 3), baseSequence.length);
-                                            const positions = new Set<number>();
-                                            while (positions.size < numResults && positions.size < baseSequence.length) {
-                                                // Prefer positions in latter half (typical CDR regions)
-                                                const pos = Math.floor(baseSequence.length * 0.5 + Math.random() * baseSequence.length * 0.5) % baseSequence.length;
-                                                positions.add(pos);
-                                            }
-                                            const suggestedAAOptions: Record<string, string[]> = {
-                                                'A': ['G', 'S', 'V'], 'G': ['A', 'S'], 'S': ['A', 'T', 'N'], 'T': ['S', 'N'],
-                                                'Y': ['F', 'W', 'H'], 'F': ['Y', 'W'], 'W': ['F', 'Y'], 'H': ['Y', 'N'],
-                                                'N': ['D', 'S', 'Q'], 'D': ['E', 'N'], 'E': ['D', 'Q'], 'Q': ['E', 'N'],
-                                                'K': ['R', 'Q'], 'R': ['K', 'Q'], 'I': ['L', 'V'], 'L': ['I', 'V'], 'V': ['I', 'L', 'A'],
-                                                'M': ['L', 'I'], 'C': ['S', 'A'], 'P': ['A'], 'default': ['A', 'S', 'G']
-                                            };
-                                            const mockResults = Array.from(positions).sort((a, b) => a - b).map((pos) => {
-                                                const aa = baseSequence[pos];
-                                                const frustration = 0.5 + Math.random() * 0.4; // 0.5-0.9 range
-                                                const suggested = suggestedAAOptions[aa] || suggestedAAOptions['default'];
-                                                return {
-                                                    position: pos + 1, // 1-indexed for display
-                                                    aa,
-                                                    frustration: Math.round(frustration * 100) / 100,
-                                                    suggestedAAs: suggested.slice(0, 2 + Math.floor(Math.random() * 2)),
-                                                    selected: frustration > 0.6 // Auto-select high frustration
-                                                };
+
+                                            const response = await fetch('/api/frustrampnn/analyze', {
+                                                method: 'POST',
+                                                body: formData
                                             });
-                                            setFrustrampnnResults(mockResults);
+
+                                            if (!response.ok) {
+                                                const errorText = await response.text();
+                                                throw new Error(errorText);
+                                            }
+
+                                            const data = await response.json();
+
+                                            // Convert native profile to our display format
+                                            // Auto-select highly frustrated positions for mutation
+                                            const results = data.native_profile.map((d: any) => ({
+                                                position: d.position + 1,  // Convert to 1-indexed
+                                                aa: d.wildtype,
+                                                frustration: d.frustration_pred,
+                                                frustrationClass: d.class as 'highly' | 'neutral' | 'minimally',
+                                                chain: d.chain,
+                                                selected: d.class === 'highly'  // Auto-select highly frustrated
+                                            }));
+
+                                            setFrustrampnnResults(results);
+                                            console.log('FrustraMPNN analysis complete:', data.summary);
+
+                                        } catch (err) {
+                                            console.error('FrustraMPNN analysis failed:', err);
+                                        } finally {
                                             setFrustrampnnLoading(false);
-                                        }, 1000);
+                                        }
                                     }}
                                     disabled={!baseSequence || frustrampnnLoading}
                                     className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors flex items-center gap-2"
@@ -920,15 +939,16 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         <thead>
                                             <tr className="text-left text-slate-400 border-b border-slate-700">
                                                 <th className="py-2 px-2">Select</th>
+                                                <th className="py-2 px-2">Chain</th>
                                                 <th className="py-2 px-2">Position</th>
                                                 <th className="py-2 px-2">WT</th>
                                                 <th className="py-2 px-2">Frustration</th>
-                                                <th className="py-2 px-2">Suggested AAs</th>
+                                                <th className="py-2 px-2">Class</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {frustrampnnResults.map((row, idx) => (
-                                                <tr key={row.position} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                                                <tr key={`${row.chain}${row.position}`} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                                                     <td className="py-2 px-2">
                                                         <input
                                                             type="checkbox"
@@ -943,18 +963,19 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                             className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-emerald-600"
                                                         />
                                                     </td>
+                                                    <td className="py-2 px-2 font-mono text-slate-500">{row.chain}</td>
                                                     <td className="py-2 px-2 font-mono text-slate-300">{row.position}</td>
                                                     <td className="py-2 px-2 font-mono font-bold text-purple-400">{row.aa}</td>
-                                                    <td className="py-2 px-2">
-                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustration > 0.7 ? 'bg-red-500/20 text-red-400' :
-                                                            row.frustration > 0.5 ? 'bg-amber-500/20 text-amber-400' :
-                                                                'bg-green-500/20 text-green-400'
-                                                            }`}>
-                                                            {row.frustration.toFixed(2)}
-                                                        </span>
+                                                    <td className="py-2 px-2 font-mono">
+                                                        {row.frustration.toFixed(2)}
                                                     </td>
-                                                    <td className="py-2 px-2 font-mono text-slate-400">
-                                                        {row.suggestedAAs.length > 0 ? row.suggestedAAs.join(', ') : '-'}
+                                                    <td className="py-2 px-2">
+                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustrationClass === 'highly' ? 'bg-red-500/20 text-red-400' :
+                                                            row.frustrationClass === 'minimally' ? 'bg-green-500/20 text-green-400' :
+                                                                'bg-slate-500/20 text-slate-400'
+                                                            }`}>
+                                                            {row.frustrationClass}
+                                                        </span>
                                                     </td>
                                                 </tr>
                                             ))}
