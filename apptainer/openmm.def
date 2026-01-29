@@ -46,26 +46,26 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     # ═══════════════════════════════════════════════════════════════════════════
     
     # PyTorch (CUDA 12.1 stable - required for OpenMM-ML/MACE)
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
     
     # OpenMM Core (requires Cython for compilation)
-    uv pip install cython
-    uv pip install openmm
+    uv pip install --compile cython
+    uv pip install --compile openmm
     
     # PDBFixer (only available via GitHub, not PyPI)
-    uv pip install git+https://github.com/openmm/pdbfixer.git
+    uv pip install --compile git+https://github.com/openmm/pdbfixer.git
     
     # OpenMM-ML (Neural Network Force Field integration)
-    uv pip install openmmml
+    uv pip install --compile openmmml
     
     # Neural Network Force Fields
     # MACE-OFF: Equivariant message-passing for organic molecules
-    uv pip install mace-torch
+    uv pip install --compile mace-torch
     # ANI-2x: Universal organic molecule potential
-    uv pip install torchani
+    uv pip install --compile torchani
     
     # Analysis and utilities
-    uv pip install \
+    uv pip install --compile \
         mdtraj \
         biopython \
         numpy \
@@ -75,6 +75,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     # Cleanup
     apt-get clean
     rm -rf /root/.cache/uv
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PATH=/opt/venv/bin:$PATH
