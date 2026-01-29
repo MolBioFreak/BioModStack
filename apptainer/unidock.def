@@ -40,7 +40,7 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     export PATH="/root/.local/bin:$PATH"
     
     # Install Python dependencies via UV (faster than conda/pip)
-    uv pip install --python /opt/conda/envs/unidock/bin/python \
+    uv pip install --compile --python /opt/conda/envs/unidock/bin/python \
         meeko \
         rdkit \
         biopython \
