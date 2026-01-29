@@ -1573,7 +1573,8 @@ workflow ANTIBODY_DENOVO {
         log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
         frustrampnn_input = final_designs.map { meta, pdb -> [meta, pdb] }
         FrustrampnnQC(frustrampnn_input)
-        AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
+        // Extract just the path from (meta, path) tuples before collecting
+        AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
     }
 
     // Step 4.y: ANARCII CDR annotation (post-pipeline polishing)
