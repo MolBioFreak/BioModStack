@@ -501,10 +501,18 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
         <div className="oligo-designer-template p-6 space-y-6 max-w-4xl mx-auto">
             {/* Header */}
             <div className="flex items-center justify-between">
-                <button onClick={onBack} className="text-slate-400 hover:text-white flex items-center gap-2">
-                    ← Back to Catalog
-                </button>
-                <h1 className="text-2xl font-bold text-white">Oligo Designer</h1>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={onBack}
+                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+                    >
+                        ← Back
+                    </button>
+                    <div>
+                        <h1 className="text-2xl font-bold text-white">Oligo Designer</h1>
+                        <p className="text-sm text-slate-500">RNA/DNA aptamer design with RFDpoly</p>
+                    </div>
+                </div>
             </div>
 
             {/* Size Limit Info Banner */}
