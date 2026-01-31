@@ -472,9 +472,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <div className="flex items-center gap-3">
                     <button
                         onClick={onBack}
-                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
                     >
-                        &lt; Back
+                        ← Back
                     </button>
                     <div>
                         <h2 className="text-lg font-semibold text-slate-200">De Novo Antibody Design</h2>
@@ -1244,39 +1244,49 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 isOpen={showTemplateManager}
                 onClose={() => setShowTemplateManager(false)}
                 onSelect={(template) => {
-                    console.log('[TEMPLATE_LOAD] Loading template:', template.name, template.params);
+                    console.log('[TEMPLATE_LOAD] ======= LOADING TEMPLATE =======');
+                    console.log('[TEMPLATE_LOAD] Template name:', template.name);
+                    console.log('[TEMPLATE_LOAD] Template id:', template.id);
+                    console.log('[TEMPLATE_LOAD] All params:', JSON.stringify(template.params, null, 2));
                     try {
                         // Load template params into state
                         const p = template.params || {};
+                        const loaded: string[] = [];
+                        const skipped: string[] = [];
+
                         // Core settings (check both new and old field names for backward compatibility)
-                        if (p.job_name) setJobName(p.job_name);
-                        if (p.framework_type) setFrameworkType(p.framework_type);
-                        if (p.seq_designer) setSeqDesigner(p.seq_designer);
-                        if (p.rfantibody_num_designs) setNumDesigns(p.rfantibody_num_designs);
-                        if (p.seqs_per_design) setSeqsPerDesign(p.seqs_per_design);
-                        if (typeof p.run_immunogenicity_scoring === 'boolean') setUseAntiberty(p.run_immunogenicity_scoring);
-                        if (typeof p.run_stability_scoring === 'boolean') setUseThermoMPNN(p.run_stability_scoring);
-                        if (typeof p.run_frustrampnn === 'boolean') setRunFrustrampnn(p.run_frustrampnn);
-                        if (typeof p.run_anarcii_post === 'boolean') setRunAnarciiPost(p.run_anarcii_post);
-                        if (typeof p.anarcii_include_children === 'boolean') setAnarciiIncludeChildren(p.anarcii_include_children);
-                        if (p.parallel_mode) setParallelMode(p.parallel_mode);
-                        if (p.designs_per_job) setDesignsPerJob(p.designs_per_job);
-                        if (p.pdbs_per_job) setPdBsPerJob(p.pdbs_per_job);
+                        if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
+                        if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
+                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); } else { skipped.push('seq_designer'); }
+                        if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
+                        if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
+                        if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
+                        if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
+                        if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
+                        if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
+                        if (p.parallel_mode) { setParallelMode(p.parallel_mode); loaded.push('parallel_mode'); } else { skipped.push('parallel_mode'); }
+                        if (p.designs_per_job) { setDesignsPerJob(p.designs_per_job); loaded.push('designs_per_job'); }
+                        if (p.pdbs_per_job) { setPdBsPerJob(p.pdbs_per_job); loaded.push('pdbs_per_job'); }
                         // Design mode
-                        if (p.design_mode) setDesignMode(p.design_mode);
-                        if (Array.isArray(p.selected_cdr_loops)) setSelectedCDRLoops(new Set(p.selected_cdr_loops));
-                        if (typeof p.protect_tetrad === 'boolean') setProtectTetrad(p.protect_tetrad);
+                        if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
+                        if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
+                        if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
                         // Target (path only - user must re-upload if file no longer at path)
-                        if (p.uploaded_path) setUploadedPath(p.uploaded_path);
-                        if (p.selected_chain) setSelectedChain(p.selected_chain);
-                        if (Array.isArray(p.selected_residues)) setSelectedResidues(new Set(p.selected_residues));
+                        if (p.uploaded_path) { setUploadedPath(p.uploaded_path); loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
+                        if (p.selected_chain) { setSelectedChain(p.selected_chain); loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
+                        if (Array.isArray(p.selected_residues)) { setSelectedResidues(new Set(p.selected_residues)); loaded.push('selected_residues'); }
                         // Quality settings - check both old and new field names
                         const qualityS = p.quality_settings || p.qualitySettings;
                         if (qualityS) {
                             setQualitySettings({ ...PRESETS.balanced, ...qualityS });
+                            loaded.push('quality_settings');
                         }
-                        if (p.quality_preset) setQualityPreset(p.quality_preset);
-                        console.log('[TEMPLATE_LOAD] Successfully loaded template');
+                        if (p.quality_preset) { setQualityPreset(p.quality_preset); loaded.push('quality_preset'); }
+
+                        console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
+                        console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
+                        console.log('[TEMPLATE_LOAD] Successfully loaded template ✓');
                     } catch (err) {
                         console.error('[TEMPLATE_LOAD] Error loading template:', err);
                     }
