@@ -15,8 +15,9 @@ export NVM_DIR="$HOME/.nvm"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 # Load BMS environment variables (paths for MSA databases, weights, etc.)
-if [ -f "$HOME/.bashrc" ]; then
-    source "$HOME/.bashrc"
+# Note: ~/.bashrc has a non-interactive guard, so we use a dedicated env file
+if [ -f "$HOME/.biomodstack/env.sh" ]; then
+    source "$HOME/.biomodstack/env.sh"
 fi
 
 check_port() {

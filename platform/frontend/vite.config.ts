@@ -6,8 +6,9 @@ import path from 'path'
 
 
 // https://vite.dev/config/
-export default defineConfig({
-  base: '/bms/',  // Required for Tailscale Serve proxy at /bms
+export default defineConfig(({ mode }) => ({
+  // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
+  base: mode === 'production' ? '/bms/' : '/',
   plugins: [react(), tailwindcss()],
   optimizeDeps: {
     include: [
@@ -58,5 +59,5 @@ export default defineConfig({
       }
     }
   }
-})
+}))
 

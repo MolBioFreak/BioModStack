@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import MolstarViewer from './MolstarViewer';
-import type { Design, Job, StructureAnalysis } from '../lib/api';
+import ChainDetailsPanel from './ChainDetailsPanel';
+import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
 
 interface Selection {
     chain_id?: string;
@@ -538,6 +539,14 @@ export default function StructureViewerPane({
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* Chain Details Panel (for multi-chain complexes) */}
+            {selectedDesign && (
+                <ChainDetailsPanel
+                    design={selectedDesign}
+                    chainMetrics={chainMetrics as Record<string, ChainMetric> | null}
+                />
             )}
 
             {/* Frustration Analysis (FrustraMPNN) */}
