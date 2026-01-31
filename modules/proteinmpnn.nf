@@ -36,8 +36,9 @@ process RunMPNN {
 
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "*.log"
 
-    // retry up to 3 times because proteinmpn occasionally fails due to memory leaks
-    maxRetries 3
+    // Retry only when allow_retries is enabled (off by default for debugging)
+    errorStrategy = { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }
+    maxRetries = params.allow_retries ? 2 : 0
 
     input:
     path pdbs

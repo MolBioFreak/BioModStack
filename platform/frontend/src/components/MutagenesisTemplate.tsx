@@ -458,6 +458,24 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         structureUrl={pdbBlobUrl}
                                         height={350}
                                         selectedResidues={mutationPositionsSet}
+                                        onResidueClick={(residueKey) => {
+                                            // Parse residue key (e.g., "A45") to extract position
+                                            const match = residueKey.match(/^([A-Z])(\d+)$/);
+                                            if (match) {
+                                                const pos = parseInt(match[2], 10);
+                                                if (pos > 0 && pos <= baseSequence.length) {
+                                                    setSelectedPositions(prev => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(pos)) {
+                                                            next.delete(pos);
+                                                        } else {
+                                                            next.add(pos);
+                                                        }
+                                                        return next;
+                                                    });
+                                                }
+                                            }
+                                        }}
                                     />
                                 </div>
                             )}
