@@ -628,48 +628,36 @@ export function ResultsViewer() {
                                                 </div>
                                             </div>
 
-                                            {/* CDR Annotation Button - Only for antibody/nanobody workflows */}
-                                            {(activeJob?.model_id === 'rfantibody' ||
-                                                activeJob?.model_id === 'antibody_child' ||
-                                                activeJob?.name?.toLowerCase().includes('antibody') ||
-                                                activeJob?.mode?.toLowerCase().includes('antibody') ||
-                                                activeJob?.mode?.toLowerCase().includes('nanobody') ||
-                                                activeJob?.mode?.toLowerCase().includes('vhh') ||
-                                                (activeJob?.model_id === 'boltzgen' && (
-                                                    activeJob?.params?.nanobody_mode === true ||
-                                                    activeJob?.mode?.toLowerCase().includes('nanobody') ||
-                                                    activeJob?.mode?.toLowerCase().includes('vhh')
-                                                ))) && (
-                                                    <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
-                                                        <h3 className="text-sm font-semibold text-slate-300 mb-3">Antibody CDR Annotation</h3>
-                                                        <p className="text-xs text-slate-400 mb-4">
-                                                            CDR annotation runs automatically after antibody jobs complete. Use this to re-run ANARCII
-                                                            if you updated structures or need a refresh.
-                                                        </p>
-                                                        <button
-                                                            onClick={async () => {
-                                                                const jobIdToUse = activeJob?.id || selectedJobId;
-                                                                if (!jobIdToUse) return;
-                                                                try {
-                                                                    const btn = document.getElementById('cdr-annotate-btn');
-                                                                    if (btn) {
-                                                                        btn.textContent = 'Annotating...';
-                                                                        btn.setAttribute('disabled', 'true');
-                                                                    }
-                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
-                                                                    const data = await res.json();
-                                                                    alert(data.message || 'CDR annotation started - refresh in 1-2 minutes');
-                                                                } catch (err) {
-                                                                    alert('CDR annotation failed: ' + err);
-                                                                }
-                                                            }}
-                                                            id="cdr-annotate-btn"
-                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-                                                        >
-                                                            Re-run ANARCII
-                                                        </button>
-                                                    </div>
-                                                )}
+                                            {/* CDR/Region Annotation Button - Works for antibodies, nanobodies, and TCRs */}
+                                            <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                                                <h3 className="text-sm font-semibold text-slate-300 mb-3">ANARCII Sequence Annotation</h3>
+                                                <p className="text-xs text-slate-400 mb-4">
+                                                    Run ANARCII to extract CDR regions (antibodies/nanobodies) or variable regions (TCRs).
+                                                    Uses IMGT numbering scheme.
+                                                </p>
+                                                <button
+                                                    onClick={async () => {
+                                                        const jobIdToUse = activeJob?.id || selectedJobId;
+                                                        if (!jobIdToUse) return;
+                                                        try {
+                                                            const btn = document.getElementById('cdr-annotate-btn');
+                                                            if (btn) {
+                                                                btn.textContent = 'Annotating...';
+                                                                btn.setAttribute('disabled', 'true');
+                                                            }
+                                                            const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
+                                                            const data = await res.json();
+                                                            alert(data.message || 'ANARCII annotation started - refresh in 1-2 minutes');
+                                                        } catch (err) {
+                                                            alert('ANARCII annotation failed: ' + err);
+                                                        }
+                                                    }}
+                                                    id="cdr-annotate-btn"
+                                                    className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                                >
+                                                    Run ANARCII
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
 
