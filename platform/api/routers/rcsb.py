@@ -13,7 +13,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
-from paths import get_code_root
+from paths import get_code_root, to_allowed_relative
 
 router = APIRouter()
 
@@ -151,7 +151,7 @@ async def list_cached():
         pdb_id = pdb_file.stem.upper()
         cached.append({
             "pdb_id": pdb_id,
-            "path": str(pdb_file),
+            "path": to_allowed_relative(pdb_file),
             "url": f"/api/rcsb/{pdb_id}/file",
             "size_bytes": pdb_file.stat().st_size
         })
@@ -208,7 +208,7 @@ async def fetch_pdb(pdb_id: str, force: bool = False):
         return {
             "pdb_id": pdb_id,
             "cached": True,
-            "path": str(cache_path),
+            "path": to_allowed_relative(cache_path),
             "url": f"/api/rcsb/{pdb_id}/file",
             "size_bytes": cache_path.stat().st_size
         }
@@ -233,7 +233,7 @@ async def fetch_pdb(pdb_id: str, force: bool = False):
             return {
                 "pdb_id": pdb_id,
                 "cached": False,
-                "path": str(cache_path),
+                "path": to_allowed_relative(cache_path),
                 "url": f"/api/rcsb/{pdb_id}/file",
                 "size_bytes": len(response.content)
             }
