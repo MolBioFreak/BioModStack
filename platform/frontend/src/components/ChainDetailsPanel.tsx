@@ -21,14 +21,14 @@ const indexToLetter = (idx: string): string => {
     return String.fromCharCode(65 + num);
 };
 
-// Type icon for chain
-const getChainTypeIcon = (type: string): string => {
+// Type indicator for chain (no emojis)
+const getChainTypeIndicator = (type: string): { label: string; color: string } => {
     switch (type.toLowerCase()) {
-        case 'protein': return '🧬';
-        case 'dna': return '🔗';
-        case 'rna': return '📜';
-        case 'ligand': return '💊';
-        default: return '•';
+        case 'protein': return { label: 'PRO', color: 'bg-emerald-500/30 text-emerald-300' };
+        case 'dna': return { label: 'DNA', color: 'bg-blue-500/30 text-blue-300' };
+        case 'rna': return { label: 'RNA', color: 'bg-purple-500/30 text-purple-300' };
+        case 'ligand': return { label: 'LIG', color: 'bg-amber-500/30 text-amber-300' };
+        default: return { label: '•', color: 'bg-slate-500/30 text-slate-300' };
     }
 };
 
@@ -112,9 +112,16 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                 key={chain.id}
                                 className="bg-slate-900/50 rounded-md p-2 border border-slate-700/30"
                             >
-                                <div className="flex items-center gap-1.5 mb-1">
-                                    <span className="text-lg">{getChainTypeIcon(chain.type)}</span>
-                                    <span className="font-mono font-semibold text-white">
+                                <div className="flex items-center gap-2 mb-1">
+                                    {(() => {
+                                        const indicator = getChainTypeIndicator(chain.type);
+                                        return (
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold leading-none ${indicator.color}`}>
+                                                {indicator.label}
+                                            </span>
+                                        );
+                                    })()}
+                                    <span className="font-mono font-semibold text-white text-sm">
                                         Chain {chain.letter}
                                     </span>
                                 </div>
@@ -152,8 +159,22 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
 
                     {/* Inter-chain iPTM matrix (if available) */}
                     {design.pair_chains_iptm && Object.keys(design.pair_chains_iptm).length > 1 && (
-                        <div className="mt-3">
-                            <div className="text-xs text-slate-400 mb-1">Inter-chain iPTM (contact strength)</div>
+                        <div className="mt-4 pt-3 border-t border-slate-700/30">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="text-xs font-medium text-slate-300">Inter-chain iPTM Matrix</div>
+                                <a
+                                    href="https://doi.org/10.1038/s41586-021-03819-2"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[10px] text-cyan-400 hover:text-cyan-300 hover:underline"
+                                >
+                                    Jumper et al., Nature 2021
+                                </a>
+                            </div>
+                            <p className="text-[10px] text-slate-500 mb-2">
+                                Interface pTM (iPTM) measures predicted structural accuracy at chain-chain interfaces.
+                                Values &gt;0.8 indicate high-confidence interactions; 0.5-0.8 suggest moderate confidence.
+                            </p>
                             <div className="overflow-x-auto">
                                 <table className="text-xs font-mono">
                                     <thead>
@@ -196,8 +217,8 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                     </tbody>
                                 </table>
                             </div>
-                            <div className="text-[10px] text-slate-500 mt-1">
-                                Higher values indicate stronger predicted interaction between chains
+                            <div className="text-[10px] text-slate-500 mt-2">
+                                Diagonal values represent intra-chain confidence; off-diagonal values indicate inter-chain contact prediction quality.
                             </div>
                         </div>
                     )}
