@@ -296,6 +296,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     const [noiseSchedule, setNoiseSchedule] = useState<'linear' | 'cosine'>('linear');
     const [bindingGuidance, setBindingGuidance] = useState(false);
 
+    // NA-MPNN sequence design settings
+    const [nampnnNumSeqs, setNampnnNumSeqs] = useState(4);
+    const [nampnnTemperature, setNampnnTemperature] = useState(0.1);
+
     // ============================================================================
     // State: UI
     // ============================================================================
@@ -463,6 +467,9 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     // Advanced options
                     ...(temperature !== 1.0 && { rfdpoly_temperature: temperature }),
                     ...(seed !== null && { rfdpoly_seed: seed }),
+                    // NA-MPNN sequence design
+                    nampnn_num_seqs: nampnnNumSeqs,
+                    ...(nampnnTemperature !== 0.1 && { nampnn_temperature: nampnnTemperature }),
                 }
             };
 
@@ -1195,6 +1202,38 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                 />
                                 <span className="text-white text-sm">Enable Binding Guidance</span>
                             </label>
+                        </div>
+
+                        {/* NA-MPNN Section */}
+                        <div className="col-span-2 mt-4 pt-4 border-t border-slate-600">
+                            <h4 className="text-sm font-medium text-emerald-400 mb-3">🧬 NA-MPNN Sequence Design</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs text-slate-400 mb-1 block">Sequences per Backbone</label>
+                                    <input
+                                        type="number"
+                                        value={nampnnNumSeqs}
+                                        onChange={(e) => setNampnnNumSeqs(Math.max(1, parseInt(e.target.value) || 1))}
+                                        min={1}
+                                        max={64}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                    />
+                                    <div className="text-xs text-slate-500 mt-1">More = higher diversity</div>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 mb-1 block">Sampling Temperature</label>
+                                    <input
+                                        type="number"
+                                        step={0.05}
+                                        value={nampnnTemperature}
+                                        onChange={(e) => setNampnnTemperature(parseFloat(e.target.value) || 0.1)}
+                                        min={0.01}
+                                        max={1.0}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                    />
+                                    <div className="text-xs text-slate-500 mt-1">0.1 = confident, 1.0 = exploratory</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 )}
