@@ -265,6 +265,7 @@ interface Translation {
     start: number;
     end: number;
     strand: 1 | -1;
+    frame?: 1 | 2 | 3;
 }
 
 function reverseComplementSeq(seq: string): string {
@@ -305,7 +306,9 @@ function findORFs(sequence: string, minLength: number = 100): Translation[] {
                                 // Convert positions back to original strand coordinates
                                 const start = strand === 1 ? i : seq.length - (j + 3);
                                 const end = strand === 1 ? j + 3 : seq.length - i;
-                                orfs.push({ start, end, strand });
+                                // Frame is 1, 2, or 3 (1-indexed from frame loop 0-2)
+                                const frameNum = (frame + 1) as 1 | 2 | 3;
+                                orfs.push({ start, end, strand, frame: frameNum });
                             }
                             break;
                         }
@@ -719,6 +722,7 @@ export function MolBioToolkitV2() {
                                         highlightedRegions={highlightedRegions}
                                         viewMode={viewMode}
                                         colorPalette={colorPalette}
+                                        visibleFrames={visibleFrames}
                                     />
                                 </div>
                             </>
@@ -754,6 +758,8 @@ export function MolBioToolkitV2() {
                                 onChange={handleVisibilityChange}
                                 colorPalette={colorPalette}
                                 onColorPaletteChange={setColorPalette}
+                                visibleFrames={visibleFrames}
+                                onVisibleFramesChange={setVisibleFrames}
                             />
                         )}
                         {activePanel === 'search' && (
