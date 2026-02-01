@@ -2,10 +2,11 @@
  * GCContentTrack - Visual GC content chart showing GC% across sequence windows
  * 
  * Displays a line chart with GC percentage calculated over sliding windows.
- * Uses blue-to-red gradient coloring based on local GC content.
+ * Uses gradient coloring based on local GC content, respecting the selected color palette.
  */
 
 import { useMemo, useState, useCallback, useRef } from 'react';
+import { COLOR_PALETTES, type ColorPaletteName } from './SequenceViewer';
 
 interface GCContentTrackProps {
     sequence: string;
@@ -14,6 +15,7 @@ interface GCContentTrackProps {
     height?: number;          // Chart height in pixels
     showLabels?: boolean;     // Show axis labels
     selection?: { start: number; end: number } | null;
+    colorPalette?: ColorPaletteName;  // Use palette colors for gradient
 }
 
 /**
@@ -53,22 +55,55 @@ function calculateGCWindows(
 }
 
 /**
- * Get color based on GC content - gradient from AT-rich (blue) to GC-rich (red)
- * Uses amplified contrast to make typical 40-60% range more distinguishable
+ * Parse hex color to RGB array
  */
-function getGCColor(gc: number): string {
-    // Amplify contrast: center at 50%, expand differences
-    // This makes 40% look very blue and 60% look very red
-    const normalizedGC = Math.max(0, Math.min(100, gc));
+function hexToRgb(hex: string): [number, number, number] {
+    const h = hex.replace('#', '');
+    return [
+        parseInt(h.substring(0, 2), 16),
+        parseInt(h.substring(2, 4), 16),
+        parseInt(h.substring(4, 6), 16)
+    ];
+}
 
-    // Apply contrast amplification (sigmoid-like curve centered at 50%)
-    // Shift so 50% is center, then amplify by 2.5x, then shift back
+/**
+ * Convert RGB to hex
+ */
+function rgbToHex(r: number, g: number, b: number): string {
+    return '#' + [r, g, b].map(x => Math.round(x).toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Blend two colors based on ratio (0 = color1, 1 = color2)
+ */
+function blendColors(color1: string, color2: string, ratio: number): string {
+    const [r1, g1, b1] = hexToRgb(color1);
+    const [r2, g2, b2] = hexToRgb(color2);
+    const r = Math.round(r1 + (r2 - r1) * ratio);
+    const g = Math.round(g1 + (g2 - g1) * ratio);
+    const b = Math.round(b1 + (b2 - b1) * ratio);
+    return rgbToHex(r, g, b);
+}
+
+/**
+ * Get color based on GC content using palette colors.
+ * Low GC (AT-rich) uses average of A/T colors, high GC uses average of G/C colors.
+ * Uses amplified contrast to make typical 40-60% range more distinguishable.
+ */
+function getGCColorFromPalette(gc: number, palette: ColorPaletteName): string {
+    const colors = COLOR_PALETTES[palette].colors;
+
+    // Get AT and GC endpoint colors from palette
+    const atColor = blendColors(colors.A, colors.T, 0.5);  // Average of A and T
+    const gcColor = blendColors(colors.G, colors.C, 0.5);  // Average of G and C
+
+    // Amplify contrast: center at 50%, expand differences
+    const normalizedGC = Math.max(0, Math.min(100, gc));
     const amplified = 50 + (normalizedGC - 50) * 2.5;
     const clamped = Math.max(0, Math.min(100, amplified));
 
-    // Map to hue: 240 (blue) -> 120 (green) -> 0 (red)
-    const hue = 240 - (clamped / 100) * 240;
-    return `hsl(${hue}, 85%, 50%)`;
+    // Blend from AT color (0%) to GC color (100%)
+    return blendColors(atColor, gcColor, clamped / 100);
 }
 
 /**
@@ -88,7 +123,8 @@ export function GCContentTrack({
     stepSize = 10,
     height = 120,
     showLabels = true,
-    selection
+    selection,
+    colorPalette = 'classic'
 }: GCContentTrackProps) {
     // Hover state for tooltip
     const [hoverInfo, setHoverInfo] = useState<{ x: number; gc: number; position: number } | null>(null);
@@ -205,7 +241,7 @@ export function GCContentTrack({
                     y1={y1}
                     x2={x2}
                     y2={y2}
-                    stroke={getGCColor(avgGC)}
+                    stroke={getGCColorFromPalette(avgGC, colorPalette)}
                     strokeWidth="2"
                     vectorEffect="non-scaling-stroke"
                 />
@@ -251,7 +287,7 @@ export function GCContentTrack({
                                 left: hoverInfo.x,
                                 top: '50%',
                                 transform: 'translate(-50%, -50%)',
-                                backgroundColor: getGCColor(hoverInfo.gc),
+                                backgroundColor: getGCColorFromPalette(hoverInfo.gc, colorPalette),
                                 color: 'white',
                                 textShadow: '0 1px 2px rgba(0,0,0,0.5)'
                             }}
