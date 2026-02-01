@@ -537,8 +537,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
             </div>
 
             {/* Size Limit Info Banner */}
-            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3 text-sm">
-                <div className="font-medium text-purple-300 mb-1">RFDpoly Size Limits</div>
+            <div className="bg-accent/10 border border-accent/30 rounded-lg p-3 text-sm">
+                <div className="font-medium text-accent mb-1">RFDpoly Size Limits</div>
                 <div className="text-slate-400 text-xs grid grid-cols-3 gap-2">
                     <span>RNA: ≤120 nt (safe) / 240 nt max</span>
                     <span>DNA: ≤120 nt (safe) / 200 nt max</span>
@@ -693,7 +693,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     <div className="flex items-center gap-2">
                         <button
                             onClick={() => setShow3DViewer(!show3DViewer)}
-                            className={`text-xs px-2 py-1 rounded ${show3DViewer ? 'bg-purple-500/20 text-purple-300' : 'bg-slate-700 text-slate-400'}`}
+                            className={`text-xs px-2 py-1 rounded ${show3DViewer ? 'bg-accent/20 text-accent' : 'bg-slate-700 text-slate-400'}`}
                         >
                             {show3DViewer ? '📐 Hide 3D' : '📐 Show 3D'}
                         </button>
@@ -752,13 +752,13 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                             setScaffoldPdbPath(`https://files.rcsb.org/download/${scaffold.id}.pdb`);
                                         }}
                                         className={`p-2 text-left rounded border transition-all ${selectedRcsbEntry?.id === scaffold.id
-                                            ? 'border-purple-500 bg-purple-500/10'
+                                            ? 'border-accent bg-accent/10'
                                             : 'border-slate-600 hover:border-slate-500 bg-slate-700/50'
                                             }`}
                                     >
                                         <div className="font-medium text-white text-sm">{scaffold.id}</div>
                                         <div className="text-xs text-slate-400">{scaffold.name}</div>
-                                        <div className="text-xs text-purple-400">{scaffold.type} • {scaffold.length} nt</div>
+                                        <div className="text-xs text-accent">{scaffold.type} • {scaffold.length} nt</div>
                                     </button>
                                 ))}
                             </div>
@@ -792,7 +792,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     <div className="mt-4">
                         <div className="flex items-center justify-between mb-2">
                             <span className="text-xs text-slate-400">
-                                Viewing: <span className="text-purple-300">{selectedRcsbEntry?.title || 'Scaffold'}</span>
+                                Viewing: <span className="text-accent">{selectedRcsbEntry?.title || 'Scaffold'}</span>
                             </span>
                             <button
                                 onClick={() => {
@@ -816,8 +816,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 )}
 
                 {!showScaffoldBrowser && selectedRcsbEntry && (
-                    <div className="p-2 bg-purple-500/10 border border-purple-500/30 rounded text-sm">
-                        <span className="text-purple-300">Using scaffold: {selectedRcsbEntry.id} - {selectedRcsbEntry.title}</span>
+                    <div className="p-2 bg-accent/10 border border-accent/30 rounded text-sm">
+                        <span className="text-accent">Using scaffold: {selectedRcsbEntry.id} - {selectedRcsbEntry.title}</span>
                         <button
                             onClick={() => {
                                 setSelectedRcsbEntry(null);
@@ -1036,7 +1036,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                         <button
                             type="button"
                             onClick={() => setValidateWithBoltz(!validateWithBoltz)}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${validateWithBoltz ? 'bg-purple-600' : 'bg-slate-600'
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${validateWithBoltz ? 'bg-accent' : 'bg-slate-600'
                                 }`}
                         >
                             <span
@@ -1050,7 +1050,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     </label>
 
                     {validateWithBoltz && (
-                        <div className="space-y-3 pl-4 border-l-2 border-purple-600">
+                        <div className="space-y-3 pl-4 border-l-2 border-accent">
                             {/* Validation Mode Selector */}
                             <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Validation Mode</label>

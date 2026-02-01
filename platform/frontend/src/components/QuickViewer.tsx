@@ -110,7 +110,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                     <button
                         onClick={() => setExpanded(!expanded)}
                         className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${expanded
-                            ? 'bg-purple-500/30 text-purple-300'
+                            ? 'bg-accent/30 text-accent'
                             : 'bg-slate-600/50 text-slate-400 hover:bg-slate-600'
                             }`}
                         title={expanded ? 'Collapse viewer' : 'Expand with controls'}
@@ -125,7 +125,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 <select
                     value={selectedJobId || ''}
                     onChange={(e) => setSelectedJobId(e.target.value || null)}
-                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm focus:ring-2 focus:ring-accent focus:border-transparent"
                 >
                     <option value="">Select a job...</option>
                     {completedJobs.map((job: Job) => (
@@ -145,7 +145,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                             const struct = structureData.structures.find(s => s.path === e.target.value);
                             setSelectedStructure(struct || null);
                         }}
-                        className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-xs focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                        className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-xs focus:ring-2 focus:ring-accent focus:border-transparent"
                     >
                         {structureData.structures.map((struct) => (
                             <option key={struct.path} value={struct.path}>
@@ -159,7 +159,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
             {/* Current job indicator if externally set */}
             {currentJob && (
                 <div className="mb-2 text-xs text-slate-400">
-                    Viewing: <span className="text-purple-400">{currentJob.name}</span>
+                    Viewing: <span className="text-accent">{currentJob.name}</span>
                 </div>
             )}
 

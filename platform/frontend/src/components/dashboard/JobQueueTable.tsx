@@ -70,7 +70,7 @@ export function JobQueueTable({
             <span className="flex items-center gap-1">
                 {children}
                 {sortColumn === column && (
-                    <span className="text-purple-400">{sortDirection === 'asc' ? '▲' : '▼'}</span>
+                    <span className="text-accent">{sortDirection === 'asc' ? '▲' : '▼'}</span>
                 )}
             </span>
         </th>
@@ -79,7 +79,7 @@ export function JobQueueTable({
     if (loading) {
         return (
             <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
             </div>
         );
     }
@@ -210,15 +210,15 @@ export function JobQueueTable({
                                 rows.push(
                                     <tr
                                         key={`batch-${batchId}`}
-                                        className="bg-purple-500/10 border-b border-purple-500/30 cursor-pointer hover:bg-purple-500/20 transition-colors"
+                                        className="bg-accent/10 border-b border-accent/30 cursor-pointer hover:bg-accent/20 transition-colors"
                                         onClick={() => toggleBatch(batchId)}
                                     >
                                         <td colSpan={6} className="py-2 px-4">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-purple-400 w-4">{isExpanded ? '▼' : '▶'}</span>
+                                                    <span className="text-accent w-4">{isExpanded ? '▼' : '▶'}</span>
                                                     <span className="text-white font-medium">{batchName}</span>
-                                                    <span className="text-purple-300 text-sm">({batchJobs.length} sims)</span>
+                                                    <span className="text-accent text-sm">({batchJobs.length} sims)</span>
                                                 </div>
                                                 <div className="flex items-center gap-4 text-sm">
                                                     <span className="text-slate-400">{totalDesigns} designs</span>
@@ -274,8 +274,8 @@ export function JobQueueTable({
                                                                         onViewQuick(job.id);
                                                                     }}
                                                                     className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
-                                                                        ? 'bg-purple-500/30 text-purple-300'
-                                                                        : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                        ? 'bg-accent/30 text-accent'
+                                                                        : 'bg-accent/20 text-accent hover:bg-accent/30'
                                                                         }`}
                                                                     title="Load in Quick Viewer"
                                                                 >
@@ -335,8 +335,8 @@ export function JobQueueTable({
                                                                     onViewQuick(job.id);
                                                                 }}
                                                                 className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
-                                                                    ? 'bg-purple-500/30 text-purple-300'
-                                                                    : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                    ? 'bg-accent/30 text-accent'
+                                                                    : 'bg-accent/20 text-accent hover:bg-accent/30'
                                                                     }`}
                                                                 title="Load in Quick Viewer"
                                                             >

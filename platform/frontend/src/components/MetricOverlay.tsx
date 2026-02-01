@@ -199,7 +199,7 @@ export function MetricOverlay({
                                         {structureAnalysis.gyration_radius && (
                                             <div className="flex justify-between">
                                                 <span className="text-slate-500">RoG</span>
-                                                <span className="text-purple-400 font-mono">{structureAnalysis.gyration_radius.toFixed(1)}Å</span>
+                                                <span className="text-accent font-mono">{structureAnalysis.gyration_radius.toFixed(1)}Å</span>
                                             </div>
                                         )}
                                         {/* SSE Bar */}

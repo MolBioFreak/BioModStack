@@ -795,7 +795,7 @@ export function ResultsViewer() {
                                                     {antibodyData.stability_data && (
                                                         <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
                                                             <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                                                                <div className="w-2 h-2 rounded-full bg-pink-500"></div>
+                                                                <div className="w-2 h-2 rounded-full bg-accent-secondary"></div>
                                                                 ThermoMPNN Stability Scan (ddG)
                                                             </h3>
                                                             <div className="h-[400px] w-full flex items-center justify-center bg-slate-900/50 rounded-lg border border-slate-800">
@@ -1084,7 +1084,7 @@ export function ResultsViewer() {
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
-                                                                <td className="px-3 py-2 font-mono text-purple-400" title={`FR2: ${d.fr2_contacts || '—'}`}>
+                                                                <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>
                                                                     {d.fr2_contacts || '—'}
                                                                 </td>
                                                                 <td className="px-3 py-2">{d.is_favorite ? '★' : ''}</td>

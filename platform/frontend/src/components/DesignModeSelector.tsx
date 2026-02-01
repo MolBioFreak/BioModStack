@@ -175,7 +175,7 @@ export const DesignModeSelector: React.FC<DesignModeSelectorProps> = ({
                                         key={loop}
                                         onClick={() => toggleLoop(loop)}
                                         className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedLoops.has(loop)
-                                            ? 'bg-purple-600 text-white'
+                                            ? 'bg-accent text-white'
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                             }`}
                                     >

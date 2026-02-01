@@ -196,7 +196,7 @@ export function ResidueLineChart({ residueNumbers, plddt, designName, height = 3
             <div className="flex items-center justify-between mb-5">
                 <div>
                     <h3 className="text-white text-lg font-bold flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-accent-secondary flex items-center justify-center shadow-lg shadow-blue-500/20">
                             <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
                             </svg>
@@ -374,9 +374,9 @@ export function ResidueLineChart({ residueNumbers, plddt, designName, height = 3
                         <div className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Maximum</div>
                     </div>
                 </div>
-                <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl px-4 py-2 text-center">
-                    <div className="text-xl font-bold text-purple-400">{plddt.length}</div>
-                    <div className="text-[10px] text-purple-400/70 uppercase tracking-wider font-medium">Residues</div>
+                <div className="bg-accent/10 border border-accent/30 rounded-xl px-4 py-2 text-center">
+                    <div className="text-xl font-bold text-accent">{plddt.length}</div>
+                    <div className="text-[10px] text-accent/70 uppercase tracking-wider font-medium">Residues</div>
                 </div>
             </div>
         </div>
