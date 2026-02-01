@@ -974,6 +974,14 @@ def build_nextflow_command(
         # Target complex prediction (optional upstream for antibody design)
         'target_protein_seq': 'target_protein_seq',
         'target_dna_seq': 'target_dna_seq',
+        # MSA Quality Parameters (passed through to BoltzFromComplex/GenerateLocalMSA)
+        'msa_taxon_list': 'msa_taxon_list',
+        'msa_evalue': 'msa_evalue',
+        'msa_min_seq_id': 'msa_min_seq_id',
+        'msa_min_coverage': 'msa_min_coverage',
+        'msa_min_depth_warning': 'msa_min_depth_warning',
+        'msa_min_depth_fail': 'msa_min_depth_fail',
+        'msa_force_refresh': 'msa_force_refresh',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process

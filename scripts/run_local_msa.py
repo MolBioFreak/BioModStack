@@ -191,7 +191,15 @@ def run_local_mmseqs2(
     use_gpu: bool = None,  # None = auto-detect
     gpu_id: int = None,
     cpu_only: bool = False,
-    reference_sequence: str = None  # For mutagenesis: use this seq for cache key
+    reference_sequence: str = None,  # For mutagenesis: use this seq for cache key
+    # MSA Quality Parameters
+    evalue: float = 0.001,         # E-value threshold (lower = stricter)
+    sensitivity: float = 8.0,      # MMseqs sensitivity (1-8)
+    min_seq_id: float = None,      # Minimum sequence identity (0-1.0)
+    min_coverage: float = None,    # Minimum query coverage (0-1.0)
+    taxon_list: str = None,        # Taxonomy IDs to include (comma-separated)
+    min_depth_warning: int = 100,  # Warn if MSA has fewer sequences
+    min_depth_fail: int = 0,       # Fail if MSA has fewer sequences (0 = warn only)
 ):
     """
     Generate MSA using local MMseqs2 databases.
@@ -210,6 +218,14 @@ def run_local_mmseqs2(
         cpu_only: Force CPU mode
         reference_sequence: For mutagenesis - use this sequence for cache key
                            (allows variants to share WT MSA)
+        evalue: E-value threshold for hits (default 0.001, lower = stricter)
+        sensitivity: MMseqs2 sensitivity 1-8 (default 8.0, higher = slower but more sensitive)
+        min_seq_id: Minimum sequence identity filter (0-1.0, None = no filter)
+        min_coverage: Minimum query coverage filter (0-1.0, None = no filter)
+        taxon_list: Comma-separated NCBI taxonomy IDs to restrict search
+                   (e.g., '2' for Bacteria, '2759' for Eukaryota)
+        min_depth_warning: Warn if MSA has fewer than this many sequences
+        min_depth_fail: Fail if MSA has fewer than this many sequences (0 = no fail)
     """
     # For cache: use reference sequence if provided (mutagenesis mode)
     cache_key_seq = reference_sequence or sequence
@@ -314,11 +330,23 @@ def run_local_mmseqs2(
             str(mmseqs_bin), "search",
             query_db, str(uniref_db), result_db,
             os.path.join(tmp_dir, "tmp"),
-            "-s", "8.0",
+            "-s", str(sensitivity),
             "--max-seqs", "10000",
-            "-e", "0.001",
+            "-e", str(evalue),
             "--split-memory-limit", "16G",  # Cap RAM to prevent OOM (safe for 8 parallel jobs)
         ]
+        # Add taxonomy filter if specified
+        if taxon_list:
+            search_cmd.extend(["--taxon-list", taxon_list])
+            print(f"Filtering MSA by taxonomy: {taxon_list}", flush=True)
+        # Add sequence identity filter if specified
+        if min_seq_id is not None:
+            search_cmd.extend(["--min-seq-id", str(min_seq_id)])
+            print(f"Minimum sequence identity: {min_seq_id:.1%}", flush=True)
+        # Add coverage filter if specified
+        if min_coverage is not None:
+            search_cmd.extend(["-c", str(min_coverage), "--cov-mode", "0"])
+            print(f"Minimum coverage: {min_coverage:.1%}", flush=True)
         # Add GPU flag or CPU-specific options
         if use_gpu_flag and selected_gpu_id is not None:
             search_cmd.extend(["--gpu", "1"])  # Enable GPU acceleration
@@ -339,9 +367,128 @@ def run_local_mmseqs2(
             a3m_bytes = f.read().replace(b'\x00', b'')
         a3m_content = a3m_bytes.decode('utf-8')
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # HEADER-BASED TAXONOMY FILTERING (MMseqs2 --taxon-list requires taxonomy-
+        # aware database which UniRef30 lacks, so we filter by TaxID in headers)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if taxon_list:
+            import re
+            target_taxids = set(taxon_list.split(','))
+            # Map of domain TaxIDs to all descendant TaxIDs (simplified top-level only)
+            domain_map = {
+                '2': 'Bacteria',      # All bacteria
+                '2157': 'Archaea',    # All archaea  
+                '2759': 'Eukaryota',  # All eukaryotes
+                '10239': 'Viruses',   # All viruses
+            }
+            filter_domains = {domain_map.get(tid) for tid in target_taxids if tid in domain_map}
+            
+            if filter_domains:
+                print(f"Post-filtering MSA by taxonomy domains: {filter_domains}", flush=True)
+                filtered_entries = []
+                current_entry = []
+                original_count = 0
+                
+                for line in a3m_content.split('\n'):
+                    if line.startswith('>'):
+                        # Save previous entry
+                        if current_entry:
+                            original_count += 1
+                            header = current_entry[0]
+                            # Check if it's the query (always keep)
+                            if header == '>query' or 'query' in header.lower()[:20]:
+                                filtered_entries.append('\n'.join(current_entry))
+                            else:
+                                # Extract Tax= field and check against domains
+                                tax_match = re.search(r'Tax=([^T]+?)(?:TaxID=|$)', header)
+                                if tax_match:
+                                    tax_name = tax_match.group(1).strip()
+                                    # Simple domain detection from taxon names
+                                    is_bacteria = any(kw in tax_name.lower() for kw in 
+                                        ['bacteri', 'escherichia', 'salmonella', 'streptococcus', 
+                                         'staphylococcus', 'pseudomonas', 'clostridium', 'bacillus',
+                                         'vibrio', 'neisseria', 'enterobacter', 'klebsiella'])
+                                    if 'Bacteria' in filter_domains and is_bacteria:
+                                        filtered_entries.append('\n'.join(current_entry))
+                                    elif 'Bacteria' not in filter_domains:
+                                        # For non-bacteria filters, keep if not clearly bacterial
+                                        filtered_entries.append('\n'.join(current_entry))
+                                else:
+                                    # No tax info - keep if filter is permissive
+                                    filtered_entries.append('\n'.join(current_entry))
+                        current_entry = [line]
+                    else:
+                        current_entry.append(line)
+                
+                # Don't forget the last entry
+                if current_entry:
+                    original_count += 1
+                    header = current_entry[0]
+                    if header == '>query' or 'query' in header.lower()[:20]:
+                        filtered_entries.append('\n'.join(current_entry))
+                    else:
+                        tax_match = re.search(r'Tax=([^T]+?)(?:TaxID=|$)', header)
+                        if tax_match:
+                            tax_name = tax_match.group(1).strip()
+                            is_bacteria = any(kw in tax_name.lower() for kw in 
+                                ['bacteri', 'escherichia', 'salmonella', 'streptococcus',
+                                 'staphylococcus', 'pseudomonas', 'clostridium', 'bacillus',
+                                 'vibrio', 'neisseria', 'enterobacter', 'klebsiella'])
+                            if 'Bacteria' in filter_domains and is_bacteria:
+                                filtered_entries.append('\n'.join(current_entry))
+                            elif 'Bacteria' not in filter_domains:
+                                filtered_entries.append('\n'.join(current_entry))
+                
+                a3m_content = '\n'.join(filtered_entries)
+                filtered_count = len(filtered_entries)
+                print(f"Taxonomy post-filter: {original_count} -> {filtered_count} sequences", flush=True)
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # MSA QUALITY VALIDATION: Count sequences and check depth thresholds
+        # ═══════════════════════════════════════════════════════════════════════════
+        msa_depth = a3m_content.count('\n>') + (1 if a3m_content.startswith('>') else 0)
+        print(f"MSA depth: {msa_depth} sequences", flush=True)
+        
+        # Generate quality report
+        quality_report = {
+            "msa_depth": msa_depth,
+            "query_length": len(sequence),
+            "evalue": evalue,
+            "sensitivity": sensitivity,
+            "taxon_filter": taxon_list,
+            "min_seq_id": min_seq_id,
+            "min_coverage": min_coverage,
+        }
+        
+        # Check depth thresholds
+        if min_depth_fail > 0 and msa_depth < min_depth_fail:
+            error_msg = (
+                f"MSA FAILED: Only {msa_depth} sequences found (minimum: {min_depth_fail}). "
+                f"This likely indicates poor homolog detection. "
+                f"Consider: 1) Relaxing filters, 2) Using taxonomy filter to target correct kingdom, "
+                f"3) Checking if sequence is a known protein family."
+            )
+            print(f"ERROR: {error_msg}", flush=True)
+            raise RuntimeError(error_msg)
+        
+        if msa_depth < min_depth_warning:
+            print(
+                f"WARNING: MSA has only {msa_depth} sequences (recommended >{min_depth_warning}). "
+                f"Structure prediction confidence may be low. "
+                f"Consider adjusting search parameters or verifying input sequence.",
+                flush=True
+            )
+        
         # Write to output
         with open(final_a3m, 'w') as f:
             f.write(a3m_content)
+        
+        # Write quality report JSON alongside MSA
+        import json
+        report_path = os.path.join(out_dir, f"{job_name}_msa_quality.json")
+        with open(report_path, 'w') as f:
+            json.dump(quality_report, f, indent=2)
+        print(f"MSA quality report: {report_path}", flush=True)
         
         print(f"MSA generated: {final_a3m}", flush=True)
         
@@ -380,6 +527,21 @@ if __name__ == "__main__":
                         help="Force CPU mode (no GPU)")
     parser.add_argument("--reference-sequence", type=str, default=None,
                         help="Reference sequence for cache key (mutagenesis mode)")
+    # MSA Quality Parameters
+    parser.add_argument("--evalue", type=float, default=0.001,
+                        help="E-value threshold (lower = stricter, default: 0.001)")
+    parser.add_argument("--sensitivity", type=float, default=8.0,
+                        help="MMseqs2 sensitivity 1-8 (default: 8.0)")
+    parser.add_argument("--min-seq-id", type=float, default=None,
+                        help="Minimum sequence identity (0-1.0)")
+    parser.add_argument("--min-coverage", type=float, default=None,
+                        help="Minimum query coverage (0-1.0)")
+    parser.add_argument("--taxon-list", type=str, default=None,
+                        help="NCBI taxonomy IDs to filter (comma-separated, e.g. '2' for Bacteria)")
+    parser.add_argument("--min-depth-warning", type=int, default=100,
+                        help="Warn if MSA has fewer sequences (default: 100)")
+    parser.add_argument("--min-depth-fail", type=int, default=10,
+                        help="Fail if MSA has fewer sequences (0 = no fail, default: 10)")
     
     args = parser.parse_args()
     
@@ -396,5 +558,12 @@ if __name__ == "__main__":
         use_gpu=args.use_gpu if args.use_gpu else None,
         gpu_id=args.gpu_id,
         cpu_only=args.cpu_only,
-        reference_sequence=args.reference_sequence
+        reference_sequence=args.reference_sequence,
+        evalue=args.evalue,
+        sensitivity=args.sensitivity,
+        min_seq_id=args.min_seq_id,
+        min_coverage=args.min_coverage,
+        taxon_list=args.taxon_list,
+        min_depth_warning=args.min_depth_warning,
+        min_depth_fail=args.min_depth_fail,
     )

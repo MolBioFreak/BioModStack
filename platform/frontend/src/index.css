@@ -1,6 +1,32 @@
 @import "tailwindcss";
 
 /* ============================================
+   TAILWIND 4 THEME - Semantic Color Utilities
+   These create classes like bg-accent, text-accent that reference CSS variables
+   ============================================ */
+@theme {
+  /* Accent colors - primary brand/highlight color per theme */
+  --color-accent: var(--accent-primary);
+  --color-accent-secondary: var(--accent-secondary);
+  
+  /* Semantic background colors */
+  --color-surface: var(--bg-primary);
+  --color-surface-secondary: var(--bg-secondary);
+  --color-surface-tertiary: var(--bg-tertiary);
+  
+  /* Semantic text colors */
+  --color-content: var(--text-primary);
+  --color-content-secondary: var(--text-secondary);
+  --color-content-muted: var(--text-muted);
+  
+  /* Status colors */
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--link);
+}
+
+/* ============================================
    THEME SYSTEM - Color Scheme Variables
    ============================================ */
 

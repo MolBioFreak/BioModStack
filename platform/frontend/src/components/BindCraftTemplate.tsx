@@ -437,7 +437,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                     <button
                         onClick={() => setDesignApproach('cdr_hallucination')}
                         className={`flex-1 p-3 rounded-lg border-2 transition-colors ${designApproach === 'cdr_hallucination'
-                            ? 'border-purple-500 bg-purple-600/20'
+                            ? 'border-accent bg-accent/20'
                             : 'border-slate-700 hover:bg-slate-800'
                             }`}
                     >
@@ -483,8 +483,8 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 )}
 
                 {designApproach === 'cdr_hallucination' && (
-                    <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-purple-500/30">
-                        <div className="text-xs text-purple-400 mb-2">
+                    <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-accent/30">
+                        <div className="text-xs text-accent mb-2">
                             🧬 VHH-optimized CDR design. Select a framework template and configure CDR regions to redesign.
                         </div>
 
@@ -499,14 +499,14 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="button"
                                         onClick={() => setShowFrameworkBrowser(!showFrameworkBrowser)}
                                         className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-1.5 ${showFrameworkBrowser
-                                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                            ? 'bg-accent/20 text-accent border border-accent/50'
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
                                             }`}
                                     >
                                         📚 {showFrameworkBrowser ? 'Hide Browser' : 'Browse SAbDab'}
                                     </button>
                                     {selectedFramework && (
-                                        <span className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs flex items-center gap-1">
+                                        <span className="px-2 py-1 bg-accent/20 text-accent rounded text-xs flex items-center gap-1">
                                             🧬 {selectedFramework.pdbCode || selectedFramework.name}
                                             <button
                                                 type="button"
@@ -515,7 +515,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                                     setFrameworkPdbUrl(null);
                                                     setScaffoldPdbPath('');
                                                 }}
-                                                className="ml-1 text-purple-400 hover:text-purple-200"
+                                                className="ml-1 text-accent hover:text-accent"
                                             >✕</button>
                                         </span>
                                     )}
@@ -560,7 +560,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 <button
                                     onClick={() => setCdrLengthMode('fixed')}
                                     className={`px-4 py-2 rounded-lg border transition-colors ${cdrLengthMode === 'fixed'
-                                        ? 'border-purple-500 bg-purple-600/20 text-purple-300'
+                                        ? 'border-accent bg-accent/20 text-accent'
                                         : 'border-slate-700 text-slate-400 hover:bg-slate-800'
                                         }`}
                                 >
@@ -569,7 +569,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 <button
                                     onClick={() => setCdrLengthMode('sample')}
                                     className={`px-4 py-2 rounded-lg border transition-colors ${cdrLengthMode === 'sample'
-                                        ? 'border-purple-500 bg-purple-600/20 text-purple-300'
+                                        ? 'border-accent bg-accent/20 text-accent'
                                         : 'border-slate-700 text-slate-400 hover:bg-slate-800'
                                         }`}
                                 >
@@ -587,7 +587,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                     value={cdrH1Range}
                                     onChange={(e) => setCdrH1Range(e.target.value)}
                                     placeholder="5-12"
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-accent outline-none"
                                 />
                             </div>
                             <div>
@@ -597,7 +597,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                     value={cdrH2Range}
                                     onChange={(e) => setCdrH2Range(e.target.value)}
                                     placeholder="6-10"
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-accent outline-none"
                                 />
                             </div>
                             <div>
@@ -607,7 +607,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                     value={cdrH3Range}
                                     onChange={(e) => setCdrH3Range(e.target.value)}
                                     placeholder="10-18"
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-purple-500 outline-none"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center focus:ring-2 focus:ring-accent outline-none"
                                 />
                                 <p className="mt-1 text-xs text-slate-500">Most variable loop</p>
                             </div>
@@ -615,7 +615,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
 
                         {/* Phase 4: CDR Sampling Option */}
                         {cdrLengthMode === 'sample' && (
-                            <div className="mt-3 p-3 bg-slate-900/40 rounded-lg border border-purple-500/20">
+                            <div className="mt-3 p-3 bg-slate-900/40 rounded-lg border border-accent/20">
                                 <div className="flex items-center justify-between mb-2">
                                     <label className="text-sm font-medium text-slate-400">
                                         Generate Multiple CDR Length Configurations
@@ -624,7 +624,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="button"
                                         onClick={() => setCdrSamplingEnabled(!cdrSamplingEnabled)}
                                         className={`px-3 py-1 text-xs rounded-lg transition-all ${cdrSamplingEnabled
-                                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                            ? 'bg-accent/20 text-accent border border-accent/50'
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
                                             }`}
                                     >
@@ -660,7 +660,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                             key={mode}
                                             onClick={() => setMaskMode(mode)}
                                             className={`px-3 py-1 text-xs rounded-lg transition-all ${maskMode === mode
-                                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50'
+                                                ? 'bg-accent/20 text-accent border border-accent/50'
                                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
                                                 }`}
                                         >
@@ -670,7 +670,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 </div>
                             </div>
                             {maskMode === 'imgt_auto' && (
-                                <div className="text-xs text-purple-400 bg-purple-500/10 rounded p-2">
+                                <div className="text-xs text-accent bg-accent/10 rounded p-2">
                                     ✓ IMGT positions will be used: CDR-H1 (26-35), CDR-H2 (50-65), CDR-H3 (95-115) → Redesign<br />
                                     Framework regions → Fixed
                                 </div>
@@ -683,7 +683,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         value={redesignRanges}
                                         onChange={(e) => setRedesignRanges(e.target.value)}
                                         placeholder="26-35,50-65,95-115"
-                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                                     />
                                 </div>
                             )}
@@ -705,7 +705,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="checkbox"
                                         checked={rmTemplateSeqDesign}
                                         onChange={(e) => setRmTemplateSeqDesign(e.target.checked)}
-                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                        className="rounded border-slate-600 bg-slate-900 text-accent"
                                     />
                                     <span className="text-sm text-slate-400">Remove target template sequence (more flexible)</span>
                                 </label>
@@ -714,7 +714,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="checkbox"
                                         checked={rmTemplateScDesign}
                                         onChange={(e) => setRmTemplateScDesign(e.target.checked)}
-                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                        className="rounded border-slate-600 bg-slate-900 text-accent"
                                     />
                                     <span className="text-sm text-slate-400">Remove target sidechains</span>
                                 </label>
@@ -723,7 +723,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="checkbox"
                                         checked={predictInitialGuess}
                                         onChange={(e) => setPredictInitialGuess(e.target.checked)}
-                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                        className="rounded border-slate-600 bg-slate-900 text-accent"
                                     />
                                     <span className="text-sm text-slate-400">Use scaffold as initial geometry guess</span>
                                 </label>
@@ -732,7 +732,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                         type="checkbox"
                                         checked={useTerminiDistanceLoss}
                                         onChange={(e) => setUseTerminiDistanceLoss(e.target.checked)}
-                                        className="rounded border-slate-600 bg-slate-900 text-purple-500"
+                                        className="rounded border-slate-600 bg-slate-900 text-accent"
                                     />
                                     <span className="text-sm text-slate-400">Minimize N/C terminus distance (for grafting)</span>
                                 </label>
@@ -795,7 +795,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                             }
                                         }}
                                         className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'framework' && show3DViewer
-                                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                                            ? 'bg-accent/20 text-accent border border-accent/50'
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
                                             }`}
                                     >

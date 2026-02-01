@@ -513,7 +513,7 @@ export function SearchPanel({
                                             <div className="flex justify-between items-center">
                                                 <span className="text-slate-200">{motif.name}</span>
                                                 {motif.isRegex && (
-                                                    <span className="text-purple-400 text-[10px]">regex</span>
+                                                    <span className="text-accent text-[10px]">regex</span>
                                                 )}
                                             </div>
                                             <div className="text-[10px] text-slate-500 truncate">
@@ -546,7 +546,7 @@ export function SearchPanel({
                         </div>
                         <button
                             onClick={runOrfFinder}
-                            className="w-full py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-medium transition-colors"
+                            className="w-full py-1.5 bg-accent hover:bg-accent rounded text-xs font-medium transition-colors"
                         >
                             Find Open Reading Frames
                         </button>
@@ -568,7 +568,7 @@ export function SearchPanel({
                                             }`}
                                     >
                                         <div className="flex items-center gap-2">
-                                            <span className={`w-4 text-center ${orf.strand === 1 ? 'text-purple-400' : 'text-pink-400'}`}>
+                                            <span className={`w-4 text-center ${orf.strand === 1 ? 'text-accent' : 'text-accent-secondary'}`}>
                                                 {orf.strand === 1 ? '→' : '←'}
                                             </span>
                                             <span>ORF {i + 1}</span>
