@@ -142,15 +142,10 @@ def check_gpu_availability(threshold: int = 80) -> int | None:
     Args:
         threshold: Max utilization/memory percentage to consider GPU available
     
-    Returns GPU ID if one is available and compatible, None otherwise.
+    Returns GPU ID if one is available, None otherwise.
     
-    Note: MMseqs2-GPU binary (as of Feb 2026) only has kernels for SM 7.5-9.0.
-    Blackwell GPUs (SM 12.0, e.g., RTX 5090) are NOT supported and will cause
-    'CUDA error: invalid configuration argument' failures.
+    Note: MMseqs2-GPU Blackwell binary supports SM 7.5-12.0 (Turing through Blackwell).
     """
-    # MMseqs2-GPU binary supports SM 7.5, 8.0, 8.6, 8.9, 9.0 (no SM 12.0)
-    MAX_SUPPORTED_SM = 10.0  # Blackwell is SM 12.0, exclude it
-    
     try:
         # Query including compute capability for logging
         result = subprocess.run(
@@ -183,26 +178,18 @@ def check_gpu_availability(threshold: int = 80) -> int | None:
                     'name': gpu_name
                 })
         
-        # Filter to only compatible GPUs (SM < 10.0, excludes Blackwell)
-        compatible_gpus = [g for g in gpus if g['compute_cap'] < MAX_SUPPORTED_SM]
-        incompatible_gpus = [g for g in gpus if g['compute_cap'] >= MAX_SUPPORTED_SM]
-        
-        if incompatible_gpus:
-            names = ', '.join(f"{g['name']} (SM {g['compute_cap']})" for g in incompatible_gpus)
-            print(f"Skipping incompatible GPUs for MMseqs2: {names}", flush=True)
-        
         # Sort by utilization (prefer least busy)
-        compatible_gpus.sort(key=lambda g: g['utilization'])
+        gpus.sort(key=lambda g: g['utilization'])
         
-        for gpu in compatible_gpus:
+        for gpu in gpus:
             if gpu['utilization'] < threshold and gpu['memory_percent'] < threshold:
                 print(f"Selected GPU {gpu['id']} ({gpu['name']}, SM {gpu['compute_cap']}) for MMseqs2", flush=True)
                 return gpu['id']
         
-        if not compatible_gpus:
-            print("No compatible GPUs found for MMseqs2 (requires SM < 10.0, excludes Blackwell)", flush=True)
+        if not gpus:
+            print("No available GPUs found for MMseqs2", flush=True)
         else:
-            print(f"All compatible GPUs are busy (utilization > {threshold}%)", flush=True)
+            print(f"All GPUs are busy (utilization > {threshold}%)", flush=True)
         
         return None
     except Exception as e:
@@ -302,7 +289,7 @@ def run_local_mmseqs2(
     # Locate databases
     db_path = Path(db_path)
     mmseqs_cpu = db_path / "mmseqs" / "bin" / "mmseqs"
-    mmseqs_gpu = db_path / "mmseqs-gpu" / "bin" / "mmseqs"  # GPU binary in separate dir
+    mmseqs_gpu = db_path / "mmseqs-gpu-blackwell" / "bin" / "mmseqs"  # GPU binary with Blackwell (SM 12.0) support
     uniref_db = db_path / "uniref30_2302_db"
     
     # Determine which binary to use
