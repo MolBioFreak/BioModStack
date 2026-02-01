@@ -71,7 +71,7 @@ export function InteractiveSequence({ sequence, mutations, onMutationAdd, onMuta
                                 className={`w-8 h-8 flex items-center justify-center rounded transition-all border ${isSelected
                                     ? 'bg-blue-600 border-blue-400 text-white z-10 scale-110 shadow-lg'
                                     : isMutated
-                                        ? 'bg-purple-900/40 border-purple-500 text-purple-300'
+                                        ? 'bg-accent/20 border-accent text-accent'
                                         : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
                                     }`}
                                 title={`Pos ${pos}: ${aa} ${isMutated ? `→ ${mutatedAA}` : ''}`}
@@ -114,7 +114,7 @@ export function InteractiveSequence({ sequence, mutations, onMutationAdd, onMuta
                                     onClick={() => handleSelectAA(aa.code)}
                                     disabled={isOriginal}
                                     className={`flex flex-col items-center justify-center p-2 rounded border transition-all ${isCurrent
-                                        ? 'bg-purple-600 border-purple-400 text-white'
+                                        ? 'bg-accent border-accent text-white'
                                         : isOriginal
                                             ? 'bg-slate-700/50 border-transparent text-slate-500 opacity-50 cursor-not-allowed'
                                             : 'bg-slate-700/50 border-slate-600 hover:bg-slate-600 hover:border-slate-500 text-slate-200'

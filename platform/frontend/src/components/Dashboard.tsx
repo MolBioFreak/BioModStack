@@ -156,7 +156,7 @@ export function Dashboard() {
         <div className="min-h-screen bg-slate-950 p-6">
             {/* Header */}
             <header className="mb-8">
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 bg-clip-text text-transparent">
+                <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-accent to-accent-secondary bg-clip-text text-transparent">
                     BioModStack
                 </h1>
                 <p className="text-slate-400 mt-2">Protein Modification & Design Platform</p>
@@ -247,7 +247,7 @@ export function Dashboard() {
                                                 key={n}
                                                 onClick={() => setVisibleCount(n)}
                                                 className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount === n
-                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                    ? 'bg-accent/30 text-accent'
                                                     : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                                     }`}
                                             >
@@ -257,7 +257,7 @@ export function Dashboard() {
                                         <button
                                             onClick={() => setVisibleCount(filteredJobs.length)}
                                             className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount >= filteredJobs.length
-                                                ? 'bg-purple-500/30 text-purple-300'
+                                                ? 'bg-accent/30 text-accent'
                                                 : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                                 }`}
                                         >
@@ -268,7 +268,7 @@ export function Dashboard() {
                                     {hasMore && (
                                         <button
                                             onClick={() => setVisibleCount(prev => prev + 25)}
-                                            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm rounded-lg transition-all hover:scale-105"
+                                            className="px-4 py-2 bg-gradient-to-r from-accent to-blue-600 hover:from-accent hover:to-blue-500 text-white text-sm rounded-lg transition-all hover:scale-105"
                                         >
                                             Load More (+25)
                                         </button>

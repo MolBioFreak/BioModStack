@@ -46,6 +46,16 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     // Error handling
     const [allowRetries, setAllowRetries] = useState(initialValues?.allow_retries ?? false);
 
+    // MSA Quality Options (advanced)
+    const [showMsaOptions, setShowMsaOptions] = useState(false);
+    const [msaTaxonomy, setMsaTaxonomy] = useState<string>(initialValues?.msa_taxon_list || '');
+    const [msaEvalue, setMsaEvalue] = useState<string>(initialValues?.msa_evalue?.toString() || '0.001');
+    const [msaMinSeqId, setMsaMinSeqId] = useState<string>(initialValues?.msa_min_seq_id?.toString() || '');
+    const [msaMinCoverage, setMsaMinCoverage] = useState<string>(initialValues?.msa_min_coverage?.toString() || '');
+    const [msaMinDepthWarning, setMsaMinDepthWarning] = useState(initialValues?.msa_min_depth_warning ?? 100);
+    const [msaMinDepthFail, setMsaMinDepthFail] = useState(initialValues?.msa_min_depth_fail ?? 0);  // 0 = no fail, just warn
+    const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
+
     // Complex components (ligands, DNA, RNA)
     // Initialize from cloned job data if present (complex_components array)
     const [ligands, setLigands] = useState<LigandEntry[]>(() => {
@@ -109,6 +119,17 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.rf3_use_msa = rf3UseMsa;
             params.rf3_num_recycles = rf3NumRecycles;
             params.rf3_num_samples = rf3NumSamples;
+        }
+
+        // MSA Quality parameters (when MSA is enabled)
+        if ((predictor === 'boltz' && boltzUseMsa) || (predictor === 'rf3' && rf3UseMsa) || predictor === 'both') {
+            if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
+            if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
+            if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
+            if (msaMinCoverage) params.msa_min_coverage = parseFloat(msaMinCoverage);
+            params.msa_min_depth_warning = msaMinDepthWarning;
+            params.msa_min_depth_fail = msaMinDepthFail;
+            if (msaForceRefresh) params.msa_force_refresh = true;
         }
 
         // Complex components
@@ -318,7 +339,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 className={`p-3 rounded-lg border text-left transition-all ${predictor === pred.id
                                     ? pred.color === 'blue' ? 'bg-blue-600/20 border-blue-500 text-blue-300'
                                         : pred.color === 'green' ? 'bg-green-600/20 border-green-500 text-green-300'
-                                            : 'bg-purple-600/20 border-purple-500 text-purple-300'
+                                            : 'bg-accent/20 border-accent text-accent'
                                     : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
                                     }`}
                             >
@@ -542,6 +563,138 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                     </div>
                 )}
 
+                {/* MSA Quality Options (Advanced) */}
+                {((showBoltzParams && boltzUseMsa) || (showRf3Params && rf3UseMsa)) && (
+                    <div className="border border-amber-700/30 rounded-lg overflow-hidden">
+                        <button
+                            onClick={() => setShowMsaOptions(!showMsaOptions)}
+                            className="w-full flex items-center justify-between p-3 bg-amber-900/20 hover:bg-amber-900/30 transition-colors"
+                        >
+                            <div className="flex items-center gap-2">
+                                <span className="text-amber-400">🧬</span>
+                                <span className="text-sm font-medium text-amber-300">MSA Quality Options</span>
+                                <span className="text-xs text-amber-600">(Advanced)</span>
+                            </div>
+                            <span className="text-amber-400 text-sm">{showMsaOptions ? '▼' : '▶'}</span>
+                        </button>
+                        {showMsaOptions && (
+                            <div className="p-4 space-y-4 bg-slate-900/50">
+                                <p className="text-xs text-slate-500">
+                                    These options control the MSA (Multiple Sequence Alignment) search.
+                                    Use taxonomy filtering to restrict to relevant organisms and prevent false positive hits.
+                                </p>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                    {/* Taxonomy Filter */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Taxonomy Filter</label>
+                                        <select
+                                            value={msaTaxonomy}
+                                            onChange={(e) => setMsaTaxonomy(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="">All organisms</option>
+                                            <option value="2">Bacteria only</option>
+                                            <option value="2157">Archaea only</option>
+                                            <option value="2759">Eukaryota only</option>
+                                            <option value="10239">Viruses only</option>
+                                            <option value="2,2157">Prokaryotes (Bacteria + Archaea)</option>
+                                        </select>
+                                    </div>
+                                    {/* E-value */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">E-value Threshold</label>
+                                        <select
+                                            value={msaEvalue}
+                                            onChange={(e) => setMsaEvalue(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="1">1 (Very relaxed)</option>
+                                            <option value="0.1">0.1</option>
+                                            <option value="0.01">0.01</option>
+                                            <option value="0.001">0.001 (Default)</option>
+                                            <option value="0.0001">0.0001 (Strict)</option>
+                                            <option value="0.00001">0.00001 (Very strict)</option>
+                                        </select>
+                                    </div>
+                                    {/* Min Seq Identity */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Min Sequence ID</label>
+                                        <select
+                                            value={msaMinSeqId}
+                                            onChange={(e) => setMsaMinSeqId(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="">No minimum</option>
+                                            <option value="0.1">10%</option>
+                                            <option value="0.2">20%</option>
+                                            <option value="0.3">30%</option>
+                                            <option value="0.4">40%</option>
+                                            <option value="0.5">50%</option>
+                                        </select>
+                                    </div>
+                                    {/* Min Coverage */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Min Coverage</label>
+                                        <select
+                                            value={msaMinCoverage}
+                                            onChange={(e) => setMsaMinCoverage(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="">No minimum</option>
+                                            <option value="0.3">30%</option>
+                                            <option value="0.5">50%</option>
+                                            <option value="0.7">70%</option>
+                                            <option value="0.8">80%</option>
+                                            <option value="0.9">90%</option>
+                                        </select>
+                                    </div>
+                                    {/* Depth Warning */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Depth Warning</label>
+                                        <input
+                                            type="number"
+                                            value={msaMinDepthWarning}
+                                            onChange={(e) => setMsaMinDepthWarning(Math.max(0, parseInt(e.target.value) || 100))}
+                                            min={0}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            title="Warn if MSA has fewer sequences"
+                                        />
+                                    </div>
+                                    {/* Depth Fail */}
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Depth Fail</label>
+                                        <input
+                                            type="number"
+                                            value={msaMinDepthFail}
+                                            onChange={(e) => setMsaMinDepthFail(Math.max(0, parseInt(e.target.value) || 10))}
+                                            min={0}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            title="Fail job if MSA has fewer sequences (0 = no fail)"
+                                        />
+                                    </div>
+                                </div>
+                                {/* Force Refresh Toggle */}
+                                <label className="flex items-center gap-3 p-3 bg-red-900/20 border border-red-700/30 rounded-lg cursor-pointer hover:bg-red-900/30 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={msaForceRefresh}
+                                        onChange={(e) => setMsaForceRefresh(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-red-700 text-red-600 focus:ring-red-500"
+                                    />
+                                    <div>
+                                        <span className="text-red-300 font-medium">🔄 Regenerate MSA (Purge Cache)</span>
+                                        <p className="text-xs text-red-400/70">Force fresh MSA search, ignoring cached results for this sequence</p>
+                                    </div>
+                                </label>
+                                <div className="text-xs text-slate-500 bg-slate-800/50 p-2 rounded">
+                                    💡 <strong>Tip:</strong> For prokaryotic proteins (e.g., RepA), set Taxonomy Filter to "Bacteria only" or "Prokaryotes".
+                                    For eukaryotic proteins, use "Eukaryota only".
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Complex Components (Ligands, DNA, RNA) */}
                 <LigandSelector
                     ligands={ligands}
@@ -572,7 +725,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                     <button
                         onClick={handleSubmit}
                         disabled={!sequence.trim() || submitMutation.isPending}
-                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-purple-900/20 transition-all transform active:scale-95"
+                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
                         {submitMutation.isPending ? 'Submitting...' : 'Launch Prediction'}
                     </button>
