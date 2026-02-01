@@ -258,6 +258,71 @@ function getFeatureColor(type: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ORF FINDER UTILITY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface Translation {
+    start: number;
+    end: number;
+    strand: 1 | -1;
+}
+
+function reverseComplementSeq(seq: string): string {
+    const complement: Record<string, string> = {
+        'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G',
+        'a': 't', 't': 'a', 'g': 'c', 'c': 'g',
+        'N': 'N', 'n': 'n',
+    };
+    return seq.split('').reverse().map(c => complement[c] || c).join('');
+}
+
+/**
+ * Find all Open Reading Frames in a sequence.
+ * Scans all 6 reading frames (3 forward, 3 reverse).
+ * Returns ORFs sorted by length (longest first).
+ */
+function findORFs(sequence: string, minLength: number = 100): Translation[] {
+    const orfs: Translation[] = [];
+    const seq = sequence.toUpperCase();
+    const startCodon = 'ATG';
+    const stopCodons = ['TAA', 'TAG', 'TGA'];
+
+    // Search all 6 reading frames (3 forward, 3 reverse)
+    for (const strand of [1, -1] as const) {
+        const workSeq = strand === 1 ? seq : reverseComplementSeq(seq);
+
+        for (let frame = 0; frame < 3; frame++) {
+            let i = frame;
+            while (i < workSeq.length - 2) {
+                const codon = workSeq.substring(i, i + 3);
+                if (codon === startCodon) {
+                    // Look for stop codon in same frame
+                    for (let j = i + 3; j < workSeq.length - 2; j += 3) {
+                        const testCodon = workSeq.substring(j, j + 3);
+                        if (stopCodons.includes(testCodon)) {
+                            const orfLen = j + 3 - i;
+                            if (orfLen >= minLength) {
+                                // Convert positions back to original strand coordinates
+                                const start = strand === 1 ? i : seq.length - (j + 3);
+                                const end = strand === 1 ? j + 3 : seq.length - i;
+                                orfs.push({ start, end, strand });
+                            }
+                            break;
+                        }
+                    }
+                }
+                i += 3;
+            }
+        }
+    }
+
+    // Sort by length descending, limit to top 20 for performance
+    return orfs
+        .sort((a, b) => (b.end - b.start) - (a.end - a.start))
+        .slice(0, 20);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -311,6 +376,22 @@ export function MolBioToolkitV2() {
         const seqs = await listSequences();
         setSequences(seqs);
     }, [listSequences]);
+
+    // Auto-compute ORFs when sequence changes (for Translations toggle)
+    useEffect(() => {
+        if (sequenceData.sequence && sequenceData.sequence.length > 100) {
+            // Only auto-compute if translations are empty
+            if (!sequenceData.translations || sequenceData.translations.length === 0) {
+                const orfs = findORFs(sequenceData.sequence, 100);
+                if (orfs.length > 0) {
+                    setSequenceData({
+                        ...sequenceData,
+                        translations: orfs
+                    });
+                }
+            }
+        }
+    }, [sequenceData.sequence]); // Only depend on sequence string to avoid infinite loop
 
     // Load selected sequence
     const loadSequence = useCallback(async (id: string) => {
