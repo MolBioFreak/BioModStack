@@ -894,11 +894,54 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     {/* Label showing current view */}
                                     <div className="text-xs text-slate-500 mb-2">
                                         {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
+                                        {viewerMode === 'framework' && detectedCDRs && (
+                                            <span className="ml-2 text-emerald-400">(CDRs highlighted)</span>
+                                        )}
                                     </div>
                                     <EpitopeMolstarViewer
                                         structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
                                         height={400}
-                                        selectedResidues={viewerMode === 'target' ? selectedResidues : new Set<string>()}
+                                        selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
+                                            // When viewing framework, highlight detected CDR residues
+                                            const cdrResidues = new Set<string>();
+                                            if (detectedCDRs) {
+                                                // Add all residues in detected CDR ranges
+                                                // Framework structures use chain 'H' for heavy chain
+                                                const chainId = 'H';
+                                                if (detectedCDRs.cdr_h1_range) {
+                                                    for (let i = detectedCDRs.cdr_h1_range[0]; i <= detectedCDRs.cdr_h1_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_h2_range) {
+                                                    for (let i = detectedCDRs.cdr_h2_range[0]; i <= detectedCDRs.cdr_h2_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_h3_range) {
+                                                    for (let i = detectedCDRs.cdr_h3_range[0]; i <= detectedCDRs.cdr_h3_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                // Light chain CDRs (chain 'L' if present)
+                                                if (detectedCDRs.cdr_l1_range) {
+                                                    for (let i = detectedCDRs.cdr_l1_range[0]; i <= detectedCDRs.cdr_l1_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_l2_range) {
+                                                    for (let i = detectedCDRs.cdr_l2_range[0]; i <= detectedCDRs.cdr_l2_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_l3_range) {
+                                                    for (let i = detectedCDRs.cdr_l3_range[0]; i <= detectedCDRs.cdr_l3_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                            }
+                                            return cdrResidues;
+                                        })()}
                                         onResidueClick={viewerMode === 'target' ? (residueKey) => {
                                             setSelectedResidues(prev => {
                                                 const next = new Set(prev);
