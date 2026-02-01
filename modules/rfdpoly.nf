@@ -95,6 +95,16 @@ process RFDPolyDesign {
         ${seed_arg} \\
         inference.output_prefix=./${design_id}
     
+    # Fix PDB files for proper visualization in PDBe Mol*
+    # RFDpoly outputs lack TER/END records which breaks RNA bond rendering
+    for pdb in *.pdb; do
+        if [ -f "\$pdb" ]; then
+            # Add TER before ENDMDL and END at the end
+            sed -i 's/^ENDMDL/TER\\nENDMDL/' "\$pdb"
+            echo "END" >> "\$pdb"
+        fi
+    done
+    
     # Generate metrics JSON
     python3 -c "
 import json, glob
