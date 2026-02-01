@@ -243,24 +243,34 @@ for seq_name, data in result.items():
     numbering = data.get("numbering", [])
     
     # Extract CDRs based on IMGT position ranges
+    # Track both residues and position ranges
     cdr1_residues = []
     cdr2_residues = []
     cdr3_residues = []
+    cdr1_positions = []
+    cdr2_positions = []
+    cdr3_positions = []
     
     for (pos, insertion), aa in numbering:
         if aa == "-":
             continue
         if 27 <= pos <= 38:
             cdr1_residues.append(aa)
+            cdr1_positions.append(pos)
         elif 56 <= pos <= 65:
             cdr2_residues.append(aa)
+            cdr2_positions.append(pos)
         elif 105 <= pos <= 117:
             cdr3_residues.append(aa)
+            cdr3_positions.append(pos)
     
     output[chain_type] = {{
         "cdr1": "".join(cdr1_residues),
         "cdr2": "".join(cdr2_residues),
         "cdr3": "".join(cdr3_residues),
+        "cdr1_range": [min(cdr1_positions), max(cdr1_positions)] if cdr1_positions else None,
+        "cdr2_range": [min(cdr2_positions), max(cdr2_positions)] if cdr2_positions else None,
+        "cdr3_range": [min(cdr3_positions), max(cdr3_positions)] if cdr3_positions else None,
         "scheme": data.get("scheme", "imgt"),
     }}
 
@@ -354,6 +364,13 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
             annotation.cdr_h1_length = len(annotation.cdr_h1) if annotation.cdr_h1 else None
             annotation.cdr_h2_length = len(annotation.cdr_h2) if annotation.cdr_h2 else None
             annotation.cdr_h3_length = len(annotation.cdr_h3) if annotation.cdr_h3 else None
+            # Extract IMGT position ranges for 3D viewer highlighting
+            if h_data.get("cdr1_range"):
+                annotation.cdr_h1_range = tuple(h_data["cdr1_range"])
+            if h_data.get("cdr2_range"):
+                annotation.cdr_h2_range = tuple(h_data["cdr2_range"])
+            if h_data.get("cdr3_range"):
+                annotation.cdr_h3_range = tuple(h_data["cdr3_range"])
             # Mark as TCR if detected
             if "B" in anarcii_result or "G" in anarcii_result:
                 annotation.antibody_type = "tcr"
@@ -366,6 +383,13 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
             annotation.cdr_l1_length = len(annotation.cdr_l1) if annotation.cdr_l1 else None
             annotation.cdr_l2_length = len(annotation.cdr_l2) if annotation.cdr_l2 else None
             annotation.cdr_l3_length = len(annotation.cdr_l3) if annotation.cdr_l3 else None
+            # Extract IMGT position ranges for 3D viewer highlighting
+            if l_data.get("cdr1_range"):
+                annotation.cdr_l1_range = tuple(l_data["cdr1_range"])
+            if l_data.get("cdr2_range"):
+                annotation.cdr_l2_range = tuple(l_data["cdr2_range"])
+            if l_data.get("cdr3_range"):
+                annotation.cdr_l3_range = tuple(l_data["cdr3_range"])
             if "A" in anarcii_result or "D" in anarcii_result:
                 annotation.antibody_type = "tcr"
             elif annotation.antibody_type != "tcr":
