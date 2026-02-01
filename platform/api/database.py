@@ -301,6 +301,41 @@ class NucleotideSequence(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
 
+class Primer(Base):
+    """Primer library entry for MolBio Toolkit."""
+    __tablename__ = "primers"
+    
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False)
+    sequence = Column(String(500), nullable=False)  # 5' to 3' sequence
+    
+    # Calculated properties (cached for filtering)
+    length = Column(Integer, nullable=False)
+    tm = Column(Float, nullable=True)  # Melting temperature (°C)
+    gc_percent = Column(Float, nullable=True)  # GC content percentage
+    
+    # Primer type and usage
+    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
+    description = Column(Text, nullable=True)
+    
+    # Target binding info (optional)
+    target_sequence_id = Column(String(36), ForeignKey("nucleotide_sequences.id"), nullable=True)
+    binding_start = Column(Integer, nullable=True)  # 0-indexed binding position
+    binding_end = Column(Integer, nullable=True)
+    binding_strand = Column(Integer, default=1)  # 1 = forward, -1 = reverse
+    
+    # Tags for organization
+    tags = Column(JSON, nullable=True)  # ["cloning", "mutagenesis", "sequencing"]
+    
+    # Metadata
+    is_favorite = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    
+    # Relationship
+    target_sequence = relationship("NucleotideSequence", foreign_keys=[target_sequence_id])
+
+
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
