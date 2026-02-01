@@ -294,10 +294,10 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                 </div>
 
                 {/* Protein Chain Input */}
-                <div className="p-3 bg-surface-tertiary rounded-lg border border-accent-secondary/20 space-y-2">
+                <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-2">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                            <span className="text-xs text-accent-secondary font-semibold">Additional Protein Chain</span>
+                            <span className="text-xs text-accent font-semibold">Additional Protein Chain</span>
                             <span className="text-xs text-content-muted">(for protein-protein complex prediction)</span>
                         </div>
                         {onImportProtein && (
