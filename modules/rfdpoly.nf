@@ -224,46 +224,58 @@ process NAMPNNDesign {
 
     output:
     path "designed/*.pdb", emit: pdbs
-    path "designed/*.fasta", emit: fastas
+    path "designed/*.fa", emit: fastas
     path "nampnn_metrics.json", emit: metrics
 
     script:
     """
-    mkdir -p designed
+    mkdir -p designed input_converted nampnn_out
     
-    # Run NA-MPNN on each backbone PDB
+    # Convert RFDpoly residue names to NA-MPNN format
+    # RFDpoly: RG, RC, RU, RA -> NA-MPNN: G, C, U, A
     for pdb in *.pdb; do
         if [ -f "\$pdb" ]; then
-            echo "Running NA-MPNN on \$pdb..."
-            python /app/NA-MPNN/inference/run.py \\
+            sed 's/ RG / G  /g; s/ RC / C  /g; s/ RU / U  /g; s/ RA / A  /g' "\$pdb" > "input_converted/\$pdb"
+        fi
+    done
+    
+    # Run NA-MPNN from its working directory (required for data_utils import)
+    cd /app/NA-MPNN
+    
+    for pdb in \${PWD}/../input_converted/*.pdb; do
+        if [ -f "\$pdb" ]; then
+            echo "Running NA-MPNN on \$(basename \$pdb)..."
+            python inference/run.py \\
                 --model_type "na_mpnn" \\
                 --mode "design" \\
                 --pdb_path "\$pdb" \\
-                --out_folder "./nampnn_out" \\
-                --num_seq_per_target ${params.nampnn_num_seqs ?: 1}
-            
-            # Copy designed outputs to designed/ folder
-            # NA-MPNN outputs: sequences/<name>.fasta, pdbs/<name>.pdb
-            if [ -d "./nampnn_out/pdbs" ]; then
-                cp ./nampnn_out/pdbs/*.pdb designed/ 2>/dev/null || true
-            fi
-            if [ -d "./nampnn_out/sequences" ]; then
-                cp ./nampnn_out/sequences/*.fasta designed/ 2>/dev/null || true
-            fi
+                --out_folder "\${PWD}/../nampnn_out" \\
+                --number_of_batches ${params.nampnn_num_seqs ?: 1}
         fi
     done
+    
+    cd -
+    
+    # Copy designed outputs to designed/ folder
+    # NA-MPNN outputs: backbones/<name>_1.pdb, seqs/<name>.fa
+    if [ -d "./nampnn_out/backbones" ]; then
+        cp ./nampnn_out/backbones/*.pdb designed/ 2>/dev/null || true
+    fi
+    if [ -d "./nampnn_out/seqs" ]; then
+        cp ./nampnn_out/seqs/*.fa designed/ 2>/dev/null || true
+    fi
     
     # Generate metrics JSON
     python3 -c "
 import json, glob
 pdbs = glob.glob('designed/*.pdb')
-fastas = glob.glob('designed/*.fasta')
+fastas = glob.glob('designed/*.fa')
 metrics = {
     'design_id': '${design_id}',
     'num_designs': len(pdbs),
     'num_sequences': len(fastas),
     'model': 'na_mpnn',
-    'seqs_per_target': ${params.nampnn_num_seqs ?: 1}
+    'num_batches': ${params.nampnn_num_seqs ?: 1}
 }
 json.dump(metrics, open('nampnn_metrics.json', 'w'), indent=2)
 print(f'NA-MPNN designed sequences for {len(pdbs)} structures')
