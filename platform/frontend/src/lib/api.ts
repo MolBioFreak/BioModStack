@@ -942,6 +942,11 @@ export interface FrameworkDownloadResponse {
     cached: boolean;
     file_path: string | null;
     pdb_content: string | null;
+    // Chain metadata from SAbDab DB for post-download selection
+    h_chain?: string | null;      // Antibody heavy chain ID
+    l_chain?: string | null;      // Antibody light chain ID (None for VHH)
+    antigen_chain?: string | null;  // Antigen chain ID(s) if bound
+    antigen_name?: string | null;   // Antigen name for display
 }
 
 export interface CachedFramework {
