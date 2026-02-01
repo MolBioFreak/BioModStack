@@ -101,6 +101,26 @@ class SearchResponse(BaseModel):
     offset: int
 
 
+class CDRAnnotationResponse(BaseModel):
+    """CDR annotation results from ANARCII for a framework PDB."""
+    pdb_code: str
+    antibody_type: str  # "VHH", "Fab", "scFv", etc.
+    # CDR sequences
+    cdr_h1: Optional[str] = None
+    cdr_h2: Optional[str] = None
+    cdr_h3: Optional[str] = None
+    cdr_l1: Optional[str] = None
+    cdr_l2: Optional[str] = None
+    cdr_l3: Optional[str] = None
+    # CDR IMGT position ranges (start, end)
+    cdr_h1_range: Optional[List[int]] = None
+    cdr_h2_range: Optional[List[int]] = None
+    cdr_h3_range: Optional[List[int]] = None
+    cdr_l1_range: Optional[List[int]] = None
+    cdr_l2_range: Optional[List[int]] = None
+    cdr_l3_range: Optional[List[int]] = None
+
+
 # ============================================================================
 # Search Endpoints (Local Database)
 # ============================================================================
@@ -405,3 +425,60 @@ async def get_sabdab_attribution():
         "website": "https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab/",
         "local_mirror": "Offline-capable SQLite mirror with pre-computed CDR annotations"
     }
+
+
+# ============================================================================
+# CDR Annotation (ANARCII)
+# ============================================================================
+
+@router.post("/sabdab/{pdb_code}/annotate-cdrs", response_model=CDRAnnotationResponse)
+async def annotate_framework_cdrs(
+    pdb_code: str,
+    scheme: str = Query("imgt", description="Numbering scheme used for framework")
+):
+    """
+    Run ANARCII on a cached SAbDab framework to detect CDR positions.
+    
+    Returns CDR sequences and IMGT position ranges for use in RFantibody design.
+    Requires the framework to be downloaded first via /sabdab/{pdb_code}/download.
+    """
+    from services.cdr_annotator import annotate_pdb
+    
+    # Check cache for framework PDB
+    cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
+    if not cache_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Framework {pdb_code} not found in cache. Download it first via /sabdab/{pdb_code}/download"
+        )
+    
+    try:
+        logger.info(f"[CDR Annotation] Running ANARCII on {pdb_code}")
+        annotation = annotate_pdb(str(cache_file))
+        
+        if not annotation:
+            raise HTTPException(status_code=500, detail="ANARCII returned no results")
+        
+        # Convert CDRAnnotation dataclass to response model
+        return CDRAnnotationResponse(
+            pdb_code=pdb_code.upper(),
+            antibody_type=annotation.antibody_type,
+            cdr_h1=annotation.cdr_h1,
+            cdr_h2=annotation.cdr_h2,
+            cdr_h3=annotation.cdr_h3,
+            cdr_l1=annotation.cdr_l1,
+            cdr_l2=annotation.cdr_l2,
+            cdr_l3=annotation.cdr_l3,
+            cdr_h1_range=list(annotation.cdr_h1_range) if annotation.cdr_h1_range else None,
+            cdr_h2_range=list(annotation.cdr_h2_range) if annotation.cdr_h2_range else None,
+            cdr_h3_range=list(annotation.cdr_h3_range) if annotation.cdr_h3_range else None,
+            cdr_l1_range=list(annotation.cdr_l1_range) if annotation.cdr_l1_range else None,
+            cdr_l2_range=list(annotation.cdr_l2_range) if annotation.cdr_l2_range else None,
+            cdr_l3_range=list(annotation.cdr_l3_range) if annotation.cdr_l3_range else None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CDR Annotation] Error for {pdb_code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
