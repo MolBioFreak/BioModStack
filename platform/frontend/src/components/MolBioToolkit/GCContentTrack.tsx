@@ -3,18 +3,21 @@
  * 
  * Uses Plotly for smooth, interactive line chart with blue-to-red gradient coloring.
  * Features per-segment color based on GC content and selection-based recomputation.
+ * Bidirectional selection sync with sequence viewer.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useCallback } from 'react';
 import Plot from 'react-plotly.js';
-import type { Data, Layout, Shape } from 'plotly.js';
+import type { Data, Layout, Shape, PlotRelayoutEvent } from 'plotly.js';
+import type { SelectionInfo } from './SequenceViewer';
 
 interface GCContentTrackProps {
     sequence: string;
     windowSize?: number;      // Size of sliding window (default: 50bp)
     stepSize?: number;        // Step between windows (default: 10bp)
     height?: number;          // Chart height in pixels
-    selection?: { start: number; end: number } | null;
+    selection?: SelectionInfo | null;
+    onSelectionChange?: (selection: SelectionInfo) => void;
 }
 
 /**
@@ -69,7 +72,8 @@ export function GCContentTrack({
     windowSize = 50,
     stepSize = 10,
     height = 100,
-    selection
+    selection,
+    onSelectionChange
 }: GCContentTrackProps) {
     // Calculate GC windows
     const gcData = useMemo(() => {
@@ -98,12 +102,28 @@ export function GCContentTrack({
         };
     }, [selection, sequence]);
 
+    // Handle Plotly selection/zoom events
+    const handleRelayout = useCallback((event: PlotRelayoutEvent) => {
+        if (!onSelectionChange || !sequence) return;
+
+        // Check if this is a zoom/selection event on x-axis
+        if ('xaxis.range[0]' in event && 'xaxis.range[1]' in event) {
+            const start = Math.max(0, Math.floor(event['xaxis.range[0]'] as number));
+            const end = Math.min(sequence.length, Math.ceil(event['xaxis.range[1]'] as number));
+
+            if (end > start && (end - start) < sequence.length * 0.95) {
+                // Only trigger selection if it's not the full sequence
+                onSelectionChange({ start, end });
+            }
+        }
+        // Note: autorange/double-click resets are handled by the parent component
+    }, [onSelectionChange, sequence]);
+
     if (!sequence || sequence.length < 10 || gcData.length === 0) {
         return null;
     }
 
     // Create multiple traces - each segment gets its own color
-    // This is the proper way to do multi-colored lines in Plotly
     const traces: Data[] = [];
 
     for (let i = 0; i < gcData.length - 1; i++) {
@@ -191,7 +211,8 @@ export function GCContentTrack({
         },
         shapes: shapes,
         hovermode: 'closest',
-        showlegend: false
+        showlegend: false,
+        dragmode: 'zoom'  // Enable zoom selection on drag
     };
 
     return (
@@ -202,10 +223,12 @@ export function GCContentTrack({
                 config={{
                     displayModeBar: false,
                     responsive: true,
-                    staticPlot: false
+                    staticPlot: false,
+                    scrollZoom: true  // Enable scroll zoom
                 }}
                 style={{ width: '100%', height: height }}
                 useResizeHandler={true}
+                onRelayout={handleRelayout}
             />
 
             {/* Overall GC badge */}
