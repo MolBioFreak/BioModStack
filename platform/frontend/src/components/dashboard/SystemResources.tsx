@@ -381,7 +381,7 @@ function WorkflowPinningSection() {
                 className="flex items-center justify-between w-full text-left"
             >
                 <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">📌 Workflow GPU Pins</span>
+                    <span className="text-xs text-slate-400">Workflow GPU Pins</span>
                     {Object.keys(workflowPins).length > 0 && (
                         <span className="px-1.5 py-0.5 rounded text-xs bg-orange-500/20 text-orange-400">
                             {Object.keys(workflowPins).length} active
@@ -852,7 +852,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 onClick={() => setExpanded(!expanded)}
             >
                 <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-slate-200">⚙️ GPU Scheduler</span>
+                    <span className="text-sm font-medium text-slate-200">GPU Scheduler</span>
                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">
                         {gpus.length} GPUs
                     </span>

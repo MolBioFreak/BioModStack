@@ -565,32 +565,31 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
                 {/* MSA Quality Options (Advanced) */}
                 {((showBoltzParams && boltzUseMsa) || (showRf3Params && rf3UseMsa)) && (
-                    <div className="border border-amber-700/30 rounded-lg overflow-hidden">
+                    <div className="border border-[var(--border-primary)] rounded-lg overflow-hidden">
                         <button
                             onClick={() => setShowMsaOptions(!showMsaOptions)}
-                            className="w-full flex items-center justify-between p-3 bg-amber-900/20 hover:bg-amber-900/30 transition-colors"
+                            className="w-full flex items-center justify-between p-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] transition-colors"
                         >
                             <div className="flex items-center gap-2">
-                                <span className="text-amber-400">🧬</span>
-                                <span className="text-sm font-medium text-amber-300">MSA Quality Options</span>
-                                <span className="text-xs text-amber-600">(Advanced)</span>
+                                <span className="text-sm font-medium text-[var(--text-primary)]">MSA Quality Options</span>
+                                <span className="text-xs text-[var(--text-muted)]">(Advanced)</span>
                             </div>
-                            <span className="text-amber-400 text-sm">{showMsaOptions ? '▼' : '▶'}</span>
+                            <span className="text-[var(--text-secondary)] text-sm">{showMsaOptions ? '▼' : '▶'}</span>
                         </button>
                         {showMsaOptions && (
-                            <div className="p-4 space-y-4 bg-slate-900/50">
-                                <p className="text-xs text-slate-500">
+                            <div className="p-4 space-y-4 bg-[var(--bg-secondary)]">
+                                <p className="text-xs text-[var(--text-muted)]">
                                     These options control the MSA (Multiple Sequence Alignment) search.
                                     Use taxonomy filtering to restrict to relevant organisms and prevent false positive hits.
                                 </p>
                                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                     {/* Taxonomy Filter */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Taxonomy Filter</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">Taxonomy Filter</label>
                                         <select
                                             value={msaTaxonomy}
                                             onChange={(e) => setMsaTaxonomy(e.target.value)}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
                                             <option value="">All organisms</option>
                                             <option value="2">Bacteria only</option>
@@ -602,11 +601,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     </div>
                                     {/* E-value */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">E-value Threshold</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">E-value Threshold</label>
                                         <select
                                             value={msaEvalue}
                                             onChange={(e) => setMsaEvalue(e.target.value)}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
                                             <option value="1">1 (Very relaxed)</option>
                                             <option value="0.1">0.1</option>
@@ -618,11 +617,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     </div>
                                     {/* Min Seq Identity */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Min Sequence ID</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">Min Sequence ID</label>
                                         <select
                                             value={msaMinSeqId}
                                             onChange={(e) => setMsaMinSeqId(e.target.value)}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
                                             <option value="">No minimum</option>
                                             <option value="0.1">10%</option>
@@ -634,11 +633,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     </div>
                                     {/* Min Coverage */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Min Coverage</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">Min Coverage</label>
                                         <select
                                             value={msaMinCoverage}
                                             onChange={(e) => setMsaMinCoverage(e.target.value)}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
                                             <option value="">No minimum</option>
                                             <option value="0.3">30%</option>
@@ -650,44 +649,44 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     </div>
                                     {/* Depth Warning */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Depth Warning</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">Depth Warning</label>
                                         <input
                                             type="number"
                                             value={msaMinDepthWarning}
                                             onChange={(e) => setMsaMinDepthWarning(Math.max(0, parseInt(e.target.value) || 100))}
                                             min={0}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                             title="Warn if MSA has fewer sequences"
                                         />
                                     </div>
                                     {/* Depth Fail */}
                                     <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Depth Fail</label>
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">Depth Fail</label>
                                         <input
                                             type="number"
                                             value={msaMinDepthFail}
                                             onChange={(e) => setMsaMinDepthFail(Math.max(0, parseInt(e.target.value) || 10))}
                                             min={0}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                             title="Fail job if MSA has fewer sequences (0 = no fail)"
                                         />
                                     </div>
                                 </div>
                                 {/* Force Refresh Toggle */}
-                                <label className="flex items-center gap-3 p-3 bg-red-900/20 border border-red-700/30 rounded-lg cursor-pointer hover:bg-red-900/30 transition-colors">
+                                <label className="flex items-center gap-3 p-3 bg-[var(--error)]/10 border border-[var(--error)]/30 rounded-lg cursor-pointer hover:bg-[var(--error)]/20 transition-colors">
                                     <input
                                         type="checkbox"
                                         checked={msaForceRefresh}
                                         onChange={(e) => setMsaForceRefresh(e.target.checked)}
-                                        className="w-4 h-4 rounded bg-slate-900 border-red-700 text-red-600 focus:ring-red-500"
+                                        className="w-4 h-4 rounded bg-[var(--bg-primary)] border-[var(--error)] text-[var(--error)] focus:ring-[var(--error)]"
                                     />
                                     <div>
-                                        <span className="text-red-300 font-medium">🔄 Regenerate MSA (Purge Cache)</span>
-                                        <p className="text-xs text-red-400/70">Force fresh MSA search, ignoring cached results for this sequence</p>
+                                        <span className="text-[var(--error)] font-medium">Regenerate MSA (Purge Cache)</span>
+                                        <p className="text-xs text-[var(--error)]/70">Force fresh MSA search, ignoring cached results for this sequence</p>
                                     </div>
                                 </label>
-                                <div className="text-xs text-slate-500 bg-slate-800/50 p-2 rounded">
-                                    💡 <strong>Tip:</strong> For prokaryotic proteins (e.g., RepA), set Taxonomy Filter to "Bacteria only" or "Prokaryotes".
+                                <div className="text-xs text-[var(--text-muted)] bg-[var(--bg-tertiary)] p-2 rounded">
+                                    <strong>Tip:</strong> For prokaryotic proteins (e.g., RepA), set Taxonomy Filter to "Bacteria only" or "Prokaryotes".
                                     For eukaryotic proteins, use "Eukaryota only".
                                 </div>
                             </div>
