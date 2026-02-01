@@ -76,6 +76,9 @@ class JobResponse(BaseModel):
     # Batch grouping for job sets
     batch_id: Optional[str] = None
     batch_name: Optional[str] = None
+    # Parent-child tracking (SWA pattern)
+    parent_job_id: Optional[str] = None
+    child_stage: Optional[str] = None
     # GPU assignment
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None

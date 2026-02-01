@@ -4,10 +4,11 @@ System monitoring API router - GPU, CPU, RAM statistics.
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel
 from collections import deque
 from pathlib import Path
+import os
 import subprocess
 import json
 import asyncio
@@ -191,6 +192,59 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
             except pynvml.NVMLError:
                 clock_graphics = clock_memory = clock_max_graphics = clock_max_memory = 0
             
+            def _infer_process_label(proc_name: str, cmdline: Optional[List[str]]) -> str:
+                """Infer a human-friendly label from process name/cmdline."""
+                base_name = proc_name or ""
+                cmdline_list = cmdline or []
+                cmdline_str = " ".join(cmdline_list)
+                haystack = f"{base_name} {cmdline_str}".lower()
+
+                # Order matters: more specific first to avoid false matches
+                patterns = [
+                    ("fampnn", "FAMPNN"),
+                    ("seq_design.py", "FAMPNN"),
+                    ("thermompnn", "ThermoMPNN"),
+                    ("ppiflow", "PPIFlow"),
+                    ("rfdiffusion_inference.py", "RFantibody"),
+                    ("rfantibody", "RFantibody"),
+                    ("boltzgen", "BoltzGen"),
+                    ("boltz", "Boltz-2"),
+                    ("af2_backprop", "AF2 Backprop"),
+                    ("alphafold", "AlphaFold2"),
+                    ("af2", "AlphaFold2"),
+                    ("diffdock", "DiffDock"),
+                    ("unidock", "Uni-Dock"),
+                    # MPNN variants - specific first, generic last
+                    ("fampnn", "FAMPNN"),
+                    ("frustrampnn", "FrustraMPNN"),
+                    ("frustra", "FrustraMPNN"),
+                    ("ligandmpnn", "LigandMPNN"),
+                    ("thermompnn", "ThermoMPNN"),
+                    ("proteinmpnn", "ProteinMPNN"),
+                    ("mpnn", "ProteinMPNN"),  # Generic fallback
+                    ("rfd3", "RFdiffusion3"),
+                    ("rfdiffusion", "RFdiffusion"),
+                    ("rf3", "RoseTTAFold3"),
+                    ("openmm", "OpenMM"),
+                    ("antiberty", "AntiBERTy"),
+                    ("anarcii", "ANARCII"),
+                    ("immunebuilder", "ImmuneBuilder"),
+                ]
+                for key, label in patterns:
+                    if key in haystack:
+                        return label
+
+                # If it's a generic python process, try to show the script name
+                if base_name.lower() in ["python", "python3", "python3.10", "python3.11"]:
+                    if cmdline_list and len(cmdline_list) > 1:
+                        script_idx = 1
+                        if cmdline_list[1] == "-m" and len(cmdline_list) > 2:
+                            script_idx = 2
+                        script = os.path.basename(cmdline_list[script_idx])
+                        if script:
+                            return script
+                return base_name
+
             # Processes
             processes = []
             try:
@@ -200,6 +254,8 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                         import psutil
                         p = psutil.Process(proc.pid)
                         proc_name = p.name()
+                        cmdline = p.cmdline()
+                        proc_name = _infer_process_label(proc_name, cmdline)
                     except:
                         proc_name = f"PID {proc.pid}"
                     
@@ -222,12 +278,16 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 
                 # Create display name
                 if model_types:
-                    # Map model types to display names
+                    # Map model types to display names - MPNN variants explicitly listed
                     MODEL_DISPLAY = {
                         'boltz': 'Boltz-2', 'boltz_batch': 'Boltz-2 Batch',
                         'rf3': 'RoseTTAFold3', 'af2': 'AlphaFold2',
                         'rfdiffusion': 'RFdiffusion', 'rfantibody': 'RFantibody',
-                        'fampnn': 'FAMPNN', 'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
+                        # MPNN variants
+                        'fampnn': 'FAMPNN', 'frustrampnn': 'FrustraMPNN',
+                        'ligandmpnn': 'LigandMPNN', 'thermompnn': 'ThermoMPNN',
+                        'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
+                        # Other
                         'diffdock': 'DiffDock', 'unidock': 'Uni-Dock',
                         'boltzgen': 'BoltzGen', 'antibody_child': 'Antibody Validation',
                     }
@@ -945,7 +1005,7 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
 class ConcurrencyLimitRequest(BaseModel):
     """Request to set concurrency limit for a model type."""
     model_type: str  # e.g., "fampnn", "rfantibody", "boltz"
-    limit: Optional[int] = None  # None = auto (no limit)
+    limit: Optional[Union[int, str]] = None  # None = unlimited, "auto" = VRAM-derived
 
 
 @router.get("/concurrency-limits")
@@ -956,7 +1016,7 @@ async def get_concurrency_limits():
     config = read_scheduler_config()
     return {
         "concurrency_limits": config.get("concurrency_limits", {}),
-        "description": "Model type -> max concurrent jobs (null = auto/unlimited)"
+        "description": "Model type -> max concurrent running jobs (cap; 'auto' uses VRAM-derived limit)"
     }
 
 
@@ -965,8 +1025,8 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     """
     [DEBUG] Set concurrency limit for a specific model type.
     
-    Limits how many jobs of this type can run concurrently.
-    Set to null to remove the limit (auto mode).
+    Limits how many jobs of this type can run concurrently (cap).
+    Set to null for unlimited, or "auto" for VRAM-derived limit.
     """
     import logging
     logger = logging.getLogger("api.gpu")
@@ -979,11 +1039,18 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     old_limit = config["concurrency_limits"].get(request.model_type)
     
     if request.limit is None:
-        # Remove the limit
+        # Remove the limit (unlimited)
         config["concurrency_limits"].pop(request.model_type, None)
         logger.info(f"[CONCURRENCY] Removed limit for {request.model_type}")
+    elif isinstance(request.limit, str):
+        if request.limit.lower() != "auto":
+            raise HTTPException(status_code=400, detail="limit must be an integer, 'auto', or null")
+        config["concurrency_limits"][request.model_type] = "auto"
+        logger.info(f"[CONCURRENCY] Set {request.model_type} limit to auto")
     else:
-        config["concurrency_limits"][request.model_type] = request.limit
+        if request.limit < 1:
+            raise HTTPException(status_code=400, detail="limit must be >= 1, 'auto', or null")
+        config["concurrency_limits"][request.model_type] = int(request.limit)
         logger.info(f"[CONCURRENCY] Set {request.model_type} limit to {request.limit}")
     
     if not write_scheduler_config(config):

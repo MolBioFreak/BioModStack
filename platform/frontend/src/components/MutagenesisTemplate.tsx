@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
@@ -7,6 +7,7 @@ import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
+import MolstarViewer from './MolstarViewer';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 interface MutagenesisTemplateProps {
@@ -18,7 +19,54 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     // Top-level state
     const [jobNamePrefix, setJobNamePrefix] = useState('mutagenesis_lib');
     const [baseSequence, setBaseSequence] = useState('');
-    const [mode, setMode] = useState<'library' | 'manual'>('library');
+    const [mode, setMode] = useState<'library' | 'manual' | 'affinityMaturation'>('library');
+
+    // Affinity Maturation State
+    // FrustraMPNN output: frustration index with thresholds <= -1.0 (highly), >= 0.58 (minimally)
+    const [frustrampnnResults, setFrustrampnnResults] = useState<Array<{
+        position: number;       // 1-indexed for display
+        aa: string;             // Wildtype residue
+        frustration: number;    // Frustration index (typically -3 to +3)
+        frustrationClass: 'highly' | 'neutral' | 'minimally';  // Classification
+        chain: string;
+        selected: boolean;
+    }>>([]);
+    const [frustrampnnLoading, setFrustrampnnLoading] = useState(false);
+    const [maturationAllowedAAs, setMaturationAllowedAAs] = useState('');
+    const [maturationGenMode, setMaturationGenMode] = useState<'singles' | 'combos' | 'sample'>('singles');
+    const [maturationSampleN, setMaturationSampleN] = useState(20);
+    const [ppiflowRotamer, setPpiflowRotamer] = useState(false);
+    const [ppiflowFlow, setPpiflowFlow] = useState(false);
+    const [ppiflowFinalBoltz, setPpiflowFinalBoltz] = useState(false);
+
+    // Clear FrustraMPNN results when sequence changes
+    useEffect(() => {
+        setFrustrampnnResults([]);
+    }, [baseSequence]);
+
+    // Official FrustraMPNN thresholds from constants.py
+    const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 };
+
+    // Helper: Convert frustration score to RGB color matching FrustraMPNN color scheme
+    const frustrationToColor = (frustration: number): { r: number; g: number; b: number } => {
+        // Official colors: red (highly) <= -1.0, gray (neutral), green (minimally) >= 0.58
+        if (frustration <= FRUSTRATION_THRESHOLDS.highly) {
+            return { r: 239, g: 68, b: 68 };    // Red: highly frustrated
+        } else if (frustration >= FRUSTRATION_THRESHOLDS.minimally) {
+            return { r: 34, g: 197, b: 94 };    // Green: minimally frustrated
+        }
+        return { r: 156, g: 163, b: 175 };      // Gray: neutral
+    };
+
+    // Build frustration color map for Molstar viewer
+    const frustrationColorMap = useMemo(() => {
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        frustrampnnResults.forEach(result => {
+            // Assuming chain 'A' for now - will be updated with actual chain info
+            colorMap.set(`A${result.position}`, frustrationToColor(result.frustration));
+        });
+        return colorMap;
+    }, [frustrampnnResults]);
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -28,7 +76,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [mutationCountMode, setMutationCountMode] = useState<'range' | 'exact' | 'set'>('range');
     const [mutationCountExact, setMutationCountExact] = useState(1);
     const [mutationCountSetInput, setMutationCountSetInput] = useState('1,2,3');
-    const [excludedPositions, setExcludedPositions] = useState<Set<number>>(new Set());
+    // Target Positions: positive selection (positions TO mutate)
+    const [selectedPositions, setSelectedPositions] = useState<Set<number>>(new Set());
+    const [lastClickedPos, setLastClickedPos] = useState<number | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
     const [excludeResiduesInput, setExcludeResiduesInput] = useState('');
     const [allowedAAsInput, setAllowedAAsInput] = useState('');
     const [blockedAAsInput, setBlockedAAsInput] = useState('');
@@ -46,11 +97,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // Preview
     const regions = useMemo(() => parseRegions(regionInput), [regionInput]);
-    const excludedPositionsList = useMemo(() => {
-        return Array.from(excludedPositions)
+    // Selected positions for Library Generator (positive selection)
+    const selectedPositionsList = useMemo(() => {
+        return Array.from(selectedPositions)
             .filter(pos => pos > 0 && pos <= baseSequence.length)
             .sort((a, b) => a - b);
-    }, [excludedPositions, baseSequence.length]);
+    }, [selectedPositions, baseSequence.length]);
+    // Note: excludedPositions state kept for future Affinity Maturation enhancements
     const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
 
     // Predictor Config
@@ -101,17 +154,48 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         return positions;
     }, [mode, regions, manualMutations, selectedChainId]);
 
-    // Handlers
-    const toggleExcludedPosition = (pos: number) => {
-        setExcludedPositions(prev => {
-            const next = new Set(prev);
-            if (next.has(pos)) {
-                next.delete(pos);
-            } else {
-                next.add(pos);
-            }
-            return next;
-        });
+    // Handlers for Target Positions selector (positive selection with shift+click/drag)
+    const handlePositionClick = (pos: number, event: React.MouseEvent) => {
+        if (event.shiftKey && lastClickedPos !== null) {
+            // Shift+Click: select range from lastClickedPos to pos
+            const start = Math.min(lastClickedPos, pos);
+            const end = Math.max(lastClickedPos, pos);
+            setSelectedPositions(prev => {
+                const next = new Set(prev);
+                for (let i = start; i <= end; i++) {
+                    next.add(i);
+                }
+                return next;
+            });
+        } else {
+            // Normal click: toggle single position
+            setSelectedPositions(prev => {
+                const next = new Set(prev);
+                if (next.has(pos)) {
+                    next.delete(pos);
+                } else {
+                    next.add(pos);
+                }
+                return next;
+            });
+        }
+        setLastClickedPos(pos);
+    };
+
+    const handleDragStart = (pos: number) => {
+        setIsDragging(true);
+        setSelectedPositions(prev => new Set(prev).add(pos));
+        setLastClickedPos(pos);
+    };
+
+    const handleDragMove = (pos: number) => {
+        if (isDragging) {
+            setSelectedPositions(prev => new Set(prev).add(pos));
+        }
+    };
+
+    const handleDragEnd = () => {
+        setIsDragging(false);
     };
 
     const handleGeneratePreview = () => {
@@ -125,9 +209,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 .split(',')
                 .map(v => parseInt(v.trim()))
                 .filter(v => Number.isFinite(v) && v > 0);
+
+            // Merge text-based regions with clicked selectedPositions
+            const mergedPositions = new Set<number>(selectedPositions);
+            for (const region of regions) {
+                for (let i = region.start; i <= region.end; i++) {
+                    if (i > 0 && i <= baseSequence.length) {
+                        mergedPositions.add(i);
+                    }
+                }
+            }
+
+            // Convert to regions format for generateLibrary (contiguous ranges)
+            const sortedPositions = Array.from(mergedPositions).sort((a, b) => a - b);
+            const mergedRegions: { id: string; start: number; end: number; enabled: boolean }[] = [];
+            if (sortedPositions.length > 0) {
+                let start = sortedPositions[0];
+                let end = sortedPositions[0];
+                for (let i = 1; i <= sortedPositions.length; i++) {
+                    const pos = sortedPositions[i];
+                    if (pos === end + 1) {
+                        end = pos;
+                    } else {
+                        mergedRegions.push({ id: `merged_${mergedRegions.length}`, start, end, enabled: true });
+                        start = pos;
+                        end = pos;
+                    }
+                }
+            }
+
             const variants = generateLibrary(
                 baseSequence,
-                regions,
+                mergedRegions, // Use merged regions from clicks + text input
                 strategy,
                 numVariants,
                 mutationsPerVariant,
@@ -136,7 +249,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     allowedAAs,
                     blockedAAs,
                     excludeFromResidues: excludeResidues,
-                    excludedPositions: excludedPositionsList,
+                    excludedPositions: [], // No longer using exclusion in standard mode
                     mutationCountMode,
                     mutationCount: mutationCountExact,
                     mutationCountSet,
@@ -228,16 +341,36 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-xl animate-in fade-in slide-in-from-bottom-4">
-            <header className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                <div>
-                    <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent flex items-center gap-2">
-                        <span>🧬</span> Mutagenesis Library
-                    </h2>
-                    <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
+            <header className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={onBack}
+                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+                    >
+                        ← Back
+                    </button>
+                    <div>
+                        <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+                            Mutagenesis Library
+                        </h2>
+                        <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
+                    </div>
                 </div>
-                <button onClick={onBack} className="text-slate-400 hover:text-white px-3 py-1 rounded hover:bg-slate-800 transition-colors">
-                    Cancel
-                </button>
+                {/* Top-level workflow tabs */}
+                <div className="flex bg-slate-800/50 p-1 rounded-lg">
+                    <button
+                        onClick={() => setMode('library')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Standard Workflow
+                    </button>
+                    <button
+                        onClick={() => setMode('affinityMaturation')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Affinity Maturation
+                    </button>
+                </div>
             </header>
 
             <div className="space-y-8">
@@ -250,7 +383,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 onClick={() => setShowSequenceManager(true)}
                                 className="px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
-                                📚 Sequence Library
+                                Sequence Library
                             </button>
                             <button
                                 onClick={() => {
@@ -259,7 +392,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 }}
                                 className="px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-600/30 text-cyan-400 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
-                                🧬 Import PDB
+                                Import PDB
                             </button>
                             <button
                                 onClick={() => {
@@ -311,20 +444,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
                                         }`}
                                 >
-                                    {show3DViewer ? '🔍 Hide 3D' : '🧬 Show 3D'}
+                                    {show3DViewer ? 'Hide 3D' : 'Show 3D'}
                                 </button>
                             </div>
                             {show3DViewer && (
                                 <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                                     <div className="text-xs text-slate-500 mb-2">
                                         {mutationPositionsSet.size > 0
-                                            ? `🎯 ${mutationPositionsSet.size} mutation positions highlighted`
+                                            ? `${mutationPositionsSet.size} mutation positions highlighted`
                                             : 'Define regions or mutations to highlight positions'}
                                     </div>
                                     <EpitopeMolstarViewer
                                         structureUrl={pdbBlobUrl}
                                         height={350}
                                         selectedResidues={mutationPositionsSet}
+                                        onResidueClick={(residueKey) => {
+                                            // Parse residue key (e.g., "A45") to extract position
+                                            const match = residueKey.match(/^([A-Z])(\d+)$/);
+                                            if (match) {
+                                                const pos = parseInt(match[2], 10);
+                                                if (pos > 0 && pos <= baseSequence.length) {
+                                                    setSelectedPositions(prev => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(pos)) {
+                                                            next.delete(pos);
+                                                        } else {
+                                                            next.add(pos);
+                                                        }
+                                                        return next;
+                                                    });
+                                                }
+                                            }
+                                        }}
                                     />
                                 </div>
                             )}
@@ -332,21 +483,23 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     )}
                 </section>
 
-                {/* 2. Mode Toggle */}
-                <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
-                    <button
-                        onClick={() => setMode('library')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        📚 Library Generator
-                    </button>
-                    <button
-                        onClick={() => setMode('manual')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        ✍️ Manual Editor
-                    </button>
-                </div>
+                {/* 2. Mode Toggle - Only show for Standard Workflow */}
+                {mode !== 'affinityMaturation' && (
+                    <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
+                        <button
+                            onClick={() => setMode('library')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Library Generator
+                        </button>
+                        <button
+                            onClick={() => setMode('manual')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Manual Editor
+                        </button>
+                    </div>
+                )}
 
                 {/* 3. Library Generator UI */}
                 {mode === 'library' && (
@@ -376,56 +529,73 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         {/* Mutation Rules */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-1">Exclude Positions</label>
-                                <p className="text-xs text-slate-500 mb-2">Click residues to blacklist within your mutation region.</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1">Target Positions</label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    Click to select positions to mutate. <span className="text-emerald-400">Shift+Click</span> for range. <span className="text-cyan-400">Drag</span> to paint.
+                                </p>
                                 {baseSequence ? (
                                     <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
                                         <div className="flex items-center justify-between mb-2">
-                                            <span className="text-[11px] text-slate-500">
-                                                Excluded: {excludedPositionsList.length}
-                                                {excludedPositionsList.length > 0 ? ` (${excludedPositionsList.join(', ')})` : ''}
+                                            <span className="text-[11px] text-emerald-400">
+                                                Selected: {selectedPositionsList.length} positions
+                                                {selectedPositionsList.length > 0 && selectedPositionsList.length <= 10
+                                                    ? ` (${selectedPositionsList.join(', ')})`
+                                                    : selectedPositionsList.length > 10
+                                                        ? ` (${selectedPositionsList.slice(0, 5).join(', ')}...${selectedPositionsList.slice(-3).join(', ')})`
+                                                        : ''}
                                             </span>
                                             <button
-                                                onClick={() => setExcludedPositions(new Set())}
+                                                onClick={() => setSelectedPositions(new Set())}
                                                 className="text-[11px] text-slate-400 hover:text-white"
-                                                disabled={excludedPositionsList.length === 0}
+                                                disabled={selectedPositionsList.length === 0}
                                             >
                                                 Clear
                                             </button>
                                         </div>
-                                        <div className="flex flex-wrap gap-1 font-mono text-xs leading-none max-h-[160px] overflow-y-auto">
+                                        <div
+                                            className="flex flex-wrap gap-1 font-mono text-xs leading-none max-h-[160px] overflow-y-auto select-none"
+                                            onMouseUp={handleDragEnd}
+                                            onMouseLeave={handleDragEnd}
+                                        >
                                             {baseSequence.split('').map((aa, idx) => {
                                                 const pos = idx + 1;
-                                                const isExcluded = excludedPositions.has(pos);
+                                                const isSelected = selectedPositions.has(pos);
+                                                const isInRegion = regions.some(r => pos >= r.start && pos <= r.end);
                                                 return (
                                                     <button
                                                         key={pos}
-                                                        onClick={() => toggleExcludedPosition(pos)}
-                                                        className={`w-7 h-7 rounded border transition-colors ${
-                                                            isExcluded
-                                                                ? 'bg-red-600/30 border-red-400 text-red-200 line-through'
-                                                                : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                                                        }`}
-                                                        title={`Pos ${pos}: ${aa}${isExcluded ? ' (excluded)' : ''}`}
+                                                        onClick={(e) => handlePositionClick(pos, e)}
+                                                        onMouseDown={() => handleDragStart(pos)}
+                                                        onMouseEnter={() => handleDragMove(pos)}
+                                                        className={`w-7 h-7 rounded border transition-colors ${isSelected
+                                                            ? 'bg-emerald-600/40 border-emerald-400 text-emerald-200 font-bold'
+                                                            : isInRegion
+                                                                ? 'bg-purple-500/20 border-purple-400 text-purple-200'
+                                                                : 'bg-slate-900 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-200'
+                                                            }`}
+                                                        title={`Pos ${pos}: ${aa}${isSelected ? ' (target)' : isInRegion ? ' (in region)' : ''}`}
                                                     >
                                                         {aa}
                                                     </button>
                                                 );
                                             })}
                                         </div>
+                                        <div className="mt-2 text-[10px] text-slate-600">
+                                            Tip: Regions input above is merged with clicked selections
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="text-xs text-slate-600 bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                                        Load a sequence to enable position exclusion.
+                                        Load a sequence to select target positions.
                                     </div>
                                 )}
-                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Exclude Residues</label>
-                                <p className="text-xs text-slate-500 mb-2">Do not mutate positions with these WT residues (e.g., "CP")</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Protect WT Residue Types</label>
+                                <p className="text-xs text-slate-500 mb-2">Don't mutate positions where the wildtype is one of these (e.g., "CP" preserves all cysteines/prolines)</p>
                                 <input
                                     type="text"
                                     value={excludeResiduesInput}
                                     onChange={(e) => setExcludeResiduesInput(e.target.value.toUpperCase())}
-                                    placeholder="e.g., C, P"
+                                    placeholder="e.g., C, P (keep existing cysteines/prolines)"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>
@@ -439,13 +609,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     placeholder="e.g., AST"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
-                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Blocked AAs (Blacklist)</label>
-                                <p className="text-xs text-slate-500 mb-2">Exclude these AAs from substitutions/insertions</p>
+                                <label className="block text-sm font-medium text-slate-300 mb-1 mt-4">Never Substitute TO These AAs</label>
+                                <p className="text-xs text-slate-500 mb-2">When mutating, don't introduce these amino acids as replacements</p>
                                 <input
                                     type="text"
                                     value={blockedAAsInput}
                                     onChange={(e) => setBlockedAAsInput(e.target.value.toUpperCase())}
-                                    placeholder="e.g., C, P"
+                                    placeholder="e.g., C, M (avoid creating new cysteines/methionines)"
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>
@@ -613,7 +783,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <h3 className="text-sm font-semibold text-slate-300">Preview</h3>
                                 <button
                                     onClick={handleGeneratePreview}
-                                    disabled={!baseSequence || regions.length === 0}
+                                    disabled={!baseSequence || (regions.length === 0 && selectedPositions.size === 0)}
                                     className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
                                 >
                                     Generate Preview
@@ -686,7 +856,245 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     </div>
                 )}
 
-                {/* 5. Predictor Settings */}
+                {/* 5. Affinity Maturation Mode */}
+                {mode === 'affinityMaturation' && (
+                    <div className="space-y-6 border-l-2 border-emerald-800 pl-4">
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-200 mb-1">FrustraMPNN-Guided Maturation</h3>
+                                <p className="text-xs text-slate-500">Identify frustrated CDR positions and generate optimized variants</p>
+                            </div>
+                        </div>
+
+                        {/* 3D Frustration Map Preview */}
+                        {pdbBlobUrl && (
+                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3">3D Frustration Map</h4>
+                                <p className="text-xs text-slate-500 mb-3">
+                                    {frustrampnnResults.length > 0
+                                        ? `Colored by frustration: green (stable) → red (frustrated)`
+                                        : 'Run FrustraMPNN analysis to color by frustration'}
+                                </p>
+                                <MolstarViewer
+                                    structureUrl={pdbBlobUrl}
+                                    height={280}
+                                    hideControls={true}
+                                    alphafoldView={frustrampnnResults.length === 0} // pLDDT coloring if no frustration data
+                                    residueColors={frustrampnnResults.length > 0 ? frustrationColorMap : undefined}
+                                    label={frustrampnnResults.length > 0 ? 'Frustration Map' : undefined}
+                                />
+                            </div>
+                        )}
+
+                        {/* FrustraMPNN Analysis Section */}
+                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                            <div className="flex justify-between items-center mb-4">
+                                <h4 className="text-sm font-semibold text-slate-300">FrustraMPNN Analysis</h4>
+                                <button
+                                    onClick={async () => {
+                                        if (!pdbBlobUrl) {
+                                            console.error('No PDB loaded for FrustraMPNN analysis');
+                                            return;
+                                        }
+
+                                        setFrustrampnnLoading(true);
+
+                                        try {
+                                            // Fetch the PDB blob from the URL
+                                            const pdbResponse = await fetch(pdbBlobUrl);
+                                            const pdbBlob = await pdbResponse.blob();
+
+                                            // Call the FrustraMPNN API
+                                            const formData = new FormData();
+                                            formData.append('pdb_file', pdbBlob, 'structure.pdb');
+                                            if (selectedChainId) {
+                                                formData.append('chain', selectedChainId);
+                                            }
+
+                                            const response = await fetch('/api/frustrampnn/analyze', {
+                                                method: 'POST',
+                                                body: formData
+                                            });
+
+                                            if (!response.ok) {
+                                                const errorText = await response.text();
+                                                throw new Error(errorText);
+                                            }
+
+                                            const data = await response.json();
+
+                                            // Convert native profile to our display format
+                                            // Auto-select highly frustrated positions for mutation
+                                            const results = data.native_profile.map((d: any) => ({
+                                                position: d.position + 1,  // Convert to 1-indexed
+                                                aa: d.wildtype,
+                                                frustration: d.frustration_pred,
+                                                frustrationClass: d.class as 'highly' | 'neutral' | 'minimally',
+                                                chain: d.chain,
+                                                selected: d.class === 'highly'  // Auto-select highly frustrated
+                                            }));
+
+                                            setFrustrampnnResults(results);
+                                            console.log('FrustraMPNN analysis complete:', data.summary);
+
+                                        } catch (err) {
+                                            console.error('FrustraMPNN analysis failed:', err);
+                                        } finally {
+                                            setFrustrampnnLoading(false);
+                                        }
+                                    }}
+                                    disabled={!baseSequence || frustrampnnLoading}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors flex items-center gap-2"
+                                >
+                                    {frustrampnnLoading ? (
+                                        <><span className="animate-spin">...</span> Analyzing...</>
+                                    ) : (
+                                        <>Run Analysis</>
+                                    )}
+                                </button>
+                            </div>
+
+                            {frustrampnnResults.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="text-left text-slate-400 border-b border-slate-700">
+                                                <th className="py-2 px-2">Select</th>
+                                                <th className="py-2 px-2">Chain</th>
+                                                <th className="py-2 px-2">Position</th>
+                                                <th className="py-2 px-2">WT</th>
+                                                <th className="py-2 px-2">Frustration</th>
+                                                <th className="py-2 px-2">Class</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {frustrampnnResults.map((row, idx) => (
+                                                <tr key={`${row.chain}${row.position}`} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                                                    <td className="py-2 px-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={row.selected}
+                                                            onChange={() => {
+                                                                setFrustrampnnResults(prev => {
+                                                                    const next = [...prev];
+                                                                    next[idx] = { ...next[idx], selected: !next[idx].selected };
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-emerald-600"
+                                                        />
+                                                    </td>
+                                                    <td className="py-2 px-2 font-mono text-slate-500">{row.chain}</td>
+                                                    <td className="py-2 px-2 font-mono text-slate-300">{row.position}</td>
+                                                    <td className="py-2 px-2 font-mono font-bold text-purple-400">{row.aa}</td>
+                                                    <td className="py-2 px-2 font-mono">
+                                                        {row.frustration.toFixed(2)}
+                                                    </td>
+                                                    <td className="py-2 px-2">
+                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustrationClass === 'highly' ? 'bg-red-500/20 text-red-400' :
+                                                            row.frustrationClass === 'minimally' ? 'bg-green-500/20 text-green-400' :
+                                                                'bg-slate-500/20 text-slate-400'
+                                                            }`}>
+                                                            {row.frustrationClass}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <div className="text-center py-6 text-slate-600 text-sm italic">
+                                    {baseSequence ? 'Click "Run Analysis" to identify frustrated positions' : 'Load a sequence first, then run analysis'}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Mutation Generation Options */}
+                        {frustrampnnResults.filter(r => r.selected).length > 0 && (
+                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3">Generation Options</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">Allowed AAs (override FrustraMPNN)</label>
+                                        <input
+                                            type="text"
+                                            value={maturationAllowedAAs}
+                                            onChange={(e) => setMaturationAllowedAAs(e.target.value.toUpperCase())}
+                                            placeholder="Leave empty to use FrustraMPNN suggestions"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">Generation Mode</label>
+                                        <select
+                                            value={maturationGenMode}
+                                            onChange={(e) => setMaturationGenMode(e.target.value as any)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                        >
+                                            <option value="singles">Single Mutants Only</option>
+                                            <option value="combos">Top Combinations</option>
+                                            <option value="sample">Random Sample</option>
+                                        </select>
+                                    </div>
+                                    {maturationGenMode === 'sample' && (
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-2">Sample N Variants</label>
+                                            <input
+                                                type="number"
+                                                value={maturationSampleN}
+                                                onChange={(e) => setMaturationSampleN(parseInt(e.target.value) || 20)}
+                                                min={1}
+                                                max={100}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* PPIFlow Refinement Options */}
+                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                            <h4 className="text-sm font-semibold text-slate-300 mb-3">Refinement Pipeline</h4>
+                            <p className="text-xs text-slate-500 mb-4">Order: Boltz-2 → [PPIFlow Rotamer] → [PPIFlow Flow] → [Final Boltz-2]</p>
+                            <div className="space-y-3">
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowRotamer}
+                                        onChange={(e) => setPpiflowRotamer(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
+                                    />
+                                    <span>PPIFlow Rotamer Enrichment</span>
+                                    <span className="text-xs text-slate-500">(sidechain optimization)</span>
+                                </label>
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowFlow}
+                                        onChange={(e) => setPpiflowFlow(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
+                                    />
+                                    <span>PPIFlow Flow Matching</span>
+                                    <span className="text-xs text-slate-500">(interface polish)</span>
+                                </label>
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowFinalBoltz}
+                                        onChange={(e) => setPpiflowFinalBoltz(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
+                                    />
+                                    <span>Final Boltz-2 Validation</span>
+                                    <span className="text-xs text-slate-500">(after PPIFlow)</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 6. Predictor Settings */}
                 <section className="pt-6 border-t border-slate-800">
                     <h3 className="text-sm font-semibold text-slate-200 mb-4">Prediction Settings</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">

@@ -96,7 +96,7 @@ Optional stages (ThermoMPNN / AF2 Backprop) remain **after maturation**, before 
 ### Phase 1 — Preflight + Canonical Dependencies
 - Confirm container hosting for `ppiflow.sif` under `params.container_dir`.
 - Decide baseline vs pinned CUDA/PyTorch stack; document only if deviation is required.
-- Define shared weights path (e.g., `/mnt/BioModStack/weights/ppiflow`) and bind via `task.ext.containerOptions`.
+- Define shared weights path (e.g., `BMS_WEIGHTS/ppiflow`) and bind via `task.ext.containerOptions`.
 - Add validation checks for missing weights.
 
 ### Phase 2 — Core Maturation Wiring

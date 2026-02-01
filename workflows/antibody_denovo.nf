@@ -276,16 +276,15 @@ process WaitForFAMPNNChildren {
 process CollectFAMPNNOutputs {
     label 'process_low'
     
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "job*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "job*.json"
     
     input:
     path child_outputs_json
     val stage_name
     
     output:
-    path "*.pdb", emit: pdbs, optional: true
-    path "*.json", emit: jsons, optional: true
+    tuple path("job*.pdb"), path("job*.json"), emit: outputs
     path "collection_manifest.json", emit: manifest
     
     script:
@@ -963,8 +962,9 @@ workflow ANTIBODY_DENOVO {
             )
             
             // REPORT STAGE: fampnn
-            CollectFAMPNNOutputs.out.pdbs.subscribe { pdbs ->
+            CollectFAMPNNOutputs.out.outputs.subscribe { items ->
                 try {
+                    def (pdbs, jsons) = items
                     def file_list = pdbs instanceof List ? pdbs : [pdbs]
                     def count = file_list.size()
                     log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
@@ -990,11 +990,8 @@ workflow ANTIBODY_DENOVO {
                 if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
                 log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
                 
-                // Collect PDBs and JSONs for filtering
-                fampnn_filter_input = CollectFAMPNNOutputs.out.pdbs
-                    .combine(CollectFAMPNNOutputs.out.jsons.ifEmpty(file("${projectDir}/lib/empty-meta.jsonl")))
-                
-                FilterFAMPNN(fampnn_filter_input)
+                // Collect PDBs + JSONs for filtering
+                FilterFAMPNN(CollectFAMPNNOutputs.out.outputs)
                 
                 FilterFAMPNN.out.pdbs.subscribe { pdbs ->
                     def count = pdbs instanceof List ? pdbs.size() : 1
@@ -1008,7 +1005,7 @@ workflow ANTIBODY_DENOVO {
             } else {
                 log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
                 // Pass through unfiltered
-                fampnn_seqs = CollectFAMPNNOutputs.out.pdbs.map { pdbs ->
+                fampnn_seqs = CollectFAMPNNOutputs.out.outputs.map { pdbs, jsons ->
                     def meta = [id: "fampnn_designs"]
                     [meta, pdbs]
                 }
@@ -1576,7 +1573,8 @@ workflow ANTIBODY_DENOVO {
         log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
         frustrampnn_input = final_designs.map { meta, pdb -> [meta, pdb] }
         FrustrampnnQC(frustrampnn_input)
-        AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
+        // Extract just the path from (meta, path) tuples before collecting
+        AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
     }
 
     // Step 4.y: ANARCII CDR annotation (post-pipeline polishing)
