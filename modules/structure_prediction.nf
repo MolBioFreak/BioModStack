@@ -2,7 +2,7 @@
 // Modules for predicting 3D protein structure directly from amino acid sequence
 
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
-// Uses full ColabFold database at /mnt/BioModStack/colabfold_db
+// Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
 process GenerateLocalMSA {
     label 'CPU'
@@ -19,8 +19,8 @@ process GenerateLocalMSA {
     path "*.log"
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
@@ -59,8 +59,8 @@ process BatchMSAGeneration {
     path "*.log"
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def maxParallel = params.msa_max_parallel ?: 4
     def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
@@ -100,12 +100,14 @@ process BoltzFromSequence {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
-    def msaCacheDir = params.msa_cache_dir ?: '/mnt/BioModStack/msa_cache'
+    def msaDbPath = params.msa_local_db
+    def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     """
+    set -o pipefail  # Propagate exit codes through pipes
+    
     # Setup temp directories for containerized execution
     mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
@@ -197,6 +199,7 @@ PYEOF
         ./yamls/ \\
         --output_format pdb \\
         --diffusion_samples ${numSamples} \\
+        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
@@ -220,6 +223,12 @@ PYEOF
         # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
+    
+    # Output validation: fail if no structure files produced
+    if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then
+        echo "ERROR: Boltz produced no output files"
+        exit 1
+    fi
     """
 }
 
@@ -246,6 +255,8 @@ process BoltzFromSequenceWithMSA {
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     """
+    set -o pipefail  # Propagate exit codes through pipes
+    
     # Setup temp directories for containerized execution
     mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
@@ -321,6 +332,7 @@ PYEOF
         ./yamls/ \\
         --output_format pdb \\
         --diffusion_samples ${numSamples} \\
+        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
@@ -342,6 +354,12 @@ PYEOF
         # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
+    
+    # Output validation: fail if no structure files produced
+    if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then
+        echo "ERROR: Boltz produced no output files"
+        exit 1
+    fi
     """
 }
 
@@ -370,10 +388,14 @@ process BoltzFromComplex {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
-    def msaDbPath = params.msa_local_db ?: '/mnt/BioModStack/colabfold_db'
+    def msaDbPath = params.msa_local_db
+    def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
+    def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     """
+    set -o pipefail  # Propagate exit codes through pipes (fixes | tee masking failures)
+    
     mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
     export XDG_CONFIG_HOME=tmp
@@ -410,6 +432,10 @@ try:
 except Exception:
     fallback_msa = None
 
+# Track sequence -> MSA path mappings for homodimer support
+# Boltz-2 requires identical sequences to share the same MSA
+seq_to_msa = {}
+
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
     comp_id = comp.get("id", "A")
@@ -425,45 +451,53 @@ for comp in complex_def.get("components", []):
         elif fallback_msa:
             entry["protein"]["msa"] = fallback_msa
         elif use_msa and sequence:
-            # Generate MSA using run_local_msa.py with file-based locking to prevent parallel OOM
-            chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
-            msa_dir = "msa"
-            msa_file = f"msa/{complex_name}_{chain_id}.a3m"
-            # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
-            ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
-            ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""
-            
-            print(f"Generating local MSA for chain {chain_id} using run_local_msa.py...")
-            try:
-                # Use run_local_msa.py which has:
-                # 1. File-based locking to serialize parallel jobs
-                # 2. Cache checking to avoid redundant MSA generation
-                # 3. GPU/CPU auto-detection
-                cmd = [
-                    "python3", "${projectDir}/scripts/run_local_msa.py",
-                    "--sequence", sequence,
-                    "--name", f"{complex_name}_{chain_id}",
-                    "--out_dir", msa_dir,
-                    "--db_path", msa_db_path,
-                    "--cache_dir", cache_dir,
-                    "--threads", str(msa_threads)
-                ]
-                if ref_seq:
-                    cmd.extend(["--reference-sequence", ref_seq])
-                if force_refresh:
-                    cmd.append("--force_refresh")
+            # Check if we've already generated MSA for this exact sequence (homodimer support)
+            if sequence in seq_to_msa:
+                print(f"Reusing MSA for chain {comp_id} - identical sequence already has MSA")
+                entry["protein"]["msa"] = seq_to_msa[sequence]
+            else:
+                # Generate MSA using run_local_msa.py with file-based locking to prevent parallel OOM
+                chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
+                msa_dir = "msa"
+                msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+                # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
+                ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
+                ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""
                 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-                if result.returncode != 0:
-                    print(f"MSA generation stderr: {result.stderr}")
-                    raise RuntimeError(f"MSA script failed with code {result.returncode}")
-                print(result.stdout)
-                
-                if Path(msa_file).exists():
-                    entry["protein"]["msa"] = str(Path(msa_file).resolve())
-                    print(f"Generated MSA: {msa_file}")
-            except Exception as e:
-                print(f"MSA generation failed for chain {chain_id}: {e}")
+                print(f"Generating local MSA for chain {chain_id} using run_local_msa.py...")
+                try:
+                    # Use run_local_msa.py which has:
+                    # 1. File-based locking to serialize parallel jobs
+                    # 2. Cache checking to avoid redundant MSA generation
+                    # 3. GPU/CPU auto-detection
+                    cmd = [
+                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "--sequence", sequence,
+                        "--name", f"{complex_name}_{chain_id}",
+                        "--out_dir", msa_dir,
+                        "--db_path", msa_db_path,
+                        "--cache_dir", cache_dir,
+                        "--threads", str(msa_threads)
+                    ]
+                    if ref_seq:
+                        cmd.extend(["--reference-sequence", ref_seq])
+                    if force_refresh:
+                        cmd.append("--force_refresh")
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    if result.returncode != 0:
+                        print(f"MSA generation stderr: {result.stderr}")
+                        raise RuntimeError(f"MSA script failed with code {result.returncode}")
+                    print(result.stdout)
+                    
+                    if Path(msa_file).exists():
+                        msa_resolved = str(Path(msa_file).resolve())
+                        entry["protein"]["msa"] = msa_resolved
+                        # Cache this sequence->MSA mapping for homodimer reuse
+                        seq_to_msa[sequence] = msa_resolved
+                        print(f"Generated MSA: {msa_file}")
+                except Exception as e:
+                    print(f"MSA generation failed for chain {chain_id}: {e}")
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
@@ -507,6 +541,49 @@ for comp in complex_def.get("components", []):
     elif comp_type == "peptide":
         peptide_seq = comp.get("sequence", "").upper()
         entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": peptide_seq}}
+        
+        # Peptides < 30 residues: use msa: empty (too short for meaningful MSA hits)
+        # Peptides >= 30 residues: try MSA generation like regular proteins
+        PEPTIDE_MSA_THRESHOLD = 30
+        
+        if len(peptide_seq) < PEPTIDE_MSA_THRESHOLD:
+            # Short peptides use single-sequence mode to avoid MSA consistency errors
+            entry["protein"]["msa"] = "empty"
+        elif use_msa and peptide_seq:
+            # Longer peptides: try MSA generation using same logic as proteins
+            if peptide_seq in seq_to_msa:
+                print(f"Reusing MSA for peptide chain {comp_id}")
+                entry["protein"]["msa"] = seq_to_msa[peptide_seq]
+            else:
+                chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
+                msa_file = f"msa/{complex_name}_{chain_id}.a3m"
+                print(f"Generating MSA for peptide chain {chain_id} ({len(peptide_seq)} aa)...")
+                try:
+                    cmd = [
+                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "--sequence", peptide_seq,
+                        "--name", f"{complex_name}_{chain_id}",
+                        "--out_dir", "msa",
+                        "--db_path", msa_db_path,
+                        "--cache_dir", cache_dir,
+                        "--threads", str(msa_threads)
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    if result.returncode == 0 and Path(msa_file).exists():
+                        msa_resolved = str(Path(msa_file).resolve())
+                        entry["protein"]["msa"] = msa_resolved
+                        seq_to_msa[peptide_seq] = msa_resolved
+                        print(f"Generated peptide MSA: {msa_file}")
+                    else:
+                        # MSA failed - fall back to empty
+                        print(f"Peptide MSA generation returned no results, using single-sequence mode")
+                        entry["protein"]["msa"] = "empty"
+                except Exception as e:
+                    print(f"Peptide MSA generation failed: {e}, using single-sequence mode")
+                    entry["protein"]["msa"] = "empty"
+        else:
+            # MSA disabled globally - use empty
+            entry["protein"]["msa"] = "empty"
     else:
         continue
     boltz_yaml["sequences"].append(entry)
@@ -524,6 +601,7 @@ PYEOF
         ./yamls/ \\
         --output_format pdb \\
         --diffusion_samples ${numSamples} \\
+        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
@@ -543,6 +621,16 @@ PYEOF
         done
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # OUTPUT VALIDATION: Fail if no structure files were produced
+    # Catches silent Boltz failures (e.g., CCD errors, input parsing errors)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then
+        echo "ERROR: Boltz produced no output files. Check log for errors."
+        echo "Common causes: CCD component not found, malformed YAML, GPU OOM"
+        exit 1
+    fi
     """
 }
 

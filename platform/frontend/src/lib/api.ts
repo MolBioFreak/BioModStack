@@ -142,6 +142,7 @@ export const fetchJobs = (params?: {
     q?: string;
     limit?: number;
     offset?: number;
+    include_children?: boolean;
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
@@ -302,6 +303,12 @@ export interface Design {
     de_loop: string | null;       // IMGT 72-75
     fr3_contacts: string | null;  // IMGT 82-87
     fr4_contacts: string | null;  // IMGT 101-103
+    // Frustration analysis (FrustraMPNN)
+    frustration_high_count: number | null;
+    frustration_min_count: number | null;
+    frustration_pct_high: number | null;
+    frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
+    frustration_csv_path: string | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -907,12 +914,26 @@ export const deleteConcurrencyLimit = (modelType: string) =>
 export interface SAbDabSearchResult {
     pdb_code: string;
     h_chain: string;
-    l_chain: string | null;
+    model: number;
     resolution: number | null;
-    method: string;
-    species: string | null;
+    method: string | null;
+    species: string | null;  // heavy_species
+    germline: string | null;  // heavy_subclass
     cdr_h3_length: number | null;
+    cdr_h3_sequence: string | null;
     antigen_type: string | null;
+    antigen_name: string | null;
+    affinity: number | null;
+    date: string | null;
+    engineered: boolean;
+    has_antigen: boolean;
+}
+
+export interface SAbDabSearchResponse {
+    results: SAbDabSearchResult[];
+    total: number;
+    limit: number;
+    offset: number;
 }
 
 export interface FrameworkDownloadResponse {
@@ -921,6 +942,11 @@ export interface FrameworkDownloadResponse {
     cached: boolean;
     file_path: string | null;
     pdb_content: string | null;
+    // Chain metadata from SAbDab DB for post-download selection
+    h_chain?: string | null;      // Antibody heavy chain ID
+    l_chain?: string | null;      // Antibody light chain ID (None for VHH)
+    antigen_chain?: string | null;  // Antigen chain ID(s) if bound
+    antigen_name?: string | null;   // Antigen name for display
 }
 
 export interface CachedFramework {
@@ -942,18 +968,52 @@ export interface SAbDabAttribution {
     license: string;
     license_url: string;
     website: string;
+    local_mirror?: string;
 }
 
-export const searchSabdabFrameworks = (params: {
+export interface SAbDabDatabaseStats {
+    total_entries: number;
+    entries_with_cdr_h3: number;
+    last_sync: string | null;
+    species_distribution: Record<string, number>;
+    db_path: string;
+    db_size_mb: number;
+}
+
+export interface SAbDabFilterOptions {
+    species: string[];
+    methods: string[];
+    antigen_types: string[];
+    germlines: string[];
+    cdr_h3_length_range: [number, number];
+}
+
+export interface SAbDabSearchParams {
     species?: string;
+    resolution_min?: number;
     resolution_max?: number;
     cdr_h3_min?: number;
     cdr_h3_max?: number;
     antigen_type?: string;
-    limit?: number;
-    sort_by?: 'resolution' | 'cdr_h3_length' | 'species' | 'pdb_code';
+    has_antigen?: boolean;
+    methods?: string;  // comma-separated
+    germlines?: string;  // comma-separated
+    has_affinity?: boolean;
+    include_scfv?: boolean;
+    sort_by?: 'resolution' | 'cdr_h3_length' | 'pdb_code' | 'date';
     sort_desc?: boolean;
-}) => api.get<SAbDabSearchResult[]>('/api/frameworks/sabdab/search', { params });
+    limit?: number;
+    offset?: number;
+}
+
+export const searchSabdabFrameworks = (params: SAbDabSearchParams) =>
+    api.get<SAbDabSearchResponse>('/api/frameworks/sabdab/search', { params });
+
+export const getSabdabDatabaseStats = () =>
+    api.get<SAbDabDatabaseStats>('/api/frameworks/sabdab/stats');
+
+export const getSabdabFilterOptions = () =>
+    api.get<SAbDabFilterOptions>('/api/frameworks/sabdab/filters');
 
 export const downloadSabdabFramework = (pdbCode: string, params?: {
     scheme?: string;
@@ -972,3 +1032,94 @@ export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
 
 export const getSabdabAttribution = () =>
     api.get<SAbDabAttribution>('/api/frameworks/attribution');
+
+// CDR Annotation via ANARCII
+export interface CDRAnnotationResponse {
+    pdb_code: string;
+    antibody_type: string;
+    cdr_h1?: string | null;
+    cdr_h2?: string | null;
+    cdr_h3?: string | null;
+    cdr_l1?: string | null;
+    cdr_l2?: string | null;
+    cdr_l3?: string | null;
+    cdr_h1_range?: [number, number] | null;
+    cdr_h2_range?: [number, number] | null;
+    cdr_h3_range?: [number, number] | null;
+    cdr_l1_range?: [number, number] | null;
+    cdr_l2_range?: [number, number] | null;
+    cdr_l3_range?: [number, number] | null;
+}
+
+export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') =>
+    api.post<CDRAnnotationResponse>(`/api/frameworks/sabdab/${pdbCode}/annotate-cdrs`, null, { params: { scheme } });
+
+// ============================================================
+// PRIMER LIBRARY API (MolBio Toolkit)
+// ============================================================
+
+export interface Primer {
+    id: string;
+    name: string;
+    sequence: string;
+    length: number;
+    tm: number | null;
+    gc_percent: number | null;
+    primer_type: string;
+    description: string | null;
+    target_sequence_id: string | null;
+    binding_start: number | null;
+    binding_end: number | null;
+    binding_strand: number;
+    tags: string[] | null;
+    is_favorite: boolean;
+    created_at: string;
+    updated_at: string | null;
+}
+
+export interface PrimerCreate {
+    name: string;
+    sequence: string;
+    primer_type?: string;
+    description?: string;
+    target_sequence_id?: string;
+    binding_start?: number;
+    binding_end?: number;
+    binding_strand?: number;
+    tags?: string[];
+}
+
+export interface PrimerUpdate {
+    name?: string;
+    sequence?: string;
+    primer_type?: string;
+    description?: string;
+    target_sequence_id?: string;
+    binding_start?: number;
+    binding_end?: number;
+    binding_strand?: number;
+    tags?: string[];
+    is_favorite?: boolean;
+}
+
+export const fetchPrimers = (params?: {
+    search?: string;
+    primer_type?: string;
+    favorites_only?: boolean;
+    target_sequence_id?: string;
+}) => api.get<Primer[]>('/api/molbio/primers', { params });
+
+export const fetchPrimer = (id: string) =>
+    api.get<Primer>(`/api/molbio/primers/${id}`);
+
+export const createPrimer = (data: PrimerCreate) =>
+    api.post<Primer>('/api/molbio/primers', data);
+
+export const updatePrimer = (id: string, data: PrimerUpdate) =>
+    api.patch<Primer>(`/api/molbio/primers/${id}`, data);
+
+export const deletePrimer = (id: string) =>
+    api.delete(`/api/molbio/primers/${id}`);
+
+export const togglePrimerFavorite = (id: string) =>
+    api.post<Primer>(`/api/molbio/primers/${id}/toggle-favorite`);

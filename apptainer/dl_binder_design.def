@@ -23,7 +23,7 @@ From: mambaorg/micromamba:1.5.8
     micromamba activate mpnn
     
     # Install UV package manager within conda env (10-100x faster than pip)
-    pip install uv
+    pip install --compile uv
     uv pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
     micromamba deactivate
 

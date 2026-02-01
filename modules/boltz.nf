@@ -33,8 +33,8 @@ process PrepBoltzWithMSA {
     path ("msa/*.a3m"), emit: msas, optional: true
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     """
     eval "\$(micromamba shell hook --shell bash)"
@@ -85,6 +85,7 @@ process RunBoltz {
             ./yamls/ \
             --output_format pdb \
             ${params.boltz_diffusion_samples ? '--diffusion_samples ' + params.boltz_diffusion_samples : ''} \
+            ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \
             --recycling_steps ${params.boltz_recycling_steps ?: 3} \
             --sampling_steps ${params.boltz_sampling_steps ?: 50} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \

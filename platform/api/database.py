@@ -199,6 +199,15 @@ class Design(Base):
     # Stability / Inverse Folding Data
     stability_data = Column(JSON, nullable=True)  # ThermoMPNN ddG matrix
     antifold_logits_path = Column(String(500), nullable=True)  # Path to probabilities.csv for heatmap
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # FRUSTRATION ANALYSIS (FrustraMPNN)
+    # ═══════════════════════════════════════════════════════════════════════════
+    frustration_high_count = Column(Integer, nullable=True)    # Residues with frust <= -1.0
+    frustration_min_count = Column(Integer, nullable=True)     # Residues with frust >= 0.58
+    frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
+    frustration_residues = Column(JSON, nullable=True)         # Per-residue: [{pos, chain, frust, class}]
+    frustration_csv_path = Column(String(500), nullable=True)  # Path to full CSV
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -292,7 +301,42 @@ class NucleotideSequence(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
 
-# MSACache removed - now using file-based caching in /mnt/BioModStack/msa_cache
+class Primer(Base):
+    """Primer library entry for MolBio Toolkit."""
+    __tablename__ = "primers"
+    
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False)
+    sequence = Column(String(500), nullable=False)  # 5' to 3' sequence
+    
+    # Calculated properties (cached for filtering)
+    length = Column(Integer, nullable=False)
+    tm = Column(Float, nullable=True)  # Melting temperature (°C)
+    gc_percent = Column(Float, nullable=True)  # GC content percentage
+    
+    # Primer type and usage
+    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
+    description = Column(Text, nullable=True)
+    
+    # Target binding info (optional)
+    target_sequence_id = Column(String(36), ForeignKey("nucleotide_sequences.id"), nullable=True)
+    binding_start = Column(Integer, nullable=True)  # 0-indexed binding position
+    binding_end = Column(Integer, nullable=True)
+    binding_strand = Column(Integer, default=1)  # 1 = forward, -1 = reverse
+    
+    # Tags for organization
+    tags = Column(JSON, nullable=True)  # ["cloning", "mutagenesis", "sequencing"]
+    
+    # Metadata
+    is_favorite = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    
+    # Relationship
+    target_sequence = relationship("NucleotideSequence", foreign_keys=[target_sequence_id])
+
+
+# MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
 async def init_db():
