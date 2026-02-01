@@ -114,6 +114,7 @@ export type ActivePanel =
     | 'ligation'
     | 'features'
     | 'edit'
+    | 'search'
     | null;
 
 export interface HighlightedRegion {
