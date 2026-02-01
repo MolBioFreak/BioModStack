@@ -841,3 +841,52 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   background-color: var(--bg-tertiary);
 }
+
+/* ============================================
+   SEQVIZ DARK MODE OVERRIDES
+   Force theme-aware text colors for sequence viewer
+   ============================================ */
+
+/* All SVG text in SeqViz should use theme text colors */
+.sequence-viewer svg text,
+.sequence-viewer text,
+[class*="seqviz"] svg text,
+[class*="seqviz"] text {
+  fill: var(--text-primary) !important;
+}
+
+/* Circular view labels - annotation names */
+.sequence-viewer svg text[font-size],
+[class*="seqviz"] svg text[font-size] {
+  fill: var(--text-primary) !important;
+}
+
+/* Tick marks and index numbers around circular view */
+.sequence-viewer svg text[text-anchor],
+[class*="seqviz"] svg text[text-anchor] {
+  fill: var(--text-secondary) !important;
+}
+
+/* Sequence name in center of circular view */
+.sequence-viewer svg text[dominant-baseline="middle"][text-anchor="middle"],
+[class*="seqviz"] svg text[dominant-baseline="middle"][text-anchor="middle"] {
+  fill: var(--text-primary) !important;
+}
+
+/* Linear view - index row numbers */
+.sequence-viewer svg g text,
+[class*="seqviz"] svg g text {
+  fill: var(--text-primary) !important;
+}
+
+/* Axis lines and circles in circular view */
+.sequence-viewer svg circle[stroke],
+[class*="seqviz"] svg circle[stroke] {
+  stroke: var(--border-primary) !important;
+}
+
+/* Make sure feature labels specifically are visible */
+.sequence-viewer svg text[style*="font-size"],
+[class*="seqviz"] svg text[style*="font-size"] {
+  fill: var(--text-primary) !important;
+}
