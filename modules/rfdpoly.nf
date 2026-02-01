@@ -47,9 +47,10 @@ process RFDPolyDesign {
         : 'train_session2024-07-08_1720455712_BFF_3.00.pt'
 
     // Handle optional input PDB (scaffold)
+    // Must explicitly set to null to override RFDpoly's default test_data/DBP035.pdb
     def input_arg = use_input_pdb && !input_pdb.name.startsWith('NO_')
         ? "inference.input_pdb=${input_pdb}"
-        : ""
+        : "inference.input_pdb=null"
 
     // Handle target PDB for binding design
     def target_arg = use_target_pdb && !target_pdb.name.startsWith('NO_')
