@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
-import { SequenceViewer, DEFAULT_VISIBILITY } from './SequenceViewer';
+import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
 import { useSequenceHistory } from './hooks/useSequenceHistory';
@@ -335,6 +335,8 @@ export function MolBioToolkitV2() {
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
+    const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
+    const [visibleFrames, setVisibleFrames] = useState<Set<1 | 2 | 3 | -1 | -2 | -3>>(new Set([1]));
 
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
@@ -716,6 +718,7 @@ export function MolBioToolkitV2() {
                                         onSelection={handleSelection}
                                         highlightedRegions={highlightedRegions}
                                         viewMode={viewMode}
+                                        colorPalette={colorPalette}
                                     />
                                 </div>
                             </>
@@ -749,6 +752,8 @@ export function MolBioToolkitV2() {
                             <VisibilityPanel
                                 visibility={visibility}
                                 onChange={handleVisibilityChange}
+                                colorPalette={colorPalette}
+                                onColorPaletteChange={setColorPalette}
                             />
                         )}
                         {activePanel === 'search' && (

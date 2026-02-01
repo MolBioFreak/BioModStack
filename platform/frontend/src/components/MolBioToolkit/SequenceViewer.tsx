@@ -104,6 +104,7 @@ export interface Translation {
     start: number;
     end: number;
     strand: 1 | -1;
+    frame?: 1 | 2 | 3;  // Reading frame (1-3 for both + and - strand)
 }
 
 export interface SequenceData {
@@ -143,6 +144,7 @@ interface SequenceViewerProps {
     className?: string;
     viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
     colorPalette?: ColorPaletteName;
+    visibleFrames?: Set<1 | 2 | 3 | -1 | -2 | -3>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -174,7 +176,8 @@ export function SequenceViewer({
     highlightedRegions,
     className,
     viewMode,
-    colorPalette = 'classic'
+    colorPalette = 'classic',
+    visibleFrames = new Set([1])
 }: SequenceViewerProps) {
 
     // Build annotations array based on visibility toggles
@@ -215,16 +218,25 @@ export function SequenceViewer({
         return result;
     }, [sequenceData.features, sequenceData.primers, visibility.features, visibility.primers]);
 
-    // Build translations array if visible
+    // Build translations array if visible - filter by selected reading frames
     const translations = useMemo(() => {
         if (!visibility.translations || !sequenceData.translations) return [];
-        return sequenceData.translations.map((t, i) => ({
-            name: `ORF ${i + 1}`,
-            start: t.start,
-            end: t.end,
-            direction: t.strand
-        }));
-    }, [sequenceData.translations, visibility.translations]);
+
+        return sequenceData.translations
+            .filter(t => {
+                // Compute reading frame: frame is 1, 2, or 3 based on start position mod 3
+                // Combined with strand direction to get -3/-2/-1 or +1/+2/+3
+                const baseFrame = (t.frame ?? ((t.start % 3) + 1)) as 1 | 2 | 3;
+                const combinedFrame = (t.strand === 1 ? baseFrame : -baseFrame) as 1 | 2 | 3 | -1 | -2 | -3;
+                return visibleFrames.has(combinedFrame);
+            })
+            .map((t, i) => ({
+                name: `ORF ${i + 1}`,
+                start: t.start,
+                end: t.end,
+                direction: t.strand
+            }));
+    }, [sequenceData.translations, visibility.translations, visibleFrames]);
 
     // Handle RNA display - convert T → U
     const displaySequence = useMemo(() => {

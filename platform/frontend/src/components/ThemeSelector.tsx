@@ -58,8 +58,8 @@ export function ThemeSelector() {
                                 <button
                                     onClick={() => handleSelect('clean_light')}
                                     className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5 ${theme === 'clean_light' || theme === 'light'
-                                            ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
-                                            : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                        ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
+                                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                                         }`}
                                 >
                                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -68,10 +68,10 @@ export function ThemeSelector() {
                                     Light
                                 </button>
                                 <button
-                                    onClick={() => handleSelect('midnight')}
-                                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5 ${theme === 'midnight' || theme === 'slate_dark'
-                                            ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
-                                            : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                    onClick={() => handleSelect('black')}
+                                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5 ${theme === 'black'
+                                        ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
+                                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                                         }`}
                                 >
                                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
