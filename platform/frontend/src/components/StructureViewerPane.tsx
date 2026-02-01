@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
+import { useThemeColors } from './useThemeColors';
 import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
 
 interface Selection {
@@ -49,6 +50,9 @@ export default function StructureViewerPane({
     const [chainBoundaries, setChainBoundaries] = useState<{ id: string; start: number; end: number }[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    // Theme-aware colors for Molstar viewer
+    const themeColors = useThemeColors();
 
     // Fetch all structure metrics in parallel when design changes
     // (Consolidated from 3 separate useEffects to reduce network round-trips)
@@ -642,7 +646,7 @@ export default function StructureViewerPane({
                             alphafoldView={colorMode === 'plddt'}
                             selections={colorMode === 'cdr' ? antibodySelections : undefined}
                             height="100%"
-                            backgroundColor="#0f172a"
+                            backgroundColor={themeColors.bgPrimary}
                         />
                     </div>
 
@@ -755,7 +759,7 @@ export default function StructureViewerPane({
                                 alphafoldView={colorMode === 'plddt'}
                                 selections={colorMode === 'cdr' ? antibodySelections : undefined}
                                 height={450}
-                                backgroundColor="#0f172a"
+                                backgroundColor={themeColors.bgPrimary}
                             />
                         </div>
                     </div>
