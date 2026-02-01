@@ -154,7 +154,7 @@ process PrepBoltzOligo {
 
 /*
  * Workflow: OLIGO_DESIGN
- * Complete workflow: RFDpoly → Boltz-2 → Filter → Results
+ * Complete workflow: RFDpoly → NA-MPNN → Boltz-2 → Results
  */
 workflow OLIGO_DESIGN {
     take:
@@ -175,7 +175,7 @@ workflow OLIGO_DESIGN {
     def use_target = target_pdb instanceof Path && !target_pdb.name.startsWith('NO_')
     def target_file = use_target ? target_pdb : file("${projectDir}/NO_TARGET")
 
-    // Stage 1: RFDpoly Generation
+    // Stage 1: RFDpoly Backbone Generation
     RFDPolyDesign(
         design_id,
         contigs,
@@ -186,10 +186,14 @@ workflow OLIGO_DESIGN {
         target_file,
     )
 
-    // Stage 2: Prepare for Boltz-2 validation
+    // Stage 2: NA-MPNN Sequence Design
+    // Per RFDpoly paper: "we design base sequences on the generated backbones using NA-MPNN"
+    NAMPNNDesign(RFDPolyDesign.out.pdbs, design_id)
+
+    // Stage 3: Prepare for Boltz-2 validation
     if (params.oligo_validate_boltz) {
         prep_script = file("${projectDir}/scripts/prep_boltz_oligo.py")
-        PrepBoltzOligo(RFDPolyDesign.out.pdbs, prep_script)
+        PrepBoltzOligo(NAMPNNDesign.out.pdbs, prep_script)
         boltz_yamls = PrepBoltzOligo.out.yamls
     }
     else {
@@ -197,7 +201,72 @@ workflow OLIGO_DESIGN {
     }
 
     emit:
-    pdbs = RFDPolyDesign.out.pdbs
+    pdbs = NAMPNNDesign.out.pdbs
+    sequences = NAMPNNDesign.out.fastas
     metrics = RFDPolyDesign.out.metrics
     boltz_yamls = boltz_yamls
+}
+
+/*
+ * Process: NAMPNNDesign
+ * Runs NA-MPNN to design optimized sequences for nucleic acid backbones
+ * Per paper: generalizes ProteinMPNN to nucleic acids
+ */
+process NAMPNNDesign {
+    label 'nampnn'
+    label 'gpu'
+
+    publishDir "${params.out_dir}/run/nampnn", mode: 'copy'
+
+    input:
+    path pdbs
+    val design_id
+
+    output:
+    path "designed/*.pdb", emit: pdbs
+    path "designed/*.fasta", emit: fastas
+    path "nampnn_metrics.json", emit: metrics
+
+    script:
+    """
+    mkdir -p designed
+    
+    # Run NA-MPNN on each backbone PDB
+    for pdb in *.pdb; do
+        if [ -f "\$pdb" ]; then
+            echo "Running NA-MPNN on \$pdb..."
+            python /app/NA-MPNN/inference/run.py \\
+                --model_type "na_mpnn" \\
+                --mode "design" \\
+                --pdb_path "\$pdb" \\
+                --out_folder "./nampnn_out" \\
+                --num_seq_per_target ${params.nampnn_num_seqs ?: 1}
+            
+            # Copy designed outputs to designed/ folder
+            # NA-MPNN outputs: sequences/<name>.fasta, pdbs/<name>.pdb
+            if [ -d "./nampnn_out/pdbs" ]; then
+                cp ./nampnn_out/pdbs/*.pdb designed/ 2>/dev/null || true
+            fi
+            if [ -d "./nampnn_out/sequences" ]; then
+                cp ./nampnn_out/sequences/*.fasta designed/ 2>/dev/null || true
+            fi
+        fi
+    done
+    
+    # Generate metrics JSON
+    python3 -c "
+import json, glob
+pdbs = glob.glob('designed/*.pdb')
+fastas = glob.glob('designed/*.fasta')
+metrics = {
+    'design_id': '${design_id}',
+    'num_designs': len(pdbs),
+    'num_sequences': len(fastas),
+    'model': 'na_mpnn',
+    'seqs_per_target': ${params.nampnn_num_seqs ?: 1}
+}
+json.dump(metrics, open('nampnn_metrics.json', 'w'), indent=2)
+print(f'NA-MPNN designed sequences for {len(pdbs)} structures')
+"
+    """
 }
