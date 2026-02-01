@@ -194,40 +194,40 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
 
     return (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
+            <div className="bg-surface border border-accent/20 rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
                 {/* Header */}
-                <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
-                    <h2 className="text-lg font-semibold text-white">🧬 Advanced Oligo Builder</h2>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+                <div className="px-6 py-4 border-b border-accent/10 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-content">Advanced Oligo Builder</h2>
+                    <button onClick={onClose} className="text-content-muted hover:text-content">×</button>
                 </div>
 
                 {/* Controls */}
-                <div className="px-6 py-4 border-b border-slate-700 flex flex-wrap gap-4 items-center">
+                <div className="px-6 py-4 border-b border-accent/10 flex flex-wrap gap-4 items-center">
                     {/* NA Type Toggle */}
                     <div className="flex items-center gap-2">
-                        <span className="text-sm text-slate-400">Type:</span>
-                        <div className="flex bg-slate-800 rounded-lg p-0.5">
+                        <span className="text-sm text-content-muted">Type:</span>
+                        <div className="flex bg-surface-secondary rounded-lg p-0.5">
                             <button
                                 onClick={() => setNaType('dna')}
-                                className={`px-3 py-1 text-sm rounded ${naType === 'dna' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}
+                                className={`px-3 py-1 text-sm rounded ${naType === 'dna' ? 'bg-accent text-white' : 'text-content-muted'}`}
                             >DNA</button>
                             <button
                                 onClick={() => setNaType('rna')}
-                                className={`px-3 py-1 text-sm rounded ${naType === 'rna' ? 'bg-accent text-white' : 'text-slate-400'}`}
+                                className={`px-3 py-1 text-sm rounded ${naType === 'rna' ? 'bg-accent-secondary text-white' : 'text-content-muted'}`}
                             >RNA</button>
                         </div>
                     </div>
 
                     {/* Length */}
                     <div className="flex items-center gap-2">
-                        <span className="text-sm text-slate-400">Length:</span>
+                        <span className="text-sm text-content-muted">Length:</span>
                         <input
                             type="number"
                             min={2}
                             max={50}
                             value={length}
                             onChange={(e) => setLength(Math.min(50, Math.max(2, parseInt(e.target.value) || 2)))}
-                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-sm"
+                            className="w-16 bg-surface-secondary border border-accent/10 rounded px-2 py-1 text-content text-sm"
                         />
                     </div>
 
@@ -237,9 +237,9 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                             type="checkbox"
                             checked={singleStrandMode}
                             onChange={(e) => setSingleStrandMode(e.target.checked)}
-                            className="w-4 h-4 rounded bg-slate-800 border-slate-700"
+                            className="w-4 h-4 rounded bg-surface-secondary border-accent/20 accent-accent"
                         />
-                        <span className="text-sm text-slate-300">Single Strand Only</span>
+                        <span className="text-sm text-content">Single Strand Only</span>
                     </label>
 
                     {/* Watson-Crick Toggle */}
@@ -249,9 +249,9 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                                 type="checkbox"
                                 checked={enforceWC}
                                 onChange={(e) => setEnforceWC(e.target.checked)}
-                                className="w-4 h-4 rounded bg-slate-800 border-slate-700"
+                                className="w-4 h-4 rounded bg-surface-secondary border-accent/20 accent-accent"
                             />
-                            <span className="text-sm text-slate-300">Enforce Watson-Crick Pairing</span>
+                            <span className="text-sm text-content">Enforce Watson-Crick Pairing</span>
                         </label>
                     )}
 
@@ -260,37 +260,37 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                         <button
                             onClick={handleSaveTemplate}
                             disabled={saveMutation.isPending}
-                            className="px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                            className="px-3 py-1.5 text-sm bg-accent hover:bg-accent/80 text-white rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50"
                         >
-                            💾 Save
+                            Save
                         </button>
                         <button
                             onClick={() => setShowTemplates(!showTemplates)}
-                            className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors ${showTemplates ? 'bg-accent text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                            className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors ${showTemplates ? 'bg-accent text-white' : 'bg-surface-secondary hover:bg-surface-tertiary text-content'
                                 }`}
                         >
-                            📂 {savedTemplates.length > 0 ? `(${savedTemplates.length})` : 'Load'}
+                            Load {savedTemplates.length > 0 ? `(${savedTemplates.length})` : ''}
                         </button>
                     </div>
                 </div>
 
                 {/* Template List (collapsible) */}
                 {showTemplates && savedTemplates.length > 0 && (
-                    <div className="px-6 pb-4 border-b border-slate-700">
+                    <div className="px-6 pb-4 border-b border-accent/10">
                         <div className="flex flex-wrap gap-2">
                             {savedTemplates.map((t: any) => (
-                                <div key={t.id} className="flex items-center gap-1 bg-slate-800 rounded-lg pl-3 pr-1 py-1">
+                                <div key={t.id} className="flex items-center gap-1 bg-surface-secondary rounded-lg pl-3 pr-1 py-1">
                                     <button
                                         onClick={() => loadTemplate(t.params)}
-                                        className="text-sm text-slate-300 hover:text-white"
+                                        className="text-sm text-content hover:text-accent"
                                     >
                                         {t.name}
                                     </button>
                                     <button
                                         onClick={() => deleteMutation.mutate(t.id)}
-                                        className="p-1 text-slate-500 hover:text-red-400 text-xs"
+                                        className="p-1 text-content-muted hover:text-[var(--error)] text-xs"
                                     >
-                                        ✕
+                                        ×
                                     </button>
                                 </div>
                             ))}
@@ -303,7 +303,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                     <div className="space-y-2 min-w-max">
                         {/* Template Strand (5'→3') */}
                         <div className="flex items-center gap-1">
-                            <span className="text-xs text-slate-500 w-16">5'</span>
+                            <span className="text-xs text-content-muted w-16">5'</span>
                             {templateStrand.map((base, idx) => (
                                 <button
                                     key={`template-${idx}`}
@@ -315,8 +315,8 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                                     {base || '—'}
                                 </button>
                             ))}
-                            <span className="text-xs text-slate-500 w-16 text-right">3'</span>
-                            <span className="text-xs text-slate-400 ml-4">Template</span>
+                            <span className="text-xs text-content-muted w-16 text-right">3'</span>
+                            <span className="text-xs text-content-muted ml-4">Template</span>
                         </div>
 
                         {/* Base pair connections */}
@@ -344,7 +344,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                         {/* Primer Strand (3'→5') */}
                         {!singleStrandMode && (
                             <div className="flex items-center gap-1">
-                                <span className="text-xs text-slate-500 w-16">3'</span>
+                                <span className="text-xs text-content-muted w-16">3'</span>
                                 {primerStrand.map((base, idx) => (
                                     <button
                                         key={`primer-${idx}`}
@@ -358,8 +358,8 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                                         {base || '—'}
                                     </button>
                                 ))}
-                                <span className="text-xs text-slate-500 w-16 text-right">5'</span>
-                                <span className="text-xs text-slate-400 ml-4">Primer</span>
+                                <span className="text-xs text-content-muted w-16 text-right">5'</span>
+                                <span className="text-xs text-content-muted ml-4">Primer</span>
                             </div>
                         )}
                     </div>
@@ -374,19 +374,19 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                             </span>
                         ))}
                         <span className="flex items-center gap-1">
-                            <span className="w-4 h-4 rounded bg-slate-700 border border-dashed border-slate-500" />
+                            <span className="w-4 h-4 rounded bg-surface-secondary border border-dashed border-accent/30" />
                             Gap
                         </span>
                     </div>
 
                     {/* Preview */}
-                    <div className="mt-4 p-3 bg-slate-800 rounded-lg">
-                        <div className="text-xs text-slate-400 mb-1">Preview:</div>
-                        <div className="font-mono text-sm text-white">
+                    <div className="mt-4 p-3 bg-surface-secondary rounded-lg">
+                        <div className="text-xs text-content-muted mb-1">Preview:</div>
+                        <div className="font-mono text-sm text-content">
                             Template: 5'-{templateStrand.map(b => b || '_').join('')}-3'
                         </div>
                         {!singleStrandMode && (
-                            <div className="font-mono text-sm text-white">
+                            <div className="font-mono text-sm text-content">
                                 Primer: &nbsp; 3'-{primerStrand.map(b => b || '_').join('')}-5'
                             </div>
                         )}
@@ -394,32 +394,32 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
 
                     {/* Sequence Text Input */}
                     <div className="mt-4">
-                        <label className="text-xs text-slate-400 block mb-1">
+                        <label className="text-xs text-content-muted block mb-1">
                             Paste Sequence (auto-syncs with editor, auto-detects DNA/RNA)
                         </label>
                         <textarea
                             value={sequenceText}
                             onChange={(e) => handleSequenceTextChange(e.target.value)}
                             placeholder="Paste sequence: ATCGATCG or AUCGAUCG..."
-                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 
-                                       text-white font-mono text-sm resize-y min-h-[60px]
-                                       focus:ring-2 focus:ring-blue-500 outline-none
-                                       placeholder:text-slate-500"
+                            className="w-full bg-surface-secondary border border-accent/10 rounded-lg px-3 py-2 
+                                       text-content font-mono text-sm resize-y min-h-[60px]
+                                       focus:ring-2 focus:ring-accent outline-none
+                                       placeholder:text-content-muted"
                         />
                     </div>
                 </div>
 
                 {/* Footer */}
-                <div className="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
+                <div className="px-6 py-4 border-t border-accent/10 flex justify-end gap-3">
                     <button
                         onClick={onClose}
-                        className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
+                        className="px-4 py-2 text-content-muted hover:text-content transition-colors"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={handleSubmit}
-                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                        className="px-4 py-2 bg-accent text-white rounded-lg hover:bg-accent/80 transition-colors"
                     >
                         Add to Complex
                     </button>
