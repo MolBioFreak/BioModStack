@@ -11,7 +11,7 @@ import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
 import { useSequenceHistory } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
-import { DigestPanel, PCRPanel, PrimerPanel, FeaturePanel } from './panels';
+import { DigestPanel, PCRPanel, PrimerPanel, FeaturePanel, EditPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
 import type {
@@ -213,6 +213,7 @@ interface PanelTabsProps {
 }
 
 const PANELS: { id: ActivePanel; label: string }[] = [
+    { id: 'edit', label: 'Edit' },
     { id: 'digest', label: 'Digest' },
     { id: 'pcr', label: 'PCR' },
     { id: 'primers', label: 'Primers' },
@@ -655,6 +656,16 @@ export function MolBioToolkitV2() {
                             <VisibilityPanel
                                 visibility={visibility}
                                 onChange={handleVisibilityChange}
+                            />
+                        )}
+                        {activePanel === 'edit' && (
+                            <EditPanel
+                                sequenceData={sequenceData}
+                                selection={selection}
+                                onSequenceChange={(newData) => {
+                                    setSequenceData(newData);
+                                    setIsDirty(true);
+                                }}
                             />
                         )}
                         {activePanel === 'digest' && (
