@@ -460,21 +460,22 @@ async def annotate_framework_cdrs(
             raise HTTPException(status_code=500, detail="ANARCII returned no results")
         
         # Convert CDRAnnotation dataclass to response model
+        # Use getattr() for safe access since VHH may not have light chain fields
         return CDRAnnotationResponse(
             pdb_code=pdb_code.upper(),
             antibody_type=annotation.antibody_type,
-            cdr_h1=annotation.cdr_h1,
-            cdr_h2=annotation.cdr_h2,
-            cdr_h3=annotation.cdr_h3,
-            cdr_l1=annotation.cdr_l1,
-            cdr_l2=annotation.cdr_l2,
-            cdr_l3=annotation.cdr_l3,
-            cdr_h1_range=list(annotation.cdr_h1_range) if annotation.cdr_h1_range else None,
-            cdr_h2_range=list(annotation.cdr_h2_range) if annotation.cdr_h2_range else None,
-            cdr_h3_range=list(annotation.cdr_h3_range) if annotation.cdr_h3_range else None,
-            cdr_l1_range=list(annotation.cdr_l1_range) if annotation.cdr_l1_range else None,
-            cdr_l2_range=list(annotation.cdr_l2_range) if annotation.cdr_l2_range else None,
-            cdr_l3_range=list(annotation.cdr_l3_range) if annotation.cdr_l3_range else None,
+            cdr_h1=getattr(annotation, 'cdr_h1', None),
+            cdr_h2=getattr(annotation, 'cdr_h2', None),
+            cdr_h3=getattr(annotation, 'cdr_h3', None),
+            cdr_l1=getattr(annotation, 'cdr_l1', None),
+            cdr_l2=getattr(annotation, 'cdr_l2', None),
+            cdr_l3=getattr(annotation, 'cdr_l3', None),
+            cdr_h1_range=list(annotation.cdr_h1_range) if getattr(annotation, 'cdr_h1_range', None) else None,
+            cdr_h2_range=list(annotation.cdr_h2_range) if getattr(annotation, 'cdr_h2_range', None) else None,
+            cdr_h3_range=list(annotation.cdr_h3_range) if getattr(annotation, 'cdr_h3_range', None) else None,
+            cdr_l1_range=list(annotation.cdr_l1_range) if getattr(annotation, 'cdr_l1_range', None) else None,
+            cdr_l2_range=list(annotation.cdr_l2_range) if getattr(annotation, 'cdr_l2_range', None) else None,
+            cdr_l3_range=list(annotation.cdr_l3_range) if getattr(annotation, 'cdr_l3_range', None) else None,
         )
     except HTTPException:
         raise

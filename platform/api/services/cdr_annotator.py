@@ -39,6 +39,9 @@ class CDRAnnotation:
     cdr_h1_range: Optional[tuple] = None
     cdr_h2_range: Optional[tuple] = None
     cdr_h3_range: Optional[tuple] = None
+    cdr_l1_range: Optional[tuple] = None
+    cdr_l2_range: Optional[tuple] = None
+    cdr_l3_range: Optional[tuple] = None
     
     # Framework contact hotspots (Zavrtanik et al. 2018)
     # These FR positions mediate antigen contacts in nanobodies
