@@ -13,8 +13,8 @@ export interface AutoAnnotateSettings {
 }
 
 export const DEFAULT_SETTINGS: AutoAnnotateSettings = {
-    minIdentity: 50,
-    detailed: false,
+    minIdentity: 35,       // Lower threshold catches more features
+    detailed: true,        // Detailed search by default for better detection
     filterFragments: false
 };
 
@@ -89,7 +89,7 @@ export function AutoAnnotatePanel({
                         </label>
                         <input
                             type="range"
-                            min="30"
+                            min="20"
                             max="99"
                             value={settings.minIdentity}
                             onChange={e => setSettings({ ...settings, minIdentity: parseInt(e.target.value) })}
