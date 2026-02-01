@@ -1033,3 +1033,23 @@ export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
 export const getSabdabAttribution = () =>
     api.get<SAbDabAttribution>('/api/frameworks/attribution');
 
+// CDR Annotation via ANARCII
+export interface CDRAnnotationResponse {
+    pdb_code: string;
+    antibody_type: string;
+    cdr_h1?: string | null;
+    cdr_h2?: string | null;
+    cdr_h3?: string | null;
+    cdr_l1?: string | null;
+    cdr_l2?: string | null;
+    cdr_l3?: string | null;
+    cdr_h1_range?: [number, number] | null;
+    cdr_h2_range?: [number, number] | null;
+    cdr_h3_range?: [number, number] | null;
+    cdr_l1_range?: [number, number] | null;
+    cdr_l2_range?: [number, number] | null;
+    cdr_l3_range?: [number, number] | null;
+}
+
+export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') =>
+    api.post<CDRAnnotationResponse>(`/api/frameworks/sabdab/${pdbCode}/annotate-cdrs`, null, { params: { scheme } });
