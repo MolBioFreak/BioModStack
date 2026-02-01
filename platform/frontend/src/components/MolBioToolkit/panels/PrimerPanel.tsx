@@ -1,9 +1,17 @@
 /**
- * PrimerPanel - Primer design and management
+ * PrimerPanel - Primer design and management with library integration
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import type { SequenceData, Primer, HighlightedRegion, SelectionInfo } from '../types';
+import {
+    fetchPrimers,
+    createPrimer,
+    deletePrimer as deletePrimerApi,
+    togglePrimerFavorite,
+    type Primer as LibraryPrimer,
+    type PrimerCreate
+} from '../../../lib/api';
 
 interface PrimerPanelProps {
     sequenceData: SequenceData;
@@ -53,6 +61,14 @@ export function PrimerPanel({
     const [newPrimerSeq, setNewPrimerSeq] = useState('');
     const [isReverse, setIsReverse] = useState(false);
     const [hoveredPrimerId, setHoveredPrimerId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<'sequence' | 'library'>('sequence');
+
+    // Library state
+    const [libraryPrimers, setLibraryPrimers] = useState<LibraryPrimer[]>([]);
+    const [libraryLoading, setLibraryLoading] = useState(false);
+    const [librarySearch, setLibrarySearch] = useState('');
+    const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+    const [saveToLibrary, setSaveToLibrary] = useState(true);
 
     // Get selected sequence region
     const selectedRegion = useMemo(() => {
@@ -62,6 +78,27 @@ export function PrimerPanel({
         const seq = sequenceData.sequence.slice(start, end);
         return { start, end, sequence: seq, length: seq.length };
     }, [selection, sequenceData.sequence]);
+
+    // Load library primers
+    const loadLibrary = useCallback(async () => {
+        setLibraryLoading(true);
+        try {
+            const response = await fetchPrimers({
+                search: librarySearch || undefined,
+                favorites_only: showFavoritesOnly
+            });
+            setLibraryPrimers(response.data);
+        } catch (e) {
+            console.error('Failed to load primer library:', e);
+        }
+        setLibraryLoading(false);
+    }, [librarySearch, showFavoritesOnly]);
+
+    useEffect(() => {
+        if (activeTab === 'library') {
+            loadLibrary();
+        }
+    }, [activeTab, loadLibrary]);
 
     // Use selection as primer
     const useSelectionAsPrimer = (reverse: boolean) => {
@@ -75,7 +112,7 @@ export function PrimerPanel({
     };
 
     // Add new primer
-    const addPrimer = () => {
+    const addPrimer = async () => {
         if (!newPrimerSeq || newPrimerSeq.length < 10) return;
 
         // Find binding position
@@ -95,6 +132,24 @@ export function PrimerPanel({
         };
 
         onAddPrimer(primer);
+
+        // Also save to library if enabled
+        if (saveToLibrary) {
+            try {
+                const libraryData: PrimerCreate = {
+                    name: primer.name,
+                    sequence: primer.sequence,
+                    primer_type: isReverse ? 'reverse' : 'forward',
+                    binding_start: primer.start,
+                    binding_end: primer.end,
+                    binding_strand: primer.strand
+                };
+                await createPrimer(libraryData);
+            } catch (e) {
+                console.error('Failed to save primer to library:', e);
+            }
+        }
+
         setNewPrimerName('');
         setNewPrimerSeq('');
     };
@@ -120,140 +175,310 @@ export function PrimerPanel({
         }
     };
 
+    // Add library primer to sequence
+    const addLibraryPrimerToSequence = (libPrimer: LibraryPrimer) => {
+        const upperSeq = sequenceData.sequence.toUpperCase();
+        const searchSeq = libPrimer.binding_strand === -1
+            ? reverseComplement(libPrimer.sequence)
+            : libPrimer.sequence.toUpperCase();
+        const pos = upperSeq.indexOf(searchSeq);
+
+        const primer: Primer = {
+            id: `primer_${Date.now()}`,
+            name: libPrimer.name,
+            sequence: libPrimer.sequence,
+            start: pos >= 0 ? pos : (libPrimer.binding_start ?? 0),
+            end: pos >= 0 ? pos + searchSeq.length : (libPrimer.binding_end ?? searchSeq.length),
+            strand: (libPrimer.binding_strand === -1 ? -1 : 1) as 1 | -1,
+            tm: libPrimer.tm ?? undefined,
+            gc_percent: libPrimer.gc_percent ?? undefined
+        };
+
+        onAddPrimer(primer);
+    };
+
+    // Toggle favorite
+    const handleToggleFavorite = async (primerId: string) => {
+        try {
+            await togglePrimerFavorite(primerId);
+            loadLibrary();
+        } catch (e) {
+            console.error('Failed to toggle favorite:', e);
+        }
+    };
+
+    // Delete from library
+    const handleDeleteFromLibrary = async (primerId: string) => {
+        try {
+            await deletePrimerApi(primerId);
+            loadLibrary();
+        } catch (e) {
+            console.error('Failed to delete primer:', e);
+        }
+    };
+
     const primers = sequenceData.primers || [];
 
     return (
-        <div className="primer-panel p-3 space-y-4">
+        <div className="primer-panel p-3 space-y-3">
             <h4 className="font-semibold text-slate-200">Primers</h4>
 
-            {/* Selection helper */}
-            {selectedRegion && (
-                <div className="p-3 bg-slate-700/50 rounded space-y-2">
-                    <div className="text-sm text-slate-300">
-                        Selected: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} bp)
-                    </div>
-                    <div className="font-mono text-xs text-slate-400 truncate">
-                        {selectedRegion.sequence.slice(0, 50)}{selectedRegion.length > 50 ? '...' : ''}
-                    </div>
-                    <div className="flex gap-2">
-                        <button
-                            onClick={() => useSelectionAsPrimer(false)}
-                            className="flex-1 px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs transition-colors"
-                        >
-                            Use as Forward
-                        </button>
-                        <button
-                            onClick={() => useSelectionAsPrimer(true)}
-                            className="flex-1 px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs transition-colors"
-                        >
-                            Use as Reverse
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Add primer form */}
-            <div className="space-y-2 p-3 bg-slate-800 rounded border border-slate-700">
-                <div className="text-sm font-medium text-slate-300">Add Primer</div>
-
-                <input
-                    type="text"
-                    value={newPrimerName}
-                    onChange={(e) => setNewPrimerName(e.target.value)}
-                    placeholder="Primer name"
-                    className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"
-                />
-
-                <input
-                    type="text"
-                    value={newPrimerSeq}
-                    onChange={(e) => setNewPrimerSeq(e.target.value.toUpperCase())}
-                    placeholder="Sequence (5'→3')"
-                    className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
-                />
-
-                <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-1 text-sm text-slate-400">
-                        <input
-                            type="checkbox"
-                            checked={isReverse}
-                            onChange={(e) => setIsReverse(e.target.checked)}
-                            className="w-3 h-3"
-                        />
-                        Reverse primer
-                    </label>
-
-                    {newPrimerSeq && (
-                        <div className="text-xs text-slate-400">
-                            Tm: {calculateTm(newPrimerSeq).toFixed(1)}°C • GC: {calculateGC(newPrimerSeq)}%
-                        </div>
-                    )}
-                </div>
-
+            {/* Tab switcher */}
+            <div className="flex gap-1 text-xs">
                 <button
-                    onClick={addPrimer}
-                    disabled={!newPrimerSeq || newPrimerSeq.length < 10}
-                    className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-sm transition-colors"
+                    onClick={() => setActiveTab('sequence')}
+                    className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'sequence'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
                 >
-                    Add Primer
+                    Sequence ({primers.length})
+                </button>
+                <button
+                    onClick={() => setActiveTab('library')}
+                    className={`px-3 py-1.5 rounded transition-colors ${activeTab === 'library'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
+                >
+                    Library
                 </button>
             </div>
 
-            {/* Primer list */}
-            <div className="space-y-1">
-                <div className="flex items-center justify-between text-sm text-slate-400 mb-2">
-                    <span>Saved Primers ({primers.length})</span>
-                    <button
-                        onClick={() => highlightPrimer(null)}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                    >
-                        Show all
-                    </button>
-                </div>
-
-                {primers.length === 0 ? (
-                    <div className="text-center text-slate-500 text-sm py-4">
-                        No primers added yet
-                    </div>
-                ) : (
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {primers.map(primer => (
-                            <div
-                                key={primer.id}
-                                className={`flex items-center justify-between p-2 rounded transition-colors ${hoveredPrimerId === primer.id ? 'bg-slate-600' : 'bg-slate-700/50'
-                                    }`}
-                                onMouseEnter={() => {
-                                    setHoveredPrimerId(primer.id);
-                                    highlightPrimer(primer);
-                                }}
-                                onMouseLeave={() => {
-                                    setHoveredPrimerId(null);
-                                    highlightPrimer(null);
-                                }}
-                            >
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <span className={`w-2 h-2 rounded-full ${primer.strand === 1 ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                                        <span className="text-sm text-slate-200 truncate">{primer.name}</span>
-                                    </div>
-                                    <div className="text-xs text-slate-400 mt-0.5">
-                                        {primer.sequence.length} bp • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent}%
-                                    </div>
-                                </div>
+            {activeTab === 'sequence' && (
+                <>
+                    {/* Selection helper */}
+                    {selectedRegion && (
+                        <div className="p-3 bg-slate-700/50 rounded space-y-2">
+                            <div className="text-sm text-slate-300">
+                                Selected: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} bp)
+                            </div>
+                            <div className="font-mono text-xs text-slate-400 truncate">
+                                {selectedRegion.sequence.slice(0, 50)}{selectedRegion.length > 50 ? '...' : ''}
+                            </div>
+                            <div className="flex gap-2">
                                 <button
-                                    onClick={() => onRemovePrimer(primer.id)}
-                                    className="p-1 hover:bg-slate-500 rounded ml-2"
-                                    title="Remove primer"
+                                    onClick={() => useSelectionAsPrimer(false)}
+                                    className="flex-1 px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs transition-colors"
                                 >
-                                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
+                                    Use as Forward
+                                </button>
+                                <button
+                                    onClick={() => useSelectionAsPrimer(true)}
+                                    className="flex-1 px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs transition-colors"
+                                >
+                                    Use as Reverse
                                 </button>
                             </div>
-                        ))}
+                        </div>
+                    )}
+
+                    {/* Add primer form */}
+                    <div className="space-y-2 p-3 bg-slate-800 rounded border border-slate-700">
+                        <div className="text-sm font-medium text-slate-300">Add Primer</div>
+
+                        <input
+                            type="text"
+                            value={newPrimerName}
+                            onChange={(e) => setNewPrimerName(e.target.value)}
+                            placeholder="Primer name"
+                            className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"
+                        />
+
+                        <input
+                            type="text"
+                            value={newPrimerSeq}
+                            onChange={(e) => setNewPrimerSeq(e.target.value.toUpperCase())}
+                            placeholder="Sequence (5'→3')"
+                            className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
+                        />
+
+                        <div className="flex items-center gap-4 flex-wrap">
+                            <label className="flex items-center gap-1 text-sm text-slate-400">
+                                <input
+                                    type="checkbox"
+                                    checked={isReverse}
+                                    onChange={(e) => setIsReverse(e.target.checked)}
+                                    className="w-3 h-3"
+                                />
+                                Reverse
+                            </label>
+
+                            <label className="flex items-center gap-1 text-sm text-slate-400">
+                                <input
+                                    type="checkbox"
+                                    checked={saveToLibrary}
+                                    onChange={(e) => setSaveToLibrary(e.target.checked)}
+                                    className="w-3 h-3"
+                                />
+                                Save to library
+                            </label>
+
+                            {newPrimerSeq && (
+                                <div className="text-xs text-slate-400">
+                                    Tm: {calculateTm(newPrimerSeq).toFixed(1)}°C • GC: {calculateGC(newPrimerSeq)}%
+                                </div>
+                            )}
+                        </div>
+
+                        <button
+                            onClick={addPrimer}
+                            disabled={!newPrimerSeq || newPrimerSeq.length < 10}
+                            className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-sm transition-colors"
+                        >
+                            Add Primer
+                        </button>
                     </div>
-                )}
-            </div>
+
+                    {/* Primer list */}
+                    <div className="space-y-1">
+                        <div className="flex items-center justify-between text-sm text-slate-400 mb-2">
+                            <span>Sequence Primers ({primers.length})</span>
+                            <button
+                                onClick={() => highlightPrimer(null)}
+                                className="text-xs text-blue-400 hover:text-blue-300"
+                            >
+                                Show all
+                            </button>
+                        </div>
+
+                        {primers.length === 0 ? (
+                            <div className="text-center text-slate-500 text-sm py-4">
+                                No primers added yet
+                            </div>
+                        ) : (
+                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                                {primers.map(primer => (
+                                    <div
+                                        key={primer.id}
+                                        className={`flex items-center justify-between p-2 rounded transition-colors ${hoveredPrimerId === primer.id ? 'bg-slate-600' : 'bg-slate-700/50'
+                                            }`}
+                                        onMouseEnter={() => {
+                                            setHoveredPrimerId(primer.id);
+                                            highlightPrimer(primer);
+                                        }}
+                                        onMouseLeave={() => {
+                                            setHoveredPrimerId(null);
+                                            highlightPrimer(null);
+                                        }}
+                                    >
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${primer.strand === 1 ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                                                <span className="text-sm text-slate-200 truncate">{primer.name}</span>
+                                            </div>
+                                            <div className="text-xs text-slate-400 mt-0.5">
+                                                {primer.sequence.length} bp • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent}%
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => onRemovePrimer(primer.id)}
+                                            className="p-1 hover:bg-slate-500 rounded ml-2"
+                                            title="Remove primer"
+                                        >
+                                            <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {activeTab === 'library' && (
+                <div className="space-y-3">
+                    {/* Search and filters */}
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={librarySearch}
+                            onChange={(e) => setLibrarySearch(e.target.value)}
+                            placeholder="Search primers..."
+                            className="flex-1 px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"
+                        />
+                        <button
+                            onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
+                            className={`px-2 py-1.5 rounded text-sm transition-colors ${showFavoritesOnly
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                                }`}
+                            title="Show favorites only"
+                        >
+                            ★
+                        </button>
+                    </div>
+
+                    {/* Library primers */}
+                    {libraryLoading ? (
+                        <div className="text-center text-slate-500 py-4">Loading...</div>
+                    ) : libraryPrimers.length === 0 ? (
+                        <div className="text-center text-slate-500 text-sm py-4">
+                            {librarySearch ? 'No matching primers' : 'Library is empty'}
+                        </div>
+                    ) : (
+                        <div className="space-y-1 max-h-64 overflow-y-auto">
+                            {libraryPrimers.map(primer => (
+                                <div
+                                    key={primer.id}
+                                    className="flex items-center justify-between p-2 bg-slate-700/50 hover:bg-slate-700 rounded transition-colors"
+                                >
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-2 h-2 rounded-full ${primer.primer_type === 'reverse' ? 'bg-red-500' : 'bg-emerald-500'
+                                                }`} />
+                                            <span className="text-sm text-slate-200 truncate">{primer.name}</span>
+                                            {primer.is_favorite && <span className="text-amber-400 text-xs">★</span>}
+                                        </div>
+                                        <div className="text-xs text-slate-400 mt-0.5 font-mono truncate">
+                                            {primer.sequence.slice(0, 30)}{primer.length > 30 ? '...' : ''}
+                                        </div>
+                                        <div className="text-xs text-slate-500 mt-0.5">
+                                            {primer.length} bp • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent?.toFixed(0)}%
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 ml-2">
+                                        <button
+                                            onClick={() => addLibraryPrimerToSequence(primer)}
+                                            className="p-1 hover:bg-blue-600 rounded text-blue-400 hover:text-white"
+                                            title="Add to sequence"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                            </svg>
+                                        </button>
+                                        <button
+                                            onClick={() => handleToggleFavorite(primer.id)}
+                                            className={`p-1 rounded transition-colors ${primer.is_favorite
+                                                ? 'text-amber-400 hover:text-amber-300'
+                                                : 'text-slate-500 hover:text-amber-400'
+                                                }`}
+                                            title="Toggle favorite"
+                                        >
+                                            ★
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteFromLibrary(primer.id)}
+                                            className="p-1 hover:bg-red-600 rounded text-slate-400 hover:text-white"
+                                            title="Delete from library"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="text-xs text-slate-500 text-center">
+                        Click + to add library primer to current sequence
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
