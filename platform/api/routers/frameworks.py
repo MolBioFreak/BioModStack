@@ -55,6 +55,12 @@ class FrameworkDownloadResponse(BaseModel):
     cached: bool
     file_path: Optional[str]
     pdb_content: Optional[str]  # Only included if include_content=True
+    # Chain metadata from SAbDab DB for post-download selection
+    h_chain: Optional[str] = None      # Antibody heavy chain ID
+    l_chain: Optional[str] = None      # Antibody light chain ID (None for VHH)
+    antigen_chain: Optional[str] = None  # Antigen chain ID(s) if bound
+    antigen_name: Optional[str] = None   # Antigen name for display
+
 
 
 class CachedFramework(BaseModel):
@@ -252,12 +258,31 @@ async def download_framework(
         
         cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
         
+        # Fetch chain metadata from local DB for post-download selection
+        h_chain, l_chain, antigen_chain, antigen_name = None, None, None, None
+        try:
+            db = get_sabdab_db()
+            entries = db.get_by_pdb(pdb_code)
+            if entries:
+                entry = entries[0]  # Use first entry
+                h_chain = entry.h_chain
+                l_chain = None  # VHH don't have L chain
+                antigen_chain = entry.antigen_chain
+                antigen_name = entry.antigen_name
+                logger.info(f"[SAbDab Download] Chain metadata: H={h_chain}, Ag={antigen_chain}")
+        except Exception as db_err:
+            logger.warning(f"[SAbDab Download] Could not fetch chain metadata: {db_err}")
+        
         return FrameworkDownloadResponse(
             pdb_code=pdb_code.upper(),
             scheme=scheme,
             cached=cache_file.exists(),
             file_path=str(cache_file) if cache_file.exists() else None,
-            pdb_content=pdb_content if include_content else None
+            pdb_content=pdb_content if include_content else None,
+            h_chain=h_chain,
+            l_chain=l_chain,
+            antigen_chain=antigen_chain,
+            antigen_name=antigen_name
         )
     except HTTPException:
         raise
