@@ -457,14 +457,17 @@ async def auto_annotate(request: AutoAnnotateRequest):
             for i in range(0, len(sequence), 60):
                 f.write(sequence[i:i+60] + "\n")
         
-        # Build plannotate command
+        # Build plannotate command with sensitive search config
+        # The custom YAML lowers identity thresholds for better detection
+        sensitive_yaml = "/home/dalab/.plannotate_sensitive.yml"
         cmd = [
             "/home/dalab/bin/micromamba",
             "run", "-n", "plannotate", "--root-prefix", "/home/dalab/micromamba",
             "plannotate", "batch",
             "-i", input_file,
             "-o", output_dir,
-            "--csv"
+            "--csv",
+            "-y", sensitive_yaml  # Use sensitive config with lower thresholds
         ]
         
         if request.is_linear:
