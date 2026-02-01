@@ -26,13 +26,13 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
     # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
     # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # install other dependencies
-    uv pip install scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
+    uv pip install --compile scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
 
     # install fampnn package
-    uv pip install --no-deps -e .
+    uv pip install --compile --no-deps -e .
 
     # cleanup
     rm -rf /var/lib/apt/lists/*
@@ -41,6 +41,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
     # link venv
     echo '. /opt/venv/bin/activate' >> $APPTAINER_ENVIRONMENT
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PYTHONPATH="/app/fampnn:$PYTHONPATH"

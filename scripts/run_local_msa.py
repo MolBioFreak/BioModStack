@@ -12,8 +12,8 @@ Usage:
         --sequence "MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSH" \
         --name hemoglobin \
         --out_dir ./output \
-        --db_path /mnt/BioModStack/colabfold_db \
-        --cache_dir /mnt/BioModStack/msa_cache
+        --db_path "$BMS_COLABFOLD_DB" \
+        --cache_dir "$BMS_MSA_CACHE"
         
     # Force GPU (specific device)
     python run_local_msa.py --use-gpu --gpu-id 2 ...
@@ -33,8 +33,13 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
-DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
-DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
+_data_root = os.getenv("BMS_DATA")
+DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or (
+    f"{_data_root}/colabfold_db" if _data_root else "/mnt/BioModStack/colabfold_db"
+)
+DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or (
+    f"{_data_root}/msa_cache" if _data_root else "/mnt/BioModStack/msa_cache"
+)
 
 
 def compute_sequence_hash(sequence: str) -> str:
@@ -358,9 +363,9 @@ if __name__ == "__main__":
     parser.add_argument("--db_path", 
                         default=DEFAULT_DB_PATH,
                         help="Path to ColabFold database directory")
-    parser.add_argument("--cache_dir", 
+    parser.add_argument("--cache_dir",
                         default=DEFAULT_CACHE_DIR,
-                        help="Cache directory (default: /mnt/BioModStack/msa_cache)")
+                        help="Cache directory (default: BMS_MSA_CACHE or BMS_DATA/msa_cache)")
     parser.add_argument("--max_age_days", type=int, default=0, 
                         help="Cache expiry in days (0 = never expire)")
     parser.add_argument("--force_refresh", action="store_true", 

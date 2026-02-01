@@ -90,10 +90,10 @@ export function ResultsViewer() {
     const [currentPage, setCurrentPage] = useState<number>(1);
     const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000, 0]; // 0 = All
 
-    // Fetch jobs list
+    // Fetch jobs list (include children for aggregation)
     const { data: jobsData } = useQuery({
-        queryKey: ['jobs'],
-        queryFn: () => fetchJobs(),
+        queryKey: ['jobs', 'include_children'],
+        queryFn: () => fetchJobs({ include_children: true }),
     });
     const jobs = jobsData?.data.jobs ?? [];
 
@@ -129,6 +129,7 @@ export function ResultsViewer() {
         queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue],
         queryFn: () => fetchDesigns({
             job_id: selectedJobId,
+            include_children: true, // Include designs from child jobs (mutagenesis variants, exploration spawns)
             limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
             offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
             sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | undefined,
@@ -358,27 +359,51 @@ export function ResultsViewer() {
                                 {(() => {
                                     const sortedJobs = [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-                                    // Build parent-children map and calculate aggregated design counts
-                                    const parentChildMap = new Map<string, { parent: Job; children: Job[]; totalDesigns: number }>();
+                                    // Build batch-based aggregation map for jobs sharing batch_id
+                                    // This handles mutagenesis workflows where child jobs have batch_id but no parent_job_id
+                                    const batchMap = new Map<string, { msaJob: Job | null; children: Job[]; totalDesigns: number }>();
                                     const childJobIds = new Set<string>();
 
-                                    // First pass: identify all child jobs
+                                    // First pass: group jobs by batch_id
                                     sortedJobs.forEach(job => {
+                                        // Also handle parent_job_id for other workflows
                                         if (job.parent_job_id) {
                                             childJobIds.add(job.id);
-                                            const existing = parentChildMap.get(job.parent_job_id);
+                                        }
+
+                                        // Group by batch_id
+                                        if (job.batch_id) {
+                                            const isMsaJob = job.mode === 'msa_generation' || job.name.endsWith('_msa');
+                                            const existing = batchMap.get(job.batch_id);
+
                                             if (existing) {
-                                                existing.children.push(job);
-                                                existing.totalDesigns += job.design_count || 0;
+                                                if (isMsaJob) {
+                                                    // MSA job found - it becomes the parent
+                                                    existing.msaJob = job;
+                                                    // Also add MSA job's designs (usually 0)
+                                                    existing.totalDesigns += job.design_count || 0;
+                                                } else {
+                                                    // Add as child
+                                                    existing.children.push(job);
+                                                    existing.totalDesigns += job.design_count || 0;
+                                                    childJobIds.add(job.id);
+                                                }
                                             } else {
-                                                // Find the parent job
-                                                const parent = sortedJobs.find(p => p.id === job.parent_job_id);
-                                                if (parent) {
-                                                    parentChildMap.set(job.parent_job_id, {
-                                                        parent,
-                                                        children: [job],
-                                                        totalDesigns: (parent.design_count || 0) + (job.design_count || 0)
+                                                // First job in this batch
+                                                if (isMsaJob) {
+                                                    batchMap.set(job.batch_id, {
+                                                        msaJob: job,
+                                                        children: [],
+                                                        totalDesigns: job.design_count || 0
                                                     });
+                                                } else {
+                                                    // Non-MSA job encountered first - still add to children, mark for aggregation
+                                                    batchMap.set(job.batch_id, {
+                                                        msaJob: null,
+                                                        children: [job],
+                                                        totalDesigns: job.design_count || 0
+                                                    });
+                                                    childJobIds.add(job.id); // Also mark as child!
                                                 }
                                             }
                                         }
@@ -388,7 +413,7 @@ export function ResultsViewer() {
 
                                     // Render jobs (skip child jobs entirely)
                                     sortedJobs.forEach(job => {
-                                        // Skip child jobs - they're aggregated under parent
+                                        // Skip child jobs - they're aggregated under parent/MSA
                                         if (childJobIds.has(job.id)) {
                                             return;
                                         }
@@ -398,10 +423,11 @@ export function ResultsViewer() {
                                         const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
                                         const statusIcon = job.status === 'completed' ? '✓' : job.status === 'running' ? '⟳' : job.status === 'failed' ? '✗' : '○';
 
-                                        // Check if this is a parent with children
-                                        const parentData = parentChildMap.get(job.id);
-                                        const displayDesigns = parentData ? parentData.totalDesigns : (job.design_count || 0);
-                                        const childIndicator = parentData ? ` (${parentData.children.length} batches)` : '';
+                                        // Check if this job has batch children
+                                        const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
+                                        const hasChildren = batchData && batchData.children.length > 0;
+                                        const displayDesigns = hasChildren ? batchData.totalDesigns : (job.design_count || 0);
+                                        const childIndicator = hasChildren ? ` (${batchData.children.length} variants)` : '';
 
                                         elements.push(
                                             <option key={job.id} value={job.id}>
@@ -602,48 +628,36 @@ export function ResultsViewer() {
                                                 </div>
                                             </div>
 
-                                            {/* CDR Annotation Button - Only for antibody/nanobody workflows */}
-                                            {(activeJob?.model_id === 'rfantibody' ||
-                                                activeJob?.model_id === 'antibody_child' ||
-                                                activeJob?.name?.toLowerCase().includes('antibody') ||
-                                                activeJob?.mode?.toLowerCase().includes('antibody') ||
-                                                activeJob?.mode?.toLowerCase().includes('nanobody') ||
-                                                activeJob?.mode?.toLowerCase().includes('vhh') ||
-                                                (activeJob?.model_id === 'boltzgen' && (
-                                                    activeJob?.params?.nanobody_mode === true ||
-                                                    activeJob?.mode?.toLowerCase().includes('nanobody') ||
-                                                    activeJob?.mode?.toLowerCase().includes('vhh')
-                                                ))) && (
-                                                    <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
-                                                        <h3 className="text-sm font-semibold text-slate-300 mb-3">Antibody CDR Annotation</h3>
-                                                        <p className="text-xs text-slate-400 mb-4">
-                                                            CDR annotation runs automatically after antibody jobs complete. Use this to re-run ANARCII
-                                                            if you updated structures or need a refresh.
-                                                        </p>
-                                                        <button
-                                                            onClick={async () => {
-                                                                const jobIdToUse = activeJob?.id || selectedJobId;
-                                                                if (!jobIdToUse) return;
-                                                                try {
-                                                                    const btn = document.getElementById('cdr-annotate-btn');
-                                                                    if (btn) {
-                                                                        btn.textContent = 'Annotating...';
-                                                                        btn.setAttribute('disabled', 'true');
-                                                                    }
-                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
-                                                                    const data = await res.json();
-                                                                    alert(data.message || 'CDR annotation started - refresh in 1-2 minutes');
-                                                                } catch (err) {
-                                                                    alert('CDR annotation failed: ' + err);
-                                                                }
-                                                            }}
-                                                            id="cdr-annotate-btn"
-                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-                                                        >
-                                                            Re-run ANARCII
-                                                        </button>
-                                                    </div>
-                                                )}
+                                            {/* CDR/Region Annotation Button - Works for antibodies, nanobodies, and TCRs */}
+                                            <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                                                <h3 className="text-sm font-semibold text-slate-300 mb-3">ANARCII Sequence Annotation</h3>
+                                                <p className="text-xs text-slate-400 mb-4">
+                                                    Run ANARCII to extract CDR regions (antibodies/nanobodies) or variable regions (TCRs).
+                                                    Uses IMGT numbering scheme.
+                                                </p>
+                                                <button
+                                                    onClick={async () => {
+                                                        const jobIdToUse = activeJob?.id || selectedJobId;
+                                                        if (!jobIdToUse) return;
+                                                        try {
+                                                            const btn = document.getElementById('cdr-annotate-btn');
+                                                            if (btn) {
+                                                                btn.textContent = 'Annotating...';
+                                                                btn.setAttribute('disabled', 'true');
+                                                            }
+                                                            const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdrs?include_children=true`, { method: 'POST' });
+                                                            const data = await res.json();
+                                                            alert(data.message || 'ANARCII annotation started - refresh in 1-2 minutes');
+                                                        } catch (err) {
+                                                            alert('ANARCII annotation failed: ' + err);
+                                                        }
+                                                    }}
+                                                    id="cdr-annotate-btn"
+                                                    className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                                >
+                                                    Run ANARCII
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
 

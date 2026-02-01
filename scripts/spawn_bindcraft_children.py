@@ -8,11 +8,14 @@ the same protein. Results are aggregated by the parent job.
 
 import argparse
 import json
+import os
 import requests
 import sys
 from pathlib import Path
 from typing import Dict, Any
 import math
+
+DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 
 def spawn_child_job(
@@ -90,7 +93,7 @@ def main():
     parser.add_argument("--target_pdb", required=True, help="Target PDB file path")
     parser.add_argument("--batch_name", required=True, help="Batch identifier")
     parser.add_argument("--params_json", required=True, help="JSON string of parameters")
-    parser.add_argument("--api_url", default="http://localhost:8000", help="API URL")
+    parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--output", required=True, help="Output JSON file")
     
     args = parser.parse_args()

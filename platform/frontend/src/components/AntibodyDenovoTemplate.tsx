@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, type CDRAnnotationResponse } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -12,6 +12,7 @@ import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -49,6 +50,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
     const [selectedCDRLoops, setSelectedCDRLoops] = useState<Set<string>>(new Set(['H1', 'H2', 'H3', 'L1', 'L2', 'L3']));
     const [protectTetrad, setProtectTetrad] = useState(true);
+    // Manual CDR definitions (for custom loop positions)
+    const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
+    const [showCDREditor, setShowCDREditor] = useState(false);
 
     // Quality settings
     const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
@@ -63,6 +67,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
     const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
     const [sabdabFramework, setSabdabFramework] = useState<SelectedFramework | null>(null);
+
+    // ANARCII CDR detection state
+    const [detectedCDRs, setDetectedCDRs] = useState<CDRAnnotationResponse | null>(null);
+    const [isDetectingCDRs, setIsDetectingCDRs] = useState(false);
 
     // Framework protection settings
     const [frameworkProtection, setFrameworkProtection] = useState<FrameworkEditorState>({
@@ -472,9 +480,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <div className="flex items-center gap-3">
                     <button
                         onClick={onBack}
-                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
                     >
-                        &lt; Back
+                        ← Back
                     </button>
                     <div>
                         <h2 className="text-lg font-semibold text-slate-200">De Novo Antibody Design</h2>
@@ -521,673 +529,882 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
             </div>
 
-            {/* Form */}
-            <div className="space-y-6">
-                {/* Job Name & GPU Pinning */}
-                <div className="flex gap-6">
-                    <div className="flex-1">
-                        <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
-                        <input
-                            type="text"
-                            value={jobName}
-                            onChange={(e) => setJobName(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                            placeholder="antibody_design"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            GPU Pinning {pinnedGpus.length > 0 && <span className="text-purple-400">({pinnedGpus.length} selected)</span>}
-                        </label>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setPinnedGpus([])}
-                                className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
-                                    ? 'bg-slate-600 text-white ring-2 ring-slate-400'
-                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                    }`}
-                            >
-                                Auto
-                            </button>
-                            {[
-                                { id: 0, name: '5090' },
-                                { id: 1, name: '5060Ti' },
-                                { id: 2, name: '3090#1' },
-                                { id: 3, name: '3090#2' },
-                            ].map(gpu => (
+            {/* Form - 2 Column Layout */}
+            <div className="grid grid-cols-2 gap-8">
+                {/* LEFT COLUMN: Target & Epitope Selection */}
+                <div className="space-y-5">
+                    {/* Job Name & GPU Pinning */}
+                    <div className="flex gap-6">
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
+                            <input
+                                type="text"
+                                value={jobName}
+                                onChange={(e) => setJobName(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="antibody_design"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                GPU Pinning {pinnedGpus.length > 0 && <span className="text-purple-400">({pinnedGpus.length} selected)</span>}
+                            </label>
+                            <div className="flex gap-2">
                                 <button
-                                    key={gpu.id}
-                                    onClick={() => {
-                                        setPinnedGpus(prev =>
-                                            prev.includes(gpu.id)
-                                                ? prev.filter(g => g !== gpu.id)
-                                                : [...prev, gpu.id].sort()
-                                        );
-                                    }}
-                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
-                                        ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                                    onClick={() => setPinnedGpus([])}
+                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
+                                        ? 'bg-slate-600 text-white ring-2 ring-slate-400'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {gpu.name}
+                                    Auto
+                                </button>
+                                {[
+                                    { id: 0, name: '5090' },
+                                    { id: 1, name: '5060Ti' },
+                                    { id: 2, name: '3090#1' },
+                                    { id: 3, name: '3090#2' },
+                                ].map(gpu => (
+                                    <button
+                                        key={gpu.id}
+                                        onClick={() => {
+                                            setPinnedGpus(prev =>
+                                                prev.includes(gpu.id)
+                                                    ? prev.filter(g => g !== gpu.id)
+                                                    : [...prev, gpu.id].sort()
+                                            );
+                                        }}
+                                        className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
+                                            ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        {gpu.name}
+                                    </button>
+                                ))}
+                            </div>
+                            {pinnedGpus.length > 0 && (
+                                <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={lockGpus}
+                                        onChange={e => setLockGpus(e.target.checked)}
+                                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+                                    />
+                                    <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
+                                </label>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Target PDB Selection - Now with multiple sources */}
+                    <TargetAntigenSelector
+                        onSelect={(target) => {
+                            if (target) {
+                                if (target.type === 'upload' && target.file) {
+                                    setTargetPdb(target.file);
+                                    setTargetSource({ type: 'upload' });
+                                } else if (target.url) {
+                                    // For URL-based sources (runs, presets, rcsb), we need to fetch and parse
+                                    setTargetSource({
+                                        type: target.type,
+                                        url: target.url,
+                                        path: target.path,
+                                        designId: target.designId,
+                                        pdbId: target.pdbId
+                                    });
+                                    // Fetch the PDB content and create a File object for parsing
+                                    fetch(target.url)
+                                        .then(res => res.blob())
+                                        .then(blob => {
+                                            const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                                            setTargetPdb(file);
+                                        })
+                                        .catch(err => {
+                                            console.error('[ANTIBODY_DENOVO] Failed to fetch PDB:', err);
+                                            alert('Failed to load PDB from source');
+                                        });
+                                }
+                            } else {
+                                setTargetPdb(null);
+                                setTargetSource(null);
+                            }
+                        }}
+                        selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
+                    />
+
+                    {/* Framework Selection */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                            {[
+                                { id: 'standard-fv', name: 'Standard Fv', desc: 'hu-4D5-8 (Herceptin)', color: 'blue' },
+                                { id: 'nanobody', name: 'Nanobody', desc: 'VHH single-domain', color: 'purple' },
+                                { id: 'sabdab', name: 'SAbDab', desc: 'Browse database', color: 'emerald' },
+                                { id: 'custom', name: 'Custom', desc: 'Upload HLT PDB', color: 'amber' },
+                            ].map((fw) => (
+                                <button
+                                    key={fw.id}
+                                    onClick={() => setFrameworkType(fw.id as FrameworkType)}
+                                    className={`p-3 rounded-lg border transition-all ${frameworkType === fw.id
+                                        ? fw.id === 'standard-fv'
+                                            ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                                            : fw.id === 'nanobody'
+                                                ? 'bg-purple-600/20 border-purple-500 text-purple-400'
+                                                : fw.id === 'sabdab'
+                                                    ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
+                                                    : 'bg-amber-600/20 border-amber-500 text-amber-400'
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                        }`}
+                                >
+                                    <div className="text-sm font-medium">{fw.name}</div>
+                                    <div className="text-xs opacity-75">{fw.desc}</div>
                                 </button>
                             ))}
                         </div>
-                        {pinnedGpus.length > 0 && (
-                            <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={lockGpus}
-                                    onChange={e => setLockGpus(e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+
+                        {/* SAbDab Framework Browser */}
+                        {frameworkType === 'sabdab' && (
+                            <div className="mt-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700">
+                                <FrameworkBrowser
+                                    onSelect={(fw) => {
+                                        setSabdabFramework(fw);
+                                        setDetectedCDRs(null); // Clear previous detection
+                                        // Set framework PDB URL for 3D preview if pdbCode available
+                                        if (fw?.pdbCode) {
+                                            // Use RCSB PDB download URL for Mol* viewer
+                                            setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
+                                            setViewerMode('framework');
+                                            setShow3DViewer(true);
+                                        } else {
+                                            setFrameworkPdbUrl(null);
+                                        }
+                                    }}
+                                    selectedFramework={sabdabFramework}
+                                    showCustomUpload={false}
                                 />
-                                <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
-                            </label>
+
+                                {/* ANARCII CDR Detection */}
+                                {sabdabFramework?.pdbCode && (
+                                    <div className="mt-3 pt-3 border-t border-slate-700">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-sm font-medium text-slate-400">CDR Detection (ANARCII)</span>
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    if (!sabdabFramework?.pdbCode) return;
+                                                    setIsDetectingCDRs(true);
+                                                    try {
+                                                        const result = await annotateFrameworkCdrs(sabdabFramework.pdbCode);
+                                                        setDetectedCDRs(result.data);
+                                                    } catch (err) {
+                                                        console.error('CDR detection failed:', err);
+                                                    } finally {
+                                                        setIsDetectingCDRs(false);
+                                                    }
+                                                }}
+                                                disabled={isDetectingCDRs}
+                                                className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-600 text-white rounded-lg transition-all"
+                                            >
+                                                {isDetectingCDRs ? 'Detecting...' : detectedCDRs ? 'Re-Detect CDRs' : 'Detect CDRs'}
+                                            </button>
+                                        </div>
+
+                                        {/* Detection Results */}
+                                        {detectedCDRs && (
+                                            <div className="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                                                <div className="text-xs text-slate-500 mb-2">
+                                                    Detected {detectedCDRs.antibody_type} CDR regions:
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                                    {detectedCDRs.cdr_h1 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H1</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h1}>{detectedCDRs.cdr_h1}</div>
+                                                            {detectedCDRs.cdr_h1_range && <div className="text-slate-500">{detectedCDRs.cdr_h1_range[0]}-{detectedCDRs.cdr_h1_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                    {detectedCDRs.cdr_h2 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H2</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h2}>{detectedCDRs.cdr_h2}</div>
+                                                            {detectedCDRs.cdr_h2_range && <div className="text-slate-500">{detectedCDRs.cdr_h2_range[0]}-{detectedCDRs.cdr_h2_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                    {detectedCDRs.cdr_h3 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H3</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h3}>{detectedCDRs.cdr_h3}</div>
+                                                            {detectedCDRs.cdr_h3_range && <div className="text-slate-500">{detectedCDRs.cdr_h3_range[0]}-{detectedCDRs.cdr_h3_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {/* Light chain CDRs if present */}
+                                                {(detectedCDRs.cdr_l1 || detectedCDRs.cdr_l2 || detectedCDRs.cdr_l3) && (
+                                                    <div className="grid grid-cols-3 gap-2 text-xs mt-2">
+                                                        {detectedCDRs.cdr_l1 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L1</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l1}>{detectedCDRs.cdr_l1}</div>
+                                                                {detectedCDRs.cdr_l1_range && <div className="text-slate-500">{detectedCDRs.cdr_l1_range[0]}-{detectedCDRs.cdr_l1_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                        {detectedCDRs.cdr_l2 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L2</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l2}>{detectedCDRs.cdr_l2}</div>
+                                                                {detectedCDRs.cdr_l2_range && <div className="text-slate-500">{detectedCDRs.cdr_l2_range[0]}-{detectedCDRs.cdr_l2_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                        {detectedCDRs.cdr_l3 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L3</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l3}>{detectedCDRs.cdr_l3}</div>
+                                                                {detectedCDRs.cdr_l3_range && <div className="text-slate-500">{detectedCDRs.cdr_l3_range[0]}-{detectedCDRs.cdr_l3_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {/* Confirmation Button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        // Convert detected CDRs to selectedCDRLoops format
+                                                        const loops = new Set<string>();
+                                                        if (detectedCDRs.cdr_h1) loops.add('H1');
+                                                        if (detectedCDRs.cdr_h2) loops.add('H2');
+                                                        if (detectedCDRs.cdr_h3) loops.add('H3');
+                                                        if (detectedCDRs.cdr_l1) loops.add('L1');
+                                                        if (detectedCDRs.cdr_l2) loops.add('L2');
+                                                        if (detectedCDRs.cdr_l3) loops.add('L3');
+                                                        setSelectedCDRLoops(loops);
+                                                        // Note: IMGT position ranges stored in detectedCDRs are available
+                                                        // for passing to backend (rfantibody design_loops param)
+                                                    }}
+                                                    className="w-full mt-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all"
+                                                >
+                                                    ✓ Use These CDRs
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         )}
+
+                        {/* Custom framework upload */}
+                        {frameworkType === 'custom' && (
+                            <div className="mt-3">
+                                <input
+                                    type="file"
+                                    accept=".pdb"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0] || null;
+                                        setCustomFrameworkFile(file);
+                                        setCustomFrameworkPath(null);
+                                    }}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer"
+                                />
+                                <p className="mt-1 text-xs text-slate-500">Upload HLT-formatted framework PDB with chain H (Heavy) and L (Light)</p>
+                            </div>
+                        )}
+
+                        <p className="mt-1 text-xs text-slate-500">
+                            {frameworkType === 'standard-fv' && 'Standard humanized Fv framework - good for most applications'}
+                            {frameworkType === 'nanobody' && 'Single-domain VHH antibody - smaller, better tissue penetration'}
+                            {frameworkType === 'sabdab' && 'Browse VHH structures from SAbDab database (CC-BY 4.0)'}
+                            {frameworkType === 'custom' && 'Use your own HLT-formatted antibody framework'}
+                        </p>
                     </div>
-                </div>
 
-                {/* Target PDB Selection - Now with multiple sources */}
-                <TargetAntigenSelector
-                    onSelect={(target) => {
-                        if (target) {
-                            if (target.type === 'upload' && target.file) {
-                                setTargetPdb(target.file);
-                                setTargetSource({ type: 'upload' });
-                            } else if (target.url) {
-                                // For URL-based sources (runs, presets, rcsb), we need to fetch and parse
-                                setTargetSource({
-                                    type: target.type,
-                                    url: target.url,
-                                    path: target.path,
-                                    designId: target.designId,
-                                    pdbId: target.pdbId
-                                });
-                                // Fetch the PDB content and create a File object for parsing
-                                fetch(target.url)
-                                    .then(res => res.blob())
-                                    .then(blob => {
-                                        const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
-                                        setTargetPdb(file);
-                                    })
-                                    .catch(err => {
-                                        console.error('[ANTIBODY_DENOVO] Failed to fetch PDB:', err);
-                                        alert('Failed to load PDB from source');
-                                    });
-                            }
-                        } else {
-                            setTargetPdb(null);
-                            setTargetSource(null);
-                        }
-                    }}
-                    selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
-                />
+                    {/* Chain Selector (when PDB is parsed) */}
+                    {parsedChains.length > 1 && (
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">Antigen Chain</label>
+                            <div className="flex gap-2 flex-wrap">
+                                {parsedChains.map(chain => (
+                                    <button
+                                        key={chain.id}
+                                        onClick={() => {
+                                            setSelectedChain(chain.id);
+                                            setSelectedResidues(new Set()); // Clear selection when chain changes
+                                        }}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedChain === chain.id
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        Chain {chain.id} ({chain.length} aa)
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">Select the chain representing the antigen/target</p>
+                        </div>
+                    )}
 
-                {/* Framework Selection */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
-                    <div className="grid grid-cols-4 gap-3 mb-3">
-                        {[
-                            { id: 'standard-fv', name: 'Standard Fv', desc: 'hu-4D5-8 (Herceptin)', color: 'blue' },
-                            { id: 'nanobody', name: 'Nanobody', desc: 'VHH single-domain', color: 'purple' },
-                            { id: 'sabdab', name: 'SAbDab', desc: 'Browse database', color: 'emerald' },
-                            { id: 'custom', name: 'Custom', desc: 'Upload HLT PDB', color: 'amber' },
-                        ].map((fw) => (
+                    {/* Interactive Epitope Selector with 3D Viewer */}
+                    {parsedChains.length > 0 && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-slate-400">
+                                    Epitope Selection
+                                    <span className="ml-2 text-xs text-slate-500 font-normal">
+                                        (Select hotspot residues the antibody should target)
+                                    </span>
+                                </label>
+
+                                {/* Explicit Toggle Buttons for Target and Framework Viewers */}
+                                <div className="flex gap-2">
+                                    {pdbBlobUrl && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setViewerMode('target');
+                                                setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
+                                            }}
+                                            className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'target'
+                                                ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/50'
+                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                                }`}
+                                        >
+                                            Target 3D
+                                        </button>
+                                    )}
+                                    {frameworkPdbUrl && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setViewerMode('framework');
+                                                setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
+                                            }}
+                                            className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'framework'
+                                                ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
+                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                                }`}
+                                        >
+                                            Framework 3D
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* 3D Molstar Viewer for visualization - toggled */}
+                            {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                    {/* Label showing current view */}
+                                    <div className="text-xs text-slate-500 mb-2">
+                                        {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
+                                        {viewerMode === 'framework' && detectedCDRs && (
+                                            <span className="ml-2 text-emerald-400">(CDRs highlighted)</span>
+                                        )}
+                                    </div>
+                                    <EpitopeMolstarViewer
+                                        structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
+                                        height={400}
+                                        selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
+                                            // When viewing framework, highlight detected CDR residues
+                                            const cdrResidues = new Set<string>();
+                                            if (detectedCDRs) {
+                                                // Add all residues in detected CDR ranges
+                                                // Use actual chain ID from framework, not hardcoded 'H'
+                                                const chainId = sabdabFramework?.hChain || 'H';
+                                                if (detectedCDRs.cdr_h1_range) {
+                                                    for (let i = detectedCDRs.cdr_h1_range[0]; i <= detectedCDRs.cdr_h1_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_h2_range) {
+                                                    for (let i = detectedCDRs.cdr_h2_range[0]; i <= detectedCDRs.cdr_h2_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_h3_range) {
+                                                    for (let i = detectedCDRs.cdr_h3_range[0]; i <= detectedCDRs.cdr_h3_range[1]; i++) {
+                                                        cdrResidues.add(`${chainId}${i}`);
+                                                    }
+                                                }
+                                                // Light chain CDRs (chain 'L' if present)
+                                                if (detectedCDRs.cdr_l1_range) {
+                                                    for (let i = detectedCDRs.cdr_l1_range[0]; i <= detectedCDRs.cdr_l1_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_l2_range) {
+                                                    for (let i = detectedCDRs.cdr_l2_range[0]; i <= detectedCDRs.cdr_l2_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                                if (detectedCDRs.cdr_l3_range) {
+                                                    for (let i = detectedCDRs.cdr_l3_range[0]; i <= detectedCDRs.cdr_l3_range[1]; i++) {
+                                                        cdrResidues.add(`L${i}`);
+                                                    }
+                                                }
+                                            }
+                                            return cdrResidues;
+                                        })()}
+                                        onResidueClick={viewerMode === 'target' ? (residueKey) => {
+                                            setSelectedResidues(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(residueKey)) {
+                                                    next.delete(residueKey);
+                                                } else {
+                                                    next.add(residueKey);
+                                                }
+                                                return next;
+                                            });
+                                        } : undefined}
+                                    />
+                                </div>
+                            )}
+
+                            {/* 2D Sequence Grid */}
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">2D Sequence View (shift+click for range)</div>
+                                <EpitopeSelector
+                                    chains={parsedChains}
+                                    selectedResidues={selectedResidues}
+                                    onSelectionChange={setSelectedResidues}
+                                    activeChain={selectedChain || undefined}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Fallback text input if no PDB */}
+                    {parsedChains.length === 0 && targetPdb && !isParsing && (
+                        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+                            Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
+                        </div>
+                    )}
+
+                    {/* Optional DNA/RNA Sequence for Complex Prediction */}
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <h4 className="text-sm font-medium text-slate-300">DNA/RNA Binding Partner (Optional)</h4>
+                                <p className="text-xs text-slate-500">For proteins that form optimal structures when bound to nucleic acid</p>
+                            </div>
                             <button
-                                key={fw.id}
-                                onClick={() => setFrameworkType(fw.id as FrameworkType)}
-                                className={`p-3 rounded-lg border transition-all ${frameworkType === fw.id
-                                    ? fw.id === 'standard-fv'
-                                        ? 'bg-blue-600/20 border-blue-500 text-blue-400'
-                                        : fw.id === 'nanobody'
-                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400'
-                                            : fw.id === 'sabdab'
-                                                ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
-                                                : 'bg-amber-600/20 border-amber-500 text-amber-400'
-                                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                                onClick={() => setShowDnaInput(!showDnaInput)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showDnaInput
+                                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                     }`}
                             >
-                                <div className="text-sm font-medium">{fw.name}</div>
-                                <div className="text-xs opacity-75">{fw.desc}</div>
+                                {showDnaInput ? 'Enabled' : '+ Add DNA/RNA'}
                             </button>
-                        ))}
+                        </div>
+                        {showDnaInput && (
+                            <div className="mt-3">
+                                <textarea
+                                    value={targetDnaSeq}
+                                    onChange={(e) => setTargetDnaSeq(e.target.value.toUpperCase().replace(/[^ATGCU\s]/gi, ''))}
+                                    placeholder="Enter DNA (ATGC) or RNA (AUGC) sequence..."
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:ring-2 focus:ring-cyan-500 outline-none h-24 resize-none"
+                                />
+                                <div className="flex items-center justify-between mt-2">
+                                    <p className="text-xs text-slate-500">
+                                        {targetDnaSeq.replace(/\s/g, '').length > 0
+                                            ? `${targetDnaSeq.replace(/\s/g, '').length} nucleotides`
+                                            : 'DNA sequence for protein-DNA complex prediction'
+                                        }
+                                    </p>
+                                    {targetDnaSeq && (
+                                        <span className="text-xs text-cyan-400">Complex prediction will precede antibody design</span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    {/* SAbDab Framework Browser */}
-                    {frameworkType === 'sabdab' && (
-                        <div className="mt-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700">
-                            <FrameworkBrowser
-                                onSelect={(fw) => {
-                                    setSabdabFramework(fw);
-                                    // Set framework PDB URL for 3D preview if pdbCode available
-                                    if (fw?.pdbCode) {
-                                        // Use RCSB PDB download URL for Mol* viewer
-                                        setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
-                                        setViewerMode('framework');
-                                        setShow3DViewer(true);
-                                    } else {
-                                        setFrameworkPdbUrl(null);
-                                    }
-                                }}
-                                selectedFramework={sabdabFramework}
-                                showCustomUpload={false}
-                            />
-                        </div>
-                    )}
+                    {/* Design Mode Selector */}
+                    <DesignModeSelector
+                        mode={designMode}
+                        onModeChange={setDesignMode}
+                        selectedLoops={selectedCDRLoops}
+                        onLoopsChange={setSelectedCDRLoops}
+                        protectTetrad={protectTetrad}
+                        onProtectTetradChange={setProtectTetrad}
+                        frameworkType={frameworkType}
+                    />
 
-                    {/* Custom framework upload */}
-                    {frameworkType === 'custom' && (
-                        <div className="mt-3">
-                            <input
-                                type="file"
-                                accept=".pdb"
-                                onChange={(e) => {
-                                    const file = e.target.files?.[0] || null;
-                                    setCustomFrameworkFile(file);
-                                    setCustomFrameworkPath(null);
-                                }}
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer"
-                            />
-                            <p className="mt-1 text-xs text-slate-500">Upload HLT-formatted framework PDB with chain H (Heavy) and L (Light)</p>
-                        </div>
-                    )}
-
-                    <p className="mt-1 text-xs text-slate-500">
-                        {frameworkType === 'standard-fv' && 'Standard humanized Fv framework - good for most applications'}
-                        {frameworkType === 'nanobody' && 'Single-domain VHH antibody - smaller, better tissue penetration'}
-                        {frameworkType === 'sabdab' && 'Browse VHH structures from SAbDab database (CC-BY 4.0)'}
-                        {frameworkType === 'custom' && 'Use your own HLT-formatted antibody framework'}
-                    </p>
-                </div>
-
-                {/* Chain Selector (when PDB is parsed) */}
-                {parsedChains.length > 1 && (
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">Antigen Chain</label>
-                        <div className="flex gap-2 flex-wrap">
-                            {parsedChains.map(chain => (
+                    {/* Manual CDR Definition - Toggle */}
+                    {designMode === 'cdr_only' && (
+                        <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-slate-200">Custom CDR Positions</h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">
+                                        Define custom loop positions instead of IMGT defaults
+                                    </p>
+                                </div>
                                 <button
-                                    key={chain.id}
-                                    onClick={() => {
-                                        setSelectedChain(chain.id);
-                                        setSelectedResidues(new Set()); // Clear selection when chain changes
-                                    }}
-                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedChain === chain.id
+                                    onClick={() => setShowCDREditor(!showCDREditor)}
+                                    className={`text-xs px-3 py-1.5 rounded transition-colors ${showCDREditor
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                        }`}
+                                >
+                                    {showCDREditor ? 'Use Defaults' : 'Define Manually'}
+                                </button>
+                            </div>
+                            {showCDREditor && parsedChains.length > 0 && (
+                                <CDRRangeSelector
+                                    chains={parsedChains}
+                                    cdrDefinitions={manualCDRDefinitions}
+                                    onDefinitionsChange={setManualCDRDefinitions}
+                                    activeChain={selectedChain || undefined}
+                                />
+                            )}
+                            {showCDREditor && parsedChains.length === 0 && (
+                                <p className="text-sm text-amber-400 italic">
+                                    Load target PDB first to define CDR positions on its structure
+                                </p>
+                            )}
+                            {manualCDRDefinitions.length > 0 && !showCDREditor && (
+                                <p className="text-xs text-emerald-400">
+                                    ✓ {manualCDRDefinitions.length} custom CDR(s) defined
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Framework Editor - shown for framework_allowed and full_design modes */}
+                    {(designMode === 'framework_allowed' || designMode === 'full_design') && (
+                        <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                            <FrameworkEditor
+                                state={frameworkProtection}
+                                onChange={setFrameworkProtection}
+                                frameworkType={frameworkType}
+                                compact={true}
+                            />
+                            <p className="mt-2 text-xs text-slate-500">
+                                Configure which framework positions should remain fixed during sequence design.
+                                Protected positions will not be mutated by FAMPNN/ProteinMPNN.
+                            </p>
+                        </div>
+                    )}
+
+                </div> {/* End LEFT COLUMN */}
+
+                {/* RIGHT COLUMN: Quality Settings & Debug */}
+                <div className="space-y-5">
+                    {/* Quality Settings Panel */}
+                    <QualitySettingsPanel
+                        settings={qualitySettings}
+                        onSettingsChange={setQualitySettings}
+                        preset={qualityPreset}
+                        onPresetChange={setQualityPreset}
+                    />
+
+                    {/* Physics Refinement Panel (OpenMM) */}
+                    <PhysicsRefinementPanel
+                        settings={physicsSettings}
+                        onSettingsChange={setPhysicsSettings}
+                        isAntibody={true}
+                    />
+
+                    {/* ANARCII Polishing */}
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-200">ANARCII CDR Annotation</h3>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    Post-pipeline CDR annotation for final designs.
+                                </p>
+                            </div>
+                            <label className="flex items-center gap-2 text-sm text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={runAnarciiPost}
+                                    onChange={(e) => setRunAnarciiPost(e.target.checked)}
+                                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                                />
+                                Enable
+                            </label>
+                        </div>
+                        {runAnarciiPost && (
+                            <div className="mt-3 space-y-2 text-xs text-slate-500">
+                                <label className="flex items-center gap-2 text-slate-300">
+                                    <input
+                                        type="checkbox"
+                                        checked={anarciiIncludeChildren}
+                                        onChange={(e) => setAnarciiIncludeChildren(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                                    />
+                                    Include child jobs (recommended for orchestrated runs)
+                                </label>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* FrustraMPNN QC */}
+                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    Annotate final candidates with local frustration (post-pipeline, FIO only).
+                                </p>
+                            </div>
+                            <label className="flex items-center gap-2 text-sm text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={runFrustrampnn}
+                                    onChange={(e) => setRunFrustrampnn(e.target.checked)}
+                                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
+                                />
+                                Enable
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* Number of Backbones */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Number of Backbones</label>
+                        <input
+                            type="number"
+                            value={numDesigns}
+                            onChange={(e) => setNumDesigns(parseInt(e.target.value) || 10)}
+                            min={1}
+                            max={100}
+                            className="w-32 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                    </div>
+
+                    {/* Sequences per Design */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            Sequences per Design
+                            <span className="ml-2 text-xs text-slate-500 font-normal">({seqsPerDesign})</span>
+                        </label>
+                        <div className="flex items-center gap-4">
+                            <input
+                                type="range"
+                                value={seqsPerDesign}
+                                onChange={(e) => setSeqsPerDesign(parseInt(e.target.value))}
+                                min={1}
+                                max={64}
+                                step={1}
+                                className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                            />
+                            <input
+                                type="number"
+                                value={seqsPerDesign}
+                                onChange={(e) => setSeqsPerDesign(Math.max(1, Math.min(64, parseInt(e.target.value) || 8)))}
+                                min={1}
+                                max={64}
+                                className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-center"
+                            />
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">Number of sequence variants to generate per backbone design</p>
+                    </div>
+
+                    {/* Sequence Designer */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
+                        <div className="flex gap-3">
+                            {(['fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                                <button
+                                    key={designer}
+                                    onClick={() => setSeqDesigner(designer)}
+                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${seqDesigner === designer
                                         ? 'bg-blue-600 text-white'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    Chain {chain.id} ({chain.length} aa)
+                                    {designer.toUpperCase()}
                                 </button>
                             ))}
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">Select the chain representing the antigen/target</p>
                     </div>
-                )}
 
-                {/* Interactive Epitope Selector with 3D Viewer */}
-                {parsedChains.length > 0 && (
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <label className="block text-sm font-medium text-slate-400">
-                                Epitope Selection
-                                <span className="ml-2 text-xs text-slate-500 font-normal">
-                                    (Select hotspot residues the antibody should target)
-                                </span>
-                            </label>
-
-                            {/* Explicit Toggle Buttons for Target and Framework Viewers */}
-                            <div className="flex gap-2">
-                                {pdbBlobUrl && (
+                    {seqDesigner === 'fampnn' && (
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">FAMPNN Constraints</label>
+                            <div className="flex gap-3">
+                                {(['generic', 'antibody'] as const).map((mode) => (
                                     <button
-                                        type="button"
-                                        onClick={() => {
-                                            setViewerMode('target');
-                                            setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
-                                        }}
-                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'target'
-                                            ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/50'
-                                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
+                                        key={mode}
+                                        onClick={() => setFampnnConstraintMode(mode)}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${fampnnConstraintMode === mode
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                             }`}
                                     >
-                                        Target 3D
+                                        {mode === 'generic' ? 'GENERIC' : 'ANTIBODY (CDR)'}
                                     </button>
-                                )}
-                                {frameworkPdbUrl && (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setViewerMode('framework');
-                                            setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
-                                        }}
-                                        className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'framework'
-                                            ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
-                                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
-                                            }`}
-                                    >
-                                        Framework 3D
-                                    </button>
-                                )}
+                                ))}
                             </div>
-                        </div>
-
-                        {/* 3D Molstar Viewer for visualization - toggled */}
-                        {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
-                            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                                {/* Label showing current view */}
-                                <div className="text-xs text-slate-500 mb-2">
-                                    {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
-                                </div>
-                                <EpitopeMolstarViewer
-                                    structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
-                                    height={400}
-                                    selectedResidues={viewerMode === 'target' ? selectedResidues : new Set<string>()}
-                                />
-                            </div>
-                        )}
-
-                        {/* 2D Sequence Grid */}
-                        <div>
-                            <div className="text-xs text-slate-500 mb-1">2D Sequence View (shift+click for range)</div>
-                            <EpitopeSelector
-                                chains={parsedChains}
-                                selectedResidues={selectedResidues}
-                                onSelectionChange={setSelectedResidues}
-                                activeChain={selectedChain || undefined}
-                            />
-                        </div>
-                    </div>
-                )}
-
-                {/* Fallback text input if no PDB */}
-                {parsedChains.length === 0 && targetPdb && !isParsing && (
-                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
-                        Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
-                    </div>
-                )}
-
-                {/* Optional DNA/RNA Sequence for Complex Prediction */}
-                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
-                        <div>
-                            <h4 className="text-sm font-medium text-slate-300">DNA/RNA Binding Partner (Optional)</h4>
-                            <p className="text-xs text-slate-500">For proteins that form optimal structures when bound to nucleic acid</p>
-                        </div>
-                        <button
-                            onClick={() => setShowDnaInput(!showDnaInput)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showDnaInput
-                                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
-                                }`}
-                        >
-                            {showDnaInput ? 'Enabled' : '+ Add DNA/RNA'}
-                        </button>
-                    </div>
-                    {showDnaInput && (
-                        <div className="mt-3">
-                            <textarea
-                                value={targetDnaSeq}
-                                onChange={(e) => setTargetDnaSeq(e.target.value.toUpperCase().replace(/[^ATGCU\s]/gi, ''))}
-                                placeholder="Enter DNA (ATGC) or RNA (AUGC) sequence..."
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:ring-2 focus:ring-cyan-500 outline-none h-24 resize-none"
-                            />
-                            <div className="flex items-center justify-between mt-2">
-                                <p className="text-xs text-slate-500">
-                                    {targetDnaSeq.replace(/\s/g, '').length > 0
-                                        ? `${targetDnaSeq.replace(/\s/g, '').length} nucleotides`
-                                        : 'DNA sequence for protein-DNA complex prediction'
-                                    }
-                                </p>
-                                {targetDnaSeq && (
-                                    <span className="text-xs text-cyan-400">Complex prediction will precede antibody design</span>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Design Mode Selector */}
-                <DesignModeSelector
-                    mode={designMode}
-                    onModeChange={setDesignMode}
-                    selectedLoops={selectedCDRLoops}
-                    onLoopsChange={setSelectedCDRLoops}
-                    protectTetrad={protectTetrad}
-                    onProtectTetradChange={setProtectTetrad}
-                    frameworkType={frameworkType}
-                />
-
-                {/* Framework Editor - shown for framework_allowed and full_design modes */}
-                {(designMode === 'framework_allowed' || designMode === 'full_design') && (
-                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                        <FrameworkEditor
-                            state={frameworkProtection}
-                            onChange={setFrameworkProtection}
-                            frameworkType={frameworkType}
-                            compact={true}
-                        />
-                        <p className="mt-2 text-xs text-slate-500">
-                            Configure which framework positions should remain fixed during sequence design.
-                            Protected positions will not be mutated by FAMPNN/ProteinMPNN.
-                        </p>
-                    </div>
-                )}
-
-                {/* Quality Settings Panel */}
-                <QualitySettingsPanel
-                    settings={qualitySettings}
-                    onSettingsChange={setQualitySettings}
-                    preset={qualityPreset}
-                    onPresetChange={setQualityPreset}
-                />
-
-                {/* Physics Refinement Panel (OpenMM) */}
-                <PhysicsRefinementPanel
-                    settings={physicsSettings}
-                    onSettingsChange={setPhysicsSettings}
-                    isAntibody={true}
-                />
-
-                {/* ANARCII Polishing */}
-                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-sm font-semibold text-slate-200">ANARCII CDR Annotation</h3>
-                            <p className="text-xs text-slate-500 mt-1">
-                                Post-pipeline CDR annotation for final designs.
+                            <p className="mt-1 text-xs text-slate-500">
+                                Generic applies no fixed positions; Antibody uses CDR-aware constraints.
                             </p>
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-slate-300">
-                            <input
-                                type="checkbox"
-                                checked={runAnarciiPost}
-                                onChange={(e) => setRunAnarciiPost(e.target.checked)}
-                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
-                            />
-                            Enable
-                        </label>
-                    </div>
-                    {runAnarciiPost && (
-                        <div className="mt-3 space-y-2 text-xs text-slate-500">
-                            <label className="flex items-center gap-2 text-slate-300">
-                                <input
-                                    type="checkbox"
-                                    checked={anarciiIncludeChildren}
-                                    onChange={(e) => setAnarciiIncludeChildren(e.target.checked)}
-                                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
-                                />
-                                Include child jobs (recommended for orchestrated runs)
-                            </label>
-                        </div>
                     )}
-                </div>
 
-                {/* FrustraMPNN QC */}
-                <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
-                            <p className="text-xs text-slate-500 mt-1">
-                                Annotate final candidates with local frustration (post-pipeline, FIO only).
-                            </p>
-                        </div>
-                        <label className="flex items-center gap-2 text-sm text-slate-300">
-                            <input
-                                type="checkbox"
-                                checked={runFrustrampnn}
-                                onChange={(e) => setRunFrustrampnn(e.target.checked)}
-                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
-                            />
-                            Enable
-                        </label>
-                    </div>
-                </div>
+                    {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
 
-                {/* Number of Backbones */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Number of Backbones</label>
-                    <input
-                        type="number"
-                        value={numDesigns}
-                        onChange={(e) => setNumDesigns(parseInt(e.target.value) || 10)}
-                        min={1}
-                        max={100}
-                        className="w-32 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                </div>
-
-                {/* Sequences per Design */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        Sequences per Design
-                        <span className="ml-2 text-xs text-slate-500 font-normal">({seqsPerDesign})</span>
-                    </label>
-                    <div className="flex items-center gap-4">
-                        <input
-                            type="range"
-                            value={seqsPerDesign}
-                            onChange={(e) => setSeqsPerDesign(parseInt(e.target.value))}
-                            min={1}
-                            max={64}
-                            step={1}
-                            className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                        <input
-                            type="number"
-                            value={seqsPerDesign}
-                            onChange={(e) => setSeqsPerDesign(Math.max(1, Math.min(64, parseInt(e.target.value) || 8)))}
-                            min={1}
-                            max={64}
-                            className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-center"
-                        />
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">Number of sequence variants to generate per backbone design</p>
-                </div>
-
-                {/* Sequence Designer */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
-                    <div className="flex gap-3">
-                        {(['fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                    {/* Orchestrator Parallelism Settings */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Orchestrator Mode</label>
+                        <div className="flex gap-3 mb-3">
                             <button
-                                key={designer}
-                                onClick={() => setSeqDesigner(designer)}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all ${seqDesigner === designer
+                                onClick={() => setParallelMode('standard')}
+                                className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'standard'
                                     ? 'bg-blue-600 text-white'
                                     : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                     }`}
                             >
-                                {designer.toUpperCase()}
+                                Nextflow Split
                             </button>
-                        ))}
-                    </div>
-                </div>
-
-                {seqDesigner === 'fampnn' && (
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">FAMPNN Constraints</label>
-                        <div className="flex gap-3">
-                            {(['generic', 'antibody'] as const).map((mode) => (
-                                <button
-                                    key={mode}
-                                    onClick={() => setFampnnConstraintMode(mode)}
-                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${fampnnConstraintMode === mode
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                        }`}
-                                >
-                                    {mode === 'generic' ? 'GENERIC' : 'ANTIBODY (CDR)'}
-                                </button>
-                            ))}
+                            <button
+                                onClick={() => setParallelMode('full_orchestrator')}
+                                className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'full_orchestrator'
+                                    ? 'bg-orange-600 text-white'
+                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                            >
+                                Orchestrator Jobs
+                            </button>
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                            Generic applies no fixed positions; Antibody uses CDR-aware constraints.
+                        <p className="text-xs text-slate-500 mb-3">
+                            {parallelMode === 'standard'
+                                ? "Standard: Split work across pinned GPUs within Nextflow"
+                                : "Orchestrator: Spawn child jobs that go through GPU queue"}
                         </p>
+
+                        {parallelMode === 'full_orchestrator' && (
+                            <div className="grid grid-cols-2 gap-4 mt-3">
+                                <div>
+                                    <label className="text-xs text-slate-500">Backbones per job</label>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="500"
+                                        value={designsPerJob}
+                                        onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
+                                        className="w-full accent-orange-500"
+                                    />
+                                    <span className="text-sm text-slate-300">{designsPerJob}</span>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-500">PDBs per FAMPNN job</label>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="500"
+                                        value={pdBsPerJob}
+                                        onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
+                                        className="w-full accent-orange-500"
+                                    />
+                                    <span className="text-sm text-slate-300">{pdBsPerJob}</span>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-500">Sequences per Boltz job</label>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="500"
+                                        value={seqsPerBoltzJob}
+                                        onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
+                                        className="w-full accent-orange-500"
+                                    />
+                                    <span className="text-sm text-slate-300">{seqsPerBoltzJob}</span>
+                                </div>
+                            </div>
+                        )}
                     </div>
-                )}
 
-                {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
-
-                {/* Orchestrator Parallelism Settings */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Orchestrator Mode</label>
-                    <div className="flex gap-3 mb-3">
+                    {/* Debug Settings Panel - Hidden by default */}
+                    <div className="mt-6 border border-amber-600/30 rounded-lg overflow-hidden">
                         <button
-                            onClick={() => setParallelMode('standard')}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'standard'
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                            onClick={() => setShowDebugSettings(!showDebugSettings)}
+                            className={`w-full px-4 py-3 flex items-center justify-between text-left transition-colors ${showDebugSettings
+                                ? 'bg-amber-600/20 text-amber-400'
+                                : 'bg-slate-900/50 text-slate-500 hover:bg-slate-800/50'
                                 }`}
                         >
-                            Nextflow Split
+                            <div className="flex items-center gap-2">
+                                <span className="font-medium">Debug Settings</span>
+                                {(skipRFantibody || skipFampnn || customOutputDir) && (
+                                    <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
+                                )}
+                            </div>
+                            <span className="text-lg">{showDebugSettings ? '-' : '+'}</span>
                         </button>
-                        <button
-                            onClick={() => setParallelMode('full_orchestrator')}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${parallelMode === 'full_orchestrator'
-                                ? 'bg-orange-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                }`}
-                        >
-                            Orchestrator Jobs
-                        </button>
+
+                        {showDebugSettings && (
+                            <div className="p-4 bg-slate-900/30 space-y-4">
+                                <div className="text-xs text-amber-500/80 mb-3">
+                                    Warning: Debug settings allow skipping workflow steps. Use with caution.
+                                </div>
+
+                                {/* Skip RFantibody */}
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={skipRFantibody}
+                                            onChange={e => {
+                                                setSkipRFantibody(e.target.checked);
+                                                if (!e.target.checked) setRfantibodyInputPdbs('');
+                                            }}
+                                            className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        <span className="text-sm text-slate-300">Skip RFantibody (use pre-existing backbone PDBs)</span>
+                                    </label>
+                                    {skipRFantibody && (
+                                        <input
+                                            type="text"
+                                            value={rfantibodyInputPdbs}
+                                            onChange={e => setRfantibodyInputPdbs(e.target.value)}
+                                            placeholder="/path/to/backbone/pdbs"
+                                            className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                        />
+                                    )}
+                                </div>
+
+                                {/* Skip FAMPNN */}
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={skipFampnn}
+                                            onChange={e => {
+                                                setSkipFampnn(e.target.checked);
+                                                if (!e.target.checked) setFampnnCollectedPdbs('');
+                                            }}
+                                            className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        <span className="text-sm text-slate-300">Skip FAMPNN (use pre-existing sequenced PDBs)</span>
+                                    </label>
+                                    {skipFampnn && (
+                                        <input
+                                            type="text"
+                                            value={fampnnCollectedPdbs}
+                                            onChange={e => setFampnnCollectedPdbs(e.target.value)}
+                                            placeholder="/path/to/fampnn/output/pdbs"
+                                            className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
+                                        />
+                                    )}
+                                </div>
+
+                                {/* Custom Output Directory */}
+                                <div className="space-y-2">
+                                    <label className="text-sm text-slate-400">Custom Output Directory (optional)</label>
+                                    <input
+                                        type="text"
+                                        value={customOutputDir}
+                                        onChange={e => setCustomOutputDir(e.target.value)}
+                                        placeholder="/mnt/BioModStack/results/custom_run"
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-slate-500 outline-none font-mono"
+                                    />
+                                </div>
+                            </div>
+                        )}
                     </div>
-                    <p className="text-xs text-slate-500 mb-3">
-                        {parallelMode === 'standard'
-                            ? "Standard: Split work across pinned GPUs within Nextflow"
-                            : "Orchestrator: Spawn child jobs that go through GPU queue"}
-                    </p>
-
-                    {parallelMode === 'full_orchestrator' && (
-                        <div className="grid grid-cols-2 gap-4 mt-3">
-                            <div>
-                                <label className="text-xs text-slate-500">Backbones per job</label>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="500"
-                                    value={designsPerJob}
-                                    onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
-                                    className="w-full accent-orange-500"
-                                />
-                                <span className="text-sm text-slate-300">{designsPerJob}</span>
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-500">PDBs per FAMPNN job</label>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="500"
-                                    value={pdBsPerJob}
-                                    onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
-                                    className="w-full accent-orange-500"
-                                />
-                                <span className="text-sm text-slate-300">{pdBsPerJob}</span>
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-500">Sequences per Boltz job</label>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="500"
-                                    value={seqsPerBoltzJob}
-                                    onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
-                                    className="w-full accent-orange-500"
-                                />
-                                <span className="text-sm text-slate-300">{seqsPerBoltzJob}</span>
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Debug Settings Panel - Hidden by default */}
-                <div className="mt-6 border border-amber-600/30 rounded-lg overflow-hidden">
-                    <button
-                        onClick={() => setShowDebugSettings(!showDebugSettings)}
-                        className={`w-full px-4 py-3 flex items-center justify-between text-left transition-colors ${showDebugSettings
-                            ? 'bg-amber-600/20 text-amber-400'
-                            : 'bg-slate-900/50 text-slate-500 hover:bg-slate-800/50'
-                            }`}
-                    >
-                        <div className="flex items-center gap-2">
-                            <span className="font-medium">Debug Settings</span>
-                            {(skipRFantibody || skipFampnn || customOutputDir) && (
-                                <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
-                            )}
-                        </div>
-                        <span className="text-lg">{showDebugSettings ? '-' : '+'}</span>
-                    </button>
-
-                    {showDebugSettings && (
-                        <div className="p-4 bg-slate-900/30 space-y-4">
-                            <div className="text-xs text-amber-500/80 mb-3">
-                                Warning: Debug settings allow skipping workflow steps. Use with caution.
-                            </div>
-
-                            {/* Skip RFantibody */}
-                            <div className="space-y-2">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={skipRFantibody}
-                                        onChange={e => {
-                                            setSkipRFantibody(e.target.checked);
-                                            if (!e.target.checked) setRfantibodyInputPdbs('');
-                                        }}
-                                        className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
-                                    />
-                                    <span className="text-sm text-slate-300">Skip RFantibody (use pre-existing backbone PDBs)</span>
-                                </label>
-                                {skipRFantibody && (
-                                    <input
-                                        type="text"
-                                        value={rfantibodyInputPdbs}
-                                        onChange={e => setRfantibodyInputPdbs(e.target.value)}
-                                        placeholder="/path/to/backbone/pdbs"
-                                        className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
-                                    />
-                                )}
-                            </div>
-
-                            {/* Skip FAMPNN */}
-                            <div className="space-y-2">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={skipFampnn}
-                                        onChange={e => {
-                                            setSkipFampnn(e.target.checked);
-                                            if (!e.target.checked) setFampnnCollectedPdbs('');
-                                        }}
-                                        className="w-4 h-4 rounded border-amber-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
-                                    />
-                                    <span className="text-sm text-slate-300">Skip FAMPNN (use pre-existing sequenced PDBs)</span>
-                                </label>
-                                {skipFampnn && (
-                                    <input
-                                        type="text"
-                                        value={fampnnCollectedPdbs}
-                                        onChange={e => setFampnnCollectedPdbs(e.target.value)}
-                                        placeholder="/path/to/fampnn/output/pdbs"
-                                        className="w-full bg-slate-900 border border-amber-600/50 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none font-mono"
-                                    />
-                                )}
-                            </div>
-
-                            {/* Custom Output Directory */}
-                            <div className="space-y-2">
-                                <label className="text-sm text-slate-400">Custom Output Directory (optional)</label>
-                                <input
-                                    type="text"
-                                    value={customOutputDir}
-                                    onChange={e => setCustomOutputDir(e.target.value)}
-                                    placeholder="/mnt/BioModStack/results/custom_run"
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-slate-500 outline-none font-mono"
-                                />
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
+                </div> {/* End RIGHT COLUMN */}
+            </div> {/* End grid */}
 
             {/* Submit Button */}
             <div className="mt-8 flex justify-end gap-3">
@@ -1237,39 +1454,74 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 isOpen={showTemplateManager}
                 onClose={() => setShowTemplateManager(false)}
                 onSelect={(template) => {
-                    console.log('[TEMPLATE_LOAD] Loading template:', template.name, template.params);
+                    console.log('[TEMPLATE_LOAD] ======= LOADING TEMPLATE =======');
+                    console.log('[TEMPLATE_LOAD] Template name:', template.name);
+                    console.log('[TEMPLATE_LOAD] Template id:', template.id);
+                    console.log('[TEMPLATE_LOAD] All params:', JSON.stringify(template.params, null, 2));
                     try {
                         // Load template params into state
                         const p = template.params || {};
+                        const loaded: string[] = [];
+                        const skipped: string[] = [];
+
                         // Core settings (check both new and old field names for backward compatibility)
-                        if (p.job_name) setJobName(p.job_name);
-                        if (p.framework_type) setFrameworkType(p.framework_type);
-                        if (p.seq_designer) setSeqDesigner(p.seq_designer);
-                        if (p.rfantibody_num_designs) setNumDesigns(p.rfantibody_num_designs);
-                        if (p.seqs_per_design) setSeqsPerDesign(p.seqs_per_design);
-                        if (typeof p.run_immunogenicity_scoring === 'boolean') setUseAntiberty(p.run_immunogenicity_scoring);
-                        if (typeof p.run_stability_scoring === 'boolean') setUseThermoMPNN(p.run_stability_scoring);
-                        if (typeof p.run_frustrampnn === 'boolean') setRunFrustrampnn(p.run_frustrampnn);
-                        if (typeof p.run_anarcii_post === 'boolean') setRunAnarciiPost(p.run_anarcii_post);
-                        if (typeof p.anarcii_include_children === 'boolean') setAnarciiIncludeChildren(p.anarcii_include_children);
-                        if (p.parallel_mode) setParallelMode(p.parallel_mode);
-                        if (p.designs_per_job) setDesignsPerJob(p.designs_per_job);
-                        if (p.pdbs_per_job) setPdBsPerJob(p.pdbs_per_job);
+                        if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
+                        if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
+                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); } else { skipped.push('seq_designer'); }
+                        if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
+                        if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
+                        if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
+                        if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
+                        if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
+                        if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
+                        if (p.parallel_mode) { setParallelMode(p.parallel_mode); loaded.push('parallel_mode'); } else { skipped.push('parallel_mode'); }
+                        if (p.designs_per_job) { setDesignsPerJob(p.designs_per_job); loaded.push('designs_per_job'); }
+                        if (p.pdbs_per_job) { setPdBsPerJob(p.pdbs_per_job); loaded.push('pdbs_per_job'); }
                         // Design mode
-                        if (p.design_mode) setDesignMode(p.design_mode);
-                        if (Array.isArray(p.selected_cdr_loops)) setSelectedCDRLoops(new Set(p.selected_cdr_loops));
-                        if (typeof p.protect_tetrad === 'boolean') setProtectTetrad(p.protect_tetrad);
+                        if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
+                        if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
+                        if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
                         // Target (path only - user must re-upload if file no longer at path)
-                        if (p.uploaded_path) setUploadedPath(p.uploaded_path);
-                        if (p.selected_chain) setSelectedChain(p.selected_chain);
-                        if (Array.isArray(p.selected_residues)) setSelectedResidues(new Set(p.selected_residues));
+                        if (p.uploaded_path) { setUploadedPath(p.uploaded_path); loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
+                        // Target source - restore full context including RCSB sources
+                        if (p.target_source) {
+                            setTargetSource(p.target_source);
+                            loaded.push('target_source');
+                            // Trigger PDB fetch if it's a URL-based source
+                            if (p.target_source.url) {
+                                fetch(p.target_source.url)
+                                    .then(res => res.blob())
+                                    .then(blob => {
+                                        const file = new File([blob], (p.target_source.name || 'structure') + '.pdb', { type: 'chemical/x-pdb' });
+                                        setTargetPdb(file);
+                                    })
+                                    .catch(err => console.error('[TEMPLATE_LOAD] Failed to fetch PDB from source:', err));
+                            }
+                        }
+                        if (p.selected_chain) { setSelectedChain(p.selected_chain); loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
+                        if (Array.isArray(p.selected_residues)) { setSelectedResidues(new Set(p.selected_residues)); loaded.push('selected_residues'); }
                         // Quality settings - check both old and new field names
                         const qualityS = p.quality_settings || p.qualitySettings;
                         if (qualityS) {
                             setQualitySettings({ ...PRESETS.balanced, ...qualityS });
+                            loaded.push('quality_settings');
                         }
-                        if (p.quality_preset) setQualityPreset(p.quality_preset);
-                        console.log('[TEMPLATE_LOAD] Successfully loaded template');
+                        if (p.quality_preset) { setQualityPreset(p.quality_preset); loaded.push('quality_preset'); }
+                        // Manual CDR definitions - deserialize from arrays
+                        if (Array.isArray(p.manual_cdr_definitions)) {
+                            const defs = p.manual_cdr_definitions.map((d: any) => ({
+                                ...d,
+                                residues: new Set(d.residues || [])
+                            }));
+                            setManualCDRDefinitions(defs);
+                            setShowCDREditor(defs.length > 0);
+                            loaded.push('manual_cdr_definitions');
+                        }
+
+                        console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
+                        console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
+                        console.log('[TEMPLATE_LOAD] Successfully loaded template ✓');
                     } catch (err) {
                         console.error('[TEMPLATE_LOAD] Error loading template:', err);
                     }
@@ -1298,18 +1550,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
                     protect_fr_contacts: frameworkProtection.protectFrContacts,
-                    // Target info (path only - file must exist at path)
+                    // Target info - now includes full source context
+                    target_source: targetSource,
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,
                     selected_residues: Array.from(selectedResidues),
                     // Quality settings
                     quality_preset: qualityPreset,
                     quality_settings: qualitySettings,
+                    // Manual CDR definitions - serialize Sets to arrays
+                    manual_cdr_definitions: manualCDRDefinitions.map(d => ({
+                        ...d,
+                        residues: Array.from(d.residues)
+                    })),
                 }}
                 currentModelId="template_antibody_denovo"
                 currentMode="antibody_denovo_pipeline"
             />
-        </div>
+        </div >
     );
 };
 

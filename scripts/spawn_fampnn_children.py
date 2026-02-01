@@ -8,9 +8,13 @@ the GPU orchestrator for optimal resource allocation.
 """
 import argparse
 import json
+import os
 import sys
 import requests
 from pathlib import Path
+
+
+DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 
 def spawn_fampnn_jobs(
@@ -20,7 +24,7 @@ def spawn_fampnn_jobs(
     seqs_per_design: int,
     batch_name: str,
     params_json: str = None,
-    api_url: str = "http://localhost:8000"
+    api_url: str = DEFAULT_API_URL
 ):
     """
     Spawn multiple FAMPNN child jobs.
@@ -178,7 +182,7 @@ def main():
     parser.add_argument("--seqs_per_design", type=int, default=20, help="Sequences per design")
     parser.add_argument("--batch_name", required=True, help="Batch name for display")
     parser.add_argument("--params_json", default=None, help="Additional params as JSON")
-    parser.add_argument("--api_url", default="http://localhost:8000", help="API URL")
+    parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--output", default="spawn_fampnn_result.json", help="Output JSON file")
     
     args = parser.parse_args()
