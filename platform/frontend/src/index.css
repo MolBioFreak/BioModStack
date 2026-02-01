@@ -28,7 +28,9 @@
 
 /* ============================================
    THEME SYSTEM - Color Scheme Variables
+   Wrapped in @layer base to prevent Tailwind 4 tree-shaking
    ============================================ */
+@layer base {
 
 /* Theme: Midnight (Default) - Deep slate with purple accents */
 :root,
@@ -409,6 +411,8 @@
   --link: #38bdf8;
   --link-hover: #7dd3fc;
 }
+
+} /* End @layer base */
 
 /* ============================================
    BASE STYLES - Using Theme Variables
