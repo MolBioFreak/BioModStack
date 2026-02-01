@@ -1053,3 +1053,73 @@ export interface CDRAnnotationResponse {
 
 export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') =>
     api.post<CDRAnnotationResponse>(`/api/frameworks/sabdab/${pdbCode}/annotate-cdrs`, null, { params: { scheme } });
+
+// ============================================================
+// PRIMER LIBRARY API (MolBio Toolkit)
+// ============================================================
+
+export interface Primer {
+    id: string;
+    name: string;
+    sequence: string;
+    length: number;
+    tm: number | null;
+    gc_percent: number | null;
+    primer_type: string;
+    description: string | null;
+    target_sequence_id: string | null;
+    binding_start: number | null;
+    binding_end: number | null;
+    binding_strand: number;
+    tags: string[] | null;
+    is_favorite: boolean;
+    created_at: string;
+    updated_at: string | null;
+}
+
+export interface PrimerCreate {
+    name: string;
+    sequence: string;
+    primer_type?: string;
+    description?: string;
+    target_sequence_id?: string;
+    binding_start?: number;
+    binding_end?: number;
+    binding_strand?: number;
+    tags?: string[];
+}
+
+export interface PrimerUpdate {
+    name?: string;
+    sequence?: string;
+    primer_type?: string;
+    description?: string;
+    target_sequence_id?: string;
+    binding_start?: number;
+    binding_end?: number;
+    binding_strand?: number;
+    tags?: string[];
+    is_favorite?: boolean;
+}
+
+export const fetchPrimers = (params?: {
+    search?: string;
+    primer_type?: string;
+    favorites_only?: boolean;
+    target_sequence_id?: string;
+}) => api.get<Primer[]>('/api/molbio/primers', { params });
+
+export const fetchPrimer = (id: string) =>
+    api.get<Primer>(`/api/molbio/primers/${id}`);
+
+export const createPrimer = (data: PrimerCreate) =>
+    api.post<Primer>('/api/molbio/primers', data);
+
+export const updatePrimer = (id: string, data: PrimerUpdate) =>
+    api.patch<Primer>(`/api/molbio/primers/${id}`, data);
+
+export const deletePrimer = (id: string) =>
+    api.delete(`/api/molbio/primers/${id}`);
+
+export const togglePrimerFavorite = (id: string) =>
+    api.post<Primer>(`/api/molbio/primers/${id}/toggle-favorite`);
