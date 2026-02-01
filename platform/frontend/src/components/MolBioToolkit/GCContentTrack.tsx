@@ -2,10 +2,12 @@
  * GCContentTrack - Visual GC content chart showing GC% across sequence windows
  * 
  * Uses Plotly for smooth, interactive line chart with blue-to-red gradient coloring.
+ * Features per-segment color based on GC content and selection-based recomputation.
  */
 
 import { useMemo } from 'react';
 import Plot from 'react-plotly.js';
+import type { Data, Layout, Shape } from 'plotly.js';
 
 interface GCContentTrackProps {
     sequence: string;
@@ -49,29 +51,17 @@ function calculateGCWindows(
 
 /**
  * Get color based on GC content - gradient from AT-rich (blue) to GC-rich (red)
+ * Uses HSL for smooth color transitions
  */
 function getGCColor(gc: number): string {
-    // Normalize to 0-1 range with amplified contrast
+    // Normalize and amplify contrast
     const normalizedGC = Math.max(0, Math.min(100, gc));
     const amplified = 50 + (normalizedGC - 50) * 2.5;
     const t = Math.max(0, Math.min(100, amplified)) / 100;
 
-    // Blue (low GC) -> Green (50%) -> Red (high GC)
-    if (t < 0.5) {
-        // Blue to Green
-        const ratio = t * 2;
-        const r = Math.round(30 + 100 * ratio);
-        const g = Math.round(130 + 70 * ratio);
-        const b = Math.round(230 - 180 * ratio);
-        return `rgb(${r},${g},${b})`;
-    } else {
-        // Green to Red
-        const ratio = (t - 0.5) * 2;
-        const r = Math.round(130 + 110 * ratio);
-        const g = Math.round(200 - 150 * ratio);
-        const b = Math.round(50 - 40 * ratio);
-        return `rgb(${r},${g},${b})`;
-    }
+    // Map to hue: 240 (blue) -> 120 (green) -> 0 (red)
+    const hue = 240 - t * 240;
+    return `hsl(${hue}, 85%, 50%)`;
 }
 
 export function GCContentTrack({
@@ -87,39 +77,73 @@ export function GCContentTrack({
         return calculateGCWindows(sequence, windowSize, stepSize);
     }, [sequence, windowSize, stepSize]);
 
-    // Compute statistics
+    // Compute overall statistics
     const { avgGC } = useMemo(() => {
         if (gcData.length === 0) return { avgGC: 0 };
         const avg = gcData.reduce((sum, d) => sum + d.gc, 0) / gcData.length;
         return { avgGC: avg };
     }, [gcData]);
 
+    // Calculate selection-specific GC
+    const selectionGC = useMemo(() => {
+        if (!selection || !sequence) return null;
+        const start = Math.max(0, selection.start);
+        const end = Math.min(sequence.length, selection.end);
+        if (end <= start) return null;
+
+        const selectedSeq = sequence.substring(start, end);
+        return {
+            gc: calculateGC(selectedSeq),
+            length: end - start
+        };
+    }, [selection, sequence]);
+
     if (!sequence || sequence.length < 10 || gcData.length === 0) {
         return null;
     }
 
-    // Prepare data for Plotly
-    const positions = gcData.map(d => d.position);
-    const gcValues = gcData.map(d => d.gc);
+    // Create multiple traces - each segment gets its own color
+    // This is the proper way to do multi-colored lines in Plotly
+    const traces: Data[] = [];
 
-    // Create color array for each point
-    const colors = gcValues.map(gc => getGCColor(gc));
+    for (let i = 0; i < gcData.length - 1; i++) {
+        const d1 = gcData[i];
+        const d2 = gcData[i + 1];
+        const avgGCSegment = (d1.gc + d2.gc) / 2;
 
-    // Create selection shape if present
-    const shapes: Partial<Plotly.Shape>[] = [];
-    if (selection && sequence.length > 0) {
-        shapes.push({
-            type: 'rect',
-            x0: selection.start,
-            x1: selection.end,
-            y0: 0,
-            y1: 100,
-            fillcolor: 'rgba(139, 92, 246, 0.25)',
-            line: { width: 0 }
+        traces.push({
+            x: [d1.position, d2.position],
+            y: [d1.gc, d2.gc],
+            type: 'scatter',
+            mode: 'lines',
+            line: {
+                width: 2.5,
+                color: getGCColor(avgGCSegment),
+                shape: 'spline'
+            },
+            hoverinfo: 'skip',
+            showlegend: false
         });
     }
 
-    // Add 50% reference line
+    // Add invisible scatter for hover tooltips
+    traces.push({
+        x: gcData.map(d => d.position),
+        y: gcData.map(d => d.gc),
+        type: 'scatter',
+        mode: 'markers',
+        marker: {
+            size: 1,
+            color: 'transparent'
+        },
+        hovertemplate: '<b>%{y:.1f}%</b> GC @ %{x:,.0f}bp<extra></extra>',
+        showlegend: false
+    });
+
+    // Create shapes for selection and reference line
+    const shapes: Partial<Shape>[] = [];
+
+    // 50% reference line
     shapes.push({
         type: 'line',
         x0: 0,
@@ -129,59 +153,52 @@ export function GCContentTrack({
         line: { color: '#64748b', width: 1, dash: 'dot' }
     });
 
+    // Selection highlight
+    if (selection && sequence.length > 0) {
+        shapes.push({
+            type: 'rect',
+            x0: selection.start,
+            x1: selection.end,
+            y0: 0,
+            y1: 100,
+            fillcolor: 'rgba(139, 92, 246, 0.3)',
+            line: { color: 'rgba(139, 92, 246, 0.8)', width: 1 }
+        });
+    }
+
+    const layout: Partial<Layout> = {
+        height: height,
+        margin: { l: 40, r: 15, t: 8, b: 25 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(30,41,59,0.3)',
+        xaxis: {
+            showgrid: false,
+            zeroline: false,
+            color: '#94a3b8',
+            tickfont: { size: 10, color: '#94a3b8' },
+            range: [0, sequence.length],
+            tickformat: ','
+        },
+        yaxis: {
+            showgrid: true,
+            gridcolor: 'rgba(51,65,85,0.5)',
+            zeroline: false,
+            color: '#94a3b8',
+            tickfont: { size: 10, color: '#94a3b8' },
+            range: [0, 100],
+            tickvals: [0, 25, 50, 75, 100],
+            ticktext: ['0%', '25%', '50%', '75%', '100%']
+        },
+        shapes: shapes,
+        hovermode: 'closest',
+        showlegend: false
+    };
+
     return (
         <div className="gc-content-track border-b border-slate-700 relative">
             <Plot
-                data={[
-                    {
-                        x: positions,
-                        y: gcValues,
-                        type: 'scatter',
-                        mode: 'lines',
-                        line: {
-                            width: 2,
-                            color: gcValues.map(gc => getGCColor(gc)),
-                            shape: 'spline',
-                            smoothing: 0.7
-                        },
-                        hovertemplate: '<b>%{y:.1f}%</b> GC @ %{x:,.0f}bp<extra></extra>',
-                        marker: {
-                            color: colors,
-                            size: 2
-                        }
-                    }
-                ]}
-                layout={{
-                    width: undefined,
-                    height: height,
-                    margin: { l: 40, r: 15, t: 8, b: 25 },
-                    paper_bgcolor: 'rgba(0,0,0,0)',
-                    plot_bgcolor: 'rgba(30,41,59,0.5)',
-                    xaxis: {
-                        title: undefined,
-                        showgrid: false,
-                        zeroline: false,
-                        color: '#94a3b8',
-                        tickfont: { size: 10, color: '#94a3b8' },
-                        range: [0, sequence.length],
-                        tickformat: ','
-                    },
-                    yaxis: {
-                        title: undefined,
-                        showgrid: true,
-                        gridcolor: 'rgba(51,65,85,0.5)',
-                        zeroline: false,
-                        color: '#94a3b8',
-                        tickfont: { size: 10, color: '#94a3b8' },
-                        range: [0, 100],
-                        tickvals: [0, 25, 50, 75, 100],
-                        ticktext: ['0%', '25%', '50%', '75%', '100%']
-                    },
-                    shapes: shapes as any,
-                    hovermode: 'x unified',
-                    showlegend: false,
-                    autosize: true
-                }}
+                data={traces}
+                layout={layout}
                 config={{
                     displayModeBar: false,
                     responsive: true,
@@ -190,6 +207,7 @@ export function GCContentTrack({
                 style={{ width: '100%', height: height }}
                 useResizeHandler={true}
             />
+
             {/* Overall GC badge */}
             <div
                 className="absolute top-1 right-2 px-2 py-0.5 rounded text-xs font-bold text-white shadow-sm"
@@ -197,6 +215,16 @@ export function GCContentTrack({
             >
                 {avgGC.toFixed(1)}% GC
             </div>
+
+            {/* Selection GC badge - shows when region is selected */}
+            {selectionGC && (
+                <div
+                    className="absolute top-1 left-12 px-2 py-0.5 rounded text-xs font-bold text-white shadow-sm border border-purple-400"
+                    style={{ backgroundColor: getGCColor(selectionGC.gc) }}
+                >
+                    Selection: {selectionGC.gc.toFixed(1)}% GC ({selectionGC.length.toLocaleString()}bp)
+                </div>
+            )}
         </div>
     );
 }
