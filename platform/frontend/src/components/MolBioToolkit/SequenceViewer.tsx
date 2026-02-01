@@ -147,7 +147,8 @@ export function SequenceViewer({
     // Build translations array if visible
     const translations = useMemo(() => {
         if (!visibility.translations || !sequenceData.translations) return [];
-        return sequenceData.translations.map(t => ({
+        return sequenceData.translations.map((t, i) => ({
+            name: `ORF ${i + 1}`,
             start: t.start,
             end: t.end,
             direction: t.strand
@@ -163,7 +164,10 @@ export function SequenceViewer({
     }, [sequenceData.sequence, sequenceData.sequenceType]);
 
     return (
-        <div className={`sequence-viewer h-full w-full ${className || ''}`}>
+        <div
+            className={`sequence-viewer ${className || ''}`}
+            style={{ height: '100%', width: '100%', position: 'relative' }}
+        >
             <SeqViz
                 name={sequenceData.name}
                 seq={displaySequence}
@@ -176,7 +180,7 @@ export function SequenceViewer({
 
                 // Selection handling with type info
                 onSelection={(sel) => {
-                    if (onSelection && sel) {
+                    if (onSelection && sel && typeof sel.start === 'number' && typeof sel.end === 'number') {
                         onSelection({
                             start: sel.start,
                             end: sel.end,
@@ -193,7 +197,7 @@ export function SequenceViewer({
 
                 highlights={highlightedRegions}
 
-                // Styling
+                // Styling - seqviz needs explicit height
                 style={{ height: "100%", width: "100%" }}
             />
         </div>
