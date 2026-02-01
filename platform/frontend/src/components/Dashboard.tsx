@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
@@ -20,13 +20,14 @@ export function Dashboard() {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [visibleCount, setVisibleCount] = useState(25); // Start with 25 jobs visible
-    const [debugMode, setDebugMode] = useState(() => {
+    // Debug mode is read from localStorage (toggled via Layout's DebugMenu or browser dev tools)
+    const debugMode = (() => {
         try {
             return localStorage.getItem('orchestrator_debug_mode') === 'true';
         } catch {
             return false;
         }
-    });
+    })();
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -147,51 +148,18 @@ export function Dashboard() {
         forceRunMutation.mutate(jobId);
     };
 
-    const toggleDebugMode = () => {
-        const newValue = !debugMode;
-        setDebugMode(newValue);
-        try {
-            localStorage.setItem('orchestrator_debug_mode', String(newValue));
-        } catch { }
-    };
+
 
 
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
             {/* Header */}
-            <header className="mb-8 flex justify-between items-center">
-                <div>
-                    <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 bg-clip-text text-transparent">
-                        BioModStack
-                    </h1>
-                    <p className="text-slate-400 mt-2">Protein Modification & Design Platform</p>
-                </div>
-                <div className="flex gap-3">
-                    {/* Debug mode toggle */}
-                    <button
-                        onClick={toggleDebugMode}
-                        className={`px-3 py-2 rounded-lg font-medium text-sm transition-all flex items-center gap-2 ${debugMode
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50 hover:bg-amber-500/30'
-                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-300'
-                            }`}
-                        title="Toggle debug mode for advanced orchestrator controls"
-                    >
-                        🔧 {debugMode ? 'Debug ON' : 'Debug'}
-                    </button>
-                    <Link
-                        to="/designs"
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-lg font-semibold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
-                    >
-                        🧬 Browse Designs
-                    </Link>
-                    <Link
-                        to="/submit"
-                        className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
-                    >
-                        <span>+</span> New Experiment
-                    </Link>
-                </div>
+            <header className="mb-8">
+                <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 bg-clip-text text-transparent">
+                    BioModStack
+                </h1>
+                <p className="text-slate-400 mt-2">Protein Modification & Design Platform</p>
             </header>
 
             {/* System Overview & GPU Status */}
