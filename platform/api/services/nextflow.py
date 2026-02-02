@@ -975,6 +975,7 @@ def build_nextflow_command(
         'target_protein_seq': 'target_protein_seq',
         'target_dna_seq': 'target_dna_seq',
         # MSA Quality Parameters (passed through to BoltzFromComplex/GenerateLocalMSA)
+        'msa_preset': 'msa_preset',
         'msa_taxon_list': 'msa_taxon_list',
         'msa_evalue': 'msa_evalue',
         'msa_min_seq_id': 'msa_min_seq_id',
