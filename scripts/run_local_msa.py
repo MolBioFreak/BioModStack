@@ -59,12 +59,12 @@ MSA_PRESETS = {
     "maximum": {
         "num_iterations": 3,
         "use_env": True,
-        "use_expand": True,
+        "use_expand": False,  # Disabled: database _aln files are corrupted/incomplete
         "use_filter": True,
         "sensitivity": 8.0,
         "evalue": 0.1,       # ColabFold uses 0.1 for initial search
         "max_seqs": 10000,
-        "qsc": 0.8,
+        "qsc": -20.0,        # ColabFold default - score per aligned residue
         "max_seq_id": 0.95,
         "description": "Full ColabFold workflow - highest MSA depth and diversity (~15-30s)"
     },
@@ -76,7 +76,7 @@ MSA_PRESETS = {
         "sensitivity": 8.0,
         "evalue": 0.1,
         "max_seqs": 10000,
-        "qsc": 0.8,
+        "qsc": -20.0,        # ColabFold default
         "max_seq_id": 0.95,
         "description": "Environmental search without expansion (~8-15s)"
     },
@@ -497,47 +497,78 @@ def run_colabfold_msa_workflow(
             # STEP 3: Extract refined profile for environmental search
             # ═══════════════════════════════════════════════════════════════════
             profile_db = os.path.join(tmp_dir, "prof_res")
-            profile_source = os.path.join(tmp_dir, f"tmp/latest/profile_{config['num_iterations']}")
+            has_profile = False
             
-            if os.path.exists(profile_source + ".dbtype"):
-                run_mmseqs(mmseqs_bin, ["mvdb", profile_source, profile_db], env)
-                # Link headers
-                run_mmseqs(mmseqs_bin, ["lndb", query_db + "_h", profile_db + "_h"], env)
-                has_profile = True
-            else:
-                print("WARNING: No profile generated, using query DB", flush=True)
-                has_profile = False
-                profile_db = query_db
+            # ColabFold uses profile_1 (first iteration profile), but check all iterations
+            for iter_num in [1, 2, 3, config["num_iterations"]]:
+                profile_source = os.path.join(tmp_dir, f"tmp/latest/profile_{iter_num}")
+                if os.path.exists(profile_source + ".dbtype"):
+                    print(f"Found profile at iteration {iter_num}", flush=True)
+                    run_mmseqs(mmseqs_bin, ["mvdb", profile_source, profile_db], env)
+                    # Link headers
+                    run_mmseqs(mmseqs_bin, ["lndb", query_db + "_h", profile_db + "_h"], env)
+                    has_profile = True
+                    break
+            
+            if not has_profile:
+                # GPU mode may store profile differently - check for result profile
+                result_profile = os.path.join(tmp_dir, "res_profile")  
+                if os.path.exists(result_db + ".dbtype"):
+                    print("Using result DB as profile (GPU mode)", flush=True)
+                    profile_db = result_db
+                    has_profile = True
+                else:
+                    print("WARNING: No profile generated, using query DB for env search", flush=True)
+                    profile_db = query_db
             
             # ═══════════════════════════════════════════════════════════════════
             # STEP 4: Alignment expansion (Maximum preset)
             # ═══════════════════════════════════════════════════════════════════
+            can_expand = False
             if config["use_expand"]:
+                # Check if alignment database is valid for expansion
+                aln_db = Path(str(uniref_db) + "_aln")
+                aln_index = Path(str(uniref_db) + "_aln.index")
+                if aln_db.exists() and aln_index.exists():
+                    # Verify the aln file is larger than its index (sanity check)
+                    aln_size = aln_db.stat().st_size
+                    index_size = aln_index.stat().st_size
+                    if aln_size > index_size:
+                        can_expand = True
+                    else:
+                        print(f"WARNING: Alignment database appears incomplete ({aln_size} bytes < {index_size} bytes index), skipping expansion", flush=True)
+                else:
+                    print("WARNING: Alignment database not found, skipping expansion", flush=True)
+            
+            if can_expand:
                 print("Expanding alignments to recover cluster members...", flush=True)
                 expanded_db = os.path.join(tmp_dir, "res_exp")
-                run_mmseqs(mmseqs_bin, [
-                    "expandaln", query_db, str(uniref_db) + "_seq",
-                    result_db, str(uniref_db) + "_aln", expanded_db,
-                    "--expansion-mode", "0",
-                    "-e", "inf",
-                    "--expand-filter-clusters", "1" if config["use_filter"] else "0",
-                    "--max-seq-id", str(config["max_seq_id"]),
-                    "--threads", str(num_threads),
-                ], env)
-                
-                # Realign expanded hits
-                realigned_db = os.path.join(tmp_dir, "res_exp_realign")
-                run_mmseqs(mmseqs_bin, [
-                    "align", profile_db if has_profile else query_db, 
-                    str(uniref_db) + "_seq",
-                    expanded_db, realigned_db,
-                    "-e", "10",
-                    "--max-accept", "100000",
-                    "--alt-ali", "10",
-                    "-a",
-                    "--threads", str(num_threads),
-                ], env)
-                result_db = realigned_db
+                try:
+                    run_mmseqs(mmseqs_bin, [
+                        "expandaln", query_db, str(uniref_db) + "_seq",
+                        result_db, str(uniref_db) + "_aln", expanded_db,
+                        "--expansion-mode", "0",
+                        "-e", "inf",
+                        "--expand-filter-clusters", "1" if config["use_filter"] else "0",
+                        "--max-seq-id", str(config["max_seq_id"]),
+                        "--threads", str(num_threads),
+                    ], env)
+                    
+                    # Realign expanded hits
+                    realigned_db = os.path.join(tmp_dir, "res_exp_realign")
+                    run_mmseqs(mmseqs_bin, [
+                        "align", profile_db if has_profile else query_db, 
+                        str(uniref_db) + "_seq",
+                        expanded_db, realigned_db,
+                        "-e", "10",
+                        "--max-accept", "100000",
+                        "--alt-ali", "10",
+                        "-a",
+                        "--threads", str(num_threads),
+                    ], env)
+                    result_db = realigned_db
+                except RuntimeError as e:
+                    print(f"WARNING: Alignment expansion failed ({e}), continuing without expansion", flush=True)
             
             # ═══════════════════════════════════════════════════════════════════
             # STEP 5: Quality filtering (Maximum/Balanced presets)
@@ -572,7 +603,7 @@ def run_colabfold_msa_workflow(
             run_mmseqs(mmseqs_bin, [
                 "result2msa", query_db, str(uniref_db) + "_seq",
                 result_db, uniref_a3m_db,
-                "--msa-format-mode", "6",
+                "--msa-format-mode", "5",
                 "--threads", str(num_threads),
             ] + filter_params, env)
             
@@ -652,7 +683,7 @@ def run_colabfold_msa_workflow(
                 run_mmseqs(mmseqs_bin, [
                     "result2msa", query_db, str(envdb) + "_seq",
                     env_result_db, env_a3m_db,
-                    "--msa-format-mode", "6",
+                    "--msa-format-mode", "5",
                     "--threads", str(num_threads),
                 ] + filter_params, env)
             
