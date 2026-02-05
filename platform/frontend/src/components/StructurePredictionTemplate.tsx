@@ -56,6 +56,10 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [msaMinDepthWarning, setMsaMinDepthWarning] = useState(initialValues?.msa_min_depth_warning ?? 100);
     const [msaMinDepthFail, setMsaMinDepthFail] = useState(initialValues?.msa_min_depth_fail ?? 0);  // 0 = no fail, just warn
     const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
+    // NEW: Expansion, EnvDB, and Iterations controls
+    const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
+    const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
+    const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
 
     // Complex components (ligands, DNA, RNA)
     // Initialize from cloned job data if present (complex_components array)
@@ -132,6 +136,10 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.msa_min_depth_warning = msaMinDepthWarning;
             params.msa_min_depth_fail = msaMinDepthFail;
             if (msaForceRefresh) params.msa_force_refresh = true;
+            // NEW: Expansion, EnvDB, and Iterations overrides
+            if (msaUseExpand !== undefined) params.msa_use_expand = msaUseExpand;
+            if (msaUseEnv !== undefined) params.msa_use_env = msaUseEnv;
+            if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
         }
 
         // Complex components
@@ -588,8 +596,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             type="button"
                                             onClick={() => setMsaPreset('maximum')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'maximum'
-                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
-                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
                                                 }`}
                                         >
                                             <div className="text-sm font-medium text-[var(--text-primary)]">Maximum</div>
@@ -599,8 +607,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             type="button"
                                             onClick={() => setMsaPreset('balanced')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'balanced'
-                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
-                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
                                                 }`}
                                         >
                                             <div className="text-sm font-medium text-[var(--text-primary)]">Balanced</div>
@@ -610,13 +618,55 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             type="button"
                                             onClick={() => setMsaPreset('fast')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'fast'
-                                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
-                                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
+                                                ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                                                : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
                                                 }`}
                                         >
                                             <div className="text-sm font-medium text-[var(--text-primary)]">Fast</div>
                                             <div className="text-xs text-[var(--text-muted)] mt-1">UniRef30 only. Quick screening. ~3-5s</div>
                                         </button>
+                                    </div>
+                                </div>
+
+                                {/* NEW: Expansion, EnvDB, and Iterations Controls */}
+                                <div className="grid grid-cols-3 gap-4 pt-2 border-t border-[var(--border-primary)]">
+                                    <label className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-tertiary)] cursor-pointer hover:bg-[var(--bg-primary)] transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={msaUseExpand ?? msaPreset === 'maximum'}
+                                            onChange={(e) => setMsaUseExpand(e.target.checked)}
+                                            className="w-4 h-4 rounded bg-[var(--bg-primary)] border-[var(--border-primary)]"
+                                        />
+                                        <div>
+                                            <span className="text-sm text-[var(--text-primary)] font-medium">Expansion</span>
+                                            <p className="text-xs text-[var(--text-muted)]">Deeper homolog coverage</p>
+                                        </div>
+                                    </label>
+                                    <label className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-tertiary)] cursor-pointer hover:bg-[var(--bg-primary)] transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={msaUseEnv ?? msaPreset !== 'fast'}
+                                            onChange={(e) => setMsaUseEnv(e.target.checked)}
+                                            className="w-4 h-4 rounded bg-[var(--bg-primary)] border-[var(--border-primary)]"
+                                        />
+                                        <div>
+                                            <span className="text-sm text-[var(--text-primary)] font-medium">EnvDB</span>
+                                            <p className="text-xs text-[var(--text-muted)]">Environmental sequences</p>
+                                        </div>
+                                    </label>
+                                    <div className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-tertiary)]">
+                                        <div>
+                                            <span className="text-sm text-[var(--text-primary)] font-medium">Iterations</span>
+                                            <p className="text-xs text-[var(--text-muted)]">Search passes</p>
+                                        </div>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={5}
+                                            value={msaNumIterations ?? (msaPreset === 'maximum' ? 3 : msaPreset === 'balanced' ? 2 : 1)}
+                                            onChange={(e) => setMsaNumIterations(parseInt(e.target.value) || undefined)}
+                                            className="w-14 bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1 text-[var(--text-primary)] text-sm"
+                                        />
                                     </div>
                                 </div>
 
