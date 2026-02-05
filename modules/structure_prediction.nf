@@ -27,8 +27,8 @@ process GenerateLocalMSA {
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
-    // MSA Quality Preset (Maximum/Balanced/Fast)
-    def msaPreset = params.msa_preset ?: "maximum"
+    // MSA Quality Preset (Maximum/Balanced/Fast) - default: balanced for speed+quality
+    def msaPreset = params.msa_preset ?: "balanced"
     // MSA Quality Parameters (can override preset)
     def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
     def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
@@ -36,7 +36,11 @@ process GenerateLocalMSA {
     def minCoverage = params.msa_min_coverage ? "--min-coverage ${params.msa_min_coverage}" : ""
     def taxonList = params.msa_taxon_list ? "--taxon-list \"${params.msa_taxon_list}\"" : ""
     def minDepthWarning = params.msa_min_depth_warning ?: 100
-    def minDepthFail = params.msa_min_depth_fail ?: 10
+    def minDepthFail = params.msa_min_depth_fail ?: 0  // 0 = warn but don't fail
+    // NEW: expansion, envdb, and iteration overrides
+    def useExpand = params.msa_use_expand != null ? "--use-expand ${params.msa_use_expand ? 1 : 0}" : ""
+    def useEnv = params.msa_use_env != null ? "--use-env ${params.msa_use_env ? 1 : 0}" : ""
+    def numIterations = params.msa_num_iterations ? "--num-iterations ${params.msa_num_iterations}" : ""
     """
     python3 ${projectDir}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
@@ -56,6 +60,9 @@ process GenerateLocalMSA {
         ${minSeqId} \\
         ${minCoverage} \\
         ${taxonList} \\
+        ${useExpand} \\
+        ${useEnv} \\
+        ${numIterations} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }
@@ -186,6 +193,10 @@ msa_path = None
 msa_check = f"msa/{sequence_name}.a3m"
 if Path(msa_check).exists():
     msa_path = str(Path(msa_check).resolve())
+    print(f"Using MSA: {msa_path}")
+else:
+    # msa_path stays None - will use "empty" for single-sequence mode
+    print("No MSA available - using single-sequence mode (msa: empty)")
 
 # Split by colon for multi-chain input
 chains = sequence_input.split(':')
@@ -201,9 +212,11 @@ for chain_id, chain_seq in zip(chain_ids, chains):
             "sequence": chain_seq.strip()
         }
     }
-    # Apply MSA to all chains to avoid "Cannot mix custom and auto-generated MSAs" error
+    # Use proper Boltz-2 API: msa path if available, otherwise "empty" for single-sequence mode
     if msa_path:
         entry["protein"]["msa"] = msa_path
+    else:
+        entry["protein"]["msa"] = "empty"  # Boltz-2 API for single-sequence mode
     boltz_yaml["sequences"].append(entry)
 
 # Write YAML
@@ -414,14 +427,18 @@ process BoltzFromComplex {
     def msaThreads = params.msa_threads ?: 32
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
-    // MSA Quality Parameters
-    def msaPreset = params.msa_preset ?: "maximum"
+    // MSA Quality Parameters - default: balanced for speed+quality
+    def msaPreset = params.msa_preset ?: "balanced"
     def msaTaxonList = params.msa_taxon_list ?: ""
     def msaEvalue = params.msa_evalue ?: "0.001"
     def msaMinSeqId = params.msa_min_seq_id ?: ""
     def msaMinCoverage = params.msa_min_coverage ?: ""
     def msaMinDepthWarning = params.msa_min_depth_warning ?: 100
     def msaMinDepthFail = params.msa_min_depth_fail ?: 0  // 0 = warn but don't fail
+    // NEW: expansion, envdb, and iteration overrides
+    def msaUseExpand = params.msa_use_expand != null ? params.msa_use_expand : ""
+    def msaUseEnv = params.msa_use_env != null ? params.msa_use_env : ""
+    def msaNumIterations = params.msa_num_iterations ?: ""
     """
     set -o pipefail  # Propagate exit codes through pipes (fixes | tee masking failures)
     
@@ -460,6 +477,10 @@ msa_min_seq_id = "${msaMinSeqId}"
 msa_min_coverage = "${msaMinCoverage}"
 msa_min_depth_warning = "${msaMinDepthWarning}"
 msa_min_depth_fail = "${msaMinDepthFail}"
+# NEW: expansion, envdb, iteration overrides
+msa_use_expand = "${msaUseExpand}"
+msa_use_env = "${msaUseEnv}"
+msa_num_iterations = "${msaNumIterations}"
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -532,6 +553,13 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--min-coverage", msa_min_coverage])
                     cmd.extend(["--min-depth-warning", msa_min_depth_warning])
                     cmd.extend(["--min-depth-fail", msa_min_depth_fail])
+                    # NEW: expansion, envdb, iteration overrides
+                    if msa_use_expand:
+                        cmd.extend(["--use-expand", "1" if msa_use_expand == "true" else "0"])
+                    if msa_use_env:
+                        cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
+                    if msa_num_iterations:
+                        cmd.extend(["--num-iterations", msa_num_iterations])
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
                     if result.returncode != 0:
@@ -547,6 +575,11 @@ for comp in complex_def.get("components", []):
                         print(f"Generated MSA: {msa_file}")
                 except Exception as e:
                     print(f"MSA generation failed for chain {chain_id}: {e}")
+        
+        # Fallback: if no MSA was set, use single-sequence mode (Boltz-2 API: msa: empty)
+        if "msa" not in entry["protein"]:
+            entry["protein"]["msa"] = "empty"
+            print(f"No MSA available for chain {comp_id} - using single-sequence mode")
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
@@ -618,6 +651,13 @@ for comp in complex_def.get("components", []):
                         "--threads", str(msa_threads),
                         "--preset", msa_preset
                     ]
+                    # Add quality overrides if set
+                    if msa_use_expand:
+                        cmd.extend(["--use-expand", "1" if msa_use_expand == "true" else "0"])
+                    if msa_use_env:
+                        cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
+                    if msa_num_iterations:
+                        cmd.extend(["--num-iterations", msa_num_iterations])
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
                     if result.returncode == 0 and Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
