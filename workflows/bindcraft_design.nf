@@ -75,7 +75,7 @@ process SpawnBindCraftJobs {
         ]
     )
     """
-    python3 ${projectDir}/scripts/spawn_bindcraft_children.py \\
+    python3 ${params.code_root}/scripts/spawn_bindcraft_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --total_trajectories ${total_trajectories} \\
         --trajectories_per_job ${trajectories_per_job} \\
@@ -102,7 +102,7 @@ process WaitForBindCraftChildren {
 
     script:
     """
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -248,7 +248,7 @@ workflow BINDCRAFT_DESIGN {
         // 1. Prepare configuration files
         def scaffold_pdb = params.bindcraft_scaffold_pdb
             ? file(params.bindcraft_scaffold_pdb)
-            : file("${projectDir}/lib/NO_TARGET_PDB")
+            : file("${params.code_root}/lib/NO_TARGET_PDB")
 
         PrepBindCraftInput(
             target_pdb,

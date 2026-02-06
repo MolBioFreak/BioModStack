@@ -63,7 +63,7 @@ workflow {
     // Use framework from params or dummy file for default
     def framework = params.framework_pdb
         ? file(params.framework_pdb)
-        : file("${projectDir}/lib/NO_FRAMEWORK")
+        : file("${params.code_root}/lib/NO_FRAMEWORK")
     
     println("=" * 60)
     println("RFantibody Backbone Workflow")

@@ -48,9 +48,10 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
     // MSA Quality Options (advanced)
     const [showMsaOptions, setShowMsaOptions] = useState(false);
-    const [msaPreset, setMsaPreset] = useState<'maximum' | 'balanced' | 'fast'>(initialValues?.msa_preset || 'maximum');
+    const [msaPreset, setMsaPreset] = useState<'maximum' | 'balanced' | 'fast'>(initialValues?.msa_preset || 'balanced');
     const [msaTaxonomy, setMsaTaxonomy] = useState<string>(initialValues?.msa_taxon_list || '');
-    const [msaEvalue, setMsaEvalue] = useState<string>(initialValues?.msa_evalue?.toString() || '0.001');
+    // Empty means "use preset default" from run_local_msa.py
+    const [msaEvalue, setMsaEvalue] = useState<string>(initialValues?.msa_evalue?.toString() || '');
     const [msaMinSeqId, setMsaMinSeqId] = useState<string>(initialValues?.msa_min_seq_id?.toString() || '');
     const [msaMinCoverage, setMsaMinCoverage] = useState<string>(initialValues?.msa_min_coverage?.toString() || '');
     const [msaMinDepthWarning, setMsaMinDepthWarning] = useState(initialValues?.msa_min_depth_warning ?? 100);
@@ -128,7 +129,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
         // MSA Quality parameters (when MSA is enabled)
         if ((predictor === 'boltz' && boltzUseMsa) || (predictor === 'rf3' && rf3UseMsa) || predictor === 'both') {
-            params.msa_preset = msaPreset;  // Maximum (default), Balanced, or Fast
+            params.msa_preset = msaPreset;  // Balanced (default), Maximum, or Fast
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -699,10 +700,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             onChange={(e) => setMsaEvalue(e.target.value)}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
+                                            <option value="">Preset default</option>
                                             <option value="1">1 (Very relaxed)</option>
                                             <option value="0.1">0.1</option>
                                             <option value="0.01">0.01</option>
-                                            <option value="0.001">0.001 (Default)</option>
+                                            <option value="0.001">0.001</option>
                                             <option value="0.0001">0.0001 (Strict)</option>
                                             <option value="0.00001">0.00001 (Very strict)</option>
                                         </select>

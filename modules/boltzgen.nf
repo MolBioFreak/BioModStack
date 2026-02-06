@@ -189,7 +189,7 @@ process SpawnBoltzGenJobs {
     script:
     def paramsJson = params.boltzgen_extra_params ? "'${params.boltzgen_extra_params}'" : "'{}'"
     """
-    python3 ${projectDir}/scripts/spawn_boltzgen_children.py \\
+    python3 ${params.code_root}/scripts/spawn_boltzgen_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --total_designs ${total_designs} \\
         --designs_per_job ${designs_per_job} \\
@@ -220,7 +220,7 @@ process WaitForBoltzGenChildren {
 
     script:
     """
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "boltzgen" \\
         --poll_interval 30 \\
@@ -334,7 +334,7 @@ process AggregateBoltzGenResults {
     # Trigger result ingestion
     if [ \$PDB_COUNT -gt 0 ]; then
         echo "Triggering result ingestion..."
-        python3 ${projectDir}/scripts/result_ingester.py \\
+        python3 ${params.code_root}/scripts/result_ingester.py \\
             --job_id "${parent_job_id}" \\
             --results_dir "${params.out_dir}" \\
             --api_url "${params.api_url}" \\

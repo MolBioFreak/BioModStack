@@ -621,6 +621,8 @@ class SchedulerGlobalConfig(BaseModel):
     capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
     emptiness_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["emptiness_weight"]
     msa_concurrency_limit: int = DEFAULT_SCHEDULER_CONFIG["global"]["msa_concurrency_limit"]
+    msa_preferred_gpu_ids: List[int] = DEFAULT_SCHEDULER_CONFIG["global"]["msa_preferred_gpu_ids"]
+    msa_avoid_heavy_gpus: bool = DEFAULT_SCHEDULER_CONFIG["global"]["msa_avoid_heavy_gpus"]
 
 
 class SchedulerGPUOverride(BaseModel):
@@ -666,6 +668,8 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),
         "emptiness_weight": max(0.0, min(10.0, global_config.emptiness_weight)),
         "msa_concurrency_limit": max(1, min(4, global_config.msa_concurrency_limit)),
+        "msa_preferred_gpu_ids": sorted({int(g) for g in global_config.msa_preferred_gpu_ids if isinstance(g, int) and g >= 0}),
+        "msa_avoid_heavy_gpus": bool(global_config.msa_avoid_heavy_gpus),
     }
     
     if not write_scheduler_config(config):
