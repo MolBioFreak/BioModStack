@@ -111,7 +111,7 @@ process SpawnRFantibodyJobs {
         antibody_design_loops: params.antibody_design_loops ?: ''
     ])
     """
-    python3 ${projectDir}/scripts/spawn_rfantibody_children.py \\
+    python3 ${params.code_root}/scripts/spawn_rfantibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --total_designs ${total_designs} \\
         --designs_per_job ${designs_per_job} \\
@@ -150,7 +150,7 @@ process SpawnFAMPNNJobs {
         fampnn_constraint_mode: params.fampnn_constraint_mode
     ])
     """
-    python3 ${projectDir}/scripts/spawn_fampnn_children.py \\
+    python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir "${pdb_dir}" \\
         --pdbs_per_job ${pdbs_per_job} \\
@@ -177,7 +177,7 @@ process WaitForChildren {
     
     script:
     """
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -263,7 +263,7 @@ process WaitForFAMPNNChildren {
     
     script:
     """
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -411,7 +411,7 @@ process SpawnMaturationJobs {
         fampnn_extra_config: params.fampnn_extra_config
     ])
     """
-    python3 ${projectDir}/scripts/spawn_maturation_children.py \\
+    python3 ${params.code_root}/scripts/spawn_maturation_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir "${pdb_dir}" \\
         --designs_per_job ${designs_per_job} \\
@@ -437,7 +437,7 @@ process WaitForMaturationChildren {
 
     script:
     """
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
@@ -464,7 +464,7 @@ process CollectMaturationOutputs {
 
     script:
     """
-    python3 ${projectDir}/scripts/collect_maturation_outputs.py \\
+    python3 ${params.code_root}/scripts/collect_maturation_outputs.py \\
         --child_outputs_json "${child_outputs_json}" \\
         --stage_name "${stage_name}" \\
         --manifest collection_manifest.json
@@ -486,7 +486,7 @@ process TriggerANARCIIAnnotation {
 
     script:
     """
-    python3 ${projectDir}/scripts/trigger_anarcii_annotation.py \\
+    python3 ${params.code_root}/scripts/trigger_anarcii_annotation.py \\
         --job_id "${job_id}" \\
         --include_children "${include_children}" \\
         --api_url "${params.api_url}" \\
@@ -553,7 +553,7 @@ process SpawnChildJobs {
     # Pass ALL quality settings to child jobs
     echo "Forwarding quality settings to child jobs" | tee -a spawn.log
     
-    python3 ${projectDir}/scripts/spawn_antibody_children.py \\
+    python3 ${params.code_root}/scripts/spawn_antibody_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --pdb_dir pdb_input \\
         --batch_name "${batch_name}" \\
@@ -604,7 +604,7 @@ process WaitAndAggregateChildResults {
     mkdir -p validated_designs intermediates/boltz intermediates/scores
     
     # Wait for all children using the wait script
-    python3 ${projectDir}/scripts/wait_for_children.py \\
+    python3 ${params.code_root}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "boltz2" \\
         --batch_name "${batch_name}" \\
@@ -677,7 +677,7 @@ EOF
     # Trigger result ingestion for parent job (updates database)
     if [ \$TOTAL_PDBS -gt 0 ]; then
         echo "Triggering result ingestion for parent job..."
-        python3 ${projectDir}/scripts/result_ingester.py \\
+        python3 ${params.code_root}/scripts/result_ingester.py \\
             --job_id "${parent_job_id}" \\
             --results_dir "${params.out_dir}" \\
             --api_url "${params.api_url}" \\
@@ -724,7 +724,7 @@ workflow ANTIBODY_DENOVO {
     // Framework PDB - if user provided custom framework, use it; otherwise use placeholder
     // The placeholder triggers preset selection in the process script
     // Use safe path resolution to avoid Channel.value() DSL2 error with undefined params
-    def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${projectDir}/lib/NO_FRAMEWORK")
+    def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
     framework_for_rfantibody = framework_pdb_ch
         .map { meta, pdb -> pdb }
         .ifEmpty { framework_path }
@@ -848,7 +848,7 @@ workflow ANTIBODY_DENOVO {
                 // Limit number of files reported to avoid command line length limits
                 def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage rfantibody: ${e.message}"
@@ -918,7 +918,7 @@ workflow ANTIBODY_DENOVO {
             
             // PrepFAMPNN generates constraint CSV and preps structures
             fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
-                [pdbs, file("${projectDir}/lib/empty-meta.jsonl")]
+                [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
             }
             PrepFAMPNN(fampnn_prep_input)
             
@@ -970,7 +970,7 @@ workflow ANTIBODY_DENOVO {
                     log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
                     def report_files = count > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage fampnn: ${e.message}"
@@ -1065,7 +1065,7 @@ workflow ANTIBODY_DENOVO {
                     log.info("  PPIFlow maturation: Collected ${count} PDBs from child jobs")
                     def report_files = count > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "maturation", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage maturation: ${e.message}"
@@ -1112,7 +1112,7 @@ workflow ANTIBODY_DENOVO {
         // FIRST run PrepMPNN to generate PDBs with FIXED labels in B-factors
         // Map backbones to [pdbs, dummy_json] input for PrepMPNN
         mpnn_prep_input = backbone_designs.map { meta, pdbs ->
-             [pdbs, file("${projectDir}/lib/empty-meta.jsonl")]
+             [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
         }
         PrepMPNN(mpnn_prep_input)
 
@@ -1155,7 +1155,7 @@ workflow ANTIBODY_DENOVO {
         THERMOMPNN.out.stability.subscribe { meta, csv ->
             try {
                 def args = [params.job_id, "thermompnn", "complete", csv.toString()]
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage thermompnn: ${e.message}"
@@ -1234,7 +1234,7 @@ workflow ANTIBODY_DENOVO {
         AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
             try {
                 def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage af2_backprop: ${e.message}"
@@ -1399,7 +1399,7 @@ workflow ANTIBODY_DENOVO {
                     def file_list = pdbs instanceof List ? pdbs : [pdbs]
                     def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "boltz2", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage boltz2: ${e.message}"
@@ -1456,7 +1456,7 @@ workflow ANTIBODY_DENOVO {
                 def file_list = pdbs instanceof List ? pdbs : [pdbs]
                 def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "openmm_relaxation", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage openmm_relaxation: ${e.message}"
@@ -1486,7 +1486,7 @@ workflow ANTIBODY_DENOVO {
             OpenMMScore.out.scores_json.subscribe { jsons ->
                 try {
                     def args = [params.job_id, "openmm_mmgbsa", "complete"]
-                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage openmm_mmgbsa: ${e.message}"

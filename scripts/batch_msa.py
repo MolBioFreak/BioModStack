@@ -41,13 +41,9 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-_data_root = os.getenv("BMS_DATA")
-DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or (
-    f"{_data_root}/colabfold_db" if _data_root else "/mnt/BioModStack/colabfold_db"
-)
-DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or (
-    f"{_data_root}/msa_cache" if _data_root else "/mnt/BioModStack/msa_cache"
-)
+_default_data_root = Path(os.path.expanduser(os.getenv("BMS_DATA") or "~/.biomodstack"))
+DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or str(_default_data_root / "colabfold_db")
+DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or str(_default_data_root / "msa_cache")
 
 
 def compute_sequence_hash(sequence: str) -> str:
@@ -98,7 +94,9 @@ def run_batch_msa(
     cache_dir: Optional[Path],
     gpu_id: int = 0,
     reference_sequence: Optional[str] = None,
-    force_refresh: bool = False
+    force_refresh: bool = False,
+    cpu_only: bool = False,
+    max_seqs: int = 300,
 ) -> Dict[str, Any]:
     """
     Generate MSAs for all sequences in a SINGLE mmseqs search.
@@ -113,6 +111,8 @@ def run_batch_msa(
     print(f"Sequences: {len(sequences)}")
     print(f"Output: {output_dir}")
     print(f"GPU: {gpu_id}")
+    print(f"CPU only: {cpu_only}")
+    print(f"Max seqs: {max_seqs}")
     print()
     
     # Determine which sequences need MSA generation (not in cache)
@@ -176,7 +176,11 @@ def run_batch_msa(
     mmseqs_gpu = db_path / "mmseqs-gpu" / "bin" / "mmseqs"
     mmseqs_cpu = db_path / "mmseqs" / "bin" / "mmseqs"
     
-    if mmseqs_blackwell.exists():
+    if cpu_only:
+        mmseqs_bin = str(mmseqs_cpu)
+        use_gpu = False
+        print(f"  Using CPU MMseqs2 (forced): {mmseqs_bin}")
+    elif mmseqs_blackwell.exists():
         mmseqs_bin = str(mmseqs_blackwell)
         use_gpu = True
         print(f"  Using Blackwell GPU MMseqs2: {mmseqs_bin}")
@@ -218,7 +222,7 @@ def run_batch_msa(
             mmseqs_bin, "search",
             str(query_db), str(uniref_db), str(result_db), str(search_tmp),
             "-s", "8.0",
-            "--max-seqs", "10000",
+            "--max-seqs", str(max(1, int(max_seqs))),
             "-e", "0.001",
             "--split-memory-limit", "16G",
         ]
@@ -375,6 +379,10 @@ if __name__ == "__main__":
                        help="Bypass cache and regenerate MSAs")
     parser.add_argument("--gpu_id", type=int, default=0,
                        help="GPU ID to use for search")
+    parser.add_argument("--cpu-only", action="store_true",
+                       help="Force CPU mode (disable GPU MMseqs2)")
+    parser.add_argument("--max-seqs", type=int, default=300,
+                       help="Maximum candidate sequences retained in search")
     parser.add_argument("--reference_sequence", default=None,
                        help="Reference sequence for cache key (mutagenesis sharing)")
     
@@ -395,7 +403,9 @@ if __name__ == "__main__":
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         gpu_id=args.gpu_id,
         reference_sequence=args.reference_sequence,
-        force_refresh=args.force_refresh
+        force_refresh=args.force_refresh,
+        cpu_only=args.cpu_only,
+        max_seqs=args.max_seqs,
     )
     
     # Exit with error if any failed

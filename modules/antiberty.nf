@@ -5,7 +5,7 @@
 process ANTIBERTY_SCORE {
     tag "${meta.id}"
     label 'process_medium'
-    container 'apptainer/antibody_tools.sif'
+    container "${params.container_dir}/antibody_tools.sif"
 
     input:
     tuple val(meta), path(input_file)  // Can be FASTA or PDB
@@ -112,7 +112,7 @@ ANTIBERTY_SCRIPT
 process ANTIBERTY_FILTER {
     tag "${meta.id}"
     label 'process_low'
-    container 'apptainer/antibody_tools.sif'
+    container "${params.container_dir}/antibody_tools.sif"
 
     input:
     tuple val(meta), path(scores_csv), path(fasta)

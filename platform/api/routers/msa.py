@@ -13,9 +13,16 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 import os
+import json as json_lib
 
 from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
+from services.msa_server import (
+    ensure_server_for_db,
+    resolve_msa_gpu_id,
+    server_status,
+    stop_servers,
+)
 from paths import get_results_dir
 
 
@@ -33,6 +40,9 @@ class MSARequest(BaseModel):
     sequence_id: Optional[str] = None
     reference_sequence: Optional[str] = None
     sequences: Optional[List[MSASequence]] = None
+    msa_use_gpu: Optional[bool] = True
+    msa_force_refresh: Optional[bool] = False
+    msa_max_seqs: Optional[int] = None
 
 
 class MSAResponse(BaseModel):
@@ -77,8 +87,11 @@ async def create_msa_job(request: MSARequest, session: AsyncSession = Depends(ge
         mode="msa_generation",
         params={
             "sequences": sequences,
-            "sequences_json": sequences,
+            "sequences_json": json_lib.dumps(sequences),
             "reference_sequence": request.reference_sequence,
+            "msa_use_gpu": bool(request.msa_use_gpu) if request.msa_use_gpu is not None else True,
+            "msa_force_refresh": bool(request.msa_force_refresh),
+            "msa_max_seqs": request.msa_max_seqs,
         },
         output_dir=base_output_dir,
         created_at=datetime.utcnow(),
@@ -99,3 +112,92 @@ async def create_msa_job(request: MSARequest, session: AsyncSession = Depends(ge
         output_dir=job.output_dir or "",
         created_at=job.created_at
     )
+
+
+class MSAServerStartRequest(BaseModel):
+    gpu_id: Optional[int] = None
+    include_envdb: bool = True
+    max_seqs: int = 300
+    prefilter_mode: int = 1
+    db_load_mode: int = 0
+    startup_wait_seconds: float = 1.0
+
+
+class MSAServerStopRequest(BaseModel):
+    gpu_id: Optional[int] = None
+
+
+@router.get("/server/status")
+async def get_msa_server_status(
+    gpu_id: Optional[int] = None,
+    include_envdb: bool = True,
+    max_seqs: int = 300,
+    prefilter_mode: int = 1,
+    db_load_mode: int = 0,
+):
+    """Get current persistent MSA server state for the selected/default GPU."""
+    try:
+        return server_status(
+            gpu_id=gpu_id,
+            include_envdb=include_envdb,
+            max_seqs=max_seqs,
+            prefilter_mode=prefilter_mode,
+            db_load_mode=db_load_mode,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read MSA server status: {exc}")
+
+
+@router.post("/server/start")
+async def start_msa_server(request: MSAServerStartRequest):
+    """
+    Start persistent MMseqs gpuserver(s) for local MSA.
+
+    By default this starts both UniRef and EnvDB servers on the scheduler-preferred
+    MSA GPU (e.g., 5060 Ti when configured as preferred).
+    """
+    try:
+        gpu_id = resolve_msa_gpu_id(request.gpu_id)
+        started = [
+            ensure_server_for_db(
+                db_alias="uniref",
+                gpu_id=gpu_id,
+                max_seqs=request.max_seqs,
+                prefilter_mode=request.prefilter_mode,
+                db_load_mode=request.db_load_mode,
+                startup_wait_seconds=request.startup_wait_seconds,
+            )
+        ]
+        if request.include_envdb:
+            started.append(
+                ensure_server_for_db(
+                    db_alias="envdb",
+                    gpu_id=gpu_id,
+                    max_seqs=request.max_seqs,
+                    prefilter_mode=request.prefilter_mode,
+                    db_load_mode=request.db_load_mode,
+                    startup_wait_seconds=request.startup_wait_seconds,
+                )
+            )
+        return {
+            "success": True,
+            "gpu_id": gpu_id,
+            "servers": started,
+            "message": f"MSA server ready on GPU {gpu_id}",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start MSA server: {exc}")
+
+
+@router.post("/server/stop")
+async def stop_msa_server(request: MSAServerStopRequest):
+    """Stop persistent MMseqs gpuserver(s)."""
+    try:
+        result = stop_servers(gpu_id=request.gpu_id)
+        return {
+            "success": True,
+            **result,
+            "message": "Stopped persistent MSA server(s)",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to stop MSA server: {exc}")

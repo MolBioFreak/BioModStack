@@ -169,11 +169,11 @@ workflow OLIGO_DESIGN {
     // Safely check if input_pdb is a valid file (not null and not placeholder)
     // Use unique placeholder names to avoid Nextflow input file collision
     def use_scaffold = input_pdb instanceof Path && !input_pdb.name.startsWith('NO_')
-    def scaffold_file = use_scaffold ? input_pdb : file("${projectDir}/NO_SCAFFOLD")
+    def scaffold_file = use_scaffold ? input_pdb : file("${params.code_root}/NO_SCAFFOLD")
 
     // Determine if target_pdb is provided (for binding design)
     def use_target = target_pdb instanceof Path && !target_pdb.name.startsWith('NO_')
-    def target_file = use_target ? target_pdb : file("${projectDir}/NO_TARGET")
+    def target_file = use_target ? target_pdb : file("${params.code_root}/NO_TARGET")
 
     // Stage 1: RFDpoly Backbone Generation
     RFDPolyDesign(
@@ -192,7 +192,7 @@ workflow OLIGO_DESIGN {
 
     // Stage 3: Prepare for Boltz-2 validation
     if (params.oligo_validate_boltz) {
-        prep_script = file("${projectDir}/scripts/prep_boltz_oligo.py")
+        prep_script = file("${params.code_root}/scripts/prep_boltz_oligo.py")
         PrepBoltzOligo(NAMPNNDesign.out.pdbs, prep_script)
         boltz_yamls = PrepBoltzOligo.out.yamls
     }
