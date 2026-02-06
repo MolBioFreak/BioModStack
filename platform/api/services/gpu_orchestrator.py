@@ -151,6 +151,27 @@ def _normalize_pinned_gpus(raw_value: Any) -> Optional[List[int]]:
     return normalized or None
 
 
+def _normalize_gpu_id_list(raw_value: Any) -> Optional[List[int]]:
+    """Normalize scheduler-config GPU list (list or comma string) to sorted ints."""
+    if raw_value is None:
+        return None
+    values = []
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif isinstance(raw_value, str):
+        values = [v.strip() for v in raw_value.split(",") if v.strip()]
+    else:
+        return None
+
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(normalized)) or None
+
+
 def _median(values: List[int]) -> Optional[int]:
     if not values:
         return None
@@ -273,10 +294,20 @@ def pack_jobs_to_gpus(
         if not is_gpu_disabled(g.index, config)
     ]
     active_gpu_ids = {g.index for g in active_gpus}
+    global_config = config.get("global", {})
+    msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
+    msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
+    msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
+    non_heavy_active_ids = {
+        g.index for g in active_gpus
+        if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
+    }
     
     if not active_gpus:
         logger.warning("[PACK] No active GPUs available (all disabled)")
         return []
+    if msa_preferred and not msa_preferred_active:
+        logger.warning(f"[PACK] MSA preferred GPUs {msa_preferred} are unavailable; using general GPU selection")
     
     # ═══════════════════════════════════════════════════════════════════════
     # 2. SORT JOBS - Priority first, then VRAM descending, then age
@@ -370,6 +401,11 @@ def pack_jobs_to_gpus(
             if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
                 if gpu.index not in job.pinned_gpus:
                     continue  # This GPU is not in the allowlist
+
+            # Check 1c: MSA preferred GPU allowlist from scheduler config (if active)
+            if job.model_type == 'msa_batch' and msa_preferred_active:
+                if gpu.index not in msa_preferred_active:
+                    continue
             
             # Check 2: GPU lock exclusion (skip GPUs locked by other batches)
             job_batch_id = getattr(job, 'batch_id', None)
@@ -394,7 +430,6 @@ def pack_jobs_to_gpus(
             # SCORING: Configurable weights for GPU preference
             # ═══════════════════════════════════════════════════════════════
             # Read weights from config
-            global_config = config.get("global", {})
             capacity_weight = global_config.get("capacity_weight", 3.0)
             emptiness_weight = global_config.get("emptiness_weight", 5.0)
             
@@ -419,6 +454,13 @@ def pack_jobs_to_gpus(
                 + emptiness_bonus
                 - gpu.index * 0.001  # Tie-breaker: prefer GPU 0
             )
+
+            # Keep MSA lightweight by favoring non-heavy GPUs when requested.
+            if job.model_type == 'msa_batch' and msa_avoid_heavy and non_heavy_active_ids:
+                if gpu.index in non_heavy_active_ids:
+                    score += 1000.0
+                else:
+                    score -= 1000.0
             
             if score > best_score:
                 best_score = score
@@ -529,7 +571,8 @@ class GPUOrchestrator:
             
             # ═══════════════════════════════════════════════════════════════════
             # CRITICAL: MSA job limiting - only ONE MSA batch at a time
-            # Multiple MSA jobs in parallel cause DRAM OOM (~16GB each)
+            # Multiple MSA jobs in parallel can cause DRAM pressure.
+            # Concurrency is configurable via scheduler global.msa_concurrency_limit.
             # ═══════════════════════════════════════════════════════════════════
             running_msa_count_result = await session.execute(
                 select(func.count()).where(
@@ -538,6 +581,11 @@ class GPUOrchestrator:
                 )
             )
             running_msa_count = running_msa_count_result.scalar() or 0
+            msa_concurrency_limit = config.get("global", {}).get("msa_concurrency_limit", 1)
+            try:
+                msa_concurrency_limit = max(1, int(msa_concurrency_limit))
+            except (TypeError, ValueError):
+                msa_concurrency_limit = 1
             
             # Build the base query for queued jobs
             base_conditions = [
@@ -550,10 +598,13 @@ class GPUOrchestrator:
                 or_(Job.parent_job_id.is_(None), Job.queue_status != "pending_msa")
             ]
             
-            # If MSA job is already running, exclude other MSA jobs from scheduling
-            if running_msa_count > 0:
+            # If MSA concurrency limit is reached, exclude additional MSA jobs.
+            if running_msa_count >= msa_concurrency_limit:
                 base_conditions.append(Job.model_id != 'msa_batch')
-                logger.debug("[ORCHESTRATOR] MSA job running, blocking additional MSA jobs")
+                logger.debug(
+                    "[ORCHESTRATOR] MSA concurrency reached "
+                    f"({running_msa_count}/{msa_concurrency_limit}); blocking additional MSA jobs"
+                )
             
             result = await session.execute(
                 select(Job).where(
@@ -763,7 +814,7 @@ class GPUOrchestrator:
         try:
             async with self.db_session_factory() as session:
                 from sqlalchemy import select, func
-                from database import Job
+                from database import Job, Design
                 
                 # Get jobs that are currently running
                 result = await session.execute(
@@ -802,13 +853,6 @@ class GPUOrchestrator:
                 
                 completions = 0
                 for job in running_jobs:
-                    # CRITICAL: Skip ALL top-level jobs - they complete via their own Nextflow workflow
-                    # Only mark CHILD jobs (spawned by a parent) as complete via process detection
-                    # Top-level jobs run the full pipeline and complete via Nextflow exit
-                    if job.parent_job_id is None:
-                        logger.debug(f"[COMPLETION] Skipping top-level job {job.name}")
-                        continue
-                    
                     job_is_running = False
                     
                     # Method 1: Check if job ID appears in any process (Nextflow uses --job_id UUID)
@@ -837,7 +881,32 @@ class GPUOrchestrator:
                             job.queue_status = "completed"
                             if job.status == "running":
                                 job.status = "completed"
+                            job.current_stage = "Complete"
+                            job.stage_progress = None
                             job.completed_at = datetime.utcnow()
+
+                            # Best-effort safety net: if a top-level workflow completed but
+                            # launch task finalization was missed, ingest outputs so Data Viewer
+                            # is populated instead of showing an empty completed job.
+                            if job.parent_job_id is None and job.output_dir:
+                                try:
+                                    existing_designs = (
+                                        await session.execute(
+                                            select(func.count(Design.id)).where(Design.job_id == job.id)
+                                        )
+                                    ).scalar() or 0
+                                    if existing_designs == 0:
+                                        from services.result_ingester import ingest_job_results
+
+                                        created = await ingest_job_results(str(job.id), job.output_dir, session)
+                                        logger.info(
+                                            f"[COMPLETION] Ingested {created} designs "
+                                            f"for reconciled top-level job {job.name}"
+                                        )
+                                except Exception as ingest_err:
+                                    logger.warning(
+                                        f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
+                                    )
                             completions += 1
                             logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
                 

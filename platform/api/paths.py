@@ -39,6 +39,35 @@ def get_work_dir() -> Path:
     return get_data_root() / "work"
 
 
+def get_container_dir() -> Path:
+    env = os.getenv("BMS_CONTAINER_DIR")
+    if env:
+        return _resolve_path(env)
+    return get_data_root() / "apptainer"
+
+
+def get_container_path(container_name: str) -> Path:
+    return get_container_dir() / container_name
+
+
+def get_rfd_models_dir() -> Path:
+    env = os.getenv("BMS_RFD_MODELS")
+    if env:
+        return _resolve_path(env)
+
+    weights_root = get_weights_root()
+    default_dir = weights_root / "rfd"
+    if default_dir.exists():
+        return default_dir
+
+    # RFantibody bundles an RFdiffusion checkpoint with different naming.
+    rfantibody_dir = weights_root / "rfantibody" / "rfantibody_repo" / "weights"
+    if (rfantibody_dir / "RFdiffusion_Ab.pt").exists():
+        return rfantibody_dir
+
+    return default_dir
+
+
 def _get_default_data_root() -> Path:
     """Return user-space default data root for portability."""
     return Path.home() / ".biomodstack"

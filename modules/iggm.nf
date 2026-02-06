@@ -5,7 +5,7 @@
 process IGGM_DENOVO {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/iggm.sif'
+    container "${params.container_dir}/iggm.sif"
 
     input:
     tuple val(meta), path(antigen_pdb)
@@ -48,7 +48,7 @@ process IGGM_DENOVO {
 process IGGM_AFFINITY_MATURATION {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/iggm.sif'
+    container "${params.container_dir}/iggm.sif"
 
     input:
     tuple val(meta), path(antibody_pdb), path(antigen_pdb)
@@ -95,7 +95,7 @@ process IGGM_AFFINITY_MATURATION {
 process IGGM_STRUCTURE_PREDICTION {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/iggm.sif'
+    container "${params.container_dir}/iggm.sif"
 
     input:
     tuple val(meta), path(antibody_fasta), path(antigen_pdb)
@@ -138,7 +138,7 @@ process IGGM_STRUCTURE_PREDICTION {
 process IGGM_HUMANIZATION {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/iggm.sif'
+    container "${params.container_dir}/iggm.sif"
 
     input:
     tuple val(meta), path(antibody_pdb)

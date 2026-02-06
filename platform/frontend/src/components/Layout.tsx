@@ -101,6 +101,9 @@ export function Layout({ children }: LayoutProps) {
                             {/* Eco Mode Toggle */}
                             <EcoModeToggle />
 
+                            {/* Persistent MSA Server Toggle */}
+                            <MSAServerToggle />
+
                             {/* Debug Menu */}
                             <DebugMenu />
                         </div>
@@ -279,6 +282,82 @@ function EcoModeToggle() {
                 <div className={`w-2 h-2 rounded-full ${getDotColor()}`} />
             )}
             {enabled ? `${powerPercent}% PWR` : 'OFF'}
+        </button>
+    );
+}
+
+function MSAServerToggle() {
+    const [loading, setLoading] = useState(false);
+    const [enabled, setEnabled] = useState(false);
+    const [gpuId, setGpuId] = useState<number | null>(null);
+    const [allRunning, setAllRunning] = useState(false);
+
+    const fetchStatus = async () => {
+        try {
+            const res = await fetch('/api/msa/server/status');
+            if (!res.ok) return;
+            const data = await res.json();
+            setEnabled(Boolean(data.running));
+            setAllRunning(Boolean(data.all_running));
+            setGpuId(typeof data.effective_gpu_id === 'number' ? data.effective_gpu_id : null);
+        } catch (error) {
+            console.error('Failed to fetch MSA server status:', error);
+        }
+    };
+
+    useEffect(() => {
+        fetchStatus();
+        const interval = setInterval(fetchStatus, 5000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const toggleServer = async () => {
+        setLoading(true);
+        try {
+            const endpoint = allRunning ? '/api/msa/server/stop' : '/api/msa/server/start';
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                await fetchStatus();
+            }
+        } catch (error) {
+            console.error('Failed to toggle MSA server:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const buttonClass = allRunning
+        ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30'
+        : enabled
+            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+            : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600';
+
+    const dotClass = allRunning
+        ? 'bg-blue-400'
+        : enabled
+            ? 'bg-amber-400'
+            : 'bg-slate-600';
+
+    const label = allRunning ? 'MSA SRV ON' : enabled ? 'MSA SRV PARTIAL' : 'MSA SRV OFF';
+    const title = gpuId !== null ? `Persistent MMseqs server (GPU ${gpuId})` : 'Persistent MMseqs server';
+
+    return (
+        <button
+            onClick={toggleServer}
+            disabled={loading}
+            title={title}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${buttonClass}`}
+        >
+            {loading ? (
+                <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            ) : (
+                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+            )}
+            {label}
         </button>
     );
 }

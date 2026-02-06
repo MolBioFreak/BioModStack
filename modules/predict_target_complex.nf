@@ -47,7 +47,7 @@ process PredictTargetComplex {
     ${dna_seq ? "echo 'DNA sequence length: ${dna_seq.length()}' | tee -a predict_complex.log" : "echo 'No DNA sequence provided' | tee -a predict_complex.log"}
     
     # Generate YAML for Boltz-2
-    python3 ${projectDir}/scripts/prep_complex_yaml.py \\
+    python3 ${params.code_root}/scripts/prep_complex_yaml.py \\
         --protein-seq "${protein_seq}" \\
         ${dna_arg} \\
         --protein-id A \\

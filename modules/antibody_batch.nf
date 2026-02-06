@@ -1,7 +1,7 @@
 process BatchBoltzValidation {
     label 'Boltz'
     label 'gpu'
-    container 'apptainer/boltz.sif'
+    container "${params.container_dir}/boltz2.sif"
 
     // CRITICAL: Publish validated structures and confidence scores to output directory
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
@@ -24,7 +24,7 @@ process BatchBoltzValidation {
     mkdir -p yamls predictions
     
     # Generate YAML config for each PDB sequence
-    python3 ${projectDir}/scripts/prep_boltz_batch.py \\
+    python3 ${params.code_root}/scripts/prep_boltz_batch.py \\
         --pdb_files ${pdbs} \\
         --msa_path ${msa} \\
         --out_dir yamls
@@ -53,7 +53,7 @@ process BatchBoltzValidation {
 
 process BatchImmunogenicity {
     label 'Antiberty'
-    container 'apptainer/antibody_tools.sif'
+    container "${params.container_dir}/antibody_tools.sif"
 
     input:
     path pdbs
@@ -64,7 +64,7 @@ process BatchImmunogenicity {
     script:
     """
     # Run AntiBERTy on all PDBs at once
-    python3 ${projectDir}/scripts/batch_antiberty.py \\
+    python3 ${params.code_root}/scripts/batch_antiberty.py \\
         --pdb_files ${pdbs} \\
         --out_csv immunogenicity_scores.csv
     """
@@ -72,7 +72,7 @@ process BatchImmunogenicity {
 
 process BatchStability {
     label 'ThermoMPNN'
-    container 'apptainer/stability_tools.sif'
+    container "${params.container_dir}/stability_tools.sif"
 
     input:
     path pdbs

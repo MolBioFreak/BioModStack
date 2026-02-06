@@ -1,7 +1,7 @@
 process THERMOMPNN {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/stability_tools.sif'
+    container "${params.container_dir}/stability_tools.sif"
     containerOptions "--nv"
 
     input:

@@ -64,6 +64,18 @@ process PrepBindCraftInput {
     path "${design_mode == 'scaffold_redesign' && scaffold_pdb.name != 'null' ? scaffold_pdb : target_pdb}", emit: target_pdb_out
 
     script:
+    def pyHotspotResidues = hotspot_residues ? "\"${hotspot_residues}\"" : "None"
+    def pyUseMultimerDesign = use_multimer_design ? "True" : "False"
+    def pyRmTemplateSeqDesign = rm_template_seq_design ? "True" : "False"
+    def pyRmTemplateScDesign = rm_template_sc_design ? "True" : "False"
+    def pyPredictInitialGuess = predict_initial_guess ? "True" : "False"
+    def pyUseTerminiDistanceLoss = use_termini_distance_loss ? "True" : "False"
+    def pyZipAnimations = zip_animations ? "True" : "False"
+    def pyZipPlots = zip_plots ? "True" : "False"
+    def pyRemoveUnrelaxedTrajectory = remove_unrelaxed_trajectory ? "True" : "False"
+    def pyRemoveUnrelaxedComplex = remove_unrelaxed_complex ? "True" : "False"
+    def pyRemoveBinderMonomer = remove_binder_monomer ? "True" : "False"
+    def pySaveTrajectoryPickle = save_trajectory_pickle ? "True" : "False"
     """
     #!/usr/bin/env python3
     import json
@@ -85,7 +97,7 @@ process PrepBindCraftInput {
         "binder_name": "${binder_name}" or "binder",
         "starting_pdb": input_pdb,
         "chains": "${chains}" or "A",
-        "target_hotspot_residues": ${hotspot_residues ? "\"${hotspot_residues}\"" : "null"},
+        "target_hotspot_residues": ${pyHotspotResidues},
         "lengths": "${binder_lengths}" or "80-120",
         "number_of_final_designs": ${num_final_designs}
     }
@@ -102,9 +114,14 @@ process PrepBindCraftInput {
     # Generate settings_advanced.json
     advanced_settings = {
         "design_algorithm": "${design_algorithm}",
-        "use_multimer_design": ${use_multimer_design},
+        "use_multimer_design": ${pyUseMultimerDesign},
         "num_recycles_design": ${num_recycles_design},
         "num_recycles_validation": ${num_recycles_validation},
+        # Required executable/model path keys expected by BindCraft.
+        "af_params_dir": "/app/params",
+        "dssp_path": None,
+        "dalphaball_path": None,
+        "omit_AAs": None,
         "sample_models": True,
         # MPNN settings
         "mpnn_weights": "${mpnn_weights}",
@@ -113,12 +130,12 @@ process PrepBindCraftInput {
         "sampling_temp": 0.1,
         "mpnn_fix_interface": False,
         # Template settings (Phase 3: from UI)
-        "rm_template_seq_design": ${rm_template_seq_design ?: 'False'},
+        "rm_template_seq_design": ${pyRmTemplateSeqDesign},
         "rm_template_seq_predict": False,
-        "rm_template_sc_design": ${rm_template_sc_design ?: 'False'},
+        "rm_template_sc_design": ${pyRmTemplateScDesign},
         "rm_template_sc_predict": False,
         # Prediction settings (Phase 3: from UI)
-        "predict_initial_guess": ${predict_initial_guess ?: 'False'},
+        "predict_initial_guess": ${pyPredictInitialGuess},
         "predict_bigbang": False,
         # Iteration counts (4stage defaults)
         "soft_iterations": 100,
@@ -143,15 +160,15 @@ process PrepBindCraftInput {
         "weights_iptm": 0.1,
         "use_rg_loss": True,
         "weights_rg": 0.1,
-        "use_termini_distance_loss": ${use_termini_distance_loss ?: 'False'},
-        "weights_termini_loss": 0.1 if ${use_termini_distance_loss ?: 'False'} else 0,
+        "use_termini_distance_loss": ${pyUseTerminiDistanceLoss},
+        "weights_termini_loss": 0.1 if ${pyUseTerminiDistanceLoss} else 0,
         # Storage optimization (from UI)
-        "zip_animations": ${zip_animations},
-        "zip_plots": ${zip_plots},
-        "remove_unrelaxed_trajectory": ${remove_unrelaxed_trajectory},
-        "remove_unrelaxed_complex": ${remove_unrelaxed_complex},
-        "remove_binder_monomer": ${remove_binder_monomer},
-        "save_trajectory_pickle": ${save_trajectory_pickle},
+        "zip_animations": ${pyZipAnimations},
+        "zip_plots": ${pyZipPlots},
+        "remove_unrelaxed_trajectory": ${pyRemoveUnrelaxedTrajectory},
+        "remove_unrelaxed_complex": ${pyRemoveUnrelaxedComplex},
+        "remove_binder_monomer": ${pyRemoveBinderMonomer},
+        "save_trajectory_pickle": ${pySaveTrajectoryPickle},
         # Runtime limits
         "max_trajectories": 10000,
         "acceptance_rate": 0.01,
@@ -230,7 +247,7 @@ process RunBindCraft {
     publishDir "${params.out_dir}/run/bindcraft/stats", mode: 'copy', pattern: "output/*.csv"
 
     // Container with AF2 weights mounted
-    container 'apptainer/bindcraft.sif'
+    container "${params.container_dir}/bindcraft.sif"
     def weightsRoot = params.weights_root
     containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${weightsRoot}/alphafold:/app/params --writable-tmpfs" }
 
@@ -415,7 +432,7 @@ process CDRHallucination {
     label 'BindCraft'
     label 'gpu'
 
-    container 'apptainer/bindcraft.sif'
+    container "${params.container_dir}/bindcraft.sif"
 
     input:
     path target_pdb

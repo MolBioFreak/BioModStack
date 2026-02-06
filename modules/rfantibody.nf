@@ -12,7 +12,7 @@ process RFANTIBODY {
      */
     tag "${meta.id}_gpu${gpu_id}"
     label 'process_gpu'
-    container 'apptainer/rfantibody.sif'
+    container "${params.container_dir}/rfantibody.sif"
 
     // Mount entire RFantibody repo from host (includes src, scripts, weights, examples)
     // Container now supports RTX 5090 (Blackwell) via compiled DGL

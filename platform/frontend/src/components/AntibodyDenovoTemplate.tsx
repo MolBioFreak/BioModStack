@@ -1396,7 +1396,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         type="text"
                                         value={customOutputDir}
                                         onChange={e => setCustomOutputDir(e.target.value)}
-                                        placeholder="/mnt/BioModStack/results/custom_run"
+                                        placeholder="/path/to/bms_results/custom_run"
                                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm focus:ring-2 focus:ring-slate-500 outline-none font-mono"
                                     />
                                 </div>

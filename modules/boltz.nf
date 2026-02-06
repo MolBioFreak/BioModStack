@@ -43,14 +43,14 @@ process PrepBoltzWithMSA {
     mkdir -p yamls msa
     
     # Call external prep_boltz_with_msa.py script
-    python3 ${projectDir}/scripts/prep_boltz_with_msa.py \\
+    python3 ${params.code_root}/scripts/prep_boltz_with_msa.py \\
         --input "./" \\
         --output "yamls" \\
         --msa_output "msa" \\
         --db_path "${dbPath}" \\
         --cache_dir "${cacheDir}" \\
         --threads ${threads} \\
-        --msa_script "${projectDir}/scripts/run_local_msa.py"
+        --msa_script "${params.code_root}/scripts/run_local_msa.py"
     """
 }
 
