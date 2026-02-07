@@ -626,122 +626,168 @@ async def launch_nextflow_job(
             else:
                 logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
             
-            # Run Nextflow with stdout piped for real-time monitoring
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(PROJECT_ROOT),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env
-            )
-            
-            # Store process reference for potential cancellation
-            _running_processes[job_id] = process
-            
-            # Store the Nextflow run ID (PID for now)
-            job.nextflow_run_id = str(process.pid)
-            await session.commit()
-            
             # ═══════════════════════════════════════════════════════════════════
-            # STREAM OUTPUT & MONITOR PROGRESS
+            # RUN NEXTFLOW + STREAM OUTPUT (with resume-lock retry hardening)
             # ═══════════════════════════════════════════════════════════════════
             full_log = []
             import re
             # Regex to capture process name: "[... ] process > PROCESS_NAME (tag) [ 10%]"
             # We want "PROCESS_NAME"
             process_regex = re.compile(r"process >\s+([^(\[]+)")
-            
-            last_stage = None
-            
-            # Read line by line
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                    
-                line_str = line.decode('utf-8', errors='replace')
-                full_log.append(line_str)
-                
-                # Check for stage update
-                # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
-                match = process_regex.search(line_str)
-                if match:
-                    # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
-                    raw_stage = match.group(1).strip()
-                    # Clean up: Remove workflow prefix if present
-                    stage_clean = raw_stage.split(':')[-1].lower()
-                    
-                    # Map to frontend stage IDs
-                    stage = stage_clean
-                    if 'fampnn' in stage_clean:
-                        stage = 'fampnn'
-                    elif 'rfantibody' in stage_clean:
-                        stage = 'rfantibody'
-                    elif 'boltz' in stage_clean:
-                        stage = 'boltz2' # Frontend uses boltz2
-                    elif 'rf3' in stage_clean:
-                        stage = 'rf3'
-                    # ──────────────────────────────────────────────────────────────
-                    # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
-                    # Order matters: most specific first, generic last
-                    # ──────────────────────────────────────────────────────────────
-                    elif 'frustra' in stage_clean:
-                        stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
-                    elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
-                        stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
-                    elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
-                        stage = 'thermompnn'   # ThermoMPNN (thermal stability)
-                    elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
-                        stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
-                    elif 'af2' in stage_clean:
-                        stage = 'af2'
-                    elif 'rfdiffusion' in stage_clean:
-                        stage = 'rfdiffusion'
-                    
-                    if stage != last_stage:
-                        logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
-                        last_stage = stage
-                        
-                        # Update DB (separate session to avoid long-held locks)
-                        try:
-                            async with async_session() as update_session:
-                                j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                                j = j_stats.scalar_one_or_none()
-                                if j:
-                                    j.current_stage = stage
-                                    j.stage_progress = None  # Reset progress on new stage
-                                    await update_session.commit()
-                        except Exception as db_err:
-                            logger.warning(f"Failed to update stage for {job_id}: {db_err}")
-                
-                # Check for work directory in TaskHandler output
-                # Example: "workDir: /home/.../work/91/0cd0da..."
-                import re
-                workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
-                if workdir_match:
-                    current_work_dir = workdir_match.group(1)
-                    
-                    # Update work dir and parse progress
-                    try:
-                        async with async_session() as update_session:
-                            j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                            j = j_stats.scalar_one_or_none()
-                            if j:
-                                j.stage_work_dir = current_work_dir
-                                # Parse progress from the work dir log
-                                progress = parse_stage_progress(
-                                    current_work_dir, 
-                                    j.current_stage,
-                                    j.params.get('rfantibody_num_designs') if j.params else None
-                                )
-                                if progress:
-                                    j.stage_progress = progress
-                                await update_session.commit()
-                    except Exception as db_err:
-                        logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
+            resume_lock_pattern = "Unable to acquire lock on session with ID"
 
-            # Wait for process to fully exit
-            exit_code = await process.wait()
+            # Respect global retry policy: if retries are disabled, fail fast to
+            # surface chokepoints instead of auto-healing them.
+            allow_retries_raw = params.get("allow_retries", False)
+            if isinstance(allow_retries_raw, str):
+                allow_retries = allow_retries_raw.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                allow_retries = bool(allow_retries_raw)
+
+            max_resume_lock_retries = 0
+            if params.get("resume_work_dir") and allow_retries:
+                try:
+                    max_resume_lock_retries = int(params.get("resume_lock_retry_attempts", 2))
+                except (TypeError, ValueError):
+                    max_resume_lock_retries = 2
+                max_resume_lock_retries = max(0, min(5, max_resume_lock_retries))
+
+            last_stage = None
+            exit_code = 1
+            total_attempts = 1 + max_resume_lock_retries
+
+            for attempt in range(1, total_attempts + 1):
+                if attempt > 1:
+                    sleep_s = min(20, 5 * (attempt - 1))
+                    msg = (
+                        f"[BMS] Resume lock retry {attempt - 1}/{max_resume_lock_retries}; "
+                        f"sleeping {sleep_s}s before relaunch."
+                    )
+                    logger.warning(msg)
+                    full_log.append(msg + "\n")
+                    await asyncio.sleep(sleep_s)
+
+                # Run Nextflow with stdout piped for real-time monitoring
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(PROJECT_ROOT),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env
+                )
+                # Store process reference for potential cancellation
+                _running_processes[job_id] = process
+                # Store the Nextflow run ID (PID for now)
+                job.nextflow_run_id = str(process.pid)
+                await session.commit()
+
+                attempt_log: list[str] = []
+                try:
+                    # Read line by line
+                    while True:
+                        line = await process.stdout.readline()
+                        if not line:
+                            break
+
+                        line_str = line.decode('utf-8', errors='replace')
+                        attempt_log.append(line_str)
+                        full_log.append(line_str)
+
+                        # Check for stage update
+                        # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
+                        match = process_regex.search(line_str)
+                        if match:
+                            # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
+                            raw_stage = match.group(1).strip()
+                            # Clean up: Remove workflow prefix if present
+                            stage_clean = raw_stage.split(':')[-1].lower()
+
+                            # Map to frontend stage IDs
+                            stage = stage_clean
+                            if 'fampnn' in stage_clean:
+                                stage = 'fampnn'
+                            elif 'rfantibody' in stage_clean:
+                                stage = 'rfantibody'
+                            elif 'boltz' in stage_clean:
+                                stage = 'boltz2' # Frontend uses boltz2
+                            elif 'rf3' in stage_clean:
+                                stage = 'rf3'
+                            # ──────────────────────────────────────────────────────────────
+                            # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
+                            # Order matters: most specific first, generic last
+                            # ──────────────────────────────────────────────────────────────
+                            elif 'frustra' in stage_clean:
+                                stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
+                            elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
+                                stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
+                            elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
+                                stage = 'thermompnn'   # ThermoMPNN (thermal stability)
+                            elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
+                                stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
+                            elif 'protenix' in stage_clean:
+                                stage = 'protenix'  # Protenix structure prediction
+                            elif 'af2' in stage_clean:
+                                stage = 'af2'
+                            elif 'rfdiffusion' in stage_clean:
+                                stage = 'rfdiffusion'
+
+                            if stage != last_stage:
+                                logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
+                                last_stage = stage
+
+                                # Update DB (separate session to avoid long-held locks)
+                                try:
+                                    async with async_session() as update_session:
+                                        j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                        j = j_stats.scalar_one_or_none()
+                                        if j:
+                                            j.current_stage = stage
+                                            j.stage_progress = None  # Reset progress on new stage
+                                            await update_session.commit()
+                                except Exception as db_err:
+                                    logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+
+                        # Check for work directory in TaskHandler output
+                        # Example: "workDir: /home/.../work/91/0cd0da..."
+                        workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
+                        if workdir_match:
+                            current_work_dir = workdir_match.group(1)
+
+                            # Update work dir and parse progress
+                            try:
+                                async with async_session() as update_session:
+                                    j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                    j = j_stats.scalar_one_or_none()
+                                    if j:
+                                        j.stage_work_dir = current_work_dir
+                                        # Parse progress from the work dir log
+                                        progress = parse_stage_progress(
+                                            current_work_dir,
+                                            j.current_stage,
+                                            j.params.get('rfantibody_num_designs') if j.params else None
+                                        )
+                                        if progress:
+                                            j.stage_progress = progress
+                                        await update_session.commit()
+                            except Exception as db_err:
+                                logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
+
+                    # Wait for process to fully exit
+                    exit_code = await process.wait()
+                finally:
+                    # Remove from running processes
+                    _running_processes.pop(job_id, None)
+
+                lock_failed = (
+                    exit_code != 0
+                    and any(resume_lock_pattern in ln for ln in attempt_log)
+                )
+                if lock_failed and attempt < total_attempts:
+                    logger.warning(
+                        f"[JOB {job_id}] Nextflow resume lock contention detected; retrying launch."
+                    )
+                    continue
+                break
             
             # Save Nextflow execution log to output directory
             try:
@@ -751,9 +797,6 @@ async def launch_nextflow_job(
                     f.writelines(full_log)
             except Exception as log_err:
                 logger.warning(f"Failed to save nextflow.log: {log_err}")
-            
-            # Remove from running processes
-            _running_processes.pop(job_id, None)
             
             # Update final status
             result = await session.execute(select(Job).where(Job.id == job_id))
@@ -809,7 +852,16 @@ async def launch_nextflow_job(
                     else:
                         job.status = JobStatus.FAILED.value
                         job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
-                        job.error_message = f"Nextflow exited with code {exit_code}"
+                        resume_lock_line = next(
+                            (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
+                            None,
+                        )
+                        if resume_lock_line:
+                            job.error_message = (
+                                f"Nextflow resume lock contention after retries: {resume_lock_line}"
+                            )
+                        else:
+                            job.error_message = f"Nextflow exited with code {exit_code}"
                         logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
                         
                         # Log last few lines
@@ -869,6 +921,9 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
+        # BindCraft API modes route to the binder profile; workflow is selected via rfd_mode
+        ('bindcraft', 'minibinder'): 'binder_denovo',
+        ('bindcraft', 'peptide'): 'binder_denovo',
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
@@ -884,6 +939,9 @@ def build_nextflow_command(
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
         # Oligo Designer (RFDpoly multi-polymer design)
         ('oligo_design', 'oligo_design'): 'oligo_design',
+        # Protenix structure prediction
+        ('protenix', 'predict'): 'protenix',
+        ('protenix', 'complex'): 'protenix',
     }
     
     # Determine profile based on model and mode
@@ -1075,6 +1133,16 @@ def build_nextflow_command(
         'rf3_num_recycles': 'rf3_num_recycles',
         'rf3_num_samples': 'rf3_num_samples',
         'rf3_early_stopping_plddt': 'rf3_early_stopping_plddt',
+        # Protenix structure prediction params
+        'protenix_model_weights': 'protenix_model_weights',
+        'protenix_seeds': 'protenix_seeds',
+        'protenix_n_sample': 'protenix_n_sample',
+        'protenix_n_step': 'protenix_n_step',
+        'protenix_n_cycle': 'protenix_n_cycle',
+        'protenix_use_msa': 'protenix_use_msa',
+        'protenix_use_template': 'protenix_use_template',
+        'protenix_enable_cache': 'protenix_enable_cache',
+        'protenix_enable_fusion': 'protenix_enable_fusion',
         # Sequence input
         'sequence': 'sequence_input',
         'sequence_name': 'sequence_name',
@@ -1116,7 +1184,11 @@ def build_nextflow_command(
         # For BoltzGen: Apply all BoltzGen-specific parameter mappings
         # These were previously in global param_mapping and broke other workflows!
         boltzgen_mappings = {
-            'target_pdb': 'boltzgen_target_pdb',
+            # Schema-native keys
+            'target_pdb': 'boltzgen_target_pdb_path',
+            'input_pdb': 'boltzgen_input_pdb',
+            'ligand_pdb': 'boltzgen_ligand_pdb',
+            'ligand_smiles': 'boltzgen_ligand_smiles',
             'ligand_description': 'boltzgen_ligand_smiles',
             'protein_sequence': 'boltzgen_protein_sequence',
             'dna_template_seq': 'boltzgen_dna_template_seq',
@@ -1128,10 +1200,73 @@ def build_nextflow_command(
             'ntp_type': 'boltzgen_ntp_type',
             'binding_site_residues': 'boltzgen_binding_site_residues',
             'catalytic_site': 'boltzgen_catalytic_site',
+            # Filtering and protocol aliases
+            'budget': 'boltzgen_budget',
+            'alpha': 'boltzgen_alpha',
+            'max_rmsd': 'boltzgen_max_rmsd',
+            'min_plddt': 'boltzgen_min_plddt',
+            'secondary_structure': 'boltzgen_secondary_structure',
+            'protocol': 'boltzgen_protocol',
         }
         for src_key, dest_key in boltzgen_mappings.items():
             if src_key in params:
                 params[dest_key] = params.pop(src_key)
+    elif model_id == 'bindcraft':
+        # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
+        bindcraft_mappings = {
+            'target_pdb': 'bindcraft_target_pdb',
+            'hotspot_residues': 'bindcraft_hotspot_residues',
+            'chains': 'bindcraft_chains',
+            'binder_lengths': 'bindcraft_binder_lengths',
+            'num_final_designs': 'bindcraft_num_final_designs',
+            'design_mode': 'bindcraft_design_mode',
+            'scaffold_pdb': 'bindcraft_scaffold_pdb',
+            'binder_chain': 'bindcraft_binder_chain',
+            'design_algorithm': 'bindcraft_design_algorithm',
+            'use_multimer_design': 'bindcraft_use_multimer_design',
+            'num_recycles_design': 'bindcraft_num_recycles_design',
+            'num_recycles_validation': 'bindcraft_num_recycles_validation',
+            'mpnn_weights': 'bindcraft_mpnn_weights',
+            'num_mpnn_sequences': 'bindcraft_num_mpnn_sequences',
+            'mpnn_fix_interface': 'bindcraft_mpnn_fix_interface',
+            'min_iptm': 'bindcraft_min_iptm',
+            'max_hotspot_rmsd': 'bindcraft_max_hotspot_rmsd',
+            'min_plddt': 'bindcraft_min_plddt',
+            'zip_animations': 'bindcraft_zip_animations',
+            'zip_plots': 'bindcraft_zip_plots',
+            'remove_unrelaxed_trajectory': 'bindcraft_remove_unrelaxed_trajectory',
+            'remove_unrelaxed_complex': 'bindcraft_remove_unrelaxed_complex',
+            'remove_binder_monomer': 'bindcraft_remove_binder_monomer',
+            'save_trajectory_pickle': 'bindcraft_save_trajectory_pickle',
+            'total_trajectories': 'bindcraft_total_trajectories',
+            'trajectories_per_job': 'bindcraft_trajectories_per_job',
+            'use_swa': 'bindcraft_use_swa',
+            'budget': 'bindcraft_budget',
+            'alpha': 'bindcraft_alpha',
+            'boltz_validation': 'bindcraft_boltz_validation',
+            # Advanced options used by the BindCraft workflow
+            'mask_mode': 'bindcraft_mask_mode',
+            'redesign_ranges': 'bindcraft_redesign_ranges',
+            'rm_template_seq_design': 'bindcraft_rm_template_seq_design',
+            'rm_template_sc_design': 'bindcraft_rm_template_sc_design',
+            'predict_initial_guess': 'bindcraft_predict_initial_guess',
+            'use_termini_distance_loss': 'bindcraft_use_termini_distance_loss',
+            'cdr_sampling_enabled': 'bindcraft_cdr_sampling_enabled',
+            'cdr_sampling_count': 'bindcraft_cdr_sampling_count',
+            'cdr_length_mode': 'bindcraft_cdr_length_mode',
+            'cdr_h1_range': 'bindcraft_cdr_h1_range',
+            'cdr_h2_range': 'bindcraft_cdr_h2_range',
+            'cdr_h3_range': 'bindcraft_cdr_h3_range',
+        }
+        for src_key, dest_key in bindcraft_mappings.items():
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        # Ensure main.nf routes into the BindCraft workflow branch.
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'bindcraft'
     
     if complex_components:
         import json

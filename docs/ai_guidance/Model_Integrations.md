@@ -150,6 +150,17 @@ These are invoked in Nextflow workflows but do not appear as registry models.
   - External code: https://github.com/openmm/openmm-ml
   - Related tooling: https://github.com/ACEsuit/mace-off, https://github.com/aiqm/torchani, https://github.com/openmm/pdbfixer
 
+- **Protenix** (`modules/protenix.nf`)
+  - Internal: `platform/api/config/models/protenix.yaml`, `docs/Protenix_PXDesign_Integration_Plan.md`
+  - External code: https://github.com/bytedance/Protenix
+  - Paper/Preprint: https://www.biorxiv.org/content/10.1101/2025.01.08.631790
+  - Container: `protenix.sif` (CUTLASS v3.5.1 + cuEquivariance + HMMER)
+  - Weights: `$BMS_PROTENIX_WEIGHTS` or `${weights_root}/protenix`
+  - Modes: `predict` (single-chain), `complex` (multi-modal protein/DNA/RNA/ligand/ion)
+  - Model variants: `protenix_base_v1.0.0`, `protenix_base_v0.2.1`, `protenix_esm_v0.2.1`, `protenix_mini_esm_v0.5.0`
+  - MSA: Built-in `protenix prep` or ColabFold a3m; auto-switches to ESM model when MSA disabled
+  - VRAM: ~4GB base + 55 MB/1K tokens (quadratic scaling)
+
 Utility Dependencies (not models)
 ---------------------------------
 - **MMseqs2 / ColabFold DB**: local MSA generation (`scripts/run_local_msa.py`, `scripts/batch_msa.py`)

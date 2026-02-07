@@ -24,7 +24,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [sequenceName, setSequenceName] = useState(initialValues?.sequence_name || 'predicted');
 
     // Predictor selection
-    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'both'>(initialValues?.pred_method || 'boltz');
+    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'protenix' | 'both' | 'all'>(initialValues?.pred_method || 'boltz');
 
     // Boltz-2 parameters
     const [boltzUseMsa, setBoltzUseMsa] = useState(initialValues?.boltz_use_msa ?? true);
@@ -39,6 +39,15 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [rf3UseMsa, setRf3UseMsa] = useState(initialValues?.rf3_use_msa ?? true);
     const [rf3NumRecycles, setRf3NumRecycles] = useState(initialValues?.rf3_num_recycles ?? 10);
     const [rf3NumSamples, setRf3NumSamples] = useState(initialValues?.rf3_num_samples ?? 1);
+
+    // Protenix parameters
+    const [protenixModelWeights, setProtenixModelWeights] = useState(initialValues?.protenix_model_weights || 'protenix_base_20250630_v1.0.0');
+    const [protenixSeeds, setProtenixSeeds] = useState(initialValues?.protenix_seeds || '42');
+    const [protenixNSample, setProtenixNSample] = useState(initialValues?.protenix_n_sample ?? 5);
+    const [protenixNStep, setProtenixNStep] = useState(initialValues?.protenix_n_step ?? 200);
+    const [protenixNCycle, setProtenixNCycle] = useState(initialValues?.protenix_n_cycle ?? 10);
+    const [protenixUseMsa, setProtenixUseMsa] = useState(initialValues?.protenix_use_msa ?? true);
+    const [protenixUseTemplate, setProtenixUseTemplate] = useState(initialValues?.protenix_use_template ?? false);
 
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
@@ -121,14 +130,29 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         }
 
         // RF3 parameters
-        if (predictor === 'rf3' || predictor === 'both') {
+        if (predictor === 'rf3' || predictor === 'both' || predictor === 'all') {
             params.rf3_use_msa = rf3UseMsa;
             params.rf3_num_recycles = rf3NumRecycles;
             params.rf3_num_samples = rf3NumSamples;
         }
 
-        // MSA Quality parameters (when MSA is enabled)
-        if ((predictor === 'boltz' && boltzUseMsa) || (predictor === 'rf3' && rf3UseMsa) || predictor === 'both') {
+        // Protenix parameters
+        if (predictor === 'protenix' || predictor === 'all') {
+            params.protenix_model_weights = protenixModelWeights;
+            params.protenix_seeds = protenixSeeds;
+            params.protenix_n_sample = protenixNSample;
+            params.protenix_n_step = protenixNStep;
+            params.protenix_n_cycle = protenixNCycle;
+            params.protenix_use_msa = protenixUseMsa;
+            params.protenix_use_template = protenixUseTemplate;
+        }
+
+        // MSA Quality parameters (when MSA is enabled for any predictor)
+        const msaNeeded =
+            ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
+            ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
+            ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
+        if (msaNeeded) {
             params.msa_preset = msaPreset;  // Balanced (default), Maximum, or Fast
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
@@ -151,12 +175,13 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             ];
         }
 
-        const modelId = predictor === 'rf3' ? 'rf3' : 'boltz2';
+        const modelId = predictor === 'rf3' ? 'rf3' : predictor === 'protenix' ? 'protenix' : 'boltz2';
+        const mode = (ligands.length > 0) ? 'complex' : 'predict';
 
         submitMutation.mutate({
             name: jobName,
             model_id: modelId,
-            mode: 'predict',
+            mode: mode,
             params: {
                 ...params,
                 pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
@@ -249,8 +274,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         setSelectedChainIndices(next);
     };
 
-    const showBoltzParams = predictor === 'boltz' || predictor === 'both';
-    const showRf3Params = predictor === 'rf3' || predictor === 'both';
+    const showBoltzParams = predictor === 'boltz' || predictor === 'both' || predictor === 'all';
+    const showRf3Params = predictor === 'rf3' || predictor === 'both' || predictor === 'all';
+    const showProtenixParams = predictor === 'protenix' || predictor === 'all';
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -335,22 +361,25 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                     </div>
                 </div>
 
-                {/* Predictor Selection - Card Style */}
                 <div>
                     <label className="block text-sm font-medium text-slate-400 mb-3">Structure Predictor</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                         {[
                             { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
-                            { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alternative', color: 'green' },
-                            { id: 'both', name: 'Ensemble (Both)', desc: 'Run in parallel', color: 'purple' },
+                            { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
+                            { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
+                            { id: 'both', name: 'Boltz + RF3', desc: 'Ensemble (2)', color: 'purple' },
+                            { id: 'all', name: 'All Three', desc: 'Full ensemble', color: 'amber' },
                         ].map((pred) => (
                             <button
                                 key={pred.id}
-                                onClick={() => setPredictor(pred.id as 'boltz' | 'rf3' | 'both')}
+                                onClick={() => setPredictor(pred.id as 'boltz' | 'rf3' | 'protenix' | 'both' | 'all')}
                                 className={`p-3 rounded-lg border text-left transition-all ${predictor === pred.id
                                     ? pred.color === 'blue' ? 'bg-blue-600/20 border-blue-500 text-blue-300'
                                         : pred.color === 'green' ? 'bg-green-600/20 border-green-500 text-green-300'
-                                            : 'bg-accent/20 border-accent text-accent'
+                                            : pred.color === 'violet' ? 'bg-violet-600/20 border-violet-500 text-violet-300'
+                                                : pred.color === 'amber' ? 'bg-amber-600/20 border-amber-500 text-amber-300'
+                                                    : 'bg-accent/20 border-accent text-accent'
                                     : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
                                     }`}
                             >
@@ -574,8 +603,107 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                     </div>
                 )}
 
+                {/* Protenix Parameters */}
+                {showProtenixParams && (
+                    <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <h3 className="text-sm font-semibold text-violet-400">Protenix Settings</h3>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="col-span-2">
+                                <label className="text-xs text-slate-400 block mb-1">Model Variant</label>
+                                <select
+                                    value={protenixModelWeights}
+                                    onChange={(e) => setProtenixModelWeights(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    <option value="protenix_base_20250630_v1.0.0">Base v1.0.0 (Latest)</option>
+                                    <option value="protenix_base_20241211_v0.2.1">Base v0.2.1 (CASP16)</option>
+                                    <option value="protenix_esm_20241211_v0.2.1">ESM v0.2.1 (No-MSA)</option>
+                                    <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0 (Light)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
+                                <select
+                                    value={protenixUseMsa ? 'true' : 'false'}
+                                    onChange={(e) => {
+                                        const useMsa = e.target.value === 'true';
+                                        setProtenixUseMsa(useMsa);
+                                        // Auto-switch to ESM model when MSA disabled
+                                        if (!useMsa && !protenixModelWeights.includes('esm')) {
+                                            setProtenixModelWeights('protenix_esm_20241211_v0.2.1');
+                                        }
+                                    }}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    <option value="true">Yes</option>
+                                    <option value="false">No (ESM)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Use Templates</label>
+                                <select
+                                    value={protenixUseTemplate ? 'true' : 'false'}
+                                    onChange={(e) => setProtenixUseTemplate(e.target.value === 'true')}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    <option value="false">No</option>
+                                    <option value="true">Yes (HMMER)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Seeds</label>
+                                <input
+                                    type="text"
+                                    value={protenixSeeds}
+                                    onChange={(e) => setProtenixSeeds(e.target.value.replace(/[^0-9,]/g, ''))}
+                                    placeholder="42,123,456"
+                                    title="Comma-separated random seeds"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Samples/Seed</label>
+                                <input
+                                    type="number"
+                                    value={protenixNSample}
+                                    onChange={(e) => setProtenixNSample(Math.max(1, Math.min(32, parseInt(e.target.value) || 5)))}
+                                    min={1}
+                                    max={32}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Diffusion Steps</label>
+                                <input
+                                    type="number"
+                                    value={protenixNStep}
+                                    onChange={(e) => setProtenixNStep(Math.max(10, Math.min(1000, parseInt(e.target.value) || 200)))}
+                                    min={10}
+                                    max={1000}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Recycle Iter.</label>
+                                <input
+                                    type="number"
+                                    value={protenixNCycle}
+                                    onChange={(e) => setProtenixNCycle(Math.max(1, Math.min(20, parseInt(e.target.value) || 10)))}
+                                    min={1}
+                                    max={20}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* MSA Quality Options (Advanced) */}
-                {((showBoltzParams && boltzUseMsa) || (showRf3Params && rf3UseMsa)) && (
+                {((showBoltzParams && boltzUseMsa) || (showRf3Params && rf3UseMsa) || (showProtenixParams && protenixUseMsa)) && (
                     <div className="border border-[var(--border-primary)] rounded-lg overflow-hidden">
                         <button
                             onClick={() => setShowMsaOptions(!showMsaOptions)}

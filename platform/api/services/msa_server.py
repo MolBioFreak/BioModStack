@@ -27,6 +27,13 @@ DB_ALIASES: Dict[str, str] = {
     "envdb": "colabfold_envdb_202108_db",
 }
 
+DEFAULT_SERVER_SETTINGS: Dict[str, Any] = {
+    # User-requested default: start UniRef server only unless explicitly enabled.
+    "include_envdb_on_start": False,
+    "auto_stop_idle_enabled": False,
+    "auto_stop_idle_minutes": 10,
+}
+
 
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
@@ -83,6 +90,78 @@ def _gpuserver_runtime_root() -> Path:
     return root
 
 
+def _settings_path() -> Path:
+    return _gpuserver_runtime_root() / "settings.json"
+
+
+def _activity_path() -> Path:
+    return _gpuserver_runtime_root() / "last_query_activity.json"
+
+
+def read_server_settings() -> Dict[str, Any]:
+    path = _settings_path()
+    if not path.exists():
+        return dict(DEFAULT_SERVER_SETTINGS)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return dict(DEFAULT_SERVER_SETTINGS)
+    settings = dict(DEFAULT_SERVER_SETTINGS)
+    if isinstance(data, dict):
+        settings.update(data)
+    settings["include_envdb_on_start"] = bool(settings.get("include_envdb_on_start", False))
+    settings["auto_stop_idle_enabled"] = bool(settings.get("auto_stop_idle_enabled", False))
+    try:
+        settings["auto_stop_idle_minutes"] = max(1, int(settings.get("auto_stop_idle_minutes", 10)))
+    except (TypeError, ValueError):
+        settings["auto_stop_idle_minutes"] = 10
+    return settings
+
+
+def write_server_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(DEFAULT_SERVER_SETTINGS)
+    if isinstance(settings, dict):
+        merged.update(settings)
+    merged["include_envdb_on_start"] = bool(merged.get("include_envdb_on_start", False))
+    merged["auto_stop_idle_enabled"] = bool(merged.get("auto_stop_idle_enabled", False))
+    try:
+        merged["auto_stop_idle_minutes"] = max(1, int(merged.get("auto_stop_idle_minutes", 10)))
+    except (TypeError, ValueError):
+        merged["auto_stop_idle_minutes"] = 10
+    _atomic_write_json(_settings_path(), merged)
+    return merged
+
+
+def touch_query_activity(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    if isinstance(metadata, dict):
+        payload.update(metadata)
+    _atomic_write_json(_activity_path(), payload)
+    return payload
+
+
+def read_query_activity() -> Optional[Dict[str, Any]]:
+    path = _activity_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _parse_utc_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
 def _resolve_mmseqs_gpu_binary(db_root: Path) -> Path:
     candidates = [
         db_root / "mmseqs-gpu-blackwell" / "bin" / "mmseqs",
@@ -97,28 +176,36 @@ def _resolve_mmseqs_gpu_binary(db_root: Path) -> Path:
     )
 
 
-def _list_gpu_indices() -> List[int]:
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return []
-    if result.returncode != 0:
-        return []
-    gpu_ids: List[int] = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+def _list_gpu_indices(retries: int = 3, timeout_seconds: int = 5) -> List[int]:
+    attempts = max(1, int(retries))
+    for attempt in range(attempts):
         try:
-            gpu_ids.append(int(line))
-        except ValueError:
-            continue
-    return sorted(set(gpu_ids))
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=max(1, int(timeout_seconds)),
+            )
+        except Exception:
+            result = None
+
+        if result and result.returncode == 0:
+            gpu_ids: List[int] = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    gpu_ids.append(int(line))
+                except ValueError:
+                    continue
+            if gpu_ids:
+                return sorted(set(gpu_ids))
+
+        if attempt < attempts - 1:
+            time.sleep(0.2 * (attempt + 1))
+
+    return []
 
 
 def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
@@ -132,8 +219,7 @@ def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
     4) First non-disabled GPU
     """
     available = _list_gpu_indices()
-    if not available:
-        raise RuntimeError("No NVIDIA GPUs detected via nvidia-smi")
+    available_set = set(available)
 
     scheduler_cfg = read_scheduler_config() or {}
     global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
@@ -149,13 +235,6 @@ def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
             except (TypeError, ValueError):
                 continue
 
-    if requested_gpu_id is not None:
-        if requested_gpu_id not in available:
-            raise RuntimeError(f"Requested GPU {requested_gpu_id} is not available")
-        if requested_gpu_id in disabled:
-            raise RuntimeError(f"Requested GPU {requested_gpu_id} is disabled in scheduler config")
-        return requested_gpu_id
-
     preferred: List[int] = []
     raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
     if isinstance(raw_preferred, list):
@@ -164,18 +243,48 @@ def resolve_msa_gpu_id(requested_gpu_id: Optional[int] = None) -> int:
                 preferred.append(int(gpu_id))
             except (TypeError, ValueError):
                 continue
-    for gpu_id in preferred:
-        if gpu_id in available and gpu_id not in disabled:
-            return gpu_id
 
-    if 1 in available and 1 not in disabled:
+    known_gpu_ids: set[int] = set(available_set)
+    known_gpu_ids.update(preferred)
+    if requested_gpu_id is not None:
+        known_gpu_ids.add(int(requested_gpu_id))
+    if isinstance(overrides, dict):
+        for gpu_key in overrides.keys():
+            try:
+                known_gpu_ids.add(int(gpu_key))
+            except (TypeError, ValueError):
+                continue
+
+    if requested_gpu_id is not None:
+        if requested_gpu_id in disabled:
+            raise RuntimeError(f"Requested GPU {requested_gpu_id} is disabled in scheduler config")
+        if available_set and requested_gpu_id not in available_set:
+            raise RuntimeError(f"Requested GPU {requested_gpu_id} is not available")
+        # If nvidia-smi is transient/unavailable, trust explicit request.
+        return requested_gpu_id
+
+    for gpu_id in preferred:
+        if gpu_id in disabled:
+            continue
+        if available_set and gpu_id not in available_set:
+            continue
+        return gpu_id
+
+    if (not available_set or 1 in available_set) and 1 not in disabled:
         return 1
 
     for gpu_id in available:
         if gpu_id not in disabled:
             return gpu_id
 
-    raise RuntimeError("All detected GPUs are disabled in scheduler config")
+    # Final fallback when nvidia-smi is unavailable but scheduler config exists.
+    for gpu_id in sorted(known_gpu_ids):
+        if gpu_id not in disabled:
+            return gpu_id
+
+    if available_set:
+        raise RuntimeError("All detected GPUs are disabled in scheduler config")
+    raise RuntimeError("No eligible GPU configured for MSA server")
 
 
 def _gpuserver_key(
@@ -227,6 +336,7 @@ def list_servers() -> List[Dict[str, Any]]:
                 **meta,
                 "db_alias": _db_alias_from_path(str(target_db)),
                 "running": running,
+                "stale": not running,
                 "meta_path": str(meta_path),
             }
         )
@@ -287,10 +397,16 @@ def ensure_server_for_db(
                         **existing,
                         "db_alias": db_alias,
                         "running": True,
+                        "stale": False,
                         "reused": True,
                         "key": key,
                         "meta_path": str(meta_path),
                     }
+                # Drop stale metadata before creating a fresh server process.
+                try:
+                    meta_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         cmd = [
             str(mmseqs_bin),
@@ -336,6 +452,7 @@ def ensure_server_for_db(
         return {
             **metadata,
             "running": True,
+            "stale": False,
             "reused": False,
             "meta_path": str(meta_path),
         }
@@ -392,11 +509,18 @@ def stop_servers(gpu_id: Optional[int] = None) -> Dict[str, Any]:
 
 def server_status(
     gpu_id: Optional[int] = None,
-    include_envdb: bool = True,
+    include_envdb: Optional[bool] = None,
     max_seqs: int = 300,
     prefilter_mode: int = 1,
     db_load_mode: int = 0,
 ) -> Dict[str, Any]:
+    settings = read_server_settings()
+    effective_include_envdb = (
+        bool(include_envdb)
+        if include_envdb is not None
+        else bool(settings.get("include_envdb_on_start", False))
+    )
+
     effective_gpu_id: Optional[int] = None
     selection_error: Optional[str] = None
     try:
@@ -411,14 +535,63 @@ def server_status(
             s for s in servers if str(s.get("cuda_visible_devices", "")) == str(effective_gpu_id)
         ]
 
+    # Optional auto-stop if idle timeout is enabled.
+    auto_stopped = False
+    auto_stop_reason: Optional[str] = None
+    idle_seconds: Optional[float] = None
+    activity = read_query_activity()
+
+    if (
+        settings.get("auto_stop_idle_enabled")
+        and any(s.get("running") for s in selected_servers)
+    ):
+        now = datetime.utcnow()
+        last_activity_dt = _parse_utc_iso((activity or {}).get("updated_at"))
+        started_values = [
+            _parse_utc_iso(str(s.get("started_at", "")))
+            for s in selected_servers
+            if s.get("running")
+        ]
+        started_values = [dt for dt in started_values if dt is not None]
+        latest_started_dt = max(started_values) if started_values else None
+        if last_activity_dt and latest_started_dt:
+            # Treat manual server startup as recent activity to avoid immediate auto-stop.
+            last_activity_dt = max(last_activity_dt, latest_started_dt)
+        elif last_activity_dt is None:
+            last_activity_dt = latest_started_dt
+
+        if last_activity_dt is not None:
+            idle_seconds = max(0.0, (now - last_activity_dt).total_seconds())
+            threshold_seconds = max(60, int(settings.get("auto_stop_idle_minutes", 10)) * 60)
+            if idle_seconds >= threshold_seconds:
+                stop_result = stop_servers(gpu_id=effective_gpu_id)
+                auto_stopped = stop_result.get("stopped", 0) > 0
+                auto_stop_reason = (
+                    f"Idle for {int(idle_seconds)}s (threshold {threshold_seconds}s)"
+                    if auto_stopped
+                    else "Idle threshold reached but no running servers were stopped"
+                )
+                servers = list_servers()
+                selected_servers = servers
+                if effective_gpu_id is not None:
+                    selected_servers = [
+                        s for s in servers if str(s.get("cuda_visible_devices", "")) == str(effective_gpu_id)
+                    ]
+
     running_aliases = {s.get("db_alias") for s in selected_servers if s.get("running")}
-    expected_aliases = {"uniref", "envdb"} if include_envdb else {"uniref"}
+    expected_aliases = {"uniref", "envdb"} if effective_include_envdb else {"uniref"}
 
     return {
         "running": any(s.get("running") for s in selected_servers),
         "all_running": expected_aliases.issubset(running_aliases),
         "effective_gpu_id": effective_gpu_id,
         "gpu_selection_error": selection_error,
+        "settings": settings,
+        "include_envdb": effective_include_envdb,
+        "query_activity": activity,
+        "idle_seconds": idle_seconds,
+        "auto_stopped": auto_stopped,
+        "auto_stop_reason": auto_stop_reason,
         "expected_aliases": sorted(expected_aliases),
         "max_seqs": int(max(1, max_seqs)),
         "prefilter_mode": int(prefilter_mode),
