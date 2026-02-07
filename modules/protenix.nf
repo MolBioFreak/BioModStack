@@ -24,35 +24,25 @@ process ProtenixPredict {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    val sequence
-    val sequence_name
-    val protenix_model_weights
-    val protenix_seeds
-    val protenix_n_sample
-    val protenix_n_step
-    val protenix_n_cycle
-    val protenix_use_msa
-    val protenix_use_template
-    val protenix_enable_cache
-    val protenix_enable_fusion
+    tuple val(sequence), val(sequence_name)
 
     output:
-    path "predictions/**/*.cif", emit: structures, optional: true
+    path "predictions/**/*.cif", emit: cifs, optional: true
     path "predictions/**/confidence.json", emit: confidence, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_weights = protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
-    def seeds = protenix_seeds ?: '42'
-    def n_sample = protenix_n_sample ?: 5
-    def n_step = protenix_n_step ?: 200
-    def n_cycle = protenix_n_cycle ?: 10
-    def use_template_flag = (protenix_use_template == true || protenix_use_template == 'true') ? '--use_template true' : ''
-    def cache_flag = (protenix_enable_cache == true || protenix_enable_cache == 'true' || protenix_enable_cache == null) ? '--enable_cache' : ''
-    def fusion_flag = (protenix_enable_fusion == true || protenix_enable_fusion == 'true' || protenix_enable_fusion == null) ? '--enable_fusion' : ''
+    def model_weights = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def seeds = params.protenix_seeds ?: '42'
+    def n_sample = params.protenix_n_sample ?: 5
+    def n_step = params.protenix_n_step ?: 200
+    def n_cycle = params.protenix_n_cycle ?: 10
+    def use_template_flag = (params.protenix_use_template == true || params.protenix_use_template == 'true') ? '--use_template true' : ''
+    def cache_flag = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null) ? '--enable_cache' : ''
+    def fusion_flag = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null) ? '--enable_fusion' : ''
 
     // Auto-switch to ESM model if MSA is disabled
-    def use_msa = (protenix_use_msa == true || protenix_use_msa == 'true' || protenix_use_msa == null)
+    def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def effective_weights = use_msa ? model_weights : 'protenix_esm_20241211_v0.2.1'
 
     """
@@ -110,6 +100,67 @@ ENDJSON
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PREP PROTENIX COMPLEX — Convert BMS complex JSON → Protenix-format JSON
+// ─────────────────────────────────────────────────────────────────────────────
+// BMS format:  {"components": [{"type": "protein", "id": "A", "sequence": "..."}]}
+// Protenix:    [{"name": "...", "modelSeeds": [42], "sequences": [{"proteinChain": {"sequence": "...", "count": 1}}]}]
+
+process PrepProtenixComplex {
+    label 'CPU'
+
+    input:
+    tuple val(name), path(complex_json), path(msa_file)
+
+    output:
+    path "protenix_input.json", emit: protenix_json
+
+    script:
+    def seeds = params.protenix_seeds ?: '42'
+    """
+    #!/usr/bin/env python3
+    import json, sys
+
+    with open("${complex_json}") as f:
+        bms = json.load(f)
+
+    type_map = {
+        'protein': 'proteinChain',
+        'dna':     'dnaSequence',
+        'rna':     'rnaSequence',
+    }
+
+    sequences = []
+    for comp in bms.get('components', []):
+        t = comp.get('type', 'protein').lower()
+        seq = comp.get('sequence', '')
+        if t in type_map:
+            sequences.append({type_map[t]: {"sequence": seq, "count": 1}})
+        elif t == 'ligand':
+            ccd = comp.get('ccd', '')
+            smiles = comp.get('smiles', '')
+            entry = {}
+            if ccd:
+                entry = {"ligand": {"ligand": ccd, "count": 1}}
+            elif smiles:
+                entry = {"ligand": {"smiles": smiles, "count": 1}}
+            if entry:
+                sequences.append(entry)
+
+    protenix_input = [{
+        "name": "${name}",
+        "modelSeeds": [${seeds}],
+        "sequences": sequences,
+    }]
+
+    with open("protenix_input.json", "w") as f:
+        json.dump(protenix_input, f, indent=2)
+
+    print(f"[PrepProtenixComplex] Converted {len(bms.get('components', []))} components to Protenix format")
+    """
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PROTENIX FROM COMPLEX — Multi-chain complex prediction
 // ─────────────────────────────────────────────────────────────────────────────
 // Handles: protein + DNA + RNA + ligand + ion complexes
@@ -123,15 +174,6 @@ process ProtenixFromComplex {
 
     input:
     path complex_json
-    val protenix_model_weights
-    val protenix_seeds
-    val protenix_n_sample
-    val protenix_n_step
-    val protenix_n_cycle
-    val protenix_use_msa
-    val protenix_use_template
-    val protenix_enable_cache
-    val protenix_enable_fusion
 
     output:
     path "predictions/**/*.cif", emit: structures, optional: true
@@ -139,16 +181,16 @@ process ProtenixFromComplex {
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_weights = protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
-    def seeds = protenix_seeds ?: '42'
-    def n_sample = protenix_n_sample ?: 5
-    def n_step = protenix_n_step ?: 200
-    def n_cycle = protenix_n_cycle ?: 10
-    def use_template_flag = (protenix_use_template == true || protenix_use_template == 'true') ? '--use_template true' : ''
-    def cache_flag = (protenix_enable_cache == true || protenix_enable_cache == 'true' || protenix_enable_cache == null) ? '--enable_cache' : ''
-    def fusion_flag = (protenix_enable_fusion == true || protenix_enable_fusion == 'true' || protenix_enable_fusion == null) ? '--enable_fusion' : ''
+    def model_weights = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def seeds = params.protenix_seeds ?: '42'
+    def n_sample = params.protenix_n_sample ?: 5
+    def n_step = params.protenix_n_step ?: 200
+    def n_cycle = params.protenix_n_cycle ?: 10
+    def use_template_flag = (params.protenix_use_template == true || params.protenix_use_template == 'true') ? '--use_template true' : ''
+    def cache_flag = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null) ? '--enable_cache' : ''
+    def fusion_flag = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null) ? '--enable_fusion' : ''
 
-    def use_msa = (protenix_use_msa == true || protenix_use_msa == 'true' || protenix_use_msa == null)
+    def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def effective_weights = use_msa ? model_weights : 'protenix_esm_20241211_v0.2.1'
 
     """
