@@ -472,7 +472,9 @@ export function JobSubmission() {
                 const predMethodMap: Record<string, { model_id: string; mode: string }> = {
                     'boltz': { model_id: 'boltz2', mode: 'predict' },
                     'rf3': { model_id: 'rf3', mode: 'predict' },
+                    'protenix': { model_id: 'protenix', mode: 'predict' },
                     'both': { model_id: 'boltz2', mode: 'predict' }, // Primary model for "both" mode
+                    'all': { model_id: 'boltz2', mode: 'predict' },  // Primary model for "all" mode
                 };
                 const mapping = predMethodMap[mergedParams.pred_method];
                 if (mapping) {
@@ -721,11 +723,11 @@ export function JobSubmission() {
                                             {
                                                 id: 'structure_prediction',
                                                 name: 'Structure Prediction',
-                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2 or RoseTTAFold3.',
+                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
                                                 icon: 'microscope',
                                                 color: '#F59E0B', // Amber
                                                 stages: [
-                                                    { tool: 'Boltz-2 / RF3' }
+                                                    { tool: 'Boltz-2 / RF3 / Protenix' }
                                                 ]
                                             },
                                             // RFantibody+ (De Novo Antibody Design)

@@ -24,6 +24,7 @@ include { Compress as CompressBoltz } from './modules/compress'
 include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from './modules/structure_prediction.nf'
 include { PrepareComplexWithMSA ; BoltzFromComplex } from './modules/structure_prediction.nf'
+include { PrepProtenixComplex ; ProtenixFromComplex } from './modules/protenix.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
@@ -487,11 +488,11 @@ workflow {
     // If complex_json_path is provided, run complex prediction (multi-chain + ligands)
     if (params.complex_json_path) {
         def numParallelJobs = params.num_parallel_jobs ?: 1
+        def pred_method = params.pred_method ?: 'boltz'
         println("Running complex-based structure prediction (multi-chain + ligands)")
         println("* Complex definition: ${params.complex_json_path}")
-        println("* Predictor: boltz")
+        println("* Predictor: ${pred_method}")
         println("* Number of simulations: ${numParallelJobs}")
-        // Complex mode only supports Boltz for now
 
         def complex_name = params.sequence_name ?: 'complex_pred'
         def complex_json = file(params.complex_json_path)
@@ -503,14 +504,45 @@ workflow {
             def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
             tuple(jobName, complex_json, msa_file)
         }
-        PrepareComplexWithMSA(complex_ch)
-        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
 
-        BoltzFromComplex.out.pdbs
-            .flatten()
-            .collect()
-            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-            .set { final_pdbs }
+        // ── Protenix complex routing ────────────────────────────────────
+        if (pred_method == 'protenix') {
+            // Convert BMS JSON → Protenix-format JSON, then predict
+            PrepProtenixComplex(complex_ch)
+            ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+
+            ProtenixFromComplex.out.structures
+                .flatten()
+                .collect()
+                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
+                .set { final_pdbs }
+        }
+        // ── "all" mode: run both Boltz + Protenix ───────────────────────
+        else if (pred_method == 'all') {
+            PrepareComplexWithMSA(complex_ch)
+            BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+
+            PrepProtenixComplex(complex_ch)
+            ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+
+            BoltzFromComplex.out.pdbs
+                .mix(ProtenixFromComplex.out.structures)
+                .flatten()
+                .collect()
+                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
+                .set { final_pdbs }
+        }
+        // ── Default: Boltz-2 complex prediction ────────────────────────
+        else {
+            PrepareComplexWithMSA(complex_ch)
+            BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+
+            BoltzFromComplex.out.pdbs
+                .flatten()
+                .collect()
+                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
+                .set { final_pdbs }
+        }
 
         // Optional post-run FrustraMPNN QC for complex prediction
         if (params.run_frustrampnn == true) {
@@ -608,8 +640,8 @@ workflow {
             tuple(params.sequence_input, jobName)
         }
 
-        if (params.pred_method == 'rf3' || params.pred_method == 'both' || params.pred_method == 'boltz') {
-            // Use the unified workflow which handles 'both', MSA generation, and tuple inputs
+        if (params.pred_method in ['boltz', 'rf3', 'both', 'protenix', 'all']) {
+            // Use the unified workflow which handles all predictors, MSA generation, and tuple inputs
             structure_prediction_wf(parallel_jobs_ch)
 
             structure_prediction_wf.out.structures
@@ -618,7 +650,7 @@ workflow {
                 .set { final_pdbs }
         }
         else {
-            // Fallback for unknown method, default to Boltz inside workflow anyway
+            // Unknown pred_method — route through workflow anyway (will use defaults)
             structure_prediction_wf(parallel_jobs_ch)
             structure_prediction_wf.out.structures.flatten().collect().set { final_pdbs }
         }
@@ -1178,7 +1210,7 @@ workflow {
                 .set { analysis_input_pdbs }
         }
         else {
-            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3")
+            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3, protenix")
         }
     }
     else if (!params.run_rfd_only) {
