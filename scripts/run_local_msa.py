@@ -97,11 +97,10 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.sha256(sequence.encode()).hexdigest()
 
 
-def get_cache_path(cache_dir: str, seq_hash: str, preset: str = "maximum") -> Path:
-    """Get path to cached file with subdirectory sharding and preset awareness."""
+def get_cache_path(cache_dir: str, seq_hash: str, cache_profile: str = "maximum") -> Path:
+    """Get path to cached file with subdirectory sharding and profile awareness."""
     subdir = seq_hash[:2]
-    # Include preset in cache key for quality differentiation
-    cache_path = Path(cache_dir) / subdir / f"{seq_hash}_{preset}.a3m.gz"
+    cache_path = Path(cache_dir) / subdir / f"{seq_hash}_{cache_profile}.a3m.gz"
     return cache_path
 
 
@@ -116,26 +115,36 @@ def check_cache(
     seq_hash: str,
     max_age_days: int,
     preset: str = "maximum",
+    cache_profile: Optional[str] = None,
 ) -> tuple[Path, str] | None:
     """
     Check if valid cached MSA exists.
 
     Returns:
-        (cache_path, cached_preset) when a compatible cache exists, otherwise None.
+        (cache_path, cached_profile) when a compatible cache exists, otherwise None.
 
     Compatibility policy:
+    - exact cache_profile match is always preferred
     - maximum: use only maximum cache
     - balanced: prefer balanced, then reuse maximum
     - fast: prefer fast, then reuse balanced, then maximum
     """
-    compatibility_order = {
-        "maximum": ["maximum"],
-        "balanced": ["balanced", "maximum"],
-        "fast": ["fast", "balanced", "maximum"],
-    }.get(preset, [preset])
+    cache_profile = cache_profile or preset
+    candidate_profiles: List[str] = [cache_profile]
 
-    for candidate_preset in compatibility_order:
-        cache_path = get_cache_path(cache_dir, seq_hash, candidate_preset)
+    # Preserve existing cross-preset compatibility only for canonical preset keys.
+    if cache_profile == preset:
+        compatibility_order = {
+            "maximum": ["maximum"],
+            "balanced": ["balanced", "maximum"],
+            "fast": ["fast", "balanced", "maximum"],
+        }.get(preset, [preset])
+        for candidate_preset in compatibility_order:
+            if candidate_preset not in candidate_profiles:
+                candidate_profiles.append(candidate_preset)
+
+    for candidate_profile in candidate_profiles:
+        cache_path = get_cache_path(cache_dir, seq_hash, candidate_profile)
         if not cache_path.exists():
             continue
 
@@ -144,16 +153,16 @@ def check_cache(
             age = datetime.now() - mtime
             if age > timedelta(days=max_age_days):
                 print(
-                    f"Cache expired for preset '{candidate_preset}' "
+                    f"Cache expired for profile '{candidate_profile}' "
                     f"(age: {age.days} days), will refresh",
                     flush=True,
                 )
                 continue
 
-        return cache_path, candidate_preset
+        return cache_path, candidate_profile
 
-    # For 'maximum' preset, also check legacy cache and upgrade if found
-    if preset == "maximum":
+    # For canonical 'maximum' profile, also check legacy cache and upgrade if found.
+    if preset == "maximum" and cache_profile == "maximum":
         legacy_path = get_legacy_cache_path(cache_dir, seq_hash)
         if legacy_path.exists():
             # Legacy cache exists but was generated with old (fast) workflow
@@ -164,9 +173,78 @@ def check_cache(
     return None
 
 
-def save_to_cache(cache_dir: str, seq_hash: str, a3m_content: str, preset: str = "maximum") -> Path:
+def _normalize_taxon_filter(taxon_list: Optional[str]) -> Optional[str]:
+    if not taxon_list:
+        return None
+    tokens = [tok.strip() for tok in taxon_list.split(",") if tok.strip()]
+    return ",".join(tokens) if tokens else None
+
+
+def build_cache_profile(
+    preset: str,
+    config: Dict[str, Any],
+    min_seq_id: Optional[float],
+    min_coverage: Optional[float],
+    taxon_list: Optional[str],
+) -> str:
+    """
+    Build cache profile key.
+
+    Default preset config keeps legacy key names (maximum|balanced|fast) so existing
+    caches still hit. Any effective override gets an isolated profile suffix to avoid
+    cross-contaminating default preset caches.
+    """
+    default_cfg = MSA_PRESETS.get(preset, {})
+    tracked_keys = [
+        "num_iterations",
+        "use_env",
+        "use_expand",
+        "use_filter",
+        "sensitivity",
+        "evalue",
+        "max_seqs",
+        "qsc",
+        "max_seq_id",
+    ]
+    changed_from_default = any(
+        key in config and key in default_cfg and config.get(key) != default_cfg.get(key)
+        for key in tracked_keys
+    )
+
+    normalized_taxon = _normalize_taxon_filter(taxon_list)
+    has_extra_filters = (
+        min_seq_id is not None
+        or min_coverage is not None
+        or normalized_taxon is not None
+    )
+
+    if not changed_from_default and not has_extra_filters:
+        return preset
+
+    signature_payload = {
+        "preset": preset,
+        "num_iterations": int(config.get("num_iterations", 0)),
+        "use_env": bool(config.get("use_env", False)),
+        "use_expand": bool(config.get("use_expand", False)),
+        "use_filter": bool(config.get("use_filter", False)),
+        "sensitivity": float(config.get("sensitivity", 0.0)),
+        "evalue": float(config.get("evalue", 0.0)),
+        "max_seqs": int(config.get("max_seqs", 0)),
+        "qsc": float(config.get("qsc", 0.0)),
+        "max_seq_id": float(config.get("max_seq_id", 1.0)),
+        "min_seq_id": float(min_seq_id) if min_seq_id is not None else None,
+        "min_coverage": float(min_coverage) if min_coverage is not None else None,
+        "taxon_list": normalized_taxon,
+    }
+    digest = hashlib.sha256(
+        json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"{preset}_{digest}"
+
+
+def save_to_cache(cache_dir: str, seq_hash: str, a3m_content: str, cache_profile: str = "maximum") -> Path:
     """Save MSA to cache with gzip compression."""
-    cache_path = get_cache_path(cache_dir, seq_hash, preset)
+    cache_path = get_cache_path(cache_dir, seq_hash, cache_profile)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     
     with gzip.open(cache_path, 'wt', encoding='utf-8') as f:
@@ -313,10 +391,43 @@ def load_scheduler_gpu_policy(config_path: Optional[Path] = None) -> Dict[str, O
     }
 
 
+def _preferred_gpu_has_running_gpuserver(gpu_id: int, cache_dir: Optional[str]) -> bool:
+    """
+    Best-effort check for an alive persistent MMseqs gpuserver on a given GPU.
+
+    This lets us treat high VRAM usage from preloaded gpuserver state as expected
+    for MSA workloads instead of incorrectly flagging the GPU as "busy".
+    """
+    try:
+        runtime_root = _gpuserver_runtime_root(cache_dir)
+        for meta_path in runtime_root.glob("*/server.json"):
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(meta.get("cuda_visible_devices", "")) != str(gpu_id):
+                continue
+
+            pid = int(meta.get("pid", -1))
+            target_db_raw = str(meta.get("target_db", "")).strip()
+            if not target_db_raw:
+                continue
+            target_db = Path(target_db_raw)
+            if _is_matching_gpuserver_process(pid, target_db):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def check_gpu_availability(
     threshold: int = 80,
     preferred_gpus: Optional[List[int]] = None,
     excluded_gpus: Optional[List[int]] = None,
+    allow_gpuserver_memory_override: bool = False,
+    cache_dir: Optional[str] = None,
 ) -> int | None:
     """
     Check for available GPU for MMseqs2.
@@ -325,6 +436,10 @@ def check_gpu_availability(
         threshold: Max utilization/memory percentage to consider GPU available
         preferred_gpus: Optional allowlist of GPU IDs
         excluded_gpus: Optional denylist of GPU IDs
+        allow_gpuserver_memory_override: If true, preferred GPUs with active
+            persistent MMseqs gpuserver are eligible even when VRAM usage exceeds
+            threshold (utilization threshold still applies).
+        cache_dir: Cache directory for gpuserver metadata lookup
     
     Returns GPU ID if one is available, None otherwise.
     
@@ -375,7 +490,27 @@ def check_gpu_availability(
         gpus.sort(key=lambda g: g['utilization'])
         
         for gpu in gpus:
-            if gpu['utilization'] < threshold and gpu['memory_percent'] < threshold:
+            memory_ok = gpu['memory_percent'] < threshold
+            gpuserver_override = False
+
+            if (
+                allow_gpuserver_memory_override
+                and preferred
+                and gpu['id'] in preferred
+                and gpu['utilization'] < threshold
+            ):
+                gpuserver_override = _preferred_gpu_has_running_gpuserver(
+                    gpu_id=gpu['id'],
+                    cache_dir=cache_dir,
+                )
+                if gpuserver_override and not memory_ok:
+                    print(
+                        f"Preferred GPU {gpu['id']} has active MSA gpuserver; "
+                        f"ignoring VRAM threshold (util={gpu['utilization']}%, mem={gpu['memory_percent']:.1f}%).",
+                        flush=True,
+                    )
+
+            if gpu['utilization'] < threshold and (memory_ok or gpuserver_override):
                 print(
                     f"Selected GPU {gpu['id']} ({gpu['name']}, SM {gpu['compute_cap']}) "
                     f"for MMseqs2 [util={gpu['utilization']}%, mem={gpu['memory_percent']:.1f}%]",
@@ -386,7 +521,14 @@ def check_gpu_availability(
         if not gpus:
             print("No GPUs matched selection policy for MMseqs2", flush=True)
         else:
-            print(f"All candidate GPUs are busy (utilization/memory > {threshold}%)", flush=True)
+            details = ", ".join(
+                f"gpu{g['id']}:util={g['utilization']}%,mem={g['memory_percent']:.1f}%"
+                for g in gpus
+            )
+            print(
+                f"All candidate GPUs are busy (utilization/memory > {threshold}%): {details}",
+                flush=True,
+            )
         
         return None
     except Exception as e:
@@ -684,6 +826,29 @@ def ensure_persistent_mmseqs_gpuserver(
         return metadata
 
 
+def touch_gpuserver_query_activity(
+    cache_dir: Optional[str],
+    job_name: str,
+    preset: str,
+    use_gpu: bool,
+    gpu_id: Optional[int],
+) -> None:
+    """Record the latest MSA query timestamp for optional idle auto-stop logic."""
+    try:
+        runtime_root = _gpuserver_runtime_root(cache_dir)
+        payload = {
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "job_name": job_name,
+            "preset": preset,
+            "use_gpu": bool(use_gpu),
+            "gpu_id": gpu_id,
+        }
+        _atomic_write_json(runtime_root / "last_query_activity.json", payload)
+    except Exception as exc:
+        # Metadata write failures should never block MSA generation.
+        print(f"WARNING: Could not record MSA query activity: {exc}", flush=True)
+
+
 @contextlib.contextmanager
 def run_mmseqs_gpuserver(
     mmseqs_bin: str,
@@ -852,6 +1017,22 @@ def run_colabfold_msa_workflow(
     if max_seqs is not None:
         config["max_seqs"] = max(1, int(max_seqs))
     
+    # Resolve DB paths before cache lookup so cache profile can reflect effective config.
+    db_path = Path(db_path)
+    envdb = db_path / "colabfold_envdb_202108_db"
+    env_available = envdb.exists() and Path(str(envdb) + ".dbtype").exists()
+    if config["use_env"] and not env_available:
+        print("WARNING: Environmental DB not found, falling back to UniRef30 only", flush=True)
+        config["use_env"] = False
+
+    cache_profile = build_cache_profile(
+        preset=preset,
+        config=config,
+        min_seq_id=min_seq_id,
+        min_coverage=min_coverage,
+        taxon_list=taxon_list,
+    )
+
     # For cache: use reference sequence if provided (mutagenesis mode)
     cache_key_seq = reference_sequence or sequence
     seq_hash = compute_sequence_hash(cache_key_seq)
@@ -868,15 +1049,21 @@ def run_colabfold_msa_workflow(
     try:
         # Check cache (after lock to avoid race conditions)
         if not force_refresh:
-            cached = check_cache(cache_dir, seq_hash, max_age_days, preset)
+            cached = check_cache(
+                cache_dir=cache_dir,
+                seq_hash=seq_hash,
+                max_age_days=max_age_days,
+                preset=preset,
+                cache_profile=cache_profile,
+            )
             if cached:
-                cached_path, cached_preset = cached
-                if cached_preset == preset:
-                    print(f"CACHE HIT: {seq_hash[:16]}... ({preset} preset)", flush=True)
+                cached_path, cached_profile = cached
+                if cached_profile == cache_profile:
+                    print(f"CACHE HIT: {seq_hash[:16]}... ({cached_profile} profile)", flush=True)
                 else:
                     print(
                         f"CACHE HIT: {seq_hash[:16]}... "
-                        f"(requested {preset}, reused {cached_preset})",
+                        f"(requested {cache_profile}, reused {cached_profile})",
                         flush=True,
                     )
                 final_a3m = os.path.join(out_dir, f"{job_name}.a3m")
@@ -890,10 +1077,13 @@ def run_colabfold_msa_workflow(
                 
                 report_path = os.path.join(out_dir, f"{job_name}_msa_quality.json")
                 with open(report_path, 'w') as f:
+                    cached_preset = cached_profile.split("_", 1)[0]
                     json.dump({
                         "msa_depth": msa_depth,
                         "query_length": len(sequence),
                         "preset": preset,
+                        "cache_profile": cache_profile,
+                        "cached_profile": cached_profile,
                         "cached_preset": cached_preset,
                         "selected_gpu_id": None,
                         "used_gpu_mmseqs": None,
@@ -904,20 +1094,12 @@ def run_colabfold_msa_workflow(
                 print("MSA lock released", flush=True)
                 return
         
-        print(f"CACHE MISS: {seq_hash[:16]}... (running ColabFold workflow)", flush=True)
+        print(f"CACHE MISS: {seq_hash[:16]}... ({cache_profile}; running ColabFold workflow)", flush=True)
         
         # Database paths
-        db_path = Path(db_path)
         mmseqs_cpu = db_path / "mmseqs" / "bin" / "mmseqs"
         mmseqs_gpu = db_path / "mmseqs-gpu-blackwell" / "bin" / "mmseqs"
         uniref_db = db_path / "uniref30_2302_db"
-        envdb = db_path / "colabfold_envdb_202108_db"
-        
-        # Check environmental DB availability
-        env_available = envdb.exists() and Path(str(envdb) + ".dbtype").exists()
-        if config["use_env"] and not env_available:
-            print("WARNING: Environmental DB not found, falling back to UniRef30 only", flush=True)
-            config["use_env"] = False
         
         # Determine which binary to use
         selected_gpu_id = None
@@ -965,6 +1147,8 @@ def run_colabfold_msa_workflow(
                     threshold=gpu_threshold,
                     preferred_gpus=effective_preferred_gpus,
                     excluded_gpus=effective_excluded_gpus,
+                    allow_gpuserver_memory_override=(normalized_gpu_server_mode != "off"),
+                    cache_dir=cache_dir,
                 )
             if selected_gpu_id is not None and effective_excluded_gpus and selected_gpu_id in set(effective_excluded_gpus):
                 raise RuntimeError(f"Selected gpu_id {selected_gpu_id} is excluded by policy")
@@ -1004,6 +1188,13 @@ def run_colabfold_msa_workflow(
             env['CUDA_VISIBLE_DEVICES'] = str(selected_gpu_id)
         
         os.makedirs(out_dir, exist_ok=True)
+        touch_gpuserver_query_activity(
+            cache_dir=cache_dir,
+            job_name=job_name,
+            preset=preset,
+            use_gpu=use_gpu_flag,
+            gpu_id=selected_gpu_id,
+        )
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             # ═══════════════════════════════════════════════════════════════════
@@ -1475,6 +1666,7 @@ def run_colabfold_msa_workflow(
                 "msa_depth": msa_depth,
                 "query_length": len(sequence),
                 "preset": preset,
+                "cache_profile": cache_profile,
                 "num_iterations": config["num_iterations"],
                 "use_env": config["use_env"],
                 "use_expand": config["use_expand"],
@@ -1517,7 +1709,7 @@ def run_colabfold_msa_workflow(
             
             # Save to cache
             if cache_dir:
-                save_to_cache(cache_dir, seq_hash, a3m_content, preset)
+                save_to_cache(cache_dir, seq_hash, a3m_content, cache_profile)
     
     finally:
         if lock_fd is not None:
