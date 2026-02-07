@@ -43,6 +43,7 @@ export BMS_WEIGHTS="/mnt/BioModStack/weights"
 export BMS_COLABFOLD_DB="/mnt/BioModStack/colabfold_db"
 export BMS_MSA_CACHE="/mnt/BioModStack/msa_cache"
 export BMS_SABDAB_CACHE="/mnt/BioModStack/sabdab_cache"
+export BMS_PROTENIX_WEIGHTS="/mnt/BioModStack/weights/protenix"
 ```
 
 Workflow Standardization

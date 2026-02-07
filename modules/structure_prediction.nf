@@ -1,6 +1,8 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
+// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
 
+include { ProtenixPredict ; ProtenixFromComplex } from './protenix.nf'
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
 // Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
@@ -460,6 +462,8 @@ process PrepareComplexWithMSA {
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
     def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    // Per-chain MSA timeout in seconds for complex prep; set <=0 to disable timeout.
+    def msaChainTimeoutSeconds = params.msa_chain_timeout_seconds ?: 3600
     """
     set -o pipefail
     
@@ -508,6 +512,7 @@ msa_gpu_server_mode = "${msaGpuServerMode}"
 msa_gpu_server_wait_timeout = "${msaGpuServerWaitTimeout}"
 msa_gpu_server_db_load_mode = "${msaGpuServerDbLoadMode}"
 msa_gpu_server_startup_wait = "${msaGpuServerStartupWait}"
+msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -516,6 +521,8 @@ try:
         fallback_msa = str(msa_path_obj.resolve())
 except Exception:
     fallback_msa = None
+
+msa_chain_timeout = None if msa_chain_timeout_seconds <= 0 else msa_chain_timeout_seconds
 
 # Track sequence -> MSA path mappings for homodimer support
 # Boltz-2 requires identical sequences to share the same MSA
@@ -597,7 +604,7 @@ for comp in complex_def.get("components", []):
                     if msa_num_iterations:
                         cmd.extend(["--num-iterations", msa_num_iterations])
                     
-                    result = subprocess.run(cmd, text=True, timeout=900)
+                    result = subprocess.run(cmd, text=True, timeout=msa_chain_timeout)
                     if result.returncode != 0:
                         raise RuntimeError(f"MSA script failed with code {result.returncode}")
                     
@@ -706,7 +713,7 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
                     if msa_num_iterations:
                         cmd.extend(["--num-iterations", msa_num_iterations])
-                    result = subprocess.run(cmd, text=True, timeout=900)
+                    result = subprocess.run(cmd, text=True, timeout=msa_chain_timeout)
                     if result.returncode == 0 and Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
                         entry["protein"]["msa"] = msa_resolved
@@ -937,11 +944,15 @@ workflow structure_prediction_wf {
     def pred_method = params.pred_method ?: 'boltz'
     def boltz_use_msa = params.boltz_use_msa ?: false
     def rf3_use_msa = params.rf3_use_msa ?: false
+    def protenix_use_msa = params.protenix_use_msa ?: true
 
     structures = channel.empty()
 
-    // Determine if we need MSA for any predictor
-    def need_msa = (pred_method in ['boltz', 'both'] && boltz_use_msa) || (pred_method in ['rf3', 'both'] && rf3_use_msa)
+    // Determine which predictors need MSA
+    def need_boltz_msa  = (pred_method in ['boltz', 'both', 'all'] && boltz_use_msa)
+    def need_rf3_msa    = (pred_method in ['rf3', 'both', 'all'] && rf3_use_msa)
+    def need_protenix_msa = (pred_method in ['protenix', 'all'] && protenix_use_msa)
+    def need_msa = need_boltz_msa || need_rf3_msa || need_protenix_msa
 
     if (need_msa) {
         def provided_msa = params.msa_path ? file(params.msa_path) : null
@@ -951,18 +962,23 @@ workflow structure_prediction_wf {
             // Use precomputed MSA (e.g., from MSA batch job)
             def inputs_with_msa = input_ch.map { seq, name -> tuple(seq, name, provided_msa) }
 
-            if (pred_method == 'boltz' || pred_method == 'both') {
+            if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
             }
 
-            if (pred_method == 'rf3' || pred_method == 'both') {
+            if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
                 structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
             }
+
+            if (pred_method == 'protenix' || pred_method == 'all') {
+                // Protenix takes [sequence, name] and handles MSA internally via protenix prep
+                ProtenixPredict(input_ch)
+                structures = structures.mix(ProtenixPredict.out.cifs)
+            }
         } else {
             // STEP 1: Generate MSA ONCE per unique sequence
-            // Extract base sequence (first item if all are same sequence with different job IDs)
             def base_seq = input_ch
                 .first()
                 .map { seq, _name -> tuple(seq, "base_msa") }
@@ -970,36 +986,44 @@ workflow structure_prediction_wf {
             GenerateLocalMSA(base_seq)
 
             // STEP 2: Combine the single MSA with all job inputs
-            // GenerateLocalMSA.out.msa = [sequence, "base_msa", path(msa)]
             def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
-
             def inputs_with_msa = input_ch.combine(msa_ch)
-            // Now: [sequence, job_name, msa_file]
 
-            // STEP 3: Run predictions with cached MSA (no rate limiting!)
-            if (pred_method == 'boltz' || pred_method == 'both') {
+            // STEP 3: Run predictions with cached MSA
+            if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
             }
 
-            if (pred_method == 'rf3' || pred_method == 'both') {
+            if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
                 structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            }
+
+            if (pred_method == 'protenix' || pred_method == 'all') {
+                ProtenixPredict(input_ch)
+                structures = structures.mix(ProtenixPredict.out.cifs)
             }
         }
     }
     else {
         // No MSA needed - run directly
-        if (pred_method == 'boltz' || pred_method == 'both') {
+        if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
             BoltzFromSequence(input_ch)
             structures = structures.mix(BoltzFromSequence.out.pdbs, BoltzFromSequence.out.cifs)
         }
 
-        if (pred_method == 'rf3' || pred_method == 'both') {
+        if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
             def dummy_msa = file("${params.code_root}/NO_MSA")
             def inputs_no_msa = input_ch.map { seq, name -> tuple(seq, name, dummy_msa) }
             RF3FromSequence(inputs_no_msa)
             structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+        }
+
+        if (pred_method == 'protenix' || pred_method == 'all') {
+            // Protenix handles its own MSA via built-in protenix prep or ESM
+            ProtenixPredict(input_ch)
+            structures = structures.mix(ProtenixPredict.out.cifs)
         }
     }
 
