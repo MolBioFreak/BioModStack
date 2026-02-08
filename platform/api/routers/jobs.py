@@ -60,6 +60,56 @@ def count_structure_files(output_dir: str) -> int:
         return 0
 
 
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _has_protenix_template_db(mmcif_dir: Path) -> bool:
+    if not mmcif_dir.is_dir():
+        return False
+    patterns = ("*.cif", "*.mmcif", "*.cif.gz", "*.mmcif.gz")
+    for pattern in patterns:
+        try:
+            next(mmcif_dir.rglob(pattern))
+            return True
+        except StopIteration:
+            continue
+    return False
+
+
+def _validate_protenix_template_requirements(model_id: str, params: dict) -> None:
+    if model_id != "protenix":
+        return
+    if not _to_bool(params.get("protenix_use_template", False)):
+        return
+
+    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
+    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
+    mmcif_dir = code_root / ".protenix_cache" / "mmcif"
+
+    if _has_protenix_template_db(mmcif_dir):
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "validation_errors": [
+                (
+                    "Protenix template mode requires an mmCIF database, but none was found at "
+                    f"{mmcif_dir}. Disable protenix_use_template or populate that directory "
+                    "before submitting."
+                )
+            ]
+        },
+    )
+
+
 @router.get("", response_model=JobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
@@ -152,6 +202,8 @@ async def create_job(
         errors = registry.validate_job_params(job_data.model_id, job_data.mode, job_data.params)
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
+
+    _validate_protenix_template_requirements(job_data.model_id, job_data.params)
     
     # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
@@ -627,6 +679,8 @@ async def resubmit_job(
         # starts a fresh job with force-refresh enabled.
         resubmit_params["msa_force_refresh"] = False
         logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
+
+    _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
 
     new_job = Job(
         id=str(uuid.uuid4()),

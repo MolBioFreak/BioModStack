@@ -9,9 +9,13 @@ API_LOG="/tmp/biomodstack_api.log"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 # Load BMS environment variables (paths for MSA databases, weights, etc.)
-if [ -f "$HOME/.bashrc" ]; then
-    source "$HOME/.bashrc"
+# Use the dedicated non-interactive env file instead of ~/.bashrc.
+if [ -f "$HOME/.biomodstack/env.sh" ]; then
+    source "$HOME/.biomodstack/env.sh"
 fi
+
+# Fan-control backend defaults to CoolerControl unless explicitly overridden.
+export BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-coolercontrol}"
 
 notify-send "BioModStack" "🔄 Restarting API backend (uvicorn)..." -i view-refresh
 

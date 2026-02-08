@@ -51,5 +51,6 @@ BioModStack is path-agnostic. These environment variables override defaults:
 - `BMS_HOME`, `BMS_DATA`
 - `BMS_WEIGHTS`, `BMS_COLABFOLD_DB`, `BMS_MSA_CACHE`, `BMS_SABDAB_CACHE`
 - `DATABASE_URL` or `BMS_DB_PATH`
+- `BMS_FAN_CONTROL_BACKEND` (`nvidia-settings` or `coolercontrol`)
 
 See `docs/installation.md` for examples.
