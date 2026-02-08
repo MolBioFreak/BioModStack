@@ -22,39 +22,108 @@ process ProtenixPredict {
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(sequence), val(sequence_name)
 
     output:
     path "predictions/**/*.cif", emit: cifs, optional: true
-    path "predictions/**/confidence.json", emit: confidence, optional: true
+    path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_weights = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def model_name = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
-    def use_template_flag = (params.protenix_use_template == true || params.protenix_use_template == 'true') ? '--use_template true' : ''
-    def cache_flag = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null) ? '--enable_cache' : ''
-    def fusion_flag = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null) ? '--enable_fusion' : ''
+    def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
+    def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
 
     // Auto-switch to ESM model if MSA is disabled
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
-    def effective_weights = use_msa ? model_weights : 'protenix_esm_20241211_v0.2.1'
+    def model_aliases = [
+        'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
+        'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
+    ]
+    def effective_model = model_aliases.get(model_name, model_name)
+    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
+        effective_model = 'protenix_mini_esm_v0.5.0'
+    }
 
     """
     #!/bin/bash
     set -euo pipefail
 
-    echo "[PROTENIX] Model: ${effective_weights} | Seeds: ${seeds} | Samples: ${n_sample} | Steps: ${n_step} | Cycles: ${n_cycle}"
-    echo "[PROTENIX] MSA: ${use_msa} | Template: ${protenix_use_template ?: false}"
+    # Persist Protenix caches/checkpoints on host disk.
+    export PROTENIX_ROOT_DIR="${params.code_root}/.protenix_cache"
+    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
+    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
+    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    export PYTHONNOUSERSITE=1
+    export PIP_NO_USER=1
+    export PATH="/root/miniconda3/bin:\$PATH"
+    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+
+    # Validate container runtime is self-contained (no runtime installs or patching).
+    if ! command -v protenix &> /dev/null; then
+        echo "[PROTENIX] ERROR: protenix CLI not found in container image"
+        exit 127
+    fi
+
+    if [ "${use_template}" = "true" ]; then
+        template_dir="\$PROTENIX_ROOT_DIR/mmcif"
+        template_file=""
+        if [ -d "\$template_dir" ]; then
+            template_file="\$(find "\$template_dir" -type f \\( -name '*.cif' -o -name '*.mmcif' -o -name '*.cif.gz' -o -name '*.mmcif.gz' \\) | head -n 1 || true)"
+        fi
+        if [ -z "\$template_file" ]; then
+            echo "[PROTENIX] ERROR: Template mode requested but no mmCIF template database was found at \$template_dir" | tee -a protenix_predict.log
+            echo "[PROTENIX] Set protenix_use_template=false or populate \$template_dir with template CIF files." | tee -a protenix_predict.log
+            exit 89
+        fi
+        echo "[PROTENIX] Template database detected: \$template_file"
+    fi
+
+    # Fail fast if GPU architecture is unsupported by the container's torch build.
+    python3 - << 'PY'
+import re
+import sys
+
+try:
+    import torch
+except Exception as exc:
+    print(f"[PROTENIX] ERROR: Could not import torch: {exc}")
+    raise SystemExit(87)
+
+if not torch.cuda.is_available():
+    print("[PROTENIX] WARNING: torch.cuda.is_available() is false; continuing")
+    raise SystemExit(0)
+
+major, minor = torch.cuda.get_device_capability(0)
+device_arch = f"sm_{major}{minor}"
+supported = set()
+for arch in torch.cuda.get_arch_list():
+    match = re.search(r"sm_(\\d+)", arch)
+    if match:
+        supported.add(f"sm_{match.group(1)}")
+
+if supported and device_arch not in supported:
+    print(f"[PROTENIX] ERROR: GPU architecture {device_arch} is unsupported by this torch build: {sorted(supported)}")
+    raise SystemExit(88)
+
+print(f"[PROTENIX] torch={torch.__version__} cuda={torch.version.cuda} device_arch={device_arch} supported={sorted(supported)}")
+PY
+
+    echo "[PROTENIX] Requested model: ${model_name} | Effective model: ${effective_model}"
+    echo "[PROTENIX] Seeds: ${seeds} | Samples: ${n_sample} | Steps: ${n_step} | Cycles: ${n_cycle}"
+    echo "[PROTENIX] MSA: ${use_msa} | Template: ${use_template} | Cache: ${enable_cache} | Fusion: ${enable_fusion}"
 
     # ═══════════════════════════════════════════════════════════════════════
     # Generate Protenix input JSON
-    # Uses proteinChain entity format (NOT 'protein')
+    # Uses proteinChain entity format.
     # ═══════════════════════════════════════════════════════════════════════
     cat > input.json << 'ENDJSON'
 [{
@@ -70,31 +139,40 @@ process ProtenixPredict {
 ENDJSON
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Run MSA generation if enabled (using built-in protenix prep)
-    # ═══════════════════════════════════════════════════════════════════════
-    if [ "${use_msa}" = "true" ]; then
-        echo "[PROTENIX] Running MSA generation via protenix prep..."
-        protenix prep --input input.json --output_dir msa_output/ 2>&1 | tee protenix_msa.log || true
-    fi
-
-    # ═══════════════════════════════════════════════════════════════════════
     # Run structure prediction
     # ═══════════════════════════════════════════════════════════════════════
     echo "[PROTENIX] Running structure prediction..."
     protenix pred \\
         --input input.json \\
-        --output_dir predictions/ \\
-        --model_weights ${effective_weights} \\
-        --sample_diffusion.N_sample ${n_sample} \\
-        --sample_diffusion.N_step ${n_step} \\
-        --num_cycle ${n_cycle} \\
-        ${use_template_flag} \\
-        ${cache_flag} \\
-        ${fusion_flag} \\
+        --out_dir predictions/ \\
+        --model_name ${effective_model} \\
+        --seeds "${seeds}" \\
+        --sample ${n_sample} \\
+        --step ${n_step} \\
+        --cycle ${n_cycle} \\
+        --use_msa ${use_msa} \\
+        --use_template ${use_template} \\
+        --enable_cache ${enable_cache} \\
+        --enable_fusion ${enable_fusion} \\
         2>&1 | tee protenix_predict.log
 
+    first_cif="\$(find predictions/ -type f -name '*.cif' | head -n 1 || true)"
+    if [ -z "\$first_cif" ]; then
+        echo "[PROTENIX] ERROR: Protenix returned without producing any CIF output" | tee -a protenix_predict.log
+        if [ -d predictions/ERR ]; then
+            echo "[PROTENIX] Error reports under predictions/ERR:" | tee -a protenix_predict.log
+            find predictions/ERR -type f | head -20 | tee -a protenix_predict.log || true
+            first_err="\$(find predictions/ERR -type f | head -n 1 || true)"
+            if [ -n "\$first_err" ]; then
+                echo "[PROTENIX] First error report (\$first_err):" | tee -a protenix_predict.log
+                sed -n '1,80p' "\$first_err" | tee -a protenix_predict.log || true
+            fi
+        fi
+        exit 86
+    fi
+
     echo "[PROTENIX] Prediction complete. Listing outputs:"
-    find predictions/ -name "*.cif" -o -name "confidence.json" | head -20
+    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20
     """
 }
 
@@ -125,24 +203,42 @@ process PrepProtenixComplex {
 
     type_map = {
         'protein': 'proteinChain',
-        'dna':     'dnaSequence',
-        'rna':     'rnaSequence',
+        'peptide': 'proteinChain',
+        'dna': 'dnaSequence',
+        'rna': 'rnaSequence',
     }
 
     sequences = []
     for comp in bms.get('components', []):
         t = comp.get('type', 'protein').lower()
         seq = comp.get('sequence', '')
+        count_raw = comp.get('count', 1)
+        try:
+            count = max(1, int(count_raw))
+        except Exception:
+            count = 1
+
         if t in type_map:
-            sequences.append({type_map[t]: {"sequence": seq, "count": 1}})
+            if seq:
+                sequences.append({type_map[t]: {"sequence": seq, "count": count}})
         elif t == 'ligand':
             ccd = comp.get('ccd', '')
             smiles = comp.get('smiles', '')
             entry = {}
             if ccd:
-                entry = {"ligand": {"ligand": ccd, "count": 1}}
+                ligand_id = str(ccd)
+                if not ligand_id.startswith("CCD_"):
+                    ligand_id = f"CCD_{ligand_id}"
+                entry = {"ligand": {"ligand": ligand_id, "count": count}}
             elif smiles:
-                entry = {"ligand": {"smiles": smiles, "count": 1}}
+                entry = {"ligand": {"ligand": str(smiles), "count": count}}
+            if entry:
+                sequences.append(entry)
+        elif t == 'ion':
+            entry = {}
+            ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
+            if ion:
+                entry = {"ion": {"ion": str(ion).upper(), "count": count}}
             if entry:
                 sequences.append(entry)
 
@@ -171,57 +267,138 @@ process ProtenixFromComplex {
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     path complex_json
 
     output:
     path "predictions/**/*.cif", emit: structures, optional: true
-    path "predictions/**/confidence.json", emit: confidence, optional: true
+    path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_weights = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def model_name = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
-    def use_template_flag = (params.protenix_use_template == true || params.protenix_use_template == 'true') ? '--use_template true' : ''
-    def cache_flag = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null) ? '--enable_cache' : ''
-    def fusion_flag = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null) ? '--enable_fusion' : ''
+    def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
+    def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
-    def effective_weights = use_msa ? model_weights : 'protenix_esm_20241211_v0.2.1'
+    def model_aliases = [
+        'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
+        'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
+    ]
+    def effective_model = model_aliases.get(model_name, model_name)
+    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
+        effective_model = 'protenix_mini_esm_v0.5.0'
+    }
 
     """
     #!/bin/bash
     set -euo pipefail
 
-    echo "[PROTENIX-COMPLEX] Model: ${effective_weights} | Seeds: ${seeds} | Samples: ${n_sample}"
+    # Persist Protenix caches/checkpoints on host disk.
+    export PROTENIX_ROOT_DIR="${params.code_root}/.protenix_cache"
+    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
+    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
+    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    export PYTHONNOUSERSITE=1
+    export PIP_NO_USER=1
+    export PATH="/root/miniconda3/bin:\$PATH"
+    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+
+    # Validate container runtime is self-contained (no runtime installs or patching).
+    if ! command -v protenix &> /dev/null; then
+        echo "[PROTENIX-COMPLEX] ERROR: protenix CLI not found in container image"
+        exit 127
+    fi
+
+    if [ "${use_template}" = "true" ]; then
+        template_dir="\$PROTENIX_ROOT_DIR/mmcif"
+        template_file=""
+        if [ -d "\$template_dir" ]; then
+            template_file="\$(find "\$template_dir" -type f \\( -name '*.cif' -o -name '*.mmcif' -o -name '*.cif.gz' -o -name '*.mmcif.gz' \\) | head -n 1 || true)"
+        fi
+        if [ -z "\$template_file" ]; then
+            echo "[PROTENIX-COMPLEX] ERROR: Template mode requested but no mmCIF template database was found at \$template_dir" | tee -a protenix_complex.log
+            echo "[PROTENIX-COMPLEX] Set protenix_use_template=false or populate \$template_dir with template CIF files." | tee -a protenix_complex.log
+            exit 89
+        fi
+        echo "[PROTENIX-COMPLEX] Template database detected: \$template_file"
+    fi
+
+    # Fail fast if GPU architecture is unsupported by the container's torch build.
+    python3 - << 'PY'
+import re
+import sys
+
+try:
+    import torch
+except Exception as exc:
+    print(f"[PROTENIX-COMPLEX] ERROR: Could not import torch: {exc}")
+    raise SystemExit(87)
+
+if not torch.cuda.is_available():
+    print("[PROTENIX-COMPLEX] WARNING: torch.cuda.is_available() is false; continuing")
+    raise SystemExit(0)
+
+major, minor = torch.cuda.get_device_capability(0)
+device_arch = f"sm_{major}{minor}"
+supported = set()
+for arch in torch.cuda.get_arch_list():
+    match = re.search(r"sm_(\\d+)", arch)
+    if match:
+        supported.add(f"sm_{match.group(1)}")
+
+if supported and device_arch not in supported:
+    print(f"[PROTENIX-COMPLEX] ERROR: GPU architecture {device_arch} is unsupported by this torch build: {sorted(supported)}")
+    raise SystemExit(88)
+
+print(f"[PROTENIX-COMPLEX] torch={torch.__version__} cuda={torch.version.cuda} device_arch={device_arch} supported={sorted(supported)}")
+PY
+
+    echo "[PROTENIX-COMPLEX] Requested model: ${model_name} | Effective model: ${effective_model}"
+    echo "[PROTENIX-COMPLEX] Seeds: ${seeds} | Samples: ${n_sample} | Steps: ${n_step} | Cycles: ${n_cycle}"
+    echo "[PROTENIX-COMPLEX] MSA: ${use_msa} | Template: ${use_template} | Cache: ${enable_cache} | Fusion: ${enable_fusion}"
     echo "[PROTENIX-COMPLEX] Input JSON: ${complex_json}"
     cat ${complex_json}
-
-    # Run MSA generation if enabled
-    if [ "${use_msa}" = "true" ]; then
-        echo "[PROTENIX-COMPLEX] Running MSA generation..."
-        protenix prep --input ${complex_json} --output_dir msa_output/ 2>&1 | tee protenix_msa.log || true
-    fi
 
     # Run structure prediction
     echo "[PROTENIX-COMPLEX] Running structure prediction..."
     protenix pred \\
         --input ${complex_json} \\
-        --output_dir predictions/ \\
-        --model_weights ${effective_weights} \\
-        --sample_diffusion.N_sample ${n_sample} \\
-        --sample_diffusion.N_step ${n_step} \\
-        --num_cycle ${n_cycle} \\
-        ${use_template_flag} \\
-        ${cache_flag} \\
-        ${fusion_flag} \\
+        --out_dir predictions/ \\
+        --model_name ${effective_model} \\
+        --seeds "${seeds}" \\
+        --sample ${n_sample} \\
+        --step ${n_step} \\
+        --cycle ${n_cycle} \\
+        --use_msa ${use_msa} \\
+        --use_template ${use_template} \\
+        --enable_cache ${enable_cache} \\
+        --enable_fusion ${enable_fusion} \\
         2>&1 | tee protenix_complex.log
 
+    first_cif="\$(find predictions/ -type f -name '*.cif' | head -n 1 || true)"
+    if [ -z "\$first_cif" ]; then
+        echo "[PROTENIX-COMPLEX] ERROR: Protenix returned without producing any CIF output" | tee -a protenix_complex.log
+        if [ -d predictions/ERR ]; then
+            echo "[PROTENIX-COMPLEX] Error reports under predictions/ERR:" | tee -a protenix_complex.log
+            find predictions/ERR -type f | head -20 | tee -a protenix_complex.log || true
+            first_err="\$(find predictions/ERR -type f | head -n 1 || true)"
+            if [ -n "\$first_err" ]; then
+                echo "[PROTENIX-COMPLEX] First error report (\$first_err):" | tee -a protenix_complex.log
+                sed -n '1,80p' "\$first_err" | tee -a protenix_complex.log || true
+            fi
+        fi
+        exit 86
+    fi
+
     echo "[PROTENIX-COMPLEX] Prediction complete. Listing outputs:"
-    find predictions/ -name "*.cif" -o -name "confidence.json" | head -20
+    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20
     """
 }
