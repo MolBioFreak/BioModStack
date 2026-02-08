@@ -630,60 +630,84 @@ async def ingest_loose_files(
             except Exception as e:
                 print(f"[Ingester] Error parsing RF3 file {json_file}: {e}")
 
-        # PROTENIX: Look for confidence.json (bare filename, in per-prediction subdirs)
-        protenix_jsons = []
-        if search_dir.name not in {"pdb_files", "predictions", "validated_designs", "collected"}:
-            # In per-design subdirectory, check for bare confidence.json
-            conf_json = search_dir / "confidence.json"
-            if conf_json.exists():
-                protenix_jsons.append(conf_json)
-        else:
-            # In a parent directory, scan subdirs for confidence.json
+        # PROTENIX: Current CLI emits *_summary_confidence_sample_*.json alongside
+        # *_sample_*.cif in predictions/. Keep legacy confidence.json parsing too.
+        protenix_jsons = set()
+        if search_dir.name in {"pdb_files", "predictions", "validated_designs", "collected"}:
+            for json_path in search_dir.rglob("*_summary_confidence_sample_*.json"):
+                protenix_jsons.add(json_path)
             for sub in search_dir.iterdir():
                 if sub.is_dir():
                     conf_json = sub / "confidence.json"
                     if conf_json.exists():
-                        protenix_jsons.append(conf_json)
+                        protenix_jsons.add(conf_json)
+        else:
+            for json_path in search_dir.glob("*_summary_confidence_sample_*.json"):
+                protenix_jsons.add(json_path)
+            conf_json = search_dir / "confidence.json"
+            if conf_json.exists():
+                protenix_jsons.add(conf_json)
 
-        for json_file in protenix_jsons:
+        for json_file in sorted(protenix_jsons):
             try:
-                # Design name from parent directory name (e.g. predictions/predicted_seed42_sample0/)
+                structure_path = None
                 design_name = json_file.parent.name
+                stem = json_file.stem
+
+                # New format:
+                #   <name>_summary_confidence_sample_<rank>.json
+                #   <name>_sample_<rank>.cif
+                if "_summary_confidence_sample_" in stem:
+                    base_name, sample_rank = stem.rsplit("_summary_confidence_sample_", 1)
+                    design_name = f"{base_name}_sample_{sample_rank}"
+                    candidate = json_file.with_name(f"{design_name}.cif")
+                    if candidate.exists():
+                        structure_path = candidate
 
                 if design_name in ingested_names:
                     continue
 
-                # Find corresponding CIF structure (Protenix outputs mmCIF)
-                cif_files = list(json_file.parent.glob("*.cif"))
-                if not cif_files:
-                    print(f"[Ingester] No CIF found for Protenix design {design_name}")
-                    continue
-                structure_path = cif_files[0]
+                # Legacy format: confidence.json in per-sample subdir
+                if structure_path is None:
+                    cif_files = list(json_file.parent.glob("*.cif"))
+                    if not cif_files:
+                        print(f"[Ingester] No CIF found for Protenix design {design_name}")
+                        continue
+                    structure_path = cif_files[0]
 
                 # Read Protenix confidence metrics
                 with open(json_file, 'r') as f:
                     metrics = json.load(f)
 
-                # Protenix format maps to BioModStack fields:
-                #   ptm, iptm, ranking_score, complex_plddt, complex_pde,
-                #   protein_iptm, ligand_iptm, complex_iplddt, complex_ipde,
-                #   chains_ptm, pair_chains_iptm, has_clash
-                plddt = metrics.get('complex_plddt') or metrics.get('plddt')
+                # Protenix confidence keys vary across releases:
+                #   current: plddt/ptm/iptm/gpde/chain_*/*_iptm/ranking_score/has_clash
+                #   legacy: complex_plddt/complex_pde/...
+                plddt = (
+                    metrics.get('full_plddt')
+                    or metrics.get('complex_plddt')
+                    or metrics.get('plddt')
+                )
                 if plddt is not None and plddt <= 1.0:
                     plddt = plddt * 100.0
 
                 conf_score = metrics.get('ranking_score') or metrics.get('confidence_score')
-                ptm = metrics.get('ptm')
-                iptm = metrics.get('iptm')
+                ptm = metrics.get('full_ptm') or metrics.get('ptm')
+                iptm = metrics.get('full_iptm') or metrics.get('iptm')
                 protein_iptm = metrics.get('protein_iptm')
                 ligand_iptm = metrics.get('ligand_iptm')
                 complex_iplddt = metrics.get('complex_iplddt')
-                complex_ipde = metrics.get('complex_ipde')
-                chains_ptm = metrics.get('chains_ptm')
-                pair_chains_iptm = metrics.get('pair_chains_iptm')
-                has_clash = metrics.get('has_clash')
+                complex_ipde = (
+                    metrics.get('complex_ipde')
+                    or metrics.get('gpde')
+                    or metrics.get('complex_pde')
+                )
+                chains_ptm = metrics.get('chain_ptm') or metrics.get('chains_ptm')
+                pair_chains_iptm = metrics.get('chain_pair_iptm') or metrics.get('pair_chains_iptm')
+                has_clash = metrics.get('full_has_clash')
+                if has_clash is None:
+                    has_clash = metrics.get('has_clash')
 
-                pae = metrics.get('complex_pae') or metrics.get('pae')
+                pae = metrics.get('complex_pae') or metrics.get('pae') or metrics.get('gpde')
                 if pae is None:
                     pde = metrics.get('complex_pde')
                     if pde is not None:

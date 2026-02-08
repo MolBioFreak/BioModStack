@@ -913,7 +913,11 @@ workflow {
     // SEQUENCE DESIGN STAGE //
     ///////////////////////////
     // Run Sequence Design if not skipped
-    if (!params.skip_rfd_seq & !params.skip_rfd_seq_pred & !params.run_rfd_only) {
+    // BoltzGen already performs sequence generation internally.
+    if (params.diffusion_method == 'boltzgen') {
+        println("Skipping Sequence Design stage for BoltzGen diffusion output.")
+    }
+    else if (!params.skip_rfd_seq & !params.skip_rfd_seq_pred & !params.run_rfd_only) {
         // Sequence design (either MPNN or FAMPNN)
         if (params.seq_method == "mpnn") {
             // Add FIXED labels to PDBs for target residues so the sequence does not change
@@ -1063,7 +1067,8 @@ workflow {
     // STRUCTURE PREDICTION STAGE //
     ////////////////////////////////
     // Run Structure Prediction if not skipped
-    if (!params.skip_rfd_seq_pred && !params.run_rfd_only && !params.skip_pred) {
+    // BoltzGen includes internal structure prediction; keep its outputs as analysis inputs.
+    if (!params.skip_rfd_seq_pred && !params.run_rfd_only && !params.skip_pred && params.diffusion_method != 'boltzgen') {
         // Optional uncropped target PDB merge for binder design
         if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {
             // if uncropped target PDB file is provided, merge with designs
@@ -1218,6 +1223,9 @@ workflow {
         Channel
             .of(pdbs_for_analysis)
             .set { analysis_input_pdbs }
+    }
+    else if (params.diffusion_method == 'boltzgen') {
+        println("Skipping Structure Prediction stage for BoltzGen diffusion output.")
     }
     else {
         println("Skipping Structure Prediction stage as run_rfd_only=true or run_boltzgen_only=true.")
