@@ -190,10 +190,17 @@ workflow OLIGO_DESIGN {
     // Per RFDpoly paper: "we design base sequences on the generated backbones using NA-MPNN"
     NAMPNNDesign(RFDPolyDesign.out.pdbs, design_id)
 
-    // Stage 3: Prepare for Boltz-2 validation
+    // Stage 3: PyRosetta sidechain rebuild
+    // NA-MPNN outputs backbone-only PDBs (12 atoms/residue).
+    // PyRosetta restores nucleobase sidechains to produce full-atom structures.
+    // Per paper: RFDpoly → NA-MPNN → PyRosetta rebuild
+    rebuild_script = file("${params.code_root}/scripts/rebuild_sidechains.py")
+    PyRosettaRebuild(NAMPNNDesign.out.pdbs, rebuild_script)
+
+    // Stage 4: Prepare for Boltz-2 validation
     if (params.oligo_validate_boltz) {
         prep_script = file("${params.code_root}/scripts/prep_boltz_oligo.py")
-        PrepBoltzOligo(NAMPNNDesign.out.pdbs, prep_script)
+        PrepBoltzOligo(PyRosettaRebuild.out.pdbs, prep_script)
         boltz_yamls = PrepBoltzOligo.out.yamls
     }
     else {
@@ -201,7 +208,7 @@ workflow OLIGO_DESIGN {
     }
 
     emit:
-    pdbs = NAMPNNDesign.out.pdbs
+    pdbs = PyRosettaRebuild.out.pdbs
     sequences = NAMPNNDesign.out.fastas
     metrics = RFDPolyDesign.out.metrics
     boltz_yamls = boltz_yamls
@@ -269,6 +276,14 @@ process NAMPNNDesign {
         cp ./nampnn_out/seqs/*.fa designed/ 2>/dev/null || true
     fi
     
+    # Decode NA-MPNN internal alphabet to standard IUPAC bases in FASTA files
+    # NA-MPNN uses: b=A(adenine), d=C(cytosine), h=G(guanine), u=U(uracil)
+    for fa in designed/*.fa; do
+        if [ -f "\$fa" ]; then
+            sed -i '/^>/!{ s/b/A/g; s/d/C/g; s/h/G/g; s/u/U/g; }' "\$fa"
+        fi
+    done
+    
     # Generate metrics JSON
     python3 -c "
 import json, glob
@@ -284,5 +299,36 @@ metrics = {
 json.dump(metrics, open('nampnn_metrics.json', 'w'), indent=2)
 print(f'NA-MPNN designed sequences for {len(pdbs)} structures')
 "
+    """
+}
+
+/*
+ * Process: PyRosettaRebuild
+ * Restores nucleobase sidechains to NA-MPNN backbone-only PDBs.
+ * NA-MPNN strips all nucleobase atoms (outputs 12 atoms/residue).
+ * PyRosetta's pose_from_pdb() auto-rebuilds missing sidechain atoms
+ * from its internal rotamer libraries.
+ * Per paper: Favor et al. 2025 - RFDpoly → NA-MPNN → PyRosetta rebuild
+ */
+process PyRosettaRebuild {
+    label 'pyrosetta_tools'
+
+    publishDir "${params.out_dir}/run/rebuilt", mode: 'copy'
+
+    input:
+    path pdbs
+    path rebuild_script
+
+    output:
+    path "out_*.pdb", emit: pdbs
+    path "rebuild_metrics.json", emit: metrics
+
+    script:
+    """
+    python ${rebuild_script} \\
+        --input_dir . \\
+        --out_dir . \\
+        --out_prefix out_ \\
+        --metrics_out rebuild_metrics.json
     """
 }
