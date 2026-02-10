@@ -488,6 +488,7 @@ function StageProgress({ job }: { job: Job }) {
         if (mode.includes('antibody')) return ['rfantibody', 'fampnn', 'boltz2'];
         if (mode.includes('binder')) return ['rfdiffusion', 'proteinmpnn', 'boltz2'];
         if (mode.includes('monomer')) return ['rfdiffusion', 'proteinmpnn', 'af2'];
+        if (mode.includes('oligo')) return ['rfdpoly', 'nampnn', 'pyrosetta_rebuild'];
         return [];
     };
 
