@@ -308,6 +308,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // NA-MPNN sequence design settings
     const [nampnnNumSeqs, setNampnnNumSeqs] = useState(4);
     const [nampnnTemperature, setNampnnTemperature] = useState(0.2);
+    const [nampnnFixedResidues, setNampnnFixedResidues] = useState('');
+    const [nampnnChainsToDesign, setNampnnChainsToDesign] = useState('');
+    const [nampnnDesignNaOnly, setNampnnDesignNaOnly] = useState(false);
+    const [nampnnSeed, setNampnnSeed] = useState<number | null>(null);
 
     // ============================================================================
     // State: UI
@@ -484,6 +488,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     // NA-MPNN sequence design
                     nampnn_num_seqs: nampnnNumSeqs,
                     nampnn_temperature: nampnnTemperature,
+                    ...(nampnnFixedResidues.trim() && { nampnn_fixed_residues: nampnnFixedResidues.trim() }),
+                    ...(nampnnChainsToDesign.trim() && { nampnn_chains_to_design: nampnnChainsToDesign.trim() }),
+                    ...(nampnnDesignNaOnly && { nampnn_design_na_only: 1 }),
+                    ...(nampnnSeed !== null && { nampnn_seed: nampnnSeed }),
                 }
             };
 
@@ -1375,6 +1383,57 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                     />
                                     <div className="text-xs text-slate-500 mt-1">0.1 = confident, 1.0 = exploratory</div>
                                 </div>
+                            </div>
+
+                            {/* Fixed Residues */}
+                            <div className="col-span-2">
+                                <label className="text-xs text-slate-400 mb-1 block">Fixed Residues (keep unchanged)</label>
+                                <input
+                                    type="text"
+                                    value={nampnnFixedResidues}
+                                    onChange={(e) => setNampnnFixedResidues(e.target.value.toUpperCase())}
+                                    placeholder="A12 A13 A14 B2 B25"
+                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white font-mono text-sm"
+                                />
+                                <div className="text-xs text-slate-500 mt-1">Pin specific positions during redesign (chain+resnum, space-separated)</div>
+                            </div>
+
+                            {/* Chains to Design + Design NA Only */}
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">Chains to Design</label>
+                                <input
+                                    type="text"
+                                    value={nampnnChainsToDesign}
+                                    onChange={(e) => setNampnnChainsToDesign(e.target.value.toUpperCase())}
+                                    placeholder="All chains (leave blank)"
+                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white font-mono text-sm"
+                                />
+                                <div className="text-xs text-slate-500 mt-1">Only redesign these chains (e.g. A)</div>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">Seed</label>
+                                <input
+                                    type="number"
+                                    value={nampnnSeed ?? ''}
+                                    onChange={(e) => setNampnnSeed(e.target.value ? parseInt(e.target.value) : null)}
+                                    placeholder="Random"
+                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white font-mono text-sm"
+                                />
+                                <div className="text-xs text-slate-500 mt-1">For reproducibility (blank = random)</div>
+                            </div>
+
+                            {/* Design NA Only toggle */}
+                            <div className="col-span-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={nampnnDesignNaOnly}
+                                        onChange={(e) => setNampnnDesignNaOnly(e.target.checked)}
+                                        className="rounded"
+                                    />
+                                    <span className="text-white text-sm">Design NA Only</span>
+                                    <span className="text-xs text-slate-500">(keep protein sequences fixed, redesign only nucleic acids)</span>
+                                </label>
                             </div>
                         </div>
                     </div>
