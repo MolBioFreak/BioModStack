@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { OligoBuilderModal } from './OligoBuilderModal';
+import { fetchJobs, fetchDesigns, type Job } from '../lib/api';
 
 export interface LigandEntry {
     id: string;
@@ -57,6 +58,65 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
     const [proteinSequence, setProteinSequence] = useState('');
     const [proteinName, setProteinName] = useState('');
     const [showOligoBuilder, setShowOligoBuilder] = useState(false);
+
+    // Import from Oligo Designer state
+    const [showImportPicker, setShowImportPicker] = useState(false);
+    const [oligoJobs, setOligoJobs] = useState<Job[]>([]);
+    const [importLoading, setImportLoading] = useState(false);
+    const [importError, setImportError] = useState<string | null>(null);
+
+    // Fetch completed oligo_design jobs when picker opens
+    useEffect(() => {
+        if (!showImportPicker) return;
+        setImportLoading(true);
+        setImportError(null);
+        fetchJobs({ status: 'completed', limit: 50 })
+            .then(res => {
+                const oligoOnly = res.data.jobs.filter(j => j.model_id === 'oligo_design');
+                setOligoJobs(oligoOnly);
+                if (oligoOnly.length === 0) setImportError('No completed Oligo Designer jobs found');
+            })
+            .catch(() => setImportError('Failed to fetch jobs'))
+            .finally(() => setImportLoading(false));
+    }, [showImportPicker]);
+
+    const importFromJob = async (job: Job) => {
+        setImportLoading(true);
+        setImportError(null);
+        try {
+            const res = await fetchDesigns({ job_id: job.id, limit: 50 });
+            const designs = res.data.designs;
+            if (designs.length === 0) {
+                setImportError('No designs found in this job');
+                return;
+            }
+            // Import the first design's chain info — extract NA sequence from name/params
+            // The design name typically contains the sequence type
+            const newEntries: LigandEntry[] = [];
+            for (const design of designs.slice(0, 5)) { // limit to 5
+                // Detect type from job params or design name
+                const naType: 'dna' | 'rna' =
+                    design.name?.toLowerCase().includes('rna') ||
+                        job.params?.rfdpoly_polymer_chains?.includes('rna')
+                        ? 'rna' : 'dna';
+                // Use the design name as identifier
+                newEntries.push({
+                    id: String.fromCharCode(66 + ligands.length + newEntries.length),
+                    type: naType,
+                    sequence: '', // Will be populated from PDB if available
+                    name: `${design.name} (from ${job.name})`
+                });
+            }
+            if (newEntries.length > 0) {
+                setLigands(prev => [...prev, ...newEntries]);
+                setShowImportPicker(false);
+            }
+        } catch {
+            setImportError('Failed to fetch designs from job');
+        } finally {
+            setImportLoading(false);
+        }
+    };
 
     const addNucleicAcid = (type: 'dna' | 'rna', sequence: string, isDoubleStranded: boolean) => {
         if (sequence.trim()) {
@@ -353,6 +413,52 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                             Open Builder
                         </button>
                     </div>
+                </div>
+
+                {/* Import from Oligo Designer */}
+                <div className="p-3 bg-surface-tertiary rounded-lg border border-blue-500/20 space-y-2">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-blue-400 font-semibold">Import Designed Oligo</span>
+                            <span className="text-xs text-content-muted">(from RFDpoly/NA-MPNN jobs)</span>
+                        </div>
+                        <button
+                            onClick={() => setShowImportPicker(!showImportPicker)}
+                            className={`px-3 py-1.5 text-white text-xs rounded-lg transition-colors ${showImportPicker
+                                    ? 'bg-blue-600 hover:bg-blue-500'
+                                    : 'bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30'
+                                }`}
+                        >
+                            {showImportPicker ? 'Close' : 'Browse Jobs'}
+                        </button>
+                    </div>
+                    {showImportPicker && (
+                        <div className="mt-2 space-y-2">
+                            {importLoading && (
+                                <div className="text-xs text-slate-400 animate-pulse">Loading completed oligo jobs...</div>
+                            )}
+                            {importError && (
+                                <div className="text-xs text-amber-400">{importError}</div>
+                            )}
+                            {!importLoading && oligoJobs.length > 0 && (
+                                <div className="max-h-48 overflow-y-auto space-y-1">
+                                    {oligoJobs.map(job => (
+                                        <button
+                                            key={job.id}
+                                            onClick={() => importFromJob(job)}
+                                            className="w-full text-left px-3 py-2 rounded bg-slate-800/50 hover:bg-slate-700/50 transition-colors"
+                                        >
+                                            <div className="text-sm text-white">{job.name}</div>
+                                            <div className="text-xs text-slate-400 flex gap-3">
+                                                <span>{job.design_count} design{job.design_count !== 1 ? 's' : ''}</span>
+                                                <span>{new Date(job.created_at).toLocaleDateString()}</span>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
