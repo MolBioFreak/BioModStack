@@ -1438,6 +1438,10 @@ def build_nextflow_command(
         # NA-MPNN sequence design params (Oligo Designer)
         'nampnn_temperature': 'nampnn_temperature',
         'nampnn_num_seqs': 'nampnn_num_seqs',
+        'nampnn_fixed_residues': 'nampnn_fixed_residues',
+        'nampnn_chains_to_design': 'nampnn_chains_to_design',
+        'nampnn_design_na_only': 'nampnn_design_na_only',
+        'nampnn_seed': 'nampnn_seed',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process

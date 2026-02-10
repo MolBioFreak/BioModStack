@@ -261,7 +261,11 @@ process NAMPNNDesign {
                 --pdb_path "\$pdb" \\
                 --out_folder "\${WORKDIR}/nampnn_out" \\
                 --temperature ${params.nampnn_temperature ?: 0.2} \\
-                --number_of_batches ${params.nampnn_num_seqs ?: 1}
+                --number_of_batches ${params.nampnn_num_seqs ?: 1} \\
+                ${params.nampnn_fixed_residues ? "--fixed_residues \"${params.nampnn_fixed_residues}\"" : ''} \\
+                ${params.nampnn_chains_to_design ? "--chains_to_design \"${params.nampnn_chains_to_design}\"" : ''} \\
+                ${params.nampnn_design_na_only ? '--design_na_only 1' : ''} \\
+                ${params.nampnn_seed ? "--seed ${params.nampnn_seed}" : ''}
         fi
     done
     
