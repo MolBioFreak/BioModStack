@@ -21,6 +21,7 @@ import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTING
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { AptamerBrowser, type Aptamer } from './AptamerBrowser';
 import MolstarViewer from './MolstarViewer';
+import { OligoBuilderModal } from './OligoBuilderModal';
 
 // ============================================================================
 // Type Definitions
@@ -57,13 +58,6 @@ const SIZE_LIMITS = {
     protein: { safe: 400, max: 600, unit: 'residues' },
 };
 
-// ============================================================================
-// Constants: Modified Nucleotides
-// ============================================================================
-const MODIFIED_NUCLEOTIDES = {
-    rna: ['Gm', 'Am', 'Cm', 'Um', 'Ψ', 'm6A', 'm5C', 's2U', '2OMe'],
-    dna: ['5mC', '5hmC', '5fC', '5caC', '8oxoG', 'IdU'],
-};
 
 // ============================================================================
 // Constants: Filter Presets
@@ -317,6 +311,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // State: UI
     // ============================================================================
     const [error, setError] = useState<string | null>(null);
+
+    // OligoBuilderModal state
+    const [showOligoBuilder, setShowOligoBuilder] = useState(false);
+    const [oligoBuilderTargetChain, setOligoBuilderTargetChain] = useState<string | null>(null);
 
     // ============================================================================
     // State: 3D Viewer & Scaffold Browser
@@ -878,15 +876,43 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                     <option value="protein">Protein</option>
                                 </select>
 
-                                <label className="flex items-center gap-1 text-xs text-slate-400">
-                                    <input
-                                        type="checkbox"
-                                        checked={chain.useSequence}
-                                        onChange={(e) => updateChain(chain.id, { useSequence: e.target.checked })}
-                                        className="rounded"
-                                    />
-                                    Use Sequence
-                                </label>
+                                {/* DNA/RNA: "Build Sequence" button opens OligoBuilderModal */}
+                                {chain.type !== 'protein' && (
+                                    <button
+                                        onClick={() => {
+                                            setOligoBuilderTargetChain(chain.id);
+                                            setShowOligoBuilder(true);
+                                        }}
+                                        className={`text-xs px-3 py-1 rounded transition-colors ${chain.useSequence && chain.sequence
+                                            ? 'bg-emerald-600/30 text-emerald-400 border border-emerald-500/40'
+                                            : 'bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/30'
+                                            }`}
+                                    >
+                                        {chain.useSequence && chain.sequence ? 'Edit Sequence' : 'Build Sequence'}
+                                    </button>
+                                )}
+                                {/* Protein: keep "Use Sequence" checkbox */}
+                                {chain.type === 'protein' && (
+                                    <label className="flex items-center gap-1 text-xs text-slate-400">
+                                        <input
+                                            type="checkbox"
+                                            checked={chain.useSequence}
+                                            onChange={(e) => updateChain(chain.id, { useSequence: e.target.checked })}
+                                            className="rounded"
+                                        />
+                                        Use Sequence
+                                    </label>
+                                )}
+
+                                {/* Clear sequence button for DNA/RNA */}
+                                {chain.type !== 'protein' && chain.useSequence && chain.sequence && (
+                                    <button
+                                        onClick={() => updateChain(chain.id, { useSequence: false, sequence: '' })}
+                                        className="text-xs text-red-400 hover:text-red-300"
+                                    >
+                                        Clear
+                                    </button>
+                                )}
 
                                 {chains.length > 1 && (
                                     <button
@@ -898,17 +924,37 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                 )}
                             </div>
 
-                            {chain.useSequence ? (
+                            {/* DNA/RNA: Show inline colored sequence preview */}
+                            {chain.type !== 'protein' && chain.useSequence && chain.sequence && (
+                                <div className="pl-16">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                        <span className="text-xs text-slate-500 mr-1">5'</span>
+                                        {chain.sequence.replace(/\s/g, '').split('').map((base, i) => {
+                                            const color = base === 'A' ? 'bg-green-500' :
+                                                base === 'T' || base === 'U' ? 'bg-red-500' :
+                                                    base === 'C' ? 'bg-blue-500' :
+                                                        base === 'G' ? 'bg-yellow-500' : 'bg-slate-600';
+                                            return (
+                                                <span key={i} className={`${color} w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center`}>
+                                                    {base}
+                                                </span>
+                                            );
+                                        })}
+                                        <span className="text-xs text-slate-500 ml-1">3'</span>
+                                    </div>
+                                    <div className="text-xs text-slate-400 mt-1">
+                                        {chain.sequence.replace(/\s/g, '').length} nt • {chain.type.toUpperCase()}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Protein: Keep existing textarea */}
+                            {chain.type === 'protein' && chain.useSequence && (
                                 <div className="pl-16">
                                     <textarea
                                         value={chain.sequence || ''}
                                         onChange={(e) => updateChain(chain.id, { sequence: e.target.value })}
-                                        placeholder={chain.type === 'protein'
-                                            ? 'MVLSPADKTN...'
-                                            : chain.type === 'rna'
-                                                ? 'AUGCAUGCAUGC...'
-                                                : 'ATGCATGCATGC...'
-                                        }
+                                        placeholder="MVLSPADKTN..."
                                         className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1 text-white font-mono text-sm h-16 resize-none"
                                     />
                                     {chain.sequence && !validateSequence(chain.sequence, chain.type).valid && (
@@ -918,16 +964,14 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                     )}
                                     {chain.sequence && (
                                         <div className="text-xs text-slate-400 mt-1">
-                                            Length: {chain.sequence.replace(/\s/g, '').length} {chain.type === 'protein' ? 'residues' : 'nt'}
-                                        </div>
-                                    )}
-                                    {chain.type !== 'protein' && (
-                                        <div className="text-xs text-slate-500 mt-1">
-                                            Modified nucleotides: {MODIFIED_NUCLEOTIDES[chain.type].join(', ')}
+                                            Length: {chain.sequence.replace(/\s/g, '').length} residues
                                         </div>
                                     )}
                                 </div>
-                            ) : (
+                            )}
+
+                            {/* Length-only mode (no sequence specified) */}
+                            {!chain.useSequence && (
                                 <div className="flex items-center gap-3 pl-16">
                                     <span className="text-slate-400">Length:</span>
                                     {chain.useRange ? (
@@ -1463,6 +1507,29 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     {submitMutation.isPending ? 'Submitting...' : 'Submit Design Job'}
                 </button>
             </div>
+
+            {/* OligoBuilderModal — visual sequence editor for DNA/RNA chains */}
+            <OligoBuilderModal
+                isOpen={showOligoBuilder}
+                onClose={() => {
+                    setShowOligoBuilder(false);
+                    setOligoBuilderTargetChain(null);
+                }}
+                onSubmit={(entries) => {
+                    if (oligoBuilderTargetChain && entries.length > 0) {
+                        // Use the template strand sequence from the modal
+                        const templateEntry = entries[0];
+                        updateChain(oligoBuilderTargetChain, {
+                            useSequence: true,
+                            sequence: templateEntry.sequence,
+                            type: templateEntry.type as PolymerType,
+                        });
+                    }
+                    setShowOligoBuilder(false);
+                    setOligoBuilderTargetChain(null);
+                }}
+                ligandCount={chains.length}
+            />
         </div>
     );
 }
