@@ -73,9 +73,10 @@ class CDRAnnotation:
         }
 
 
-# Project root for container paths
-from paths import get_code_root
-PROJECT_ROOT = get_code_root()
+# Container path resolution - uses BMS_DATA/BMS_CONTAINER_DIR for correct NVMe paths
+from paths import get_container_path
+import logging
+logger = logging.getLogger(__name__)
 
 
 def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> Dict[str, str]:
@@ -216,10 +217,10 @@ def run_anarcii(sequence: str, scheme: str = "imgt") -> Optional[Dict]:
     Returns dict with chain type and CDR regions extracted from IMGT numbering.
     CDR definitions (IMGT): H1=27-38, H2=56-65, H3=105-117, L1=27-38, L2=56-65, L3=105-117
     """
-    container_path = PROJECT_ROOT / "apptainer" / "antibody_tools.sif"
+    container_path = get_container_path("antibody_tools.sif")
     
     if not container_path.exists():
-        print(f"[CDR Annotator] Container not found: {container_path}")
+        logger.error(f"[CDR Annotator] Container not found: {container_path}")
         return None
     
     try:
@@ -409,10 +410,10 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
     
     Returns dict of {pdb_path: CDRAnnotation}
     """
-    container_path = PROJECT_ROOT / "apptainer" / "antibody_tools.sif"
+    container_path = get_container_path("antibody_tools.sif")
     
     if not container_path.exists():
-        print(f"[CDR Annotator] Container not found: {container_path}")
+        logger.error(f"[CDR Annotator] Container not found: {container_path}")
         return {}
     
     # Step 1: Extract all binder sequences from PDBs

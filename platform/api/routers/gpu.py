@@ -13,6 +13,7 @@ import os
 import subprocess
 import json
 import asyncio
+import logging
 import time
 import re
 import shutil
@@ -30,6 +31,7 @@ from services.gpu_metadata import HARDWARE_LIMITS
 from services.job_control import force_launch_job as force_launch_job_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = get_code_root()
 GPU_RESERVATIONS_PATH = PROJECT_ROOT / ".gpu_reservations.json"
@@ -164,7 +166,7 @@ def _load_power_state() -> None:
     try:
         raw = json.loads(GPU_POWER_STATE_PATH.read_text(encoding="utf-8"))
     except Exception as exc:
-        print(f"[GPU] Failed reading power state file {GPU_POWER_STATE_PATH}: {exc}")
+        logger.warning("[GPU] Failed reading power state file %s: %s", GPU_POWER_STATE_PATH, exc)
         return
 
     loaded_current = raw.get("current_limits", {}) if isinstance(raw, dict) else {}
@@ -200,7 +202,7 @@ def _save_power_state() -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, GPU_POWER_STATE_PATH)
     except Exception as exc:
-        print(f"[GPU] Failed writing power state file {GPU_POWER_STATE_PATH}: {exc}")
+        logger.warning("[GPU] Failed writing power state file %s: %s", GPU_POWER_STATE_PATH, exc)
 
 
 def _read_live_power_limits() -> Dict[int, int]:
@@ -1837,7 +1839,7 @@ def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
                 return True
         return False
     except Exception as e:
-        print(f"Failed to set power limit for GPU {gpu_index}: {e}")
+        logger.warning("Failed to set power limit for GPU %d: %s", gpu_index, e)
         return False
 
 
@@ -1924,7 +1926,7 @@ async def set_power_control(request: PowerControlRequest):
         if set_gpu_power_limit(request.gpu_index, clamped):
             _current_limits[request.gpu_index] = clamped
             _saved_limits[request.gpu_index] = clamped  # Save for toggle memory
-            _power_enabled = True  # Mark as enabled since user set custom limit
+            _power_enabled = _derive_power_enabled_from_current()
             applied_count += 1
             message = f"GPU {request.gpu_index} set to {clamped}W"
         else:
@@ -1953,6 +1955,7 @@ async def set_power_control(request: PowerControlRequest):
         "total_max_watts": summary["total_max_watts"],
         "total_default_watts": summary["total_default_watts"],
         "per_gpu": summary["per_gpu"],
+        "hardware_limits": HARDWARE_LIMITS,
     }
 
 
