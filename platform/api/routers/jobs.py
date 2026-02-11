@@ -253,8 +253,10 @@ async def create_job(
         sequence_length = 300  # Default fallback
     
     # Estimate VRAM based on model type
-    from services.gpu_orchestrator import estimate_vram
-    vram_estimate = estimate_vram(job_data.model_id, sequence_length)
+    from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
+    if job_data.model_id == "protenix":
+        sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
+    vram_estimate = estimate_vram(job_data.model_id, sequence_length, job_data.params)
     
     # Generate batch_id if creating multiple jobs
     batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
@@ -682,6 +684,19 @@ async def resubmit_job(
 
     _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
 
+    from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
+    resubmit_sequence_length = original_job.sequence_length or 300
+    if original_job.model_id == "protenix":
+        resubmit_sequence_length = estimate_protenix_tokens(
+            resubmit_params,
+            resubmit_sequence_length,
+        )
+    resubmit_vram_estimate = estimate_vram(
+        original_job.model_id,
+        resubmit_sequence_length,
+        resubmit_params,
+    )
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
@@ -696,8 +711,8 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
-        vram_estimate_mb=original_job.vram_estimate_mb,
-        sequence_length=original_job.sequence_length,
+        vram_estimate_mb=resubmit_vram_estimate,
+        sequence_length=resubmit_sequence_length,
         priority=0,
         paused=False,
         retry_count=0,
@@ -984,42 +999,78 @@ async def get_children_status(
             "total": 0,
             "completed": 0,
             "failed": 0,
+            "cancelled": 0,
             "running": 0,
             "pending": 0,
             "all_done": True,
             "child_output_dirs": [],
+            "child_output_dirs_all": [],
             "success_rate": 100.0
         }
-    
-    completed = [c for c in children if c.status == "completed"]
-    failed = [c for c in children if c.status == "failed"]
-    running = [c for c in children if c.status == "running"]
-    pending = [c for c in children if c.status in ["queued", "pending"]]
-    
-    all_done = all(c.status in ["completed", "failed", "cancelled"] for c in children)
-    
-    # Collect output directories from completed children
-    output_dirs = [
-        c.child_output_dir or c.output_dir 
-        for c in completed 
-        if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
-    ]
-    
-    total = len(children)
+
+    # Guard against duplicate records and make resume behavior deterministic.
+    child_map = {child.id: child for child in children}
+    deduped_children = list(child_map.values())
+
+    completed = [c for c in deduped_children if c.status == "completed"]
+    failed = [c for c in deduped_children if c.status == "failed"]
+    cancelled = [c for c in deduped_children if c.status == "cancelled"]
+    running = [c for c in deduped_children if c.status == "running"]
+    pending = [c for c in deduped_children if c.status in ["queued", "pending"]]
+
+    all_done = all(c.status in ["completed", "failed", "cancelled"] for c in deduped_children)
+
+    def _dedupe_preserve_order(values: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for value in values:
+            if value not in seen:
+                seen.add(value)
+                out.append(value)
+        return out
+
+    all_output_dirs = _dedupe_preserve_order(
+        [
+            c.child_output_dir or c.output_dir
+            for c in completed
+            if (c.child_output_dir or c.output_dir)
+        ]
+    )
+    # Default collection set excludes already-aggregated children.
+    output_dirs = _dedupe_preserve_order(
+        [
+            c.child_output_dir or c.output_dir
+            for c in completed
+            if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
+        ]
+    )
+
+    total = len(deduped_children)
     success_rate = (len(completed) / total * 100) if total > 0 else 0
-    
+
     return {
         "parent_id": parent_id,
         "stage": stage,
         "total": total,
         "completed": len(completed),
         "failed": len(failed),
+        "cancelled": len(cancelled),
         "running": len(running),
         "pending": len(pending),
         "all_done": all_done,
         "child_output_dirs": output_dirs,
+        "child_output_dirs_all": all_output_dirs,
         "success_rate": round(success_rate, 1),
-        "child_ids": [c.id for c in children]
+        "child_ids": [c.id for c in deduped_children],
+        "children": [
+            {
+                "job_id": c.id,
+                "status": c.status,
+                "output_dir": c.child_output_dir or c.output_dir,
+                "aggregated_by_parent": bool(c.aggregated_by_parent),
+            }
+            for c in deduped_children
+        ],
     }
 
 
@@ -1027,17 +1078,30 @@ async def get_children_status(
 async def mark_children_aggregated(
     parent_id: str,
     stage: Optional[str] = None,
+    batch_name: Optional[str] = None,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Mark all completed children as aggregated by parent.
     Prevents double-collection when polling multiple times.
     """
-    query = select(Job).where(
-        Job.parent_job_id == parent_id,
-        Job.status == "completed",
-        Job.aggregated_by_parent == False
-    )
+    from sqlalchemy import or_
+
+    if batch_name:
+        query = select(Job).where(
+            or_(
+                Job.parent_job_id == parent_id,
+                Job.batch_name == batch_name
+            ),
+            Job.status == "completed",
+            Job.aggregated_by_parent == False
+        )
+    else:
+        query = select(Job).where(
+            Job.parent_job_id == parent_id,
+            Job.status == "completed",
+            Job.aggregated_by_parent == False
+        )
     
     if stage:
         query = query.where(Job.child_stage == stage)
@@ -1053,7 +1117,8 @@ async def mark_children_aggregated(
     return {
         "marked_count": len(children),
         "parent_id": parent_id,
-        "stage": stage
+        "stage": stage,
+        "batch_name": batch_name,
     }
 
 
@@ -1133,6 +1198,7 @@ async def get_job_stages(
         all_stages_map = {
             "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
             "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
+            "oligo_design": ["rfdpoly", "nampnn"],
         }
         display_stages = all_stages_map.get(job.mode, [])
 

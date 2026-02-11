@@ -744,6 +744,12 @@ workflow ANTIBODY_DENOVO {
     def num_gpus = available_gpus.size()
     def designs_per_gpu = (total_designs / num_gpus).intValue()
     def remainder = total_designs % num_gpus
+    // Use a per-run unique batch key to prevent accidental cross-run child reuse.
+    // Reusing a static name (e.g., "antibody_batch") can make fresh jobs skip RFantibody
+    // by attaching to completed children from older runs.
+    def orchestrator_batch_name = params.job_id
+        ? "${params.name ?: 'antibody_batch'}_${params.job_id}"
+        : "${params.name ?: 'antibody_batch'}_${workflow.runName}"
     
     // =========================================================================
     // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating
@@ -784,14 +790,14 @@ workflow ANTIBODY_DENOVO {
             total_designs,
             params.designs_per_job ?: 5,
             params.job_id ?: "unknown",
-            params.name ?: "antibody_batch"
+            orchestrator_batch_name
         )
         
         // Wait for all child jobs to complete
         // Depends on spawn completion via SpawnRFantibodyJobs.out.result
         // Pass batch_name for resume support (find children from original run)
         wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
-        batch_name = params.name ?: "antibody_batch"
+        batch_name = orchestrator_batch_name
         WaitForChildren(
             wait_trigger,
             "rfantibody",
@@ -804,6 +810,21 @@ workflow ANTIBODY_DENOVO {
             WaitForChildren.out.child_outputs,
             "rfantibody"
         )
+
+        // REPORT STAGE: rfantibody (orchestrator path)
+        CollectChildOutputs.out.pdbs.subscribe { pdbs ->
+            try {
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def count = file_list.size()
+                log.info("  RFantibody via orchestrator: Collected ${count} PDBs from child jobs")
+                def report_files = count > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage rfantibody: ${e.message}"
+            }
+        }
         
         // Create backbone_designs channel from collected outputs
         backbone_designs = CollectChildOutputs.out.pdbs
@@ -937,14 +958,14 @@ workflow ANTIBODY_DENOVO {
                 params.seqs_per_design ?: 20,
                 params.pdbs_per_job ?: 5,
                 params.job_id ?: "unknown",
-                params.name ?: "antibody_batch"
+                orchestrator_batch_name
             )
             
             // Wait for all FAMPNN children to complete
             // Pass batch_name for resume support (find children from original run)
             // Note: map closure must accept the path argument (even if unused) 
             fampnn_wait_trigger = SpawnFAMPNNJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
-            fampnn_batch_name = params.name ?: "antibody_batch"
+            fampnn_batch_name = orchestrator_batch_name
             
             // Reuse WaitForChildren process - need separate call for FAMPNN stage
             // Note: We use a different variable name to avoid Nextflow channel conflicts
@@ -1038,12 +1059,12 @@ workflow ANTIBODY_DENOVO {
                 StageMaturationInputs.out.pdb_dir,
                 params.maturation_designs_per_job ?: 4,
                 params.job_id ?: "unknown",
-                params.name ?: "antibody_batch"
+                orchestrator_batch_name
             )
 
             // Wait for all maturation children to complete
             maturation_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
-            maturation_batch_name = params.name ?: "antibody_batch"
+            maturation_batch_name = orchestrator_batch_name
 
             WaitForMaturationChildren(
                 maturation_wait_trigger,

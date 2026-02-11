@@ -43,6 +43,10 @@ export default function StructureViewerPane({
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
+
+    // For oligo_design jobs: B-factors are NA-MPNN design confidence, not AlphaFold pLDDT
+    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
+    const bfactorLabel = isOligoJob ? 'Design Conf.' : 'pLDDT';
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
     const [paeMatrix, setPaeMatrix] = useState<number[][] | null>(null);
     const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number }>>({});
@@ -173,7 +177,7 @@ export default function StructureViewerPane({
             <div className="flex border-b border-slate-700/50">
                 {[
                     { id: 'metrics', label: 'Metrics' },
-                    { id: 'plddt', label: 'pLDDT' },
+                    { id: 'plddt', label: bfactorLabel },
                     { id: 'pae', label: 'PAE' },
                 ].map(tab => (
                     <button
@@ -210,7 +214,7 @@ export default function StructureViewerPane({
                                     <div className={`text-lg font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
                                         {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
                                     </div>
-                                    <div className="text-[10px] text-slate-500">pLDDT</div>
+                                    <div className="text-[10px] text-slate-500">{bfactorLabel}</div>
                                 </div>
                                 <div className="bg-slate-800/40 rounded p-2 text-center">
                                     <div className={`text-lg font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
@@ -366,7 +370,7 @@ export default function StructureViewerPane({
                             </div>
                         ) : (
                             <div className="h-36 flex items-center justify-center text-slate-500 text-xs bg-slate-800/40 rounded">
-                                No pLDDT profile data available
+                                No {bfactorLabel} profile data available
                             </div>
                         )}
                         <div className="text-[10px] text-slate-500 mt-1 text-center">
@@ -492,7 +496,7 @@ export default function StructureViewerPane({
                             <div className={`text-2xl font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
                                 {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
                             </div>
-                            <div className="text-xs text-slate-500 mt-1">pLDDT</div>
+                            <div className="text-xs text-slate-500 mt-1">{bfactorLabel}</div>
                         </div>
                         <div className="bg-slate-900/50 rounded-lg p-3 text-center">
                             <div className={`text-2xl font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
@@ -655,7 +659,7 @@ export default function StructureViewerPane({
                 className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
             >
                 <option value="default">Chain Colors</option>
-                <option value="plddt">pLDDT</option>
+                <option value="plddt">{bfactorLabel}</option>
                 <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
                     CDR Regions
                 </option>
