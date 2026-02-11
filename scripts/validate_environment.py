@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import argparse
 from pathlib import Path
 
 # Import from platform if available, fallback to inline definitions
@@ -103,7 +104,6 @@ OPTIONAL_CONTAINERS = [
     "bindcraft.sif",
     "antibody_tools.sif",
     "stability_tools.sif",
-    "rfantibody.sif",
     "iggm.sif",
     "frustrampnn.sif",
 ]
@@ -153,7 +153,13 @@ def has_rfd_weights(path: Path) -> bool:
     return any(path.glob("*.pt"))
 
 
-def main(create_dirs: bool = False) -> int:
+def requires_rfantibody_assets(workflow: str) -> bool:
+    workflow_key = (workflow or "all").strip().lower()
+    antibody_workflows = {"antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"}
+    return workflow_key in antibody_workflows
+
+
+def main(create_dirs: bool = False, workflow: str = "all") -> int:
     """Run validation checks and report results."""
     print("=" * 60)
     print("BioModStack Environment Validation")
@@ -232,10 +238,34 @@ def main(create_dirs: bool = False) -> int:
             status = "⚠ missing (optional)"
         print(f"  {subdir}: {status}")
 
-    # 5. Container images (warn-only)
-    print("\n[5] Optional Containers")
+    # RFantibody checkpoint (required for antibody workflows)
+    if requires_rfantibody_assets(workflow):
+        expected_ckpt = weights_root / "rfantibody" / "rfantibody_repo" / "weights" / "RFdiffusion_Ab.pt"
+        print("  rfantibody/RFdiffusion_Ab.pt: ", end="")
+        if expected_ckpt.exists():
+            print(f"✓ exists ({expected_ckpt})")
+        else:
+            errors += 1
+            print(f"✗ MISSING (required for workflow={workflow}; expected at {expected_ckpt})")
+
+    # 5. Container images
+    print("\n[5] Containers")
     print("-" * 40)
     container_dir = get_container_dir()
+
+    required_containers = []
+    if requires_rfantibody_assets(workflow):
+        required_containers.append("rfantibody.sif")
+
+    for image in required_containers:
+        image_path = container_dir / image
+        if image_path.exists():
+            print(f"  {image}: ✓ exists (required for workflow={workflow})")
+        else:
+            errors += 1
+            print(f"  {image}: ✗ MISSING (required for workflow={workflow})")
+
+    print("  -- optional --")
     for image in OPTIONAL_CONTAINERS:
         image_path = container_dir / image
         if image_path.exists():
@@ -272,9 +302,18 @@ def main(create_dirs: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    create = "--create" in sys.argv or "-c" in sys.argv
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print("Usage: python validate_environment.py [--create]")
-        print("  --create, -c  Create missing directories")
-        sys.exit(0)
-    sys.exit(main(create_dirs=create))
+    parser = argparse.ArgumentParser(description="Validate BioModStack environment and assets")
+    parser.add_argument(
+        "--create",
+        "-c",
+        action="store_true",
+        help="Create missing core directories when possible",
+    )
+    parser.add_argument(
+        "--workflow",
+        default="all",
+        choices=["all", "antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"],
+        help="Enable workflow-specific required checks",
+    )
+    args = parser.parse_args()
+    sys.exit(main(create_dirs=args.create, workflow=args.workflow))

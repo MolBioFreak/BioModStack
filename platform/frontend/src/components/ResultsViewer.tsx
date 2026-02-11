@@ -274,6 +274,16 @@ export function ResultsViewer() {
     }, [designs, selectedDesignId]);
 
     const activeJob = jobs.find((j: Job) => j.id === selectedJobId);
+
+    // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
+    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
+    useEffect(() => {
+        if (isOligoJob) {
+            setColorMode('default');
+        } else {
+            setColorMode('plddt');
+        }
+    }, [selectedJobId, isOligoJob]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';

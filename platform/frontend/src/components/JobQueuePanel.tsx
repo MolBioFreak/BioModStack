@@ -142,6 +142,9 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
     const stageDisplayNames: Record<string, string> = {
         'rfantibody': 'RFAntibody',
         'rfdiffusion': 'RFdiffusion',
+        'rfdpoly': 'RFDpoly',
+        'nampnn': 'NA-MPNN',
+        'pyrosetta_rebuild': 'PyRosetta',
         'fampnn': 'FA-MPNN',
         'proteinmpnn': 'ProteinMPNN',
         'thermompnn': 'ThermoMPNN',
