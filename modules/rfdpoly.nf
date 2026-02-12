@@ -54,26 +54,21 @@ process RFDPolyDesign {
         : "inference.input_pdb=/RFDpoly/rf_diffusion/test_data/DBP035.pdb"
     // Dummy for de novo
 
-    // Handle target PDB for binding design
+    // Handle target PDB for binding design (uses scaffoldguided config group)
     def target_arg = use_target_pdb && !target_pdb.name.startsWith('NO_')
-        ? "ppi.target_pdb=${target_pdb}"
+        ? "scaffoldguided.target_pdb=True scaffoldguided.target_path=${target_pdb}"
         : ""
 
-    // Hotspot residues for binding guidance
+    // Hotspot residues for binding guidance (per polymer-pair type keys)
+    // Supported keys: inference.protein_dna_hotspot_res, inference.protein_rna_hotspot_res, etc.
     def hotspot_arg = params.hotspot_residues && use_target_pdb
-        ? "ppi.hotspot_residues=${params.hotspot_residues}"
-        : ""
-
-    // Binding guidance (guided diffusion toward target)
-    def guidance_arg = params.binding_guidance && use_target_pdb
-        ? "diffuser.guidance_scale=2.0"
+        ? "inference.protein_dna_hotspot_res=[${params.hotspot_residues}]"
         : ""
 
     // Note: noise_schedule is not a valid RFDpoly config key (causes Hydra error)
     // Linear is the default behavior in RFDpoly
 
-    // Advanced params: temperature, seed
-    def temp_arg = params.rfdpoly_temperature ? "diffuser.partial_T=${params.rfdpoly_temperature}" : ""
+    // Advanced params: seed (temperature is NOT a valid RFDpoly key)
     def seed_arg = params.rfdpoly_seed ? "inference.seed=${params.rfdpoly_seed}" : ""
 
     // Container paths: /RFDpoly (repo), /models (weights)
@@ -88,8 +83,6 @@ process RFDPolyDesign {
         ${input_arg} \\
         ${target_arg} \\
         ${hotspot_arg} \\
-        ${guidance_arg} \\
-        ${temp_arg} \\
         ${seed_arg} \\
         inference.output_prefix=./${design_id}
     
@@ -113,8 +106,6 @@ metrics = {
     'contigs': '${contigs}',
     'polymer_chains': '${polymer_chains}'.split(','),
     'checkpoint': '${ckpt_file}',
-    'noise_schedule': '${params.rfdpoly_noise_schedule ?: "linear"}',
-    'binding_guidance': ${params.binding_guidance ? 'True' : 'False'},
     'has_target': ${use_target_pdb ? 'True' : 'False'},
     'pdbs': pdbs
 }
