@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List
+from typing import Optional, List, Dict
 from copy import deepcopy
 import asyncio
 import uuid
@@ -35,6 +35,14 @@ router = APIRouter()
 
 # Project root for resolving code-relative paths
 CODE_ROOT = get_code_root()
+
+NANOPORE_PATH_PARAM_KEYS = {
+    "pod5_dir",
+    "bam_path",
+    "fastq_path",
+    "reference_fasta",
+    "wf_clone_workflow_dir",
+}
 
 
 def resolve_output_dir(output_dir: str) -> Optional[Path]:
@@ -68,6 +76,231 @@ def _to_bool(value: object) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return False
+
+
+def _is_meaningful_param_value(value: object) -> bool:
+    """Treat empty/sentinel strings as unset."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in {"", "null", "none", "undefined", "n/a", "na"}
+    return bool(value)
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _to_stage_output_path(path: Path) -> str:
+    try:
+        return to_allowed_relative(path)
+    except Exception:
+        return str(path)
+
+
+def _stage_output_exists(output_path: Optional[Path], output_value: str) -> bool:
+    if not output_value or not isinstance(output_value, str):
+        return False
+
+    raw = Path(output_value)
+    candidates: List[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.append(get_data_root() / output_value)
+        if output_path is not None:
+            candidates.append(output_path / output_value)
+            try:
+                output_rel = to_allowed_relative(output_path)
+                if output_value.startswith(f"{output_rel}/"):
+                    suffix = output_value[len(output_rel) + 1 :]
+                    candidates.append(output_path / suffix)
+            except Exception:
+                pass
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _sanitize_nanopore_stage_outputs(
+    stage_outputs: Dict[str, List[str]],
+    output_dir: Optional[str],
+) -> Dict[str, List[str]]:
+    output_path = resolve_output_dir(output_dir or "")
+    cleaned: Dict[str, List[str]] = {}
+    for stage, outputs in (stage_outputs or {}).items():
+        if not isinstance(outputs, list):
+            continue
+        filtered = [
+            value
+            for value in outputs
+            if isinstance(value, str) and _stage_output_exists(output_path, value)
+        ]
+        deduped = _dedupe_preserve_order(filtered)
+        if deduped:
+            cleaned[stage] = deduped
+    return cleaned
+
+
+def _infer_nanopore_stage_outputs(
+    output_dir: Optional[str],
+    params: Optional[dict] = None,
+) -> Dict[str, List[str]]:
+    output_path = resolve_output_dir(output_dir or "")
+    if not output_path or not output_path.exists():
+        return {}
+
+    expected = {
+        "dorado_basecall": [
+            "basecall/calls.bam",
+            "basecall/basecall.log",
+            "basecall/sequencing_summary.tsv",
+        ],
+        "dorado_align": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+            "align/align.log",
+        ],
+        "bam_prepare": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/bam_prepare.log",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+        ],
+        "fastq_align": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+            "align/fastq_align.log",
+        ],
+        "modkit": [
+            "methylation/methylation.bed",
+            "methylation/pileup.log",
+            "methylation/modkit_summary.tsv",
+            "methylation/summary.log",
+        ],
+        "multimer_qc": [
+            "multimer_qc/read_lengths.tsv",
+            "multimer_qc/multimer_summary.tsv",
+            "multimer_qc/multimer_candidates.tsv",
+            "multimer_qc/multimer_qc.log",
+        ],
+        "dimer_analysis": [
+            "multimer_qc/dimer_candidates.fastq",
+            "multimer_qc/dimer_candidates.fasta",
+            "multimer_qc/dimer_read_lengths.tsv",
+            "multimer_qc/dimer_analysis_summary.tsv",
+            "multimer_qc/dimer_analysis.log",
+            "multimer_qc/dimer_candidates.aligned.bam",
+            "multimer_qc/dimer_candidates.aligned.bam.bai",
+            "multimer_qc/dimer_reference.fasta",
+            "multimer_qc/dimer_reference.fasta.fai",
+            "multimer_qc/dimer_consensus.fasta",
+            "multimer_qc/dimer_consensus.log",
+            "multimer_qc/dominant_dimer_consensus.fasta",
+            "multimer_qc/dominant_dimer_consensus.log",
+            "multimer_qc/dominant_dimer_consensus_metadata.tsv",
+            "multimer_qc/dimer_junction_profile.tsv",
+            "multimer_qc/dimer_read_junctions.tsv",
+            "multimer_qc/dimer_junction_events.tsv",
+            "multimer_qc/dimer_junction_clusters.tsv",
+            "multimer_qc/dimer_junction_hotspots.tsv",
+            "multimer_qc/dimer_junction_rotated_profile.tsv",
+            "multimer_qc/dimer_junction_rotation_summary.tsv",
+            "multimer_qc/dimer_breakpoint_screen.tsv",
+            "multimer_qc/dimer_breakpoint_start_counts.tsv",
+            "multimer_qc/dimer_read_ledger.tsv",
+            "multimer_qc/dimer_breakpoint_reads.tsv",
+            "multimer_qc/dimer_rotated_remap_summary.tsv",
+            "multimer_qc/dimer_rotated_remap_breakpoints.tsv",
+            "multimer_qc/dimer_single_ref_split_events.tsv",
+            "multimer_qc/dimer_single_ref_split_profile.tsv",
+            "multimer_qc/dimer_candidates.single_ref.aligned.bam",
+            "multimer_qc/dimer_candidates.single_ref.aligned.bam.bai",
+            "multimer_qc/dimer_single_ref_alignment.log",
+        ],
+        "wf_clone_validation": [
+            "assembly/wf_clone.log",
+            "assembly/wf_clone_out",
+            "assembly/wf_clone_out/wf-clone-validation-report.html",
+            "assembly/wf_clone_out/sample_status.txt",
+        ],
+    }
+
+    allowed_stages = set(expected.keys())
+    if isinstance(params, dict):
+        has_pod5 = _is_meaningful_param_value(params.get("pod5_dir"))
+        has_bam = _is_meaningful_param_value(params.get("bam_path"))
+        has_fastq = _is_meaningful_param_value(params.get("fastq_path"))
+        has_reference = _is_meaningful_param_value(params.get("reference_fasta"))
+
+        allowed_stages = set()
+        if has_pod5:
+            allowed_stages.add("dorado_basecall")
+        if (has_pod5 and has_reference) or (has_bam and has_reference):
+            allowed_stages.add("dorado_align")
+        if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+            allowed_stages.add("bam_prepare")
+        if has_fastq and has_reference:
+            allowed_stages.add("fastq_align")
+        if params.get("run_modkit") is not False and (has_pod5 or has_bam):
+            allowed_stages.add("modkit")
+        if params.get("run_multimer_qc") is not False and has_fastq:
+            allowed_stages.add("multimer_qc")
+        if params.get("run_multimer_qc") is not False and has_fastq and has_reference:
+            allowed_stages.add("dimer_analysis")
+        if params.get("run_assembly") is True and (has_pod5 or has_bam):
+            allowed_stages.add("wf_clone_validation")
+
+    inferred: Dict[str, List[str]] = {}
+    for stage, rel_paths in expected.items():
+        if stage not in allowed_stages:
+            continue
+        found: List[str] = []
+        for rel in rel_paths:
+            p = output_path / rel
+            if p.exists():
+                found.append(_to_stage_output_path(p))
+        if found:
+            inferred[stage] = _dedupe_preserve_order(found)
+    return inferred
+
+
+def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, List[str]]]:
+    completed = _dedupe_preserve_order(list(job.completed_stages or []))
+    stage_outputs = dict(job.stage_outputs or {})
+
+    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        for stage, outputs in inferred_outputs.items():
+            existing = stage_outputs.get(stage)
+            if isinstance(existing, list):
+                merged = _dedupe_preserve_order([*existing, *outputs])
+            else:
+                merged = outputs
+            stage_outputs[stage] = merged
+            if merged and stage not in completed:
+                completed.append(stage)
+
+    return completed, stage_outputs
 
 
 def _has_protenix_template_db(mmcif_dir: Path) -> bool:
@@ -108,6 +341,72 @@ def _validate_protenix_template_requirements(model_id: str, params: dict) -> Non
             ]
         },
     )
+
+
+def _resolve_alias_path_for_runtime(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    expanded = os.path.expanduser(raw)
+    if Path(expanded).is_absolute():
+        return expanded
+    try:
+        return str(resolve_allowed_path(raw))
+    except ValueError:
+        return raw
+
+
+def _normalize_nanopore_runtime_paths(model_id: str, params: dict) -> dict:
+    if model_id != "nanopore" or not isinstance(params, dict):
+        return params
+    normalized = dict(params)
+    for key in NANOPORE_PATH_PARAM_KEYS:
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+def _normalize_nanopore_modbase_for_validation(
+    registry,
+    model_id: str,
+    params: dict,
+) -> dict:
+    """
+    Normalize known modbase aliases before schema validation.
+
+    This prevents launcher/API 422 regressions when frontend and backend are on
+    slightly different nanopore enum revisions (e.g. canonical vs legacy alias).
+    """
+    if model_id != "nanopore" or not isinstance(params, dict):
+        return params
+
+    raw_value = params.get("modified_bases")
+    if not isinstance(raw_value, str):
+        return params
+
+    cleaned_value = " ".join(raw_value.strip().split())
+    normalized = dict(params)
+    normalized["modified_bases"] = cleaned_value
+
+    model = registry.get_model(model_id)
+    if not model:
+        return normalized
+
+    modbase_param = next((p for p in model.params if p.name == "modified_bases"), None)
+    if not modbase_param or not modbase_param.enum:
+        return normalized
+
+    enum_values = set(modbase_param.enum)
+    canonical = "6mA 4mC_5mC"
+    legacy = "6mA 5mC"
+
+    if cleaned_value == canonical and canonical not in enum_values and legacy in enum_values:
+        normalized["modified_bases"] = legacy
+    elif cleaned_value == legacy and legacy not in enum_values and canonical in enum_values:
+        normalized["modified_bases"] = canonical
+
+    return normalized
 
 
 @router.get("", response_model=JobList)
@@ -156,6 +455,7 @@ async def list_jobs(
     
     job_responses = []
     for job, design_count in rows:
+        completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
         # Fallback for structure/PDB jobs that don't have Design entries
         if design_count == 0 and job.status == JobStatus.COMPLETED.value and job.output_dir:
             # Note: This file system check is still "slow" per job, but only runs for 
@@ -178,8 +478,8 @@ async def list_jobs(
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             current_stage=job.current_stage,
-            completed_stages=job.completed_stages,
-            stage_outputs=job.stage_outputs,
+            completed_stages=completed_stages,
+            stage_outputs=stage_outputs,
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -193,6 +493,21 @@ async def create_job(
 ):
     """Create and queue a new pipeline job."""
     registry = get_registry()
+
+    # Keep model schema in sync with disk changes during long-lived API sessions.
+    try:
+        registry.reload()
+    except Exception as e:
+        logger.warning(f"Failed to reload model registry before validation: {e}")
+
+    if isinstance(job_data.params, dict):
+        job_data.params = _normalize_nanopore_modbase_for_validation(
+            registry,
+            job_data.model_id,
+            job_data.params,
+        )
+        # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
+        job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
@@ -257,6 +572,16 @@ async def create_job(
     if job_data.model_id == "protenix":
         sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
     vram_estimate = estimate_vram(job_data.model_id, sequence_length, job_data.params)
+
+    # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
+    if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):
+        has_pod5 = bool((job_data.params.get("pod5_dir") or "").strip())
+        has_bam = bool((job_data.params.get("bam_path") or "").strip())
+        has_fastq = bool((job_data.params.get("fastq_path") or "").strip())
+        if has_fastq and not has_pod5 and not has_bam:
+            vram_estimate = 0
+            job_data.pinned_gpu = None
+            logger.info(f"[QUEUE] FASTQ-only nanopore job '{job_data.name}': CPU-only, vram_estimate=0")
     
     # Generate batch_id if creating multiple jobs
     batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
@@ -497,6 +822,7 @@ async def get_job(
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
+    completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
     
     return JobResponse(
         id=job.id,
@@ -510,7 +836,10 @@ async def get_job(
         completed_at=job.completed_at,
         output_dir=job.output_dir,
         error_message=job.error_message,
-        design_count=design_count or 0
+        design_count=design_count or 0,
+        current_stage=job.current_stage,
+        completed_stages=completed_stages,
+        stage_outputs=stage_outputs,
     )
 
 
@@ -676,6 +1005,7 @@ async def resubmit_job(
     os.makedirs(output_dir, exist_ok=True)
     
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
     if resubmit_params.get("msa_force_refresh") is True:
         # Resubmits should reuse cache by default unless user explicitly
         # starts a fresh job with force-refresh enabled.
@@ -1194,24 +1524,80 @@ async def get_job_stages(
              display_stages.append("thermompnn")
              
     else:
-        # Fallback for other modes
-        all_stages_map = {
-            "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
-            "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
-            "oligo_design": ["rfdpoly", "nampnn"],
-        }
-        display_stages = all_stages_map.get(job.mode, [])
+        # Nanopore stage list is dynamic based on params.
+        if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+            np_params = job.params or {}
+            display_stages = []
+            has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
+            has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
+            has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
+            has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
 
-    all_stages = display_stages
-    completed = job.completed_stages or []
-    
+            if has_pod5:
+                display_stages.append("dorado_basecall")
+
+            if has_pod5 and has_reference:
+                display_stages.append("dorado_align")
+
+            if has_bam and has_reference:
+                display_stages.append("dorado_align")
+
+            if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+                display_stages.append("bam_prepare")
+
+            if has_fastq and has_reference:
+                display_stages.append("fastq_align")
+
+            # Modkit only for POD5/BAM — FASTQ lacks methylation tags (MM/ML)
+            if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
+                display_stages.append("modkit")
+
+            # Multimer QC consumes FASTQ reads only
+            if np_params.get("run_multimer_qc") is not False and has_fastq:
+                display_stages.append("multimer_qc")
+            if np_params.get("run_multimer_qc") is not False and has_fastq and has_reference:
+                display_stages.append("dimer_analysis")
+
+            if np_params.get("run_assembly") is True and (has_pod5 or has_bam):
+                display_stages.append("wf_clone_validation")
+        else:
+            # Fallback for other modes
+            all_stages_map = {
+                "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
+                "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
+                "oligo_design": ["rfdpoly", "nampnn"],
+            }
+            display_stages = all_stages_map.get(job.mode, [])
+
+    all_stages = _dedupe_preserve_order(display_stages)
+    completed = _dedupe_preserve_order(list(job.completed_stages or []))
+    stage_outputs = dict(job.stage_outputs or {})
+
+    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
+        # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        for stage, outputs in inferred_outputs.items():
+            existing = stage_outputs.get(stage)
+            if isinstance(existing, list):
+                merged = _dedupe_preserve_order([*existing, *outputs])
+            else:
+                merged = outputs
+            stage_outputs[stage] = merged
+            if merged and stage not in completed:
+                completed.append(stage)
+
+        # If pipeline exited successfully, remaining planned stages are considered complete.
+        if job.status == JobStatus.COMPLETED.value:
+            completed = _dedupe_preserve_order([*completed, *all_stages])
+
     return {
         "job_id": job_id,
         "mode": job.mode,
         "all_stages": all_stages,
         "current_stage": job.current_stage,
         "completed_stages": completed,
-        "stage_outputs": job.stage_outputs or {},
+        "stage_outputs": stage_outputs,
         # Allow resume if failed/cancelled, even if no stages fully completed (rely on cache)
         "can_resume": job.status in ["failed", "cancelled"]
     }
@@ -1360,9 +1746,15 @@ async def get_job_logs(
     """
     Get log output for a job.
     
-    Searches for Nextflow work directory logs (.command.log, .command.err)
-    and returns structured log data with error extraction.
+    Strategy:
+    1. Read the saved nextflow.log from job's output_dir (most reliable)
+    2. Parse work directory hashes from that log to find .command.log/.command.err
+    3. Fallback to CODE_ROOT/.nextflow.log if no saved log exists
+    
+    Work dir resolution is wrapped in a timeout to prevent hanging on slow filesystems.
     """
+    import asyncio
+    import concurrent.futures
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -1380,90 +1772,132 @@ async def get_job_logs(
         "parsed_error": None,
     }
     
-    # Try to find work directory logs
-    work_dir = get_work_dir()
+    # --- Step 1: Find the nextflow log for THIS job ---
+    nf_log_content = None
+    nf_log_candidates = []
     
-    if work_dir.exists():
-        # Find most recent .command.log files (search by modification time)
-        import subprocess
-        try:
-            # Find command logs modified in last hour, sorted by time
-            result = subprocess.run(
-                ["find", str(work_dir), "-name", ".command.log", "-mmin", "-60", 
-                 "-exec", "stat", "--format=%Y %n", "{}", ";"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # Parse output and get most recent log
-                logs_with_time = []
-                for line in result.stdout.strip().split('\n'):
-                    parts = line.split(' ', 1)
-                    if len(parts) == 2:
-                        try:
-                            mtime = int(parts[0])
-                            path = parts[1]
-                            logs_with_time.append((mtime, path))
-                        except ValueError:
-                            continue
-                
-                # Sort by time descending (most recent first)
-                logs_with_time.sort(reverse=True)
-                
-                # Read most recent log that might belong to this job
-                # For now, just take most recent - could match by job name in future
-                if logs_with_time:
-                    log_path = Path(logs_with_time[0][1])
-                    log_dir = log_path.parent
-                    
-                    # Read .command.log
-                    if log_path.exists():
-                        with open(log_path, 'r') as f:
-                            lines = f.readlines()
-                            logs_data["command_log"] = "".join(lines[-tail:])
-                    
-                    # Read .command.err if exists
-                    err_path = log_dir / ".command.err"
-                    if err_path.exists():
-                        with open(err_path, 'r') as f:
-                            logs_data["command_err"] = f.read()
-                    
-                    # Read exit code
-                    exit_path = log_dir / ".exitcode"
-                    if exit_path.exists():
-                        with open(exit_path, 'r') as f:
-                            try:
-                                logs_data["exit_code"] = int(f.read().strip())
-                            except ValueError:
-                                pass
-                    
-                    # Parse error from logs
-                    logs_data["parsed_error"] = extract_error_from_logs(
-                        logs_data["command_log"], 
-                        logs_data["command_err"]
-                    )
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception as e:
-            logger.warning(f"Error searching work dir: {e}")
-    
-    # Fallback: Read .nextflow.log from output_dir
     if job.output_dir:
-        # Check for explicitly saved nextflow.log first (from nextflow.py update)
-        nf_log_path = Path(job.output_dir) / "nextflow.log"
-        
-        if not nf_log_path.exists():
-            nf_log_path = Path(job.output_dir) / ".nextflow.log"
-            
-        if not nf_log_path.exists():
-            nf_log_path = CODE_ROOT / ".nextflow.log"
-        
-        if nf_log_path.exists():
+        output_path = resolve_output_dir(job.output_dir)
+        if output_path:
+            nf_log_candidates.append(output_path / "nextflow.log")
+            nf_log_candidates.append(output_path / ".nextflow.log")
+    
+    # Fallback: global .nextflow.log (may be from a different job)
+    nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
+    
+    for nf_path in nf_log_candidates:
+        if nf_path and nf_path.exists():
             try:
-                with open(nf_log_path, 'r') as f:
-                    lines = f.readlines()
-                    logs_data["nextflow_log"] = "".join(lines[-50:])
+                with open(nf_path, 'r') as f:
+                    nf_log_content = f.read()
+                    lines = nf_log_content.split('\n')
+                    logs_data["nextflow_log"] = "\n".join(lines[-tail:])
+                break
             except Exception:
-                pass
+                continue
+    
+    # --- Step 2: Extract work dir hashes and read command logs ---
+    # This touches the filesystem which may be slow, so wrap in a timeout.
+    def _resolve_work_dir_logs(nf_content: str, tail_lines: int) -> dict:
+        """Blocking function to resolve work dir logs. Runs in executor with timeout."""
+        result = {"command_log": None, "command_err": None, "exit_code": None}
+        if not nf_content:
+            return result
+        
+        import re
+        work_dir = get_work_dir()
+        
+        # Match Nextflow task hash patterns: [xx/yyyyyy]
+        hash_pattern = re.compile(r'\[([0-9a-f]{2}/[0-9a-f]{6,})\]')
+        workdir_pattern = re.compile(r'work[Dd]ir[:\s]+\S*?/work/([0-9a-f]{2}/[0-9a-f]{6,})')
+        
+        found_hashes = set()
+        for match in hash_pattern.finditer(nf_content):
+            found_hashes.add(match.group(1))
+        for match in workdir_pattern.finditer(nf_content):
+            found_hashes.add(match.group(1))
+        
+        # Resolve full paths from hashes
+        work_dirs_found = []
+        for hash_prefix in found_hashes:
+            parts = hash_prefix.split('/')
+            if len(parts) == 2:
+                candidate_dir = work_dir / parts[0]
+                try:
+                    if candidate_dir.exists():
+                        for entry in candidate_dir.iterdir():
+                            if entry.name.startswith(parts[1]) and entry.is_dir():
+                                work_dirs_found.append(entry)
+                except OSError:
+                    continue
+        
+        # Sort by modification time (most recent first)
+        try:
+            work_dirs_found.sort(
+                key=lambda d: d.stat().st_mtime if d.exists() else 0,
+                reverse=True
+            )
+        except OSError:
+            pass
+        
+        # Read command logs from the most recent work dir
+        for task_dir in work_dirs_found:
+            try:
+                cmd_log = task_dir / ".command.log"
+                cmd_err = task_dir / ".command.err"
+                exit_file = task_dir / ".exitcode"
+                
+                if cmd_log.exists():
+                    with open(cmd_log, 'r') as f:
+                        lines = f.readlines()
+                        result["command_log"] = "".join(lines[-tail_lines:])
+                
+                if cmd_err.exists():
+                    with open(cmd_err, 'r') as f:
+                        err_content = f.read()
+                        if err_content.strip():
+                            result["command_err"] = err_content
+                
+                if exit_file.exists():
+                    with open(exit_file, 'r') as f:
+                        try:
+                            result["exit_code"] = int(f.read().strip())
+                        except ValueError:
+                            pass
+                
+                if result["command_log"] or result["command_err"]:
+                    break
+            except OSError:
+                continue
+        
+        return result
+    
+    # Run the blocking filesystem operations with a 3-second timeout
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            work_dir_result = await asyncio.wait_for(
+                loop.run_in_executor(pool, _resolve_work_dir_logs, nf_log_content, tail),
+                timeout=3.0
+            )
+        logs_data["command_log"] = work_dir_result["command_log"]
+        logs_data["command_err"] = work_dir_result["command_err"]
+        logs_data["exit_code"] = work_dir_result["exit_code"]
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"Work dir log resolution timed out or failed for job {job_id}: {e}")
+    
+    # --- Step 3: Parse error summary ---
+    # Try command logs first, then fall back to nextflow log for error extraction
+    logs_data["parsed_error"] = extract_error_from_logs(
+        logs_data["command_log"],
+        logs_data["command_err"]
+    )
+    
+    # If no error from command logs but we have nextflow log, extract from there
+    if not logs_data["parsed_error"] and nf_log_content:
+        logs_data["parsed_error"] = extract_error_from_logs(
+            nf_log_content, None
+        )
     
     return logs_data
 

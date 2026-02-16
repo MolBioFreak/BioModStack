@@ -133,13 +133,22 @@ def get_db_url() -> str:
 
 def get_allowed_roots() -> dict[str, Path]:
     code_root = get_code_root()
-    return {
+    roots = {
         "bms_results": get_results_dir(),
         "benchmarkdata": code_root / "benchmarkdata",
         "lib": code_root / "lib",
         "rcsb": code_root / "rcsb",
         "inputs": get_inputs_dir(),
     }
+    # Host filesystem roots for Nanopore/NGS data browsing
+    home = Path.home()
+    downloads = home / "Downloads"
+    if downloads.exists():
+        roots["downloads"] = downloads
+    data_root = get_data_root()
+    if data_root.exists() and data_root != code_root:
+        roots["data"] = data_root
+    return roots
 
 
 def resolve_allowed_path(rel_path: str) -> Path:
