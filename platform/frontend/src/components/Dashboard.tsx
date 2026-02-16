@@ -295,7 +295,7 @@ function LogsModal({
     loading: boolean;
     onClose: () => void;
 }) {
-    const [activeTab, setActiveTab] = useState<'parsed' | 'command' | 'stderr'>('parsed');
+    const [activeTab, setActiveTab] = useState<'parsed' | 'command' | 'stderr' | 'nextflow'>('parsed');
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -324,6 +324,7 @@ function LogsModal({
                         { id: 'parsed' as const, label: '🎯 Parsed Error' },
                         { id: 'command' as const, label: '📜 Command Log' },
                         { id: 'stderr' as const, label: '⚠️ Stderr' },
+                        { id: 'nextflow' as const, label: '📋 Nextflow Log' },
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -359,6 +360,9 @@ function LogsModal({
                             {activeTab === 'stderr' && (
                                 logs.command_err || <span className="text-slate-500 italic">No stderr output</span>
                             )}
+                            {activeTab === 'nextflow' && (
+                                logs.nextflow_log || <span className="text-slate-500 italic">No Nextflow log available</span>
+                            )}
                         </pre>
                     )}
                 </div>
@@ -376,7 +380,6 @@ function LogsModal({
         </div>
     );
 }
-
 
 
 
