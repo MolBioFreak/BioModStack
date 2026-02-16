@@ -46,6 +46,8 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
 
     // Oligo Designer
     'oligo_design': 'Oligo Designer',
+    'methylation_analysis': 'Nanopore Methylation',
+    'nanopore_methylation': 'Nanopore Methylation',
 };
 
 // Model display names (job.model_id -> human readable)
@@ -70,6 +72,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',
     'oligo_design': 'Oligo Designer',
+    'nanopore': 'Nanopore Sequencing',
 };
 
 // Pipeline stage display names
@@ -88,6 +91,16 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',
     'pyrosetta_rebuild': 'PyRosetta Rebuild',
+    'dorado': 'Dorado Basecall',
+    'dorado_basecall': 'Dorado Basecall',
+    'dorado_align': 'Dorado Align',
+    'bam_prepare': 'BAM Prepare',
+    'preparebamforanalysis': 'BAM Prepare',
+    'modkit': 'modkit',
+    'multimer_qc': 'Multimer QC',
+    'fastqmultimerqc': 'Multimer QC',
+    'wf_clone_validation': 'wf-clone-validation',
+    'wf-clone-validation': 'wf-clone-validation',
 };
 
 /**
