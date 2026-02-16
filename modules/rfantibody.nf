@@ -17,12 +17,10 @@ process RFANTIBODY {
     maxRetries 2
 
     // Bind the full repo - uses host repo source code + weights.
-    // IMPORTANT: Must use closure { } for dynamic evaluation per task.
-    def weightsRoot = params.weights_root
-    def rfantibodyRepo = "${weightsRoot}/rfantibody/rfantibody_repo"
-    def codeRoot = params.code_root
+    // All params referenced directly inside closure for correct DSL2 scoping.
     containerOptions {
-        def codeBind = codeRoot ? "--bind ${codeRoot}" : ""
+        def rfantibodyRepo = "${params.weights_root}/rfantibody/rfantibody_repo"
+        def codeBind = params.code_root ? "--bind ${params.code_root}" : ""
         return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpu_id} ${codeBind} --bind ${rfantibodyRepo}:/opt/RFantibody --writable-tmpfs"
     }
 
@@ -136,7 +134,7 @@ process RFANTIBODY {
     cd /opt/RFantibody
 
     python3 scripts/rfdiffusion_inference.py \\
-        --config-path /opt/RFantibody/scripts/config/inference \\
+        --config-path /opt/RFantibody/src/rfantibody/rfdiffusion/config/inference \\
         --config-name antibody \\
         antibody.target_pdb=\${WORK_DIR}/${target_pdb} \\
         antibody.framework_pdb=${framework} \\
