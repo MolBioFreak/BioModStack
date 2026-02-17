@@ -701,6 +701,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         expected_plasmid_size: expectedPlasmidSize,
                         enable_rotating_reference_frames: enableRotatingReferenceFrames,
                         rotation_scan_step_bp: enableRotatingReferenceFrames ? Math.max(1, rotationScanStepBp) : undefined,
+                        dimer_output_mode: 'core',
+                        dimer_emit_legacy_outputs: false,
 
                         min_fastq_read_length: minFastqReadLength,
                     }),
