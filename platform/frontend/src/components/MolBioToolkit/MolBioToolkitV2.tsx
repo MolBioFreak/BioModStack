@@ -92,13 +92,27 @@ interface SequenceLibraryProps {
     onSelect: (id: string) => void;
     onRefresh: () => void;
     onImport: (file: File) => void;
+    onPasteSequence: (data: { name: string; sequence: string; circular: boolean }) => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
 }
 
-function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, onImport, onLoadDemo, loading }: SequenceLibraryProps) {
+function SequenceLibrary({
+    sequences,
+    selectedId,
+    onSelect,
+    onRefresh,
+    onImport,
+    onPasteSequence,
+    onLoadDemo,
+    loading
+}: SequenceLibraryProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [showDemos, setShowDemos] = useState(false);
+    const [showPasteModal, setShowPasteModal] = useState(false);
+    const [pasteName, setPasteName] = useState('New Plasmid');
+    const [pasteSequence, setPasteSequence] = useState('');
+    const [pasteCircular, setPasteCircular] = useState(true);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -108,11 +122,51 @@ function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, onImport,
         }
     };
 
+    const normalizedPastedSequence = pasteSequence
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith('>'))
+        .join('')
+        .replace(/\s+/g, '')
+        .toUpperCase()
+        .replace(/U/g, 'T');
+
+    const handleCreateFromPaste = () => {
+        if (!normalizedPastedSequence) {
+            alert('Paste a nucleotide sequence or FASTA text first.');
+            return;
+        }
+        if (/[^ACGTNRYMKSWHBVD]/.test(normalizedPastedSequence)) {
+            alert('Sequence contains invalid characters. Use DNA bases/IUPAC codes only.');
+            return;
+        }
+
+        onPasteSequence({
+            name: pasteName.trim() || 'Pasted sequence',
+            sequence: normalizedPastedSequence,
+            circular: pasteCircular
+        });
+
+        setShowPasteModal(false);
+        setPasteName('New Plasmid');
+        setPasteSequence('');
+        setPasteCircular(true);
+    };
+
     return (
         <div className="sequence-library w-64 flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <h3 className="font-semibold text-slate-200">Library</h3>
                 <div className="flex items-center gap-1">
+                    <button
+                        onClick={() => setShowPasteModal(true)}
+                        className="p-1.5 hover:bg-slate-700 rounded transition-colors"
+                        title="Paste nucleotide sequence"
+                    >
+                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h8M8 11h8m-8 4h4m4 6H6a2 2 0 01-2-2V5a2 2 0 012-2h8l4 4v12a2 2 0 01-2 2z" />
+                        </svg>
+                    </button>
                     <button
                         onClick={() => fileInputRef.current?.click()}
                         className="p-1.5 hover:bg-slate-700 rounded transition-colors"
@@ -174,7 +228,7 @@ function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, onImport,
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
                         <p>No saved sequences</p>
-                        <p className="mt-1 text-xs">Import a file or try demos</p>
+                        <p className="mt-1 text-xs">Paste sequence, import a file, or try demos</p>
                     </div>
                 ) : (
                     sequences.map((seq) => (
@@ -199,6 +253,71 @@ function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, onImport,
                     ))
                 )}
             </div>
+
+            {showPasteModal && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+                            <h4 className="font-semibold text-slate-100">Create Sequence From Paste</h4>
+                            <button
+                                onClick={() => setShowPasteModal(false)}
+                                className="p-1.5 hover:bg-slate-800 rounded transition-colors text-slate-400"
+                                title="Close"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <input
+                                    type="text"
+                                    value={pasteName}
+                                    onChange={(e) => setPasteName(e.target.value)}
+                                    placeholder="Sequence name"
+                                    className="md:col-span-2 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100"
+                                />
+                                <label className="flex items-center gap-2 px-3 py-2 bg-slate-800 border border-slate-700 rounded text-sm text-slate-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={pasteCircular}
+                                        onChange={(e) => setPasteCircular(e.target.checked)}
+                                        className="accent-blue-500"
+                                    />
+                                    Circular plasmid
+                                </label>
+                            </div>
+
+                            <textarea
+                                value={pasteSequence}
+                                onChange={(e) => setPasteSequence(e.target.value)}
+                                rows={9}
+                                placeholder="Paste FASTA or raw sequence"
+                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm font-mono text-slate-100 resize-y"
+                            />
+
+                            <p className="text-xs text-slate-400">
+                                {normalizedPastedSequence.length.toLocaleString()} bp detected
+                            </p>
+                        </div>
+                        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-slate-700">
+                            <button
+                                onClick={() => setShowPasteModal(false)}
+                                className="px-3 py-2 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleCreateFromPaste}
+                                className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                            >
+                                Load Sequence
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -369,6 +488,7 @@ export function MolBioToolkitV2() {
         error,
         listSequences,
         getSequence,
+        createSequence,
         updateSequence
     } = useSequenceOperations();
 
@@ -432,6 +552,23 @@ export function MolBioToolkitV2() {
         setIsDirty(false);
     }, [resetHistory]);
 
+    // Create a new in-memory sequence from pasted text (can be saved afterward)
+    const handlePasteSequence = useCallback((data: { name: string; sequence: string; circular: boolean }) => {
+        const newSequence: SequenceData = {
+            name: data.name,
+            sequence: data.sequence,
+            circular: data.circular,
+            sequenceType: 'dna',
+            features: [],
+            primers: [],
+            translations: []
+        };
+
+        resetHistory(newSequence);
+        setSelectedSequenceId(null);
+        setIsDirty(true);
+    }, [resetHistory]);
+
     // Import file using Teselagen bio-parsers
     const handleImport = useCallback(async (file: File) => {
         try {
@@ -480,20 +617,35 @@ export function MolBioToolkitV2() {
 
     // Save sequence
     const saveSequence = useCallback(async () => {
-        if (!selectedSequenceId) return;
+        if (!sequenceData.sequence.trim()) return;
 
-        await updateSequence(selectedSequenceId, {
-            name: sequenceData.name,
+        const normalizedType = sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType;
+        const payload = {
+            name: sequenceData.name.trim() || 'Untitled sequence',
             sequence: sequenceData.sequence,
             is_circular: sequenceData.circular,
-            sequence_type: sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType,
+            sequence_type: normalizedType,
             features: sequenceData.features,
             primers: sequenceData.primers
-        });
+        };
 
-        setIsDirty(false);
-        loadLibrary();
-    }, [selectedSequenceId, sequenceData, updateSequence, loadLibrary]);
+        let saved = false;
+        if (selectedSequenceId) {
+            const updated = await updateSequence(selectedSequenceId, payload);
+            saved = Boolean(updated);
+        } else {
+            const created = await createSequence(payload);
+            if (created) {
+                setSelectedSequenceId(created.id);
+                saved = true;
+            }
+        }
+
+        if (saved) {
+            setIsDirty(false);
+            loadLibrary();
+        }
+    }, [selectedSequenceId, sequenceData, updateSequence, createSequence, loadLibrary]);
 
     // Visibility toggle handler
     const handleVisibilityChange = useCallback((key: keyof VisibilityState) => {
@@ -700,6 +852,7 @@ export function MolBioToolkitV2() {
                     onSelect={loadSequence}
                     onRefresh={loadLibrary}
                     onImport={handleImport}
+                    onPasteSequence={handlePasteSequence}
                     onLoadDemo={loadDemo}
                     loading={loading}
                 />
@@ -708,7 +861,7 @@ export function MolBioToolkitV2() {
                 <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
                     <SequenceHeader
                         sequenceData={sequenceData}
-                        onSave={selectedSequenceId ? saveSequence : undefined}
+                        onSave={saveSequence}
                         onUndo={undo}
                         onRedo={redo}
                         onAutoAnnotate={handleAutoAnnotate}

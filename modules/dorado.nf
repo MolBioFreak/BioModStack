@@ -367,7 +367,37 @@ process FastqMultimerQC {
 // ═══════════════════════════════════════════════════════════════════════════════
 process FastqDimerAnalysis {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/multimer_qc", mode: 'copy'
+    publishDir "${params.out_dir}/multimer_qc", mode: 'copy', saveAs: { filename ->
+        def mode = (params.dimer_output_mode ?: 'core').toString().trim().toLowerCase()
+        def emitLegacy = params.dimer_emit_legacy_outputs == true
+        def legacyArtifacts = [
+            'dimer_consensus.fasta',
+            'dimer_consensus.log',
+            'dimer_junction_profile.tsv',
+            'dimer_read_junctions.tsv',
+            'dimer_junction_events.tsv',
+            'dimer_junction_clusters.tsv',
+            'dimer_junction_hotspots.tsv',
+            'dimer_junction_rotated_profile.tsv',
+            'dimer_junction_rotation_summary.tsv',
+            'dimer_breakpoint_screen.tsv',
+            'dimer_breakpoint_start_counts.tsv',
+            'dimer_read_ledger.tsv',
+            'dimer_breakpoint_reads.tsv',
+            'dimer_rotated_remap_summary.tsv',
+            'dimer_rotated_remap_breakpoints.tsv',
+            'dimer_single_ref_split_events.tsv',
+            'dimer_single_ref_split_profile.tsv',
+            'dimer_candidates.single_ref.aligned.bam',
+            'dimer_candidates.single_ref.aligned.bam.bai',
+            'dimer_single_ref_alignment.log',
+            'dimer_alignment.log',
+        ] as Set
+        if (mode == 'debug' || emitLegacy || !legacyArtifacts.contains(filename.toString())) {
+            return filename
+        }
+        return null
+    }
     tag "dimer_analysis"
 
     input:
@@ -1608,13 +1638,69 @@ process FastqDimerAnalysis {
         echo "FASTQ dimer analysis complete"
         echo "Reference: \${ref_name} (\${ref_len} bp)"
         echo "Dimer candidate/aligned/crossing: \${dimer_count}/\${aligned_reads}/\${junction_spanning_reads}"
-        echo "Split (dimer-ref + single-ref)/seam/single events: \${total_split_support} (\${event_split_support} + \${single_ref_split_support})/\${seam_event_reads}/\${single_event_reads}"
-        echo "Breakpoint model: \${breakpoint_model_status} (informative=\${informative_breakpoint_count}, artifact=\${artifact_breakpoint_count}, seam_only=\${seam_only_unresolved_flag})"
-        echo "Screened primary breakpoint: \${screened_primary_breakpoint_position_mod_ref} support=\${screened_primary_breakpoint_support_reads} confidence=\${screened_primary_breakpoint_confidence}"
-        echo "Rotation mode/tested: \${rotation_offsets_mode}/\${rotation_offsets_tested}; selected offset=\${rotation_selected_offset_bp}"
-        echo "Rotation dominant hotspot (rot->mod): \${rotation_dominant_hotspot_position_rotated}->\${rotation_dominant_hotspot_position_mod_ref}"
-        echo "Consensus status: \${consensus_status}; dominant consensus status: \${dominant_consensus_status}"
+        echo "Breakpoint model: \${breakpoint_model_status}; screened=\${screened_primary_breakpoint_position_mod_ref} support=\${screened_primary_breakpoint_support_reads} conf=\${screened_primary_breakpoint_confidence}"
+        echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
+        """
+    }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Process 11: Build canonical dimer outputs from detailed analysis tables
+// ═══════════════════════════════════════════════════════════════════════════════
+process BuildDimerCanonicalOutputs {
+    label 'local_cpu'
+    publishDir "${params.out_dir}/multimer_qc", mode: 'copy'
+    tag "dimer_canonicalize"
+
+    input:
+    path summary
+    path events
+    path single_ref_events
+    path single_ref_profile
+    path breakpoint_screen
+    path reference_fasta
+
+    output:
+    path "dimer_breakpoint_call.tsv", emit: breakpoint_call
+    path "dimer_evidence_by_position.tsv", emit: evidence_by_position
+    path "dimer_read_events.tsv", emit: read_events
+    path "dimer_breakpoint_sequences.tsv", emit: breakpoint_sequences
+    path "dimer_secondary_anomalies.tsv", emit: secondary_anomalies
+    path "dimer_secondary_summary.tsv", emit: secondary_summary
+    path "dimer_diagnostics.tar.gz", emit: diagnostics, optional: true
+
+    script:
+    def codeRoot = params.code_root ?: projectDir
+    def requestedDimerOutputMode = (params.dimer_output_mode ?: 'core').toString().trim().toLowerCase()
+    def dimerOutputMode = (requestedDimerOutputMode in ['core', 'debug']) ? requestedDimerOutputMode : 'core'
+    def emitLegacyOutputs = params.dimer_emit_legacy_outputs == true ? 'true' : 'false'
+    """
+    set -euo pipefail
+
+    if [[ ! -f "${codeRoot}/scripts/build_dimer_canonical_outputs.py" ]]; then
+        echo "Missing parser script: ${codeRoot}/scripts/build_dimer_canonical_outputs.py" >&2
+        exit 1
+    fi
+
+    python3 "${codeRoot}/scripts/build_dimer_canonical_outputs.py" \\
+        --summary ${summary} \\
+        --events ${events} \\
+        --single-ref-events ${single_ref_events} \\
+        --single-ref-profile ${single_ref_profile} \\
+        --breakpoint-screen ${breakpoint_screen} \\
+        --reference-fasta ${reference_fasta} \\
+        --window-bp 50 \\
+        --out-call dimer_breakpoint_call.tsv \\
+        --out-evidence dimer_evidence_by_position.tsv \\
+        --out-read-events dimer_read_events.tsv \\
+        --out-breakpoint-sequences dimer_breakpoint_sequences.tsv \\
+        --out-secondary-anomalies dimer_secondary_anomalies.tsv \\
+        --out-secondary-summary dimer_secondary_summary.tsv
+
+    if [[ "${dimerOutputMode}" == "core" && "${emitLegacyOutputs}" != "true" ]]; then
+        tar -czf dimer_diagnostics.tar.gz ${events} ${single_ref_events} ${single_ref_profile} ${breakpoint_screen} 2>/dev/null || true
+    fi
     """
 }
 
