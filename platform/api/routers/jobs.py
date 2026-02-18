@@ -155,6 +155,22 @@ def _sanitize_nanopore_stage_outputs(
     return cleaned
 
 
+def _resolve_nanopore_fastq_qc_mode(params: Optional[dict]) -> tuple[bool, bool]:
+    """Return (enabled, use_legacy_multimer_stages)."""
+    if not isinstance(params, dict):
+        return False, False
+
+    run_fastq_qc = params.get("run_fastq_qc")
+    if isinstance(run_fastq_qc, bool):
+        return run_fastq_qc, False
+
+    run_multimer_qc = params.get("run_multimer_qc")
+    if isinstance(run_multimer_qc, bool):
+        return run_multimer_qc, True
+
+    return False, False
+
+
 def _infer_nanopore_stage_outputs(
     output_dir: Optional[str],
     params: Optional[dict] = None,
@@ -189,6 +205,15 @@ def _infer_nanopore_stage_outputs(
             "align/reference.fasta",
             "align/reference.fasta.fai",
             "align/fastq_align.log",
+        ],
+        "fastq_qc": [
+            "fastq_qc/read_lengths.tsv",
+            "fastq_qc/fastq_qc_summary.tsv",
+            "fastq_qc/fastq_alignment_stats.tsv",
+            "fastq_qc/fastq_coverage.tsv",
+            "fastq_qc/fastq_consensus.fasta",
+            "fastq_qc/fastq_consensus.log",
+            "fastq_qc/fastq_qc.log",
         ],
         "modkit": [
             "methylation/methylation.bed",
@@ -244,6 +269,7 @@ def _infer_nanopore_stage_outputs(
         has_bam = _is_meaningful_param_value(params.get("bam_path"))
         has_fastq = _is_meaningful_param_value(params.get("fastq_path"))
         has_reference = _is_meaningful_param_value(params.get("reference_fasta"))
+        fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(params)
 
         allowed_stages = set()
         if has_pod5:
@@ -254,11 +280,13 @@ def _infer_nanopore_stage_outputs(
             allowed_stages.add("bam_prepare")
         if has_fastq and has_reference:
             allowed_stages.add("fastq_align")
+        if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+            allowed_stages.add("fastq_qc")
         if params.get("run_modkit") is not False and (has_pod5 or has_bam):
             allowed_stages.add("modkit")
-        if params.get("run_multimer_qc") is not False and has_fastq:
+        if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
             allowed_stages.add("multimer_qc")
-        if params.get("run_multimer_qc") is not False and has_fastq and has_reference:
+        if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
             allowed_stages.add("dimer_analysis")
         if params.get("run_assembly") is True and (has_pod5 or has_bam):
             allowed_stages.add("wf_clone_validation")
@@ -1526,6 +1554,7 @@ async def get_job_stages(
             has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
             has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
             has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
+            fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
 
             if has_pod5:
                 display_stages.append("dorado_basecall")
@@ -1541,15 +1570,17 @@ async def get_job_stages(
 
             if has_fastq and has_reference:
                 display_stages.append("fastq_align")
+            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+                display_stages.append("fastq_qc")
 
             # Modkit only for POD5/BAM — FASTQ lacks methylation tags (MM/ML)
             if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
                 display_stages.append("modkit")
 
-            # Multimer QC consumes FASTQ reads only
-            if np_params.get("run_multimer_qc") is not False and has_fastq:
+            # Legacy multimer/dimer stage labels for old runs.
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
                 display_stages.append("multimer_qc")
-            if np_params.get("run_multimer_qc") is not False and has_fastq and has_reference:
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
                 display_stages.append("dimer_analysis")
 
             if np_params.get("run_assembly") is True and (has_pod5 or has_bam):
