@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
+import type { IGV as IgvLibrary } from 'igv';
 import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
@@ -20,6 +21,24 @@ interface IgvArtifacts {
     fastaUrl: string | null;
     faiPath: string | null;
     faiUrl: string | null;
+    coverageDepthPath: string | null;
+    coverageDepthUrl: string | null;
+    positionGradientPath: string | null;
+    positionGradientUrl: string | null;
+    gcContentPath: string | null;
+    gcContentUrl: string | null;
+    gcZscorePath: string | null;
+    gcZscoreUrl: string | null;
+    splitDensityPath: string | null;
+    splitDensityUrl: string | null;
+    softclipDensityPath: string | null;
+    softclipDensityUrl: string | null;
+    junctionHotspotsPath: string | null;
+    junctionHotspotsUrl: string | null;
+    reportPath: string | null;
+    reportUrl: string | null;
+    trackConfigPath: string | null;
+    trackConfigUrl: string | null;
     missingReason: string | null;
 }
 
@@ -29,6 +48,22 @@ interface MethylationArtifacts {
     bedPath: string | null;
     bedUrl: string | null;
     missingReason: string | null;
+}
+
+interface IgvAlignmentSource {
+    label: string;
+    bamPath: string;
+    bamUrl: string | null;
+    baiPath: string | null;
+    baiUrl: string | null;
+}
+
+interface IgvReferenceSource {
+    label: string;
+    fastaPath: string;
+    fastaUrl: string | null;
+    faiPath: string | null;
+    faiUrl: string | null;
 }
 
 interface MultimerArtifacts {
@@ -247,18 +282,6 @@ interface HighlightedSequenceSegment {
     isSelected: boolean;
 }
 
-interface DimerSequenceHighlight {
-    readCount: number;
-    supportPercent: number | null;
-    backgroundColor: string;
-}
-
-interface DimerHighlightedSequenceSegment {
-    text: string;
-    position: number | null;
-    highlight: DimerSequenceHighlight | null;
-}
-
 const STAGE_LABELS: Record<string, string> = {
     dorado_basecall: 'Dorado Basecall',
     doradobasecall: 'Dorado Basecall',
@@ -269,6 +292,8 @@ const STAGE_LABELS: Record<string, string> = {
     modkit: 'modkit',
     modkitpileup: 'modkit Pileup',
     modkitsummary: 'modkit Summary',
+    fastq_qc: 'FASTQ Plasmid QC',
+    fastqplasmidqc: 'FASTQ Plasmid QC',
     multimer_qc: 'Multimer QC',
     dimer_analysis: 'Dimer Analysis',
     dimeranalysis: 'Dimer Analysis',
@@ -283,14 +308,15 @@ const STAGE_LABELS: Record<string, string> = {
 
 const STATUS_OPTIONS = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled'];
 const ALLOWED_ROOT_PREFIXES = ['bms_results/', 'inputs/', 'benchmarkdata/', 'lib/', 'rcsb/', 'downloads/', 'data/'];
-const IGV_SCRIPT_BASE_ID = 'bms-igv-script';
-const IGV_SCRIPT_URLS = [
-    '/api/files/igv-script',
-];
-const IGV_SCRIPT_TIMEOUT_MS = 15000;
+const IGV_REQUIRED_VERSION = '3.7.3';
 const IGV_INIT_TIMEOUT_MS = 20000;
 const IGV_INITIAL_LOCUS_WINDOW_BP = 800;
 const IGV_INITIAL_FULL_LOCUS_MAX_BP = 100000;
+const IGV_READS_TRACK_MIN_HEIGHT_PX = 260;
+const IGV_READS_TRACK_MIN_WITHOUT_AUX_PX = 520;
+const IGV_READS_TRACK_BOTTOM_GUTTER_PX = 8;
+const IGV_AUX_TRACK_RESERVED_GUTTER_PX = 24;
+const IGV_AUX_TRACK_MAX_RESERVED_FRACTION = 0.42;
 const METHYLATION_BED_MAX_BYTES = 8 * 1024 * 1024;
 const METHYLATION_SUMMARY_MAX_BYTES = 2 * 1024 * 1024;
 const REFERENCE_FASTA_MAX_BYTES = 2 * 1024 * 1024;
@@ -302,16 +328,42 @@ const DIMER_CONSENSUS_PREVIEW_CHARS = 12000;
 const MAX_PLOT_POINTS_PER_CODE = 5000;
 const REFERENCE_SEQUENCE_LINE_WIDTH = 120;
 const DEFAULT_MOTIF_MIN_COVERAGE = 20;
-const DEFAULT_INCLUDE_BOUNDARY_JUNCTIONS = false;
-const MIN_CONFIDENT_SPLIT_SUPPORT_READS = 3;
 const ALIGNMENT_STAGE_ALIASES = ['dorado_align', 'doradoalign', 'bam_prepare', 'bamprepare', 'preparebamforanalysis', 'fastq_align', 'fastqalign'];
 const REFERENCE_STAGE_ALIASES = [...ALIGNMENT_STAGE_ALIASES, 'reference_prepare', 'referenceprepareforigv'];
 const MODKIT_STAGE_ALIASES = ['modkit', 'modkitpileup', 'modkitsummary'];
-const MULTIMER_STAGE_ALIASES = ['multimer_qc', 'multimerqc', 'fastqmultimerqc'];
+const MULTIMER_STAGE_ALIASES = ['fastq_qc', 'fastqqc', 'fastqplasmidqc', 'multimer_qc', 'multimerqc', 'fastqmultimerqc'];
 const DIMER_STAGE_ALIASES = ['dimer_analysis', 'dimeranalysis', 'fastqdimeranalysis'];
 const METHYLATION_STRAND_FILTERS = ['both', '+', '-'] as const;
 const MOTIF_CONCORDANCE_DELTA_PERCENT = 20;
 const RELEVANT_METHYLATION_CODES = new Set(['a', 'm']);
+const IGV_ALIGNMENT_DISPLAY_OPTIONS = [
+    { value: 'COLLAPSED', label: 'Collapsed' },
+    { value: 'EXPANDED', label: 'Expanded' },
+    { value: 'SQUISHED', label: 'Squished' },
+    { value: 'FULL', label: 'Full' },
+];
+const IGV_ALIGNMENT_COLOR_OPTIONS = [
+    { value: 'none', label: 'Color: None' },
+    { value: 'strand', label: 'Color: Strand' },
+    { value: 'firstOfPairStrand', label: 'Color: First Pair Strand' },
+    { value: 'pairOrientation', label: 'Color: Pair Orientation' },
+    { value: 'tlen', label: 'Color: Template Length' },
+    { value: 'unexpectedPair', label: 'Color: Unexpected Pair' },
+    { value: 'basemod', label: 'Color: Base Mods' },
+    { value: 'basemod2', label: 'Color: Base Mods (Alt)' },
+];
+const IGV_ALIGNMENT_GROUP_OPTIONS = [
+    { value: 'none', label: 'Group: None' },
+    { value: 'strand', label: 'Group: Strand' },
+    { value: 'firstOfPairStrand', label: 'Group: First Pair Strand' },
+    { value: 'pairOrientation', label: 'Group: Pair Orientation' },
+    { value: 'mateChr', label: 'Group: Mate Chromosome' },
+    { value: 'chimeric', label: 'Group: Chimeric' },
+    { value: 'supplementary', label: 'Group: Supplementary' },
+    { value: 'readOrder', label: 'Group: Read Order' },
+    { value: 'phase', label: 'Group: Phase (HP)' },
+];
+let igvLibraryPromise: Promise<{ igv: IgvLibrary; version: string }> | null = null;
 
 function isAllowedRelativePath(path: string): boolean {
     return ALLOWED_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -423,6 +475,13 @@ function hasMeaningfulValue(value: unknown): boolean {
     return Boolean(value);
 }
 
+function resolveFastqQcEnabled(params: Record<string, unknown>, hasFastq: boolean): boolean {
+    if (!hasFastq) return false;
+    if (typeof params.run_fastq_qc === 'boolean') return params.run_fastq_qc;
+    if (typeof params.run_multimer_qc === 'boolean') return params.run_multimer_qc;
+    return false;
+}
+
 function collectPathsForStageAliases(stageOutputs: StageOutputsMap, aliases: string[]): string[] {
     const aliasSet = new Set(aliases.map(normalizeStageKey));
     return Object.entries(stageOutputs || {})
@@ -470,6 +529,26 @@ function resolveBamIndexArtifactPath(bamPath: string | null, paths: string[]): s
     return findFirstMatchingPath(paths, [/\.bam\.(bai|csi)$/i, /\.(bai|csi)$/i]);
 }
 
+function resolveFastaIndexArtifactPath(fastaPath: string | null, paths: string[]): string | null {
+    if (!fastaPath) return null;
+    const exact = `${fastaPath}.fai`;
+    if (paths.includes(exact)) return exact;
+
+    const fastaBase = fastaPath.split('/').pop();
+    if (fastaBase) {
+        const paired = paths.find((path) => path.endsWith(`${fastaBase}.fai`));
+        if (paired) return paired;
+    }
+
+    return findFirstMatchingPath(paths, [/\.fai$/i]);
+}
+
+function formatIgvSourceLabel(path: string): string {
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length <= 2) return parts.join('/');
+    return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
+
 function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): IgvArtifacts {
     if (!job) {
         return {
@@ -481,6 +560,24 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
             fastaUrl: null,
             faiPath: null,
             faiUrl: null,
+            coverageDepthPath: null,
+            coverageDepthUrl: null,
+            positionGradientPath: null,
+            positionGradientUrl: null,
+            gcContentPath: null,
+            gcContentUrl: null,
+            gcZscorePath: null,
+            gcZscoreUrl: null,
+            splitDensityPath: null,
+            splitDensityUrl: null,
+            softclipDensityPath: null,
+            softclipDensityUrl: null,
+            junctionHotspotsPath: null,
+            junctionHotspotsUrl: null,
+            reportPath: null,
+            reportUrl: null,
+            trackConfigPath: null,
+            trackConfigUrl: null,
             missingReason: 'Select a run to inspect IGV artifacts.',
         };
     }
@@ -506,9 +603,10 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
         : (referencePaths.length > 0 ? referencePaths : dimerBase);
     const alignmentCandidates = dedupePaths(alignmentBase);
     const referenceCandidates = dedupePaths(referenceBase);
+    const analysisCandidates = dedupePaths(runPrefix ? scopedPaths : paths);
 
     const hasFastq = hasMeaningfulValue(params.fastq_path);
-    const runMultimerQc = hasFastq && params.run_multimer_qc !== false;
+    const runFastqQc = resolveFastqQcEnabled(params, hasFastq);
     const dimerBamPreferred = findFirstMatchingPath(
         dimerBase,
         [/\/multimer_qc\/dimer_candidates\.aligned\.bam$/i, /(^|\/)dimer_candidates\.aligned\.bam$/i]
@@ -523,18 +621,18 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
         [/\/multimer_qc\/dimer_reference\.fasta\.fai$/i, /(^|\/)dimer_reference\.fasta\.fai$/i]
     );
 
-    const bamPath = (runMultimerQc && dimerBamPreferred)
+    const bamPath = (runFastqQc && dimerBamPreferred)
         ? dimerBamPreferred
         : resolveBamArtifactPath(alignmentCandidates);
-    const baiPath = (runMultimerQc && dimerBamPreferred)
+    const baiPath = (runFastqQc && dimerBamPreferred)
         ? dimerBaiPreferred
         : resolveBamIndexArtifactPath(bamPath, alignmentCandidates);
     const fastaPath = findFirstMatchingPath(
-        (runMultimerQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
+        (runFastqQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
         [/\/dimer_reference\.fasta$/, /\/reference\.fasta$/, /\/reference\.fa$/, /\.fasta$/, /\.fa$/]
     );
     const faiPath = findFirstMatchingPath(
-        (runMultimerQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
+        (runFastqQc && dimerFastaPreferred) ? dimerBase : referenceCandidates,
         [/\/dimer_reference\.fasta\.fai$/, /\/reference\.fasta\.fai$/, /\/reference\.fa\.fai$/, /\.fai$/]
     );
 
@@ -546,6 +644,24 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
     const baiUrl = baiPath ? toStreamHref(baiPath, cacheKey) : null;
     const fastaUrl = fastaPath ? toStreamHref(fastaPath, cacheKey) : (fallbackReference ? toStreamHref(fallbackReference, cacheKey) : null);
     const faiUrl = faiPath ? toStreamHref(faiPath, cacheKey) : (fallbackReferenceIndex ? toStreamHref(fallbackReferenceIndex, cacheKey) : null);
+    const coverageDepthPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_coverage_depth\.bedgraph$/i, /(^|\/)igv_coverage_depth\.bedgraph$/i]);
+    const positionGradientPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_position_gradient\.bedgraph$/i, /(^|\/)igv_position_gradient\.bedgraph$/i]);
+    const gcContentPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_gc_content\.bedgraph$/i, /(^|\/)igv_gc_content\.bedgraph$/i]);
+    const gcZscorePath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_gc_zscore\.bedgraph$/i, /(^|\/)igv_gc_zscore\.bedgraph$/i]);
+    const splitDensityPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_split_read_density\.bedgraph$/i, /(^|\/)igv_split_read_density\.bedgraph$/i]);
+    const softclipDensityPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_softclip_density\.bedgraph$/i, /(^|\/)igv_softclip_density\.bedgraph$/i]);
+    const junctionHotspotsPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_junction_hotspots\.bed$/i, /(^|\/)igv_junction_hotspots\.bed$/i]);
+    const reportPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_report\.html$/i, /(^|\/)igv_report\.html$/i]);
+    const trackConfigPath = findFirstMatchingPath(analysisCandidates, [/\/fastq_qc\/igv_track_config\.json$/i, /(^|\/)igv_track_config\.json$/i]);
+    const coverageDepthUrl = coverageDepthPath ? toStreamHref(coverageDepthPath, cacheKey) : null;
+    const positionGradientUrl = positionGradientPath ? toStreamHref(positionGradientPath, cacheKey) : null;
+    const gcContentUrl = gcContentPath ? toStreamHref(gcContentPath, cacheKey) : null;
+    const gcZscoreUrl = gcZscorePath ? toStreamHref(gcZscorePath, cacheKey) : null;
+    const splitDensityUrl = splitDensityPath ? toStreamHref(splitDensityPath, cacheKey) : null;
+    const softclipDensityUrl = softclipDensityPath ? toStreamHref(softclipDensityPath, cacheKey) : null;
+    const junctionHotspotsUrl = junctionHotspotsPath ? toStreamHref(junctionHotspotsPath, cacheKey) : null;
+    const reportUrl = reportPath ? toDownloadHref(reportPath, cacheKey) : null;
+    const trackConfigUrl = trackConfigPath ? toDownloadHref(trackConfigPath, cacheKey) : null;
 
     let missingReason: string | null = null;
     if (!bamUrl) {
@@ -563,10 +679,28 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
         bamUrl,
         baiPath,
         baiUrl,
-        fastaPath: (runMultimerQc ? (dimerFastaPreferred || fastaPath) : fastaPath) || fallbackReference,
+        fastaPath: (runFastqQc ? (dimerFastaPreferred || fastaPath) : fastaPath) || fallbackReference,
         fastaUrl,
-        faiPath: (runMultimerQc ? (dimerFaiPreferred || faiPath) : faiPath) || fallbackReferenceIndex,
+        faiPath: (runFastqQc ? (dimerFaiPreferred || faiPath) : faiPath) || fallbackReferenceIndex,
         faiUrl,
+        coverageDepthPath,
+        coverageDepthUrl,
+        positionGradientPath,
+        positionGradientUrl,
+        gcContentPath,
+        gcContentUrl,
+        gcZscorePath,
+        gcZscoreUrl,
+        splitDensityPath,
+        splitDensityUrl,
+        softclipDensityPath,
+        softclipDensityUrl,
+        junctionHotspotsPath,
+        junctionHotspotsUrl,
+        reportPath,
+        reportUrl,
+        trackConfigPath,
+        trackConfigUrl,
         missingReason,
     };
 }
@@ -685,7 +819,7 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
 
     const params = (job.params || {}) as Record<string, unknown>;
     const hasFastq = hasMeaningfulValue(params.fastq_path);
-    const runMultimerQc = hasFastq && params.run_multimer_qc !== false;
+    const runFastqQc = resolveFastqQcEnabled(params, hasFastq);
     const paths = collectStageOutputPaths(stageOutputs);
     const multimerPaths = collectPathsForStageAliases(stageOutputs, MULTIMER_STAGE_ALIASES);
     const dimerPaths = collectPathsForStageAliases(stageOutputs, DIMER_STAGE_ALIASES);
@@ -700,15 +834,15 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
         : (stagePaths.length > 0 ? stagePaths : paths);
     const candidates = dedupePaths(candidateBase);
 
-    const summaryPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/multimer_summary\.tsv$/i, /(^|\/)multimer_summary\.tsv$/i]);
-    const lengthsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/read_lengths\.tsv$/i, /(^|\/)read_lengths\.tsv$/i]);
+    const summaryPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_qc_summary\.tsv$/i, /(^|\/)fastq_qc_summary\.tsv$/i, /\/multimer_qc\/multimer_summary\.tsv$/i, /(^|\/)multimer_summary\.tsv$/i]);
+    const lengthsPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/read_lengths\.tsv$/i, /(^|\/)read_lengths\.tsv$/i]);
     const candidatesPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/multimer_candidates\.tsv$/i, /(^|\/)multimer_candidates\.tsv$/i]);
-    const logPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/multimer_qc\.log$/i, /(^|\/)multimer_qc\.log$/i]);
+    const logPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_qc\.log$/i, /(^|\/)fastq_qc\.log$/i, /\/multimer_qc\/multimer_qc\.log$/i, /(^|\/)multimer_qc\.log$/i]);
     const dimerFastqPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_candidates\.fastq$/i, /(^|\/)dimer_candidates\.fastq$/i]);
     const dimerFastaPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_candidates\.fasta$/i, /(^|\/)dimer_candidates\.fasta$/i]);
     const dimerLengthsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_read_lengths\.tsv$/i, /(^|\/)dimer_read_lengths\.tsv$/i]);
-    const dimerSummaryPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_analysis_summary\.tsv$/i, /(^|\/)dimer_analysis_summary\.tsv$/i]);
-    const dimerConsensusPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_consensus\.fasta$/i, /(^|\/)dimer_consensus\.fasta$/i]);
+    const dimerSummaryPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_alignment_stats\.tsv$/i, /(^|\/)fastq_alignment_stats\.tsv$/i, /\/multimer_qc\/dimer_analysis_summary\.tsv$/i, /(^|\/)dimer_analysis_summary\.tsv$/i]);
+    const dimerConsensusPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_consensus\.fasta$/i, /(^|\/)fastq_consensus\.fasta$/i, /\/multimer_qc\/dimer_consensus\.fasta$/i, /(^|\/)dimer_consensus\.fasta$/i]);
     const dominantDimerConsensusPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dominant_dimer_consensus\.fasta$/i, /(^|\/)dominant_dimer_consensus\.fasta$/i]);
     const dominantDimerConsensusMetadataPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dominant_dimer_consensus_metadata\.tsv$/i, /(^|\/)dominant_dimer_consensus_metadata\.tsv$/i]);
     const dimerCanonicalEvidencePath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_evidence_by_position\.tsv$/i, /(^|\/)dimer_evidence_by_position\.tsv$/i]);
@@ -774,8 +908,8 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
     let missingReason: string | null = null;
     if (!hasFastq) {
         missingReason = 'Run does not include FASTQ input.';
-    } else if (!runMultimerQc) {
-        missingReason = 'FASTQ multimer QC is disabled for this run.';
+    } else if (!runFastqQc) {
+        missingReason = 'FASTQ plasmid QC is disabled for this run.';
     } else if (
         !summaryUrl
         && !lengthsUrl
@@ -981,371 +1115,6 @@ function parseMultimerCandidates(text: string, maxRows = 1000): MultimerCandidat
         if (rows.length >= maxRows) break;
     }
     return rows;
-}
-
-function normalizeTsvHeaderKey(value: string): string {
-    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-}
-
-function parseTsvRowsWithHeader(text: string): { header: string[]; rows: string[][] } {
-    const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0 && !line.startsWith('#'));
-
-    if (lines.length === 0) {
-        return { header: [], rows: [] };
-    }
-
-    const firstCols = lines[0].split('\t').map((col) => col.trim());
-    const firstNormalized = firstCols.map((col) => normalizeTsvHeaderKey(col));
-    const looksLikeHeader = firstNormalized.some((col) => /[a-z]/.test(col));
-
-    if (looksLikeHeader) {
-        return {
-            header: firstCols,
-            rows: lines.slice(1).map((line) => line.split('\t').map((col) => col.trim())),
-        };
-    }
-
-    return {
-        header: firstCols.map((_, idx) => `col_${idx}`),
-        rows: lines.map((line) => line.split('\t').map((col) => col.trim())),
-    };
-}
-
-function findTsvColumnIndex(normalizedHeader: string[], aliases: string[]): number {
-    const normalizedAliases = aliases.map((alias) => normalizeTsvHeaderKey(alias));
-    for (const alias of normalizedAliases) {
-        const exact = normalizedHeader.indexOf(alias);
-        if (exact >= 0) return exact;
-    }
-
-    for (const alias of normalizedAliases) {
-        const partial = normalizedHeader.findIndex((key) => key.includes(alias) || alias.includes(key));
-        if (partial >= 0) return partial;
-    }
-
-    return -1;
-}
-
-function parseOptionalNumber(value: string | null | undefined): number | null {
-    if (value == null) return null;
-    const raw = String(value).trim();
-    if (!raw) return null;
-    const normalized = raw.replace(/,/g, '');
-    const isPercent = normalized.endsWith('%');
-    const numeric = Number.parseFloat(isPercent ? normalized.slice(0, -1) : normalized);
-    if (!Number.isFinite(numeric)) return null;
-    return numeric;
-}
-
-function parseOptionalInteger(value: string | null | undefined): number | null {
-    const numeric = parseOptionalNumber(value);
-    if (numeric == null) return null;
-    return Math.round(numeric);
-}
-
-function parseOptionalBoolean(value: string | null | undefined): boolean | null {
-    if (value == null) return null;
-    const normalized = String(value).trim().toLowerCase();
-    if (!normalized) return null;
-    if (['1', 'true', 't', 'yes', 'y', 'crossing', 'crosses', 'spanning', 'spans'].includes(normalized)) return true;
-    if (['0', 'false', 'f', 'no', 'n', 'non_crossing', 'noncrossing', 'not_crossing'].includes(normalized)) return false;
-    const numeric = Number.parseFloat(normalized);
-    if (Number.isFinite(numeric)) return numeric > 0;
-    return null;
-}
-
-function parseOptionalText(value: string | null | undefined): string | null {
-    if (value == null) return null;
-    const trimmed = String(value).trim();
-    return trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeMaybePercent(value: number | null): number | null {
-    if (value == null) return null;
-    if (value >= 0 && value <= 1) return value * 100;
-    return value;
-}
-
-function modeNonEmpty(values: Array<string | null | undefined>): string | null {
-    const counts = new Map<string, number>();
-    for (const value of values) {
-        const key = parseOptionalText(value);
-        if (!key) continue;
-        counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
-    return top?.[0] || null;
-}
-
-function parseDimerJunctionProfile(
-    text: string,
-    maxRows = 5000
-): DimerJunctionProfileRow[] {
-    const parsed = parseTsvRowsWithHeader(text);
-    const header = parsed.header.map((col) => normalizeTsvHeaderKey(col));
-    const positionIdx = findTsvColumnIndex(header, ['position_mod_ref', 'position', 'junction_position', 'junction_pos']);
-    const readCountIdx = findTsvColumnIndex(header, ['read_count', 'support_reads', 'dimer_reads', 'count']);
-    const spanningIdx = findTsvColumnIndex(header, ['junction_spanning_reads', 'spanning_reads', 'crossing_reads', 'crossing_count']);
-
-    const rows: DimerJunctionProfileRow[] = [];
-    for (const cols of parsed.rows) {
-        const position = parseOptionalInteger(cols[positionIdx >= 0 ? positionIdx : 0]);
-        const readCount = parseOptionalInteger(cols[readCountIdx >= 0 ? readCountIdx : 1]);
-        const spanningReads = parseOptionalInteger(cols[spanningIdx >= 0 ? spanningIdx : 2]);
-        if (!Number.isFinite(position as number) || !Number.isFinite(readCount as number)) continue;
-
-        rows.push({
-            positionModRef: position as number,
-            readCount: readCount as number,
-            spanningReads: Number.isFinite(spanningReads as number) ? (spanningReads as number) : 0,
-        });
-        if (rows.length >= maxRows) break;
-    }
-
-    return rows.sort((a, b) => a.positionModRef - b.positionModRef);
-}
-
-function parseDimerReadJunctions(
-    text: string,
-    maxRows = 1000
-): DimerReadJunctionRow[] {
-    const parsed = parseTsvRowsWithHeader(text);
-    const header = parsed.header.map((col) => normalizeTsvHeaderKey(col));
-    const readIdIdx = findTsvColumnIndex(header, ['read_id', 'read', 'qname', 'query_name']);
-    const startIdx = findTsvColumnIndex(header, ['start', 'read_start', 'alignment_start', 'ref_start']);
-    const endIdx = findTsvColumnIndex(header, ['end', 'read_end', 'alignment_end', 'ref_end']);
-    const posIdx = findTsvColumnIndex(header, ['position_mod_ref', 'pos_mod', 'junction_position', 'junction_pos', 'position']);
-    const crossesIdx = findTsvColumnIndex(header, ['crosses_junction', 'crosses', 'crossing', 'spans_junction', 'junction_crossing']);
-
-    const rows: DimerReadJunctionRow[] = [];
-    for (const cols of parsed.rows) {
-        const start = parseOptionalInteger(cols[startIdx >= 0 ? startIdx : 1]);
-        const end = parseOptionalInteger(cols[endIdx >= 0 ? endIdx : 2]);
-        const positionModRef = parseOptionalInteger(cols[posIdx >= 0 ? posIdx : 3]);
-        const readId = parseOptionalText(cols[readIdIdx >= 0 ? readIdIdx : 0]) || '';
-        if (start == null && end == null && positionModRef == null && !readId) continue;
-
-        rows.push({
-            readId,
-            start,
-            end,
-            positionModRef,
-            crossesJunction: parseOptionalBoolean(cols[crossesIdx >= 0 ? crossesIdx : 4]),
-            method: null,
-            orientation: null,
-            missingLeftBp: null,
-            missingRightBp: null,
-            source: 'legacy',
-        });
-        if (rows.length >= maxRows) break;
-    }
-    return rows;
-}
-
-function parseDimerJunctionEvents(
-    text: string,
-    maxRows = 1500
-): DimerReadJunctionRow[] {
-    const parsed = parseTsvRowsWithHeader(text);
-    const header = parsed.header.map((col) => normalizeTsvHeaderKey(col));
-    const readIdIdx = findTsvColumnIndex(header, ['read_id', 'read', 'qname', 'query_name']);
-    const startIdx = findTsvColumnIndex(header, ['start', 'read_start', 'alignment_start', 'ref_start']);
-    const endIdx = findTsvColumnIndex(header, ['end', 'read_end', 'alignment_end', 'ref_end']);
-    const posIdx = findTsvColumnIndex(header, ['position_mod_ref', 'junction_position', 'junction_pos', 'position', 'hotspot_position']);
-    const crossesIdx = findTsvColumnIndex(header, ['crosses_junction', 'crossing', 'spans_junction', 'junction_crossing']);
-    const methodIdx = findTsvColumnIndex(header, ['method', 'junction_method', 'detection_method', 'call_method']);
-    const orientationIdx = findTsvColumnIndex(header, ['orientation', 'strand', 'junction_orientation', 'read_orientation']);
-    const missingLeftIdx = findTsvColumnIndex(header, ['missing_left_bp', 'missing_5p_bp', 'missing_5p', 'left_missing_bp', 'left_gap_bp']);
-    const missingRightIdx = findTsvColumnIndex(header, ['missing_right_bp', 'missing_3p_bp', 'missing_3p', 'right_missing_bp', 'right_gap_bp']);
-
-    const rows: DimerReadJunctionRow[] = [];
-    for (const cols of parsed.rows) {
-        const readId = parseOptionalText(cols[readIdIdx >= 0 ? readIdIdx : 0]) || '';
-        const start = parseOptionalInteger(cols[startIdx]);
-        const end = parseOptionalInteger(cols[endIdx]);
-        const positionModRef = parseOptionalInteger(cols[posIdx]);
-        if (!readId && start == null && end == null && positionModRef == null) continue;
-
-        rows.push({
-            readId,
-            start,
-            end,
-            positionModRef,
-            crossesJunction: parseOptionalBoolean(cols[crossesIdx]),
-            method: parseOptionalText(cols[methodIdx]),
-            orientation: parseOptionalText(cols[orientationIdx]),
-            missingLeftBp: parseOptionalInteger(cols[missingLeftIdx]),
-            missingRightBp: parseOptionalInteger(cols[missingRightIdx]),
-            source: 'events',
-        });
-        if (rows.length >= maxRows) break;
-    }
-    return rows;
-}
-
-function parseDimerJunctionClusters(
-    text: string,
-    maxRows = 5000,
-    source: DimerJunctionClusterRow['source'] = 'clusters'
-): DimerJunctionClusterRow[] {
-    const parsed = parseTsvRowsWithHeader(text);
-    const header = parsed.header.map((col) => normalizeTsvHeaderKey(col));
-    const clusterIdIdx = findTsvColumnIndex(header, ['cluster_id', 'cluster', 'id']);
-    const posIdx = findTsvColumnIndex(header, ['position_mod_ref', 'junction_position', 'junction_pos', 'position', 'hotspot_position']);
-    const supportIdx = findTsvColumnIndex(header, ['support_reads', 'read_count', 'cluster_reads', 'total_reads', 'support_count']);
-    const crossingIdx = findTsvColumnIndex(header, ['crossing_reads', 'junction_spanning_reads', 'spanning_reads', 'crossing_count']);
-    const supportPctIdx = findTsvColumnIndex(header, ['support_percent', 'support_pct', 'support_fraction', 'crossing_percent', 'crossing_pct', 'crossing_fraction']);
-    const methodIdx = findTsvColumnIndex(header, ['method', 'junction_method', 'detection_method', 'call_method']);
-    const orientationIdx = findTsvColumnIndex(header, ['orientation', 'strand', 'junction_orientation']);
-    const eventCountIdx = findTsvColumnIndex(header, ['event_count', 'events', 'member_count', 'n_events']);
-    const boundaryIdx = findTsvColumnIndex(header, ['in_boundary_window', 'boundary_window', 'is_boundary', 'in_boundary']);
-
-    const rows: DimerJunctionClusterRow[] = [];
-    for (const cols of parsed.rows) {
-        const positionModRef = parseOptionalInteger(cols[posIdx >= 0 ? posIdx : 0]);
-        if (!Number.isFinite(positionModRef as number) || (positionModRef as number) <= 0) continue;
-        const supportReads = parseOptionalInteger(cols[supportIdx >= 0 ? supportIdx : 1]);
-        const crossingRaw = crossingIdx >= 0
-            ? parseOptionalInteger(cols[crossingIdx])
-            : null;
-        const eventCount = parseOptionalInteger(cols[eventCountIdx]);
-        let supportPercent = normalizeMaybePercent(parseOptionalNumber(cols[supportPctIdx]));
-        const safeSupportReads = Math.max(0, supportReads ?? 0);
-        // Hotspot tables only have support count + support pct (no explicit crossing count).
-        // Treat support_reads as crossing support for hotspot-derived rows.
-        const safeCrossingReads = Math.max(0, source === 'hotspots' ? safeSupportReads : (crossingRaw ?? 0));
-        if (supportPercent == null && safeSupportReads > 0 && safeCrossingReads > 0) {
-            supportPercent = (safeCrossingReads / safeSupportReads) * 100;
-        }
-
-        rows.push({
-            clusterId: parseOptionalText(cols[clusterIdIdx]),
-            positionModRef: positionModRef as number,
-            supportReads: safeSupportReads,
-            crossingReads: safeCrossingReads,
-            supportPercent,
-            method: parseOptionalText(cols[methodIdx]),
-            orientation: parseOptionalText(cols[orientationIdx]),
-            eventCount,
-            inBoundaryWindow: parseOptionalBoolean(cols[boundaryIdx]),
-            source,
-        });
-        if (rows.length >= maxRows) break;
-    }
-
-    return rows.sort((a, b) => a.positionModRef - b.positionModRef);
-}
-
-function parseDimerBreakpointScreen(
-    text: string,
-    maxRows = 5000
-): DimerBreakpointScreenRow[] {
-    const parsed = parseTsvRowsWithHeader(text);
-    const header = parsed.header.map((col) => normalizeTsvHeaderKey(col));
-    const posIdx = findTsvColumnIndex(header, ['position_mod_ref', 'position', 'junction_position', 'junction_pos']);
-    const totalIdx = findTsvColumnIndex(header, ['total_support_reads', 'support_reads', 'total_reads', 'crossing_reads']);
-    const seamIdx = findTsvColumnIndex(header, ['seam_support_reads', 'seam_reads']);
-    const splitIdx = findTsvColumnIndex(header, ['split_support_reads', 'split_reads']);
-    const supportPctIdx = findTsvColumnIndex(header, ['support_pct_all', 'support_percent_all', 'support_pct']);
-    const splitPctPosIdx = findTsvColumnIndex(header, ['split_pct_of_position', 'split_fraction_of_position']);
-    const splitPctAllIdx = findTsvColumnIndex(header, ['split_pct_of_all_split', 'split_fraction_of_all_split']);
-    const boundaryIdx = findTsvColumnIndex(header, ['in_boundary_window', 'boundary_window', 'is_boundary', 'in_boundary']);
-    const boundaryStartReadsIdx = findTsvColumnIndex(header, ['boundary_start_reads', 'start_boundary_reads']);
-    const boundaryStartFractionIdx = findTsvColumnIndex(header, ['boundary_start_fraction', 'start_boundary_fraction']);
-    const seamFractionIdx = findTsvColumnIndex(header, ['seam_fraction', 'seam_support_fraction']);
-    const splitToSeamRatioIdx = findTsvColumnIndex(header, ['split_to_seam_ratio', 'split_seam_ratio']);
-    const artifactFlagIdx = findTsvColumnIndex(header, ['artifact_flag', 'artifact_likely']);
-    const confidenceIdx = findTsvColumnIndex(header, ['confidence', 'confidence_tier', 'screen_confidence']);
-    const windowLabelIdx = findTsvColumnIndex(header, ['junction_window_label', 'window_label', 'window_coords']);
-    const windowSeqIdx = findTsvColumnIndex(header, ['junction_window_seq', 'junction_sequence', 'window_sequence', 'junction_window']);
-
-    const rows: DimerBreakpointScreenRow[] = [];
-    for (const cols of parsed.rows) {
-        const positionModRef = parseOptionalInteger(cols[posIdx >= 0 ? posIdx : 0]);
-        if (!Number.isFinite(positionModRef as number) || (positionModRef as number) <= 0) continue;
-        rows.push({
-            positionModRef: positionModRef as number,
-            totalSupportReads: Math.max(0, parseOptionalInteger(cols[totalIdx >= 0 ? totalIdx : 1]) ?? 0),
-            seamSupportReads: Math.max(0, parseOptionalInteger(cols[seamIdx >= 0 ? seamIdx : 2]) ?? 0),
-            splitSupportReads: Math.max(0, parseOptionalInteger(cols[splitIdx >= 0 ? splitIdx : 3]) ?? 0),
-            supportPctAll: normalizeMaybePercent(parseOptionalNumber(cols[supportPctIdx])),
-            splitPctOfPosition: normalizeMaybePercent(parseOptionalNumber(cols[splitPctPosIdx])),
-            splitPctOfAllSplit: normalizeMaybePercent(parseOptionalNumber(cols[splitPctAllIdx])),
-            inBoundaryWindow: parseOptionalBoolean(cols[boundaryIdx]),
-            boundaryStartReads: parseOptionalInteger(cols[boundaryStartReadsIdx]),
-            boundaryStartFraction: normalizeMaybePercent(parseOptionalNumber(cols[boundaryStartFractionIdx])),
-            seamFraction: normalizeMaybePercent(parseOptionalNumber(cols[seamFractionIdx])),
-            splitToSeamRatio: parseOptionalNumber(cols[splitToSeamRatioIdx]),
-            artifactFlag: parseOptionalBoolean(cols[artifactFlagIdx]),
-            confidence: parseOptionalText(cols[confidenceIdx]),
-            junctionWindowLabel: parseOptionalText(cols[windowLabelIdx]),
-            junctionWindowSeq: parseOptionalText(cols[windowSeqIdx]),
-        });
-        if (rows.length >= maxRows) break;
-    }
-    return rows;
-}
-
-function clustersFromLegacyProfile(rows: DimerJunctionProfileRow[]): DimerJunctionClusterRow[] {
-    return rows.map((row) => ({
-        clusterId: null,
-        positionModRef: row.positionModRef,
-        supportReads: row.readCount,
-        crossingReads: row.spanningReads,
-        supportPercent: null,
-        method: null,
-        orientation: null,
-        eventCount: null,
-        inBoundaryWindow: null,
-        source: 'profile',
-    }));
-}
-
-function clustersFromEvents(rows: DimerReadJunctionRow[]): DimerJunctionClusterRow[] {
-    const grouped = new Map<number, {
-        supportReads: number;
-        crossingReads: number;
-        eventCount: number;
-        methods: Array<string | null>;
-        orientations: Array<string | null>;
-    }>();
-
-    for (const row of rows) {
-        if (row.positionModRef == null) continue;
-        if (!grouped.has(row.positionModRef)) {
-            grouped.set(row.positionModRef, {
-                supportReads: 0,
-                crossingReads: 0,
-                eventCount: 0,
-                methods: [],
-                orientations: [],
-            });
-        }
-        const acc = grouped.get(row.positionModRef)!;
-        acc.supportReads += 1;
-        acc.eventCount += 1;
-        if (row.crossesJunction === true) acc.crossingReads += 1;
-        acc.methods.push(row.method);
-        acc.orientations.push(row.orientation);
-    }
-
-    return Array.from(grouped.entries())
-        .map(([positionModRef, value]) => ({
-            clusterId: null,
-            positionModRef,
-            supportReads: value.supportReads,
-            crossingReads: value.crossingReads,
-            supportPercent: value.supportReads > 0 ? (value.crossingReads / value.supportReads) * 100 : null,
-            method: modeNonEmpty(value.methods),
-            orientation: modeNonEmpty(value.orientations),
-            eventCount: value.eventCount,
-            inBoundaryWindow: null,
-            source: 'events' as const,
-        }))
-        .sort((a, b) => a.positionModRef - b.positionModRef);
 }
 
 function removeDeprecatedSummaryFields(table: SummaryTable): SummaryTable {
@@ -1767,40 +1536,6 @@ function formatSequenceContext(sequence: string, position: number, flank = 12): 
     };
 }
 
-function formatCircularJunctionWindow(
-    sequence: string,
-    rightPosition: number,
-    flank = 50
-): { text: string; label: string } | null {
-    const len = sequence.length;
-    if (!len) return null;
-
-    const normalize = (pos: number): number => {
-        const v = ((pos - 1) % len + len) % len;
-        return v + 1;
-    };
-    const sliceCircular = (startPos: number, count: number): string => {
-        let out = '';
-        for (let i = 0; i < count; i++) {
-            const pos = normalize(startPos + i);
-            out += sequence.charAt(pos - 1) || 'N';
-        }
-        return out;
-    };
-
-    const rightStart = normalize(rightPosition);
-    const leftEnd = normalize(rightStart - 1);
-    const leftStart = normalize(rightStart - flank);
-    const rightEnd = normalize(rightStart + flank - 1);
-
-    const upstream = sliceCircular(rightStart - flank, flank);
-    const downstream = sliceCircular(rightStart, flank);
-    return {
-        text: `${upstream}[|]${downstream}`,
-        label: `${leftStart}-${leftEnd}|${rightStart}-${rightEnd}`,
-    };
-}
-
 function buildSequenceRows(sequence: string, lineWidth = REFERENCE_SEQUENCE_LINE_WIDTH): SequenceRow[] {
     if (!sequence) return [];
     const rows: SequenceRow[] = [];
@@ -1841,13 +1576,6 @@ function toAlphaColor(color: string, alpha: number): string {
 function percentToHighlightAlpha(percentModified: number): number {
     const normalized = clampNumber(percentModified, 0, 100) / 100;
     return 0.12 + (0.72 * normalized);
-}
-
-function readCountToHighlightAlpha(readCount: number, maxReadCount: number): number {
-    if (!Number.isFinite(readCount) || readCount <= 0) return 0;
-    if (!Number.isFinite(maxReadCount) || maxReadCount <= 0) return 0.2;
-    const normalized = clampNumber(readCount / maxReadCount, 0, 1);
-    return 0.15 + (0.75 * Math.sqrt(normalized));
 }
 
 function buildHighlightedSequenceSegments(
@@ -1897,122 +1625,43 @@ function buildHighlightedSequenceSegments(
     return segments;
 }
 
-function buildDimerHighlightedSequenceSegments(
-    row: SequenceRow,
-    highlightsByPosition: Map<number, DimerSequenceHighlight>
-): DimerHighlightedSequenceSegment[] {
-    const segments: DimerHighlightedSequenceSegment[] = [];
-    let plainBuffer = '';
-    let plainStartPos = row.start;
-
-    const flushPlain = () => {
-        if (!plainBuffer) return;
-        segments.push({
-            text: plainBuffer,
-            position: plainStartPos,
-            highlight: null,
-        });
-        plainBuffer = '';
-    };
-
-    for (let offset = 0; offset < row.bases.length; offset += 1) {
-        const position = row.start + offset;
-        const base = row.bases.charAt(offset);
-        const highlight = highlightsByPosition.get(position) || null;
-        if (!highlight) {
-            if (plainBuffer.length === 0) {
-                plainStartPos = position;
-            }
-            plainBuffer += base;
-            continue;
-        }
-        flushPlain();
-        segments.push({
-            text: base,
-            position,
-            highlight,
-        });
-    }
-
-    flushPlain();
-    return segments;
+function parseSemver(version: string): [number, number, number] | null {
+    const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match) return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
-async function waitForIgvScript(script: HTMLScriptElement, source: string): Promise<void> {
-    if ((window as any).igv) return;
-    if (script.dataset.loaded === 'true') return;
-
-    await new Promise<void>((resolve, reject) => {
-        let finished = false;
-        const timeout = window.setTimeout(() => {
-            if (finished) return;
-            finished = true;
-            reject(new Error(`Timed out loading IGV script from ${source}`));
-        }, IGV_SCRIPT_TIMEOUT_MS);
-
-        const cleanup = () => {
-            window.clearTimeout(timeout);
-            script.removeEventListener('load', onLoad);
-            script.removeEventListener('error', onError);
-        };
-
-        const onLoad = () => {
-            if (finished) return;
-            finished = true;
-            cleanup();
-            script.dataset.loaded = 'true';
-            resolve();
-        };
-        const onError = () => {
-            if (finished) return;
-            finished = true;
-            cleanup();
-            reject(new Error(`Failed to load IGV script from ${source}`));
-        };
-
-        script.addEventListener('load', onLoad);
-        script.addEventListener('error', onError);
-    });
+function isVersionAtLeast(actual: string, required: string): boolean {
+    const actualParts = parseSemver(actual);
+    const requiredParts = parseSemver(required);
+    if (!actualParts || !requiredParts) return false;
+    for (let i = 0; i < 3; i += 1) {
+        if (actualParts[i] > requiredParts[i]) return true;
+        if (actualParts[i] < requiredParts[i]) return false;
+    }
+    return true;
 }
 
-async function loadIgvLibrary(): Promise<any> {
-    if ((window as any).igv) return (window as any).igv;
-
-    let lastError: Error | null = null;
-    for (let i = 0; i < IGV_SCRIPT_URLS.length; i++) {
-        const source = IGV_SCRIPT_URLS[i];
-        const scriptId = `${IGV_SCRIPT_BASE_ID}-${i}`;
-        let script = document.getElementById(scriptId) as HTMLScriptElement | null;
-
-        if (script && script.dataset.failed === 'true') {
-            script.remove();
-            script = null;
-        }
-
-        if (!script) {
-            script = document.createElement('script');
-            script.id = scriptId;
-            script.src = source;
-            script.async = true;
-            script.dataset.loaded = 'false';
-            script.dataset.failed = 'false';
-            document.head.appendChild(script);
-        }
-
-        try {
-            await waitForIgvScript(script, source);
-            if ((window as any).igv) {
-                return (window as any).igv;
-            }
-            lastError = new Error(`IGV script loaded from ${source} but window.igv is unavailable`);
-        } catch (err) {
-            script.dataset.failed = 'true';
-            lastError = err instanceof Error ? err : new Error(String(err));
-        }
+async function loadIgvLibrary(): Promise<{ igv: IgvLibrary; version: string }> {
+    if (!igvLibraryPromise) {
+        igvLibraryPromise = import('igv')
+            .then((mod) => {
+                const igv = mod.default;
+                if (!igv || typeof igv.createBrowser !== 'function') {
+                    throw new Error('IGV package loaded, but createBrowser is unavailable.');
+                }
+                const version = typeof igv.version === 'function' ? igv.version() : 'unknown';
+                if (version !== 'unknown' && !isVersionAtLeast(version, IGV_REQUIRED_VERSION)) {
+                    throw new Error(`Loaded IGV.js ${version}, but ${IGV_REQUIRED_VERSION}+ is required.`);
+                }
+                return { igv, version };
+            })
+            .catch((error) => {
+                igvLibraryPromise = null;
+                throw error instanceof Error ? error : new Error(String(error));
+            });
     }
-
-    const sourceList = IGV_SCRIPT_URLS.join(', ');
-    throw lastError || new Error(`Failed to load IGV script from configured sources: ${sourceList}`);
+    return igvLibraryPromise;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -2064,6 +1713,337 @@ async function detectInitialLocusFromFasta(fastaUrl: string | null): Promise<str
     }
 }
 
+function resolveIgvReadsTrackHeight(container: HTMLDivElement | null, auxiliaryTrackHeightPx = 0): number {
+    const height = container?.clientHeight ?? 0;
+    if (height <= 0) return IGV_READS_TRACK_MIN_WITHOUT_AUX_PX;
+    if (auxiliaryTrackHeightPx <= 0) {
+        return Math.max(IGV_READS_TRACK_MIN_WITHOUT_AUX_PX, Math.floor(height - IGV_READS_TRACK_BOTTOM_GUTTER_PX));
+    }
+    const reservedCap = Math.floor(height * IGV_AUX_TRACK_MAX_RESERVED_FRACTION);
+    const reserved = Math.min(
+        reservedCap,
+        Math.max(0, Math.round(auxiliaryTrackHeightPx + IGV_AUX_TRACK_RESERVED_GUTTER_PX))
+    );
+    // Keep only a tiny gutter so alignment rows can consume nearly all available vertical space.
+    return Math.max(IGV_READS_TRACK_MIN_HEIGHT_PX, Math.floor(height - reserved - IGV_READS_TRACK_BOTTOM_GUTTER_PX));
+}
+
+function findIgvAlignmentTrack(browser: any): any | null {
+    if (!browser || typeof browser.findTracks !== 'function') return null;
+    const tracks = browser.findTracks((track: any) => {
+        if (!track) return false;
+        const type = String(track.type || track.config?.type || '').toLowerCase();
+        return type === 'alignment' || Boolean(track.alignmentTrack);
+    });
+    if (Array.isArray(tracks) && tracks.length > 0) return tracks[0];
+    const byName = browser.findTracks('name', 'Aligned Reads');
+    if (Array.isArray(byName) && byName.length > 0) return byName[0];
+    return null;
+}
+
+function applyIgvAlignmentOptionsToTrack(
+    track: any,
+    options: { displayMode: string; colorBy: string; groupBy: string }
+): void {
+    if (!track) return;
+    const bamTrack = track.alignmentTrack ? track : null;
+    const alignmentTrack = bamTrack?.alignmentTrack || track.alignmentTrack || track;
+    if (!alignmentTrack) return;
+
+    const displayMode = options.displayMode.toUpperCase();
+    // IGV alignment tracks use explicit "none" here; undefined falls back to default
+    // (often pair-based coloring), which makes UI controls appear ineffective.
+    const nextColorBy = options.colorBy || 'none';
+    const nextGroupBy = options.groupBy === 'none' ? undefined : options.groupBy;
+    const colorChanged = alignmentTrack.colorBy !== nextColorBy;
+    const groupChanged = alignmentTrack.groupBy !== nextGroupBy;
+    const trackView = alignmentTrack.trackView || bamTrack?.trackView || track.trackView;
+
+    if (typeof alignmentTrack.setDisplayMode === 'function') {
+        alignmentTrack.setDisplayMode(displayMode);
+    } else if (typeof track.setDisplayMode === 'function') {
+        track.setDisplayMode(displayMode);
+    } else {
+        alignmentTrack.displayMode = displayMode;
+        if (alignmentTrack.config) {
+            alignmentTrack.config.displayMode = displayMode;
+        }
+        trackView?.checkContentHeight?.();
+    }
+
+    alignmentTrack.colorBy = nextColorBy;
+    if (alignmentTrack.config) {
+        alignmentTrack.config.colorBy = nextColorBy;
+    }
+
+    alignmentTrack.groupBy = nextGroupBy;
+    if (alignmentTrack.config) {
+        alignmentTrack.config.groupBy = nextGroupBy;
+    }
+
+    if (groupChanged && typeof alignmentTrack.repackAlignments === 'function') {
+        alignmentTrack.repackAlignments();
+        return;
+    }
+
+    if (groupChanged && typeof alignmentTrack.getCachedAlignmentContainers === 'function') {
+        const containers = alignmentTrack.getCachedAlignmentContainers();
+        if (Array.isArray(containers)) {
+            for (const container of containers) {
+                if (container && typeof container.pack === 'function') {
+                    container.pack(alignmentTrack);
+                }
+            }
+        }
+        trackView?.checkContentHeight?.();
+    }
+
+    if (colorChanged || groupChanged) {
+        trackView?.checkContentHeight?.();
+    }
+    trackView?.repaintViews?.();
+}
+
+function resolveIgvAuxiliaryTrackHeight(browser: any): number {
+    if (!browser || typeof browser.findTracks !== 'function') return 0;
+    const auxTracks = browser.findTracks((track: any) => {
+        if (!track) return false;
+        const type = String(track.type || track.config?.type || '').toLowerCase();
+        return type !== 'alignment' && type !== 'ruler' && type !== 'ideogram';
+    });
+    if (!Array.isArray(auxTracks) || auxTracks.length === 0) return 0;
+    return auxTracks.reduce((sum: number, track: any) => {
+        const height = Number(track?.height ?? track?.config?.height);
+        if (!Number.isFinite(height)) return sum + 42;
+        return sum + Math.max(20, Math.round(height));
+    }, 0);
+}
+
+function resizeIgvAlignmentTrackToContainer(browser: any, container: HTMLDivElement | null): void {
+    const track = findIgvAlignmentTrack(browser);
+    if (!track) return;
+    const alignmentTrack = track.alignmentTrack || track;
+    const trackView = alignmentTrack?.trackView || track?.trackView;
+    if (!alignmentTrack || !trackView) return;
+
+    const auxHeight = resolveIgvAuxiliaryTrackHeight(browser);
+    const nextHeight = resolveIgvReadsTrackHeight(container, auxHeight);
+    const currentHeight = Number(alignmentTrack.height ?? track.height ?? alignmentTrack.config?.height ?? 0);
+    if (Number.isFinite(currentHeight) && Math.abs(currentHeight - nextHeight) < 2) return;
+
+    alignmentTrack.height = nextHeight;
+    if (alignmentTrack.config) {
+        alignmentTrack.config.height = nextHeight;
+    }
+    if (track !== alignmentTrack) {
+        track.height = nextHeight;
+        if (track.config) {
+            track.config.height = nextHeight;
+        }
+    }
+    trackView.checkContentHeight?.();
+    trackView.repaintViews?.();
+}
+
+async function requestDocumentFullscreen(): Promise<void> {
+    if (!document.fullscreenEnabled || document.fullscreenElement) return;
+    await document.documentElement.requestFullscreen();
+}
+
+async function exitDocumentFullscreen(): Promise<void> {
+    if (!document.fullscreenElement) return;
+    await document.exitFullscreen();
+}
+
+function resolveThemeColor(cssVarName: string, fallback: string): string {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(cssVarName).trim();
+    return value || fallback;
+}
+
+function ensureIgvThemeStyles(container: HTMLDivElement | null): void {
+    const shadowRoot = container?.shadowRoot;
+    if (!shadowRoot) return;
+    if (shadowRoot.querySelector('style[data-bms-igv-theme="true"]')) return;
+
+    const style = document.createElement('style');
+    style.setAttribute('data-bms-igv-theme', 'true');
+    style.textContent = `
+      .igv-container {
+        background-color: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+      }
+      .igv-navbar,
+      .igv-navbar-left-container,
+      .igv-navbar-right-container,
+      .igv-navbar-header,
+      .igv-trackgear-container,
+      .igv-current-genome,
+      .igv-locus-size-group,
+      .igv-search-container,
+      .igv-ruler-div,
+      .igv-ruler-shim,
+      .igv-ruler-label,
+      .igv-whole-genome-container,
+      .igv-track-label,
+      .igv-track-label-name,
+      .igv-ruler-tooltip,
+      .igv-cytoband-tooltip,
+      .igv-viewport-message {
+        color: var(--text-primary) !important;
+      }
+      .igv-ruler-div svg text,
+      .igv-ruler-div text {
+        fill: var(--text-primary) !important;
+      }
+      .igv-ruler-div,
+      .igv-ruler-shim,
+      .igv-ruler-shim * {
+        color: var(--text-primary) !important;
+      }
+      .igv-menu-popup *,
+      .igv-ui-dropdown *,
+      .igv-track-menu-category {
+        color: var(--text-primary) !important;
+      }
+      .igv-navbar,
+      .igv-menu-popup,
+      .igv-ui-dropdown,
+      .igv-ui-dropdown > div,
+      .igv-ui-dropdown > div > div,
+      .igv-menu-popup > div:not(:first-child) > div,
+      .igv-track-label {
+        background-color: var(--bg-secondary) !important;
+        border-color: var(--border-primary) !important;
+      }
+      .igv-search-input,
+      .igv-current-genome,
+      .igv-locus-size-group {
+        color: var(--text-primary) !important;
+        background-color: var(--bg-primary) !important;
+        border-color: var(--border-primary) !important;
+      }
+      .igv-search-input::placeholder {
+        color: var(--text-secondary) !important;
+        opacity: 1;
+      }
+      .igv-navbar-button,
+      .igv-navbar-text-button,
+      .igv-navbar-icon-button {
+        color: var(--text-primary) !important;
+        border-color: var(--border-primary) !important;
+        background-color: var(--bg-tertiary) !important;
+      }
+      .igv-navbar-button:hover,
+      .igv-navbar-text-button:hover,
+      .igv-navbar-icon-button:hover {
+        background-color: var(--card-hover) !important;
+      }
+      .igv-ruler-tooltip > div,
+      .igv-cytoband-tooltip > div {
+        color: var(--text-primary) !important;
+        background-color: color-mix(in srgb, var(--bg-secondary) 96%, transparent) !important;
+        border: 1px solid var(--border-primary) !important;
+      }
+      .igv-navbar-text-button-svg-inactive rect,
+      #igv-save-svg-group rect,
+      #igv-save-png-group rect {
+        fill: var(--bg-tertiary) !important;
+        stroke: var(--border-secondary) !important;
+      }
+      .igv-navbar-text-button-svg-inactive text,
+      #igv-save-svg-group text,
+      #igv-save-png-group text {
+        fill: var(--text-primary) !important;
+      }
+      .igv-navbar-text-button-svg-hover rect,
+      #igv-save-svg-group:hover rect,
+      #igv-save-png-group:hover rect {
+        fill: var(--card-hover) !important;
+        stroke: var(--border-secondary) !important;
+      }
+      .igv-navbar-text-button-svg-hover text,
+      #igv-save-svg-group:hover text,
+      #igv-save-png-group:hover text {
+        fill: var(--text-primary) !important;
+      }
+      .igv-viewport-message {
+        background-color: color-mix(in srgb, var(--bg-secondary) 90%, transparent) !important;
+      }
+    `;
+    shadowRoot.appendChild(style);
+}
+
+function patchIgvRulerContrast(browser: any): void {
+    if (!browser || typeof browser.findTracks !== 'function') return;
+    const tracks = browser.findTracks((track: any) => {
+        if (!track) return false;
+        const type = String(track.type || track.config?.type || '').toLowerCase();
+        const idOrName = String(track.id || track.name || '').toLowerCase();
+        return type === 'ruler' || idOrName.includes('ruler');
+    });
+    if (!Array.isArray(tracks)) return;
+
+    for (const track of tracks) {
+        if (!track || track.__bmsRulerContrastPatched) continue;
+        if (typeof track.doDraw !== 'function') continue;
+        if (typeof track.height === 'number' && track.height < 56) {
+            track.height = 56;
+        }
+
+        const originalDoDraw = track.doDraw.bind(track);
+        track.doDraw = (args: any) => {
+            const context = args?.context;
+            if (!context || typeof context.save !== 'function' || typeof context.restore !== 'function') {
+                return originalDoDraw(args);
+            }
+
+            const textColor = resolveThemeColor('--text-primary', '#e5e7eb');
+            const lineColor = resolveThemeColor('--border-secondary', textColor);
+            const fontFamily = getComputedStyle(document.body).fontFamily || 'sans-serif';
+            const originalFillText = typeof context.fillText === 'function'
+                ? context.fillText.bind(context)
+                : null;
+            const originalStrokeText = typeof context.strokeText === 'function'
+                ? context.strokeText.bind(context)
+                : null;
+
+            context.save();
+            context.fillStyle = textColor;
+            context.strokeStyle = lineColor;
+            context.lineWidth = 1.1;
+            context.font = `600 13px ${fontFamily}`;
+            context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            context.shadowBlur = 1;
+            if (originalFillText) {
+                context.fillText = (...drawArgs: any[]) => {
+                    context.fillStyle = textColor;
+                    context.font = `600 13px ${fontFamily}`;
+                    return originalFillText(...drawArgs);
+                };
+            }
+            if (originalStrokeText) {
+                context.strokeText = (...drawArgs: any[]) => {
+                    context.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+                    context.lineWidth = 1.2;
+                    return originalStrokeText(...drawArgs);
+                };
+            }
+            try {
+                return originalDoDraw(args);
+            } finally {
+                if (originalFillText) {
+                    context.fillText = originalFillText;
+                }
+                if (originalStrokeText) {
+                    context.strokeText = originalStrokeText;
+                }
+                context.restore();
+            }
+        };
+        track.__bmsRulerContrastPatched = true;
+    }
+}
+
 function stageDisplayName(stage: string | null | undefined): string {
     if (!stage) return '—';
     const key = stage.toLowerCase();
@@ -2098,7 +2078,8 @@ function normalizeInitialValues(job: Job | null): Record<string, unknown> | unde
         modifiedBases: p.modified_bases || '6mA 4mC_5mC',
         trimAdapters: p.trim_adapters !== false,
         runModkit: p.run_modkit !== false,
-        runMultimerQc: p.run_multimer_qc === true,
+        runFastqQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
+        runMultimerQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
         expectedPlasmidSize: p.expected_plasmid_size ?? 7000,
         enableRotatingReferenceFrames: p.enable_rotating_reference_frames !== false,
         rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
@@ -2135,8 +2116,16 @@ export function NGSToolkit() {
     const [logsData, setLogsData] = useState<JobLogs | null>(null);
     const [activeLogTab, setActiveLogTab] = useState<LogTab>('parsed');
     const [igvModalOpen, setIgvModalOpen] = useState(false);
+    const [igvIsFullscreen, setIgvIsFullscreen] = useState(false);
     const [igvLoading, setIgvLoading] = useState(false);
     const [igvError, setIgvError] = useState<string | null>(null);
+    const [igvVersion, setIgvVersion] = useState<string | null>(null);
+    const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
+    const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<string>('EXPANDED');
+    const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<string>('strand');
+    const [igvAlignmentGroupBy, setIgvAlignmentGroupBy] = useState<string>('none');
+    const [igvSelectedBamPath, setIgvSelectedBamPath] = useState<string>('');
+    const [igvSelectedReferencePath, setIgvSelectedReferencePath] = useState<string>('');
     const [multimerLoading, setMultimerLoading] = useState(false);
     const [multimerError, setMultimerError] = useState<string | null>(null);
     const [multimerReport, setMultimerReport] = useState<MultimerReportData | null>(null);
@@ -2144,7 +2133,6 @@ export function NGSToolkit() {
     const [methylationError, setMethylationError] = useState<string | null>(null);
     const [methylationReport, setMethylationReport] = useState<MethylationReportData | null>(null);
     const [showRawTopLoci, setShowRawTopLoci] = useState(false);
-    const [includeBoundaryJunctions, setIncludeBoundaryJunctions] = useState(DEFAULT_INCLUDE_BOUNDARY_JUNCTIONS);
     const [selectedMotifPoint, setSelectedMotifPoint] = useState<SelectedMotifPoint | null>(null);
     const [strandFilter, setStrandFilter] = useState<(typeof METHYLATION_STRAND_FILTERS)[number]>('both');
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
@@ -2152,10 +2140,42 @@ export function NGSToolkit() {
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<any | null>(null);
+    const igvLoadedSourceKeyRef = useRef('');
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
     const themeColors = useThemeColors();
     const basePlotlyLayout = useThemePlotlyLayout();
+
+    const openIgvModal = useCallback(async () => {
+        setIgvModalOpen(true);
+        try {
+            await requestDocumentFullscreen();
+        } catch {
+            // Fullscreen requests can be denied by browser policy; modal still opens.
+        }
+    }, []);
+
+    const closeIgvModal = useCallback(async () => {
+        setIgvModalOpen(false);
+        setIgvError(null);
+        igvLoadedSourceKeyRef.current = '';
+        try {
+            await exitDocumentFullscreen();
+        } catch {
+            // no-op
+        }
+    }, []);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIgvIsFullscreen(Boolean(document.fullscreenElement));
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        handleFullscreenChange();
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        };
+    }, []);
 
     useEffect(() => {
         const raw = localStorage.getItem('clonedJobData');
@@ -2275,45 +2295,184 @@ export function NGSToolkit() {
         () => resolveMethylationArtifacts(selectedJob, stageOutputs),
         [selectedJob, stageOutputs]
     );
+    const igvSourcePaths = useMemo(() => {
+        const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
+        const runPrefix = resolveRunPrefix(selectedJob?.output_dir, allPaths);
+        return runPrefix ? dedupePaths(filterPathsByRunPrefix(allPaths, runPrefix)) : allPaths;
+    }, [selectedJob?.output_dir, stageOutputs]);
+    const igvAlignmentSources = useMemo<IgvAlignmentSource[]>(() => {
+        const sourcePaths = dedupePaths([
+            ...igvSourcePaths,
+            ...(igvArtifacts.bamPath ? [igvArtifacts.bamPath] : []),
+        ]);
+        const bamPaths = sourcePaths.filter((path) => (
+            /\.bam$/i.test(path)
+            && !/\.bam\.(bai|csi)$/i.test(path)
+            && !/\/calls\.bam$/i.test(path)
+        ));
+        const cacheKey = selectedJob?.id || undefined;
+        return bamPaths.map((bamPath) => {
+            const baiPath = resolveBamIndexArtifactPath(bamPath, sourcePaths);
+            return {
+                label: formatIgvSourceLabel(bamPath),
+                bamPath,
+                bamUrl: toStreamHref(bamPath, cacheKey),
+                baiPath,
+                baiUrl: baiPath ? toStreamHref(baiPath, cacheKey) : null,
+            };
+        }).filter((source) => Boolean(source.bamUrl));
+    }, [igvSourcePaths, igvArtifacts.bamPath, selectedJob?.id]);
+    const igvReferenceSources = useMemo<IgvReferenceSource[]>(() => {
+        const sourcePaths = dedupePaths([
+            ...igvSourcePaths,
+            ...(igvArtifacts.fastaPath ? [igvArtifacts.fastaPath] : []),
+            ...(selectedReferenceFastaPath ? [selectedReferenceFastaPath] : []),
+        ]);
+        const fastaPaths = sourcePaths.filter((path) => (
+            /\.(fasta|fa)$/i.test(path)
+            && !/\.fai$/i.test(path)
+        ));
+        const cacheKey = selectedJob?.id || undefined;
+        return fastaPaths.map((fastaPath) => {
+            const faiPath = resolveFastaIndexArtifactPath(fastaPath, sourcePaths);
+            return {
+                label: formatIgvSourceLabel(fastaPath),
+                fastaPath,
+                fastaUrl: toStreamHref(fastaPath, cacheKey),
+                faiPath,
+                faiUrl: faiPath ? toStreamHref(faiPath, cacheKey) : null,
+            };
+        }).filter((source) => Boolean(source.fastaUrl));
+    }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id]);
+    const selectedIgvAlignmentSource = useMemo(
+        () => igvAlignmentSources.find((source) => source.bamPath === igvSelectedBamPath) || igvAlignmentSources[0] || null,
+        [igvAlignmentSources, igvSelectedBamPath]
+    );
+    const selectedIgvReferenceSource = useMemo(
+        () => igvReferenceSources.find((source) => source.fastaPath === igvSelectedReferencePath) || igvReferenceSources[0] || null,
+        [igvReferenceSources, igvSelectedReferencePath]
+    );
+    const activeIgvBamPath = selectedIgvAlignmentSource?.bamPath || igvArtifacts.bamPath;
+    const activeIgvBamUrl = selectedIgvAlignmentSource?.bamUrl || igvArtifacts.bamUrl;
+    const activeIgvBaiPath = selectedIgvAlignmentSource?.baiPath || igvArtifacts.baiPath;
+    const activeIgvBaiUrl = selectedIgvAlignmentSource?.baiUrl || igvArtifacts.baiUrl;
+    const activeIgvFastaPath = selectedIgvReferenceSource?.fastaPath || igvArtifacts.fastaPath || selectedReferenceFastaPath;
+    const activeIgvFastaUrl = selectedIgvReferenceSource?.fastaUrl || selectedReferenceFastaUrlParam || igvArtifacts.fastaUrl;
+    const activeIgvFaiPath = selectedIgvReferenceSource?.faiPath || igvArtifacts.faiPath;
+    const activeIgvFaiUrl = selectedIgvReferenceSource?.faiUrl || igvArtifacts.faiUrl;
+    const activeIgvSourceKey = `${activeIgvBamPath || ''}::${activeIgvFastaPath || ''}`;
     const selectedReferenceFastaUrl = selectedReferenceFastaUrlParam
-        || igvArtifacts.fastaUrl
-        || multimerArtifacts.dimerReferenceUrl
+        || activeIgvFastaUrl
         || null;
-    const igvReady = !igvArtifacts.missingReason;
+    const igvMissingReason = !activeIgvBamUrl
+        ? 'Aligned BAM artifact not found yet.'
+        : !activeIgvBaiUrl
+            ? 'BAM index (.bai/.csi) not found yet.'
+            : !activeIgvFastaUrl
+                ? 'Reference FASTA not found yet.'
+                : !activeIgvFaiUrl
+                    ? 'Reference FASTA index (.fai) not found yet.'
+                    : null;
+    const igvReady = !igvMissingReason;
     const igvReadinessChecks = useMemo(
         () => [
             {
                 label: 'Aligned BAM',
-                ok: Boolean(igvArtifacts.bamUrl),
-                path: igvArtifacts.bamPath,
+                ok: Boolean(activeIgvBamUrl),
+                path: activeIgvBamPath,
             },
             {
                 label: 'BAM index (.bai/.csi)',
-                ok: Boolean(igvArtifacts.baiUrl),
-                path: igvArtifacts.baiPath,
+                ok: Boolean(activeIgvBaiUrl),
+                path: activeIgvBaiPath,
             },
             {
                 label: 'Reference FASTA',
-                ok: Boolean(igvArtifacts.fastaUrl),
-                path: igvArtifacts.fastaPath,
+                ok: Boolean(activeIgvFastaUrl),
+                path: activeIgvFastaPath,
             },
             {
                 label: 'Reference FASTA index (.fai)',
-                ok: Boolean(igvArtifacts.faiUrl),
-                path: igvArtifacts.faiPath,
+                ok: Boolean(activeIgvFaiUrl),
+                path: activeIgvFaiPath,
             },
         ],
         [
-            igvArtifacts.bamPath,
-            igvArtifacts.bamUrl,
-            igvArtifacts.baiPath,
-            igvArtifacts.baiUrl,
-            igvArtifacts.fastaPath,
-            igvArtifacts.fastaUrl,
-            igvArtifacts.faiPath,
-            igvArtifacts.faiUrl,
+            activeIgvBamPath,
+            activeIgvBamUrl,
+            activeIgvBaiPath,
+            activeIgvBaiUrl,
+            activeIgvFastaPath,
+            activeIgvFastaUrl,
+            activeIgvFaiPath,
+            activeIgvFaiUrl,
         ]
     );
+    const igvAuxReadinessChecks = useMemo(
+        () => [
+            { label: 'Coverage depth track', ok: Boolean(igvArtifacts.coverageDepthUrl), path: igvArtifacts.coverageDepthPath },
+            { label: 'Position gradient track', ok: Boolean(igvArtifacts.positionGradientUrl), path: igvArtifacts.positionGradientPath },
+            { label: 'GC content track', ok: Boolean(igvArtifacts.gcContentUrl), path: igvArtifacts.gcContentPath },
+            { label: 'GC z-score track', ok: Boolean(igvArtifacts.gcZscoreUrl), path: igvArtifacts.gcZscorePath },
+            { label: 'Split-read density track', ok: Boolean(igvArtifacts.splitDensityUrl), path: igvArtifacts.splitDensityPath },
+            { label: 'Soft-clip density track', ok: Boolean(igvArtifacts.softclipDensityUrl), path: igvArtifacts.softclipDensityPath },
+            { label: 'Junction hotspot BED', ok: Boolean(igvArtifacts.junctionHotspotsUrl), path: igvArtifacts.junctionHotspotsPath },
+        ],
+        [
+            igvArtifacts.coverageDepthPath,
+            igvArtifacts.coverageDepthUrl,
+            igvArtifacts.positionGradientPath,
+            igvArtifacts.positionGradientUrl,
+            igvArtifacts.gcContentPath,
+            igvArtifacts.gcContentUrl,
+            igvArtifacts.gcZscorePath,
+            igvArtifacts.gcZscoreUrl,
+            igvArtifacts.splitDensityPath,
+            igvArtifacts.splitDensityUrl,
+            igvArtifacts.softclipDensityPath,
+            igvArtifacts.softclipDensityUrl,
+            igvArtifacts.junctionHotspotsPath,
+            igvArtifacts.junctionHotspotsUrl,
+        ]
+    );
+    const missingIgvAuxTracks = useMemo(
+        () => igvAuxReadinessChecks.filter((check) => !check.ok),
+        [igvAuxReadinessChecks]
+    );
+    useEffect(() => {
+        if (igvAlignmentSources.length === 0) {
+            if (igvSelectedBamPath !== '') {
+                setIgvSelectedBamPath('');
+            }
+            return;
+        }
+        if (!igvAlignmentSources.some((source) => source.bamPath === igvSelectedBamPath)) {
+            const preferred = igvArtifacts.bamPath && igvAlignmentSources.some((source) => source.bamPath === igvArtifacts.bamPath)
+                ? igvArtifacts.bamPath
+                : igvAlignmentSources[0].bamPath;
+            setIgvSelectedBamPath(preferred);
+        }
+    }, [igvAlignmentSources, igvArtifacts.bamPath, igvSelectedBamPath]);
+    useEffect(() => {
+        if (igvReferenceSources.length === 0) {
+            if (igvSelectedReferencePath !== '') {
+                setIgvSelectedReferencePath('');
+            }
+            return;
+        }
+        if (!igvReferenceSources.some((source) => source.fastaPath === igvSelectedReferencePath)) {
+            const preferred = activeIgvFastaPath && igvReferenceSources.some((source) => source.fastaPath === activeIgvFastaPath)
+                ? activeIgvFastaPath
+                : igvReferenceSources[0].fastaPath;
+            setIgvSelectedReferencePath(preferred);
+        }
+    }, [igvReferenceSources, activeIgvFastaPath, igvSelectedReferencePath]);
+    const igvReportDownloadHref = igvArtifacts.reportPath
+        ? toDownloadHref(igvArtifacts.reportPath, selectedJob?.id || undefined)
+        : null;
+    const igvTrackConfigDownloadHref = igvArtifacts.trackConfigPath
+        ? toDownloadHref(igvArtifacts.trackConfigPath, selectedJob?.id || undefined)
+        : null;
     const methylationSummaryDownloadHref = methylationArtifacts.summaryPath
         ? toDownloadHref(methylationArtifacts.summaryPath, selectedJob?.id || undefined)
         : null;
@@ -2329,71 +2488,17 @@ export function NGSToolkit() {
     const multimerCandidatesDownloadHref = multimerArtifacts.candidatesPath
         ? toDownloadHref(multimerArtifacts.candidatesPath, selectedJob?.id || undefined)
         : null;
-    const dimerFastqDownloadHref = multimerArtifacts.dimerFastqPath
-        ? toDownloadHref(multimerArtifacts.dimerFastqPath, selectedJob?.id || undefined)
-        : null;
-    const dimerFastaDownloadHref = multimerArtifacts.dimerFastaPath
-        ? toDownloadHref(multimerArtifacts.dimerFastaPath, selectedJob?.id || undefined)
-        : null;
-    const dimerLengthsDownloadHref = multimerArtifacts.dimerLengthsPath
-        ? toDownloadHref(multimerArtifacts.dimerLengthsPath, selectedJob?.id || undefined)
-        : null;
-    const dimerSummaryDownloadHref = multimerArtifacts.dimerSummaryPath
+    const fastqAlignmentSummaryDownloadHref = multimerArtifacts.dimerSummaryPath
         ? toDownloadHref(multimerArtifacts.dimerSummaryPath, selectedJob?.id || undefined)
         : null;
-    const dimerConsensusDownloadHref = multimerArtifacts.dimerConsensusPath
-        ? toDownloadHref(multimerArtifacts.dimerConsensusPath, selectedJob?.id || undefined)
+    const fastqConsensusDownloadHref = (multimerArtifacts.dominantDimerConsensusPath || multimerArtifacts.dimerConsensusPath)
+        ? toDownloadHref(
+            multimerArtifacts.dominantDimerConsensusPath || multimerArtifacts.dimerConsensusPath || '',
+            selectedJob?.id || undefined
+        )
         : null;
-    const dominantDimerConsensusDownloadHref = multimerArtifacts.dominantDimerConsensusPath
-        ? toDownloadHref(multimerArtifacts.dominantDimerConsensusPath, selectedJob?.id || undefined)
-        : null;
-    const dominantDimerConsensusMetadataDownloadHref = multimerArtifacts.dominantDimerConsensusMetadataPath
-        ? toDownloadHref(multimerArtifacts.dominantDimerConsensusMetadataPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionDownloadHref = multimerArtifacts.dimerJunctionPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionEventsDownloadHref = multimerArtifacts.dimerJunctionEventsPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionEventsPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionClustersDownloadHref = multimerArtifacts.dimerJunctionClustersPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionClustersPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionHotspotsDownloadHref = multimerArtifacts.dimerJunctionHotspotsPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionHotspotsPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionRotatedDownloadHref = multimerArtifacts.dimerJunctionRotatedPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionRotatedPath, selectedJob?.id || undefined)
-        : null;
-    const dimerJunctionRotationSummaryDownloadHref = multimerArtifacts.dimerJunctionRotationSummaryPath
-        ? toDownloadHref(multimerArtifacts.dimerJunctionRotationSummaryPath, selectedJob?.id || undefined)
-        : null;
-    const dimerBreakpointScreenDownloadHref = multimerArtifacts.dimerBreakpointScreenPath
-        ? toDownloadHref(multimerArtifacts.dimerBreakpointScreenPath, selectedJob?.id || undefined)
-        : null;
-    const dimerBreakpointSequencesDownloadHref = multimerArtifacts.dimerBreakpointSequencesPath
-        ? toDownloadHref(multimerArtifacts.dimerBreakpointSequencesPath, selectedJob?.id || undefined)
-        : null;
-    const dimerSecondaryAnomaliesDownloadHref = multimerArtifacts.dimerSecondaryAnomaliesPath
-        ? toDownloadHref(multimerArtifacts.dimerSecondaryAnomaliesPath, selectedJob?.id || undefined)
-        : null;
-    const dimerSecondarySummaryDownloadHref = multimerArtifacts.dimerSecondarySummaryPath
-        ? toDownloadHref(multimerArtifacts.dimerSecondarySummaryPath, selectedJob?.id || undefined)
-        : null;
-    const dimerReadsDownloadHref = multimerArtifacts.dimerReadsPath
-        ? toDownloadHref(multimerArtifacts.dimerReadsPath, selectedJob?.id || undefined)
-        : null;
-    const dimerReadLedgerDownloadHref = multimerArtifacts.dimerReadLedgerPath
-        ? toDownloadHref(multimerArtifacts.dimerReadLedgerPath, selectedJob?.id || undefined)
-        : null;
-    const dimerBreakpointReadsDownloadHref = multimerArtifacts.dimerBreakpointReadsPath
-        ? toDownloadHref(multimerArtifacts.dimerBreakpointReadsPath, selectedJob?.id || undefined)
-        : null;
-    const dimerRotatedRemapSummaryDownloadHref = multimerArtifacts.dimerRotatedRemapSummaryPath
-        ? toDownloadHref(multimerArtifacts.dimerRotatedRemapSummaryPath, selectedJob?.id || undefined)
-        : null;
-    const dimerRotatedRemapBreakpointsDownloadHref = multimerArtifacts.dimerRotatedRemapBreakpointsPath
-        ? toDownloadHref(multimerArtifacts.dimerRotatedRemapBreakpointsPath, selectedJob?.id || undefined)
+    const fastqQcLogDownloadHref = multimerArtifacts.logPath
+        ? toDownloadHref(multimerArtifacts.logPath, selectedJob?.id || undefined)
         : null;
     const motifAllSites = useMemo(
         () => {
@@ -2645,14 +2750,45 @@ export function NGSToolkit() {
         themeColors.error,
     ]);
     const multimerMetrics = multimerReport?.metrics || {};
-    const dimerMetrics = useMemo(
-        () => parseNumericMetricsFromSummaryTable(multimerReport?.dimerSummary || null),
-        [multimerReport?.dimerSummary]
-    );
     const expectedPlasmidSize = Number.isFinite(multimerMetrics.expected_plasmid_size)
         ? multimerMetrics.expected_plasmid_size
         : Number.parseFloat(String(selectedJobParams.expected_plasmid_size ?? ''));
-    const dimerSummaryLookup = useMemo(() => {
+    const multimerSummaryLookup = useMemo(() => {
+        const table = multimerReport?.summary;
+        if (!table || table.header.length === 0) return new Map<string, string>();
+        const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
+        const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
+        if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
+        const lookup = new Map<string, string>();
+        for (const row of table.rows) {
+            const key = String(row[metricIdx] ?? '').trim().toLowerCase();
+            if (!key) continue;
+            lookup.set(key, String(row[valueIdx] ?? '').trim());
+        }
+        return lookup;
+    }, [multimerReport?.summary]);
+    const readMultimerMetric = useCallback((keys: string[]): number => {
+        for (const key of keys) {
+            const fromMetrics = multimerMetrics[key];
+            if (Number.isFinite(fromMetrics)) return Number(fromMetrics);
+            const raw = multimerSummaryLookup.get(key.toLowerCase());
+            if (raw == null) continue;
+            const fromSummary = Number.parseFloat(raw);
+            if (Number.isFinite(fromSummary)) return fromSummary;
+        }
+        return 0;
+    }, [multimerMetrics, multimerSummaryLookup]);
+    const multimerClassCounts = useMemo(() => ({
+        monomer: Math.max(0, Math.round(readMultimerMetric(['monomer_like_reads', 'monomer_reads']))),
+        dimer: Math.max(0, Math.round(readMultimerMetric(['dimer_candidate_reads', 'dimer_reads']))),
+        trimer: Math.max(0, Math.round(readMultimerMetric(['trimer_reads']))),
+        highOrder: Math.max(0, Math.round(readMultimerMetric(['multimer_candidate_reads', 'tetramer_plus_reads']))),
+    }), [readMultimerMetric]);
+    const totalClassifiedReads = useMemo(
+        () => multimerClassCounts.monomer + multimerClassCounts.dimer + multimerClassCounts.trimer + multimerClassCounts.highOrder,
+        [multimerClassCounts]
+    );
+    const alignmentSummaryLookup = useMemo(() => {
         const table = multimerReport?.dimerSummary;
         if (!table || table.header.length === 0) return new Map<string, string>();
         const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
@@ -2666,259 +2802,44 @@ export function NGSToolkit() {
         }
         return lookup;
     }, [multimerReport?.dimerSummary]);
-    const readDimerSummaryNumber = useCallback(
-        (keys: string[]): number | null => {
-            for (const key of keys) {
-                const raw = dimerSummaryLookup.get(key.toLowerCase());
-                if (raw == null) continue;
-                const value = Number.parseFloat(raw);
-                if (Number.isFinite(value)) return value;
-            }
-            return null;
-        },
-        [dimerSummaryLookup]
-    );
-    const dimerJunctionEvidenceRows = useMemo(
-        () => {
-            const clusterRows = multimerReport?.dimerJunctionClusters || [];
-            if (clusterRows.length > 0) {
-                return [...clusterRows].sort((a, b) => a.positionModRef - b.positionModRef);
-            }
-            return clustersFromLegacyProfile(multimerReport?.dimerJunctionRows || []);
-        },
-        [multimerReport?.dimerJunctionClusters, multimerReport?.dimerJunctionRows]
-    );
-    const dimerNonBoundaryEvidenceRows = useMemo(
-        () => dimerJunctionEvidenceRows.filter((row) => row.inBoundaryWindow !== true),
-        [dimerJunctionEvidenceRows]
-    );
-    const dimerDisplayEvidenceRows = useMemo(
-        () => (includeBoundaryJunctions ? dimerJunctionEvidenceRows : dimerNonBoundaryEvidenceRows),
-        [includeBoundaryJunctions, dimerJunctionEvidenceRows, dimerNonBoundaryEvidenceRows]
-    );
-    const dimerHotspots = useMemo(
-        () => [...dimerDisplayEvidenceRows]
-            .sort((a, b) => {
-                const crossing = (b.crossingReads || 0) - (a.crossingReads || 0);
-                if (crossing !== 0) return crossing;
-                const support = (b.supportReads || 0) - (a.supportReads || 0);
-                if (support !== 0) return support;
-                return a.positionModRef - b.positionModRef;
-            })
-            .slice(0, 20),
-        [dimerDisplayEvidenceRows]
-    );
-    const topDimerHotspot = dimerHotspots.length > 0 ? dimerHotspots[0] : null;
-    const boundaryWindowBp = readDimerSummaryNumber(['boundary_window_bp']);
-    const boundaryWindowSupportReads = readDimerSummaryNumber(['boundary_window_support_reads']);
-    const boundaryWindowSupportPct = readDimerSummaryNumber(['boundary_window_support_pct']);
-    const rotationSelectedOffsetBp = readDimerSummaryNumber(['rotation_selected_offset_bp']);
-    const rotationDominantPosRotated = readDimerSummaryNumber(['rotation_dominant_hotspot_position_rotated']);
-    const rotationDominantPosModRef = readDimerSummaryNumber(['rotation_dominant_hotspot_position_mod_ref']);
-    const rotationBoundarySupportPct = readDimerSummaryNumber(['rotation_selected_boundary_support_pct']);
-    const dominantSplitPos = readDimerSummaryNumber(['dominant_split_junction_position_mod_ref']);
-    const dominantSplitSupportReads = readDimerSummaryNumber(['dominant_split_junction_support_reads']);
-    const dominantSplitSupportPct = readDimerSummaryNumber(['dominant_split_junction_support_pct']);
-    const dominantSplitSupportPctOfSplit = readDimerSummaryNumber(['dominant_split_junction_support_pct_of_split']);
-    const splitSupportReads = readDimerSummaryNumber(['split_support_reads']);
-    const screenedPrimaryBreakpointPos = readDimerSummaryNumber(['screened_primary_breakpoint_position_mod_ref']);
-    const screenedPrimaryBreakpointSupportReads = readDimerSummaryNumber(['screened_primary_breakpoint_support_reads']);
-    const screenedPrimaryBreakpointBoundaryStartFraction = readDimerSummaryNumber(['screened_primary_breakpoint_boundary_start_fraction']);
-    const screenedPrimaryBreakpointSeamFraction = readDimerSummaryNumber(['screened_primary_breakpoint_seam_fraction']);
-    const screenedPrimaryBreakpointSplitToSeamRatio = readDimerSummaryNumber(['screened_primary_breakpoint_split_to_seam_ratio']);
-    const informativeBreakpointCount = readDimerSummaryNumber(['informative_breakpoint_count']);
-    const artifactBreakpointCount = readDimerSummaryNumber(['artifact_breakpoint_count']);
-    const seamOnlyUnresolvedFlag = readDimerSummaryNumber(['seam_only_unresolved_flag']);
-    const boundaryDominantArtifactFlag = readDimerSummaryNumber(['boundary_dominant_artifact_flag']);
-    const screenedPrimaryBreakpointConfidence = (dimerSummaryLookup.get('screened_primary_breakpoint_confidence') || '').trim().toLowerCase();
-    const breakpointModelStatus = (dimerSummaryLookup.get('breakpoint_model_status') || '').trim().toLowerCase();
-    const splitJunctionHotspots = useMemo(() => {
-        const grouped = new Map<number, number>();
-        for (const row of multimerReport?.dimerReadJunctions || []) {
-            if (row.crossesJunction !== true) continue;
-            if (row.positionModRef == null || !Number.isFinite(row.positionModRef) || row.positionModRef <= 0) continue;
-            if (!row.method || !row.method.toLowerCase().includes('split')) continue;
-            const pos = Math.round(row.positionModRef);
-            grouped.set(pos, (grouped.get(pos) || 0) + 1);
+    const readAlignmentMetric = useCallback((keys: string[]): number | null => {
+        for (const key of keys) {
+            const raw = alignmentSummaryLookup.get(key.toLowerCase());
+            if (raw == null) continue;
+            const parsed = Number.parseFloat(raw);
+            if (Number.isFinite(parsed)) return parsed;
         }
-        return Array.from(grouped.entries())
-            .map(([positionModRef, supportReads]) => ({ positionModRef, supportReads }))
-            .sort((a, b) => b.supportReads - a.supportReads || a.positionModRef - b.positionModRef);
-    }, [multimerReport?.dimerReadJunctions]);
-    const topSplitHotspot = splitJunctionHotspots.length > 0 ? splitJunctionHotspots[0] : null;
-    const screenedPrimaryBreakpoint = (screenedPrimaryBreakpointPos != null
-        && screenedPrimaryBreakpointSupportReads != null
-        && screenedPrimaryBreakpointSupportReads > 0
-        && ['high', 'medium'].includes(screenedPrimaryBreakpointConfidence))
-        ? {
-            positionModRef: Math.round(screenedPrimaryBreakpointPos),
-            supportReads: Math.round(screenedPrimaryBreakpointSupportReads),
-            supportPercent: dominantSplitSupportPct ?? dominantSplitSupportPctOfSplit ?? null,
-            confidence: screenedPrimaryBreakpointConfidence,
-        }
-        : null;
-    const splitSupportedScreenRows = useMemo(
-        () => (multimerReport?.dimerBreakpointScreenRows || [])
-            .filter((row) => row.splitSupportReads > 0 && row.artifactFlag !== true)
-            .filter((row) => {
-                const confidence = (row.confidence || '').trim().toLowerCase();
-                return confidence === 'high' || confidence === 'medium';
-            })
-            .sort((a, b) => b.splitSupportReads - a.splitSupportReads || a.positionModRef - b.positionModRef),
-        [multimerReport?.dimerBreakpointScreenRows]
+        return null;
+    }, [alignmentSummaryLookup]);
+    const alignedReadCount = useMemo(() => {
+        const preferred = readAlignmentMetric(['aligned_reads', 'aligned_dimer_reads', 'mapped_reads']);
+        if (preferred != null) return Math.max(0, Math.round(preferred));
+        const fallback = readMultimerMetric(['aligned_reads']);
+        return fallback > 0 ? Math.max(0, Math.round(fallback)) : null;
+    }, [readAlignmentMetric, readMultimerMetric]);
+    const consensusStatus = alignmentSummaryLookup.get('consensus_status') || null;
+    const consensusPreview = multimerReport?.dominantDimerConsensusPreview
+        || multimerReport?.dimerConsensusPreview
+        || null;
+    const topMultimerCandidates = useMemo(
+        () => (multimerReport?.candidates || []).slice(0, 40),
+        [multimerReport?.candidates]
     );
-    const hasSplitSupportedEvidence = useMemo(() => {
-        if (breakpointModelStatus === 'split_supported' || breakpointModelStatus === 'provisional_split_supported') return true;
-        return splitSupportedScreenRows.length > 0;
-    }, [breakpointModelStatus, splitSupportedScreenRows]);
-    const likelyDimerizationLocus = screenedPrimaryBreakpoint || ((dominantSplitPos != null && dominantSplitSupportReads != null && dominantSplitSupportReads >= MIN_CONFIDENT_SPLIT_SUPPORT_READS)
-        ? {
-            positionModRef: Math.round(dominantSplitPos),
-            supportReads: Math.round(dominantSplitSupportReads),
-            supportPercent: dominantSplitSupportPct ?? dominantSplitSupportPctOfSplit ?? null,
-        }
-        : null);
-    const boundaryDominantArtifactLikely = useMemo(() => {
-        if (boundaryDominantArtifactFlag != null) {
-            return Math.round(boundaryDominantArtifactFlag) === 1;
-        }
-        if (!Number.isFinite(boundaryWindowSupportPct as number)) return false;
-        if ((boundaryWindowSupportPct as number) < 30) return false;
-        if (likelyDimerizationLocus) return false;
-        return true;
-    }, [boundaryDominantArtifactFlag, boundaryWindowSupportPct, likelyDimerizationLocus]);
-    const multimerClassCounts = useMemo(() => {
-        const readMetric = (keys: string[]): number => {
-            for (const key of keys) {
-                const value = multimerMetrics[key];
-                if (Number.isFinite(value)) return Number(value);
-            }
-            return 0;
-        };
-        return {
-            monomer: readMetric(['monomer_like_reads', 'monomer_reads']),
-            dimer: readMetric(['dimer_candidate_reads', 'dimer_reads']),
-            trimer: readMetric(['trimer_reads']),
-            highOrder: readMetric(['multimer_candidate_reads', 'tetramer_plus_reads']),
-        };
-    }, [multimerMetrics]);
-    const dimerCandidateReads = Number.isFinite(dimerMetrics.dimer_candidate_reads)
-        ? Math.round(dimerMetrics.dimer_candidate_reads)
-        : Math.round(multimerClassCounts.dimer);
-    const alignedDimerReads = Number.isFinite(dimerMetrics.aligned_dimer_reads)
-        ? Math.round(dimerMetrics.aligned_dimer_reads)
-        : null;
-    const junctionSpanningReads = Number.isFinite(dimerMetrics.junction_spanning_reads)
-        ? Math.round(dimerMetrics.junction_spanning_reads)
-        : (() => {
-            const totalCrossing = dimerJunctionEvidenceRows.reduce((sum, row) => sum + Math.max(0, row.crossingReads || 0), 0);
-            return totalCrossing > 0 ? totalCrossing : null;
-        })();
-    const splitEvidencePending = !hasSplitSupportedEvidence
-        && ((junctionSpanningReads ?? 0) > 0 || (dimerCandidateReads ?? 0) > 0);
-    const dimerReferenceLength = Number.isFinite(dimerMetrics.reference_length)
-        ? Math.round(dimerMetrics.reference_length)
-        : null;
-    const dimerHotspotRows = useMemo(
-        () => dimerHotspots.map((row) => {
-            const sequence = multimerReport?.referenceSequence || '';
-            const window = sequence && row.positionModRef > 0 && row.positionModRef <= sequence.length
-                ? formatCircularJunctionWindow(sequence, row.positionModRef, 50)
-                : null;
-            const denominator = dimerCandidateReads > 0 ? dimerCandidateReads : 0;
-            const supportSource = row.crossingReads > 0 ? row.crossingReads : row.supportReads;
-            const supportPercent = denominator > 0
-                ? ((supportSource / denominator) * 100)
-                : (row.supportPercent != null ? row.supportPercent : null);
-            return {
-                ...row,
-                supportPercent,
-                window100bp: window?.text || null,
-                windowLabel: window?.label || null,
-            };
-        }),
-        [dimerHotspots, multimerReport?.referenceSequence, dimerCandidateReads]
-    );
-    const dimerBreakpointScreenTopRows = useMemo(
-        () => (multimerReport?.dimerBreakpointScreenRows || []).slice(0, 20).map((row) => {
-            const parsedWindow = row.junctionWindowSeq
-                ? {
-                    text: row.junctionWindowSeq,
-                    label: row.junctionWindowLabel || null,
-                }
-                : null;
-            const derivedWindow = (!parsedWindow && multimerReport?.referenceSequence && row.positionModRef > 0)
-                ? formatCircularJunctionWindow(multimerReport.referenceSequence, row.positionModRef, 50)
-                : null;
-            const windowText = parsedWindow?.text || derivedWindow?.text || null;
-            const windowLabel = parsedWindow?.label || derivedWindow?.label || null;
-            return {
-                ...row,
-                junctionWindowSeq: windowText,
-                junctionWindowLabel: windowLabel,
-            };
-        }),
-        [multimerReport?.dimerBreakpointScreenRows, multimerReport?.referenceSequence]
-    );
-    const dimerReferenceSequenceRows = useMemo(
-        () => buildSequenceRows(multimerReport?.referenceSequence || '', REFERENCE_SEQUENCE_LINE_WIDTH),
-        [multimerReport?.referenceSequence]
-    );
-    const dimerMaxSupportReads = useMemo(
-        () => dimerDisplayEvidenceRows.reduce((max, row) => {
-            const supportSource = row.crossingReads > 0 ? row.crossingReads : row.supportReads;
-            return Math.max(max, Math.max(0, supportSource || 0));
-        }, 0),
-        [dimerDisplayEvidenceRows]
-    );
-    const dimerSequenceHighlightsByPosition = useMemo(() => {
-        const highlights = new Map<number, DimerSequenceHighlight>();
-        const sequenceLen = (multimerReport?.referenceSequence || '').length;
-        const denominator = dimerCandidateReads > 0 ? dimerCandidateReads : null;
-
-        for (const row of dimerDisplayEvidenceRows) {
-            const position = Math.round(row.positionModRef || 0);
-            if (!Number.isFinite(position) || position <= 0) continue;
-            if (sequenceLen > 0 && position > sequenceLen) continue;
-
-            const supportSource = Math.max(0, row.crossingReads > 0 ? row.crossingReads : row.supportReads);
-            if (supportSource <= 0) continue;
-            const supportPercent = denominator ? ((supportSource / denominator) * 100) : null;
-            const alpha = readCountToHighlightAlpha(supportSource, dimerMaxSupportReads);
-            const highlight: DimerSequenceHighlight = {
-                readCount: supportSource,
-                supportPercent,
-                backgroundColor: toAlphaColor(themeColors.warning, alpha),
-            };
-            const existing = highlights.get(position);
-            if (!existing || highlight.readCount > existing.readCount) {
-                highlights.set(position, highlight);
-            }
-        }
-        return highlights;
-    }, [
-        dimerDisplayEvidenceRows,
-        multimerReport?.referenceSequence,
-        dimerCandidateReads,
-        dimerMaxSupportReads,
-        themeColors.warning,
+    const hasFastqQcDetails = useMemo(() => Boolean(
+        (multimerReport?.readLengths?.length || 0) > 0
+        || (multimerReport?.candidates?.length || 0) > 0
+        || totalClassifiedReads > 0
+        || multimerReport?.summary
+        || multimerReport?.dimerSummary
+        || consensusPreview
+    ), [
+        multimerReport?.readLengths,
+        multimerReport?.candidates,
+        totalClassifiedReads,
+        multimerReport?.summary,
+        multimerReport?.dimerSummary,
+        consensusPreview,
     ]);
-    const dimerReadTableHasMethod = useMemo(
-        () => (multimerReport?.dimerReadJunctions || []).some((row) => Boolean(row.method)),
-        [multimerReport?.dimerReadJunctions]
-    );
-    const dimerReadTableHasOrientation = useMemo(
-        () => (multimerReport?.dimerReadJunctions || []).some((row) => Boolean(row.orientation)),
-        [multimerReport?.dimerReadJunctions]
-    );
-    const dimerReadTableHasMissingLeft = useMemo(
-        () => (multimerReport?.dimerReadJunctions || []).some((row) => row.missingLeftBp != null),
-        [multimerReport?.dimerReadJunctions]
-    );
-    const dimerReadTableHasMissingRight = useMemo(
-        () => (multimerReport?.dimerReadJunctions || []).some((row) => row.missingRightBp != null),
-        [multimerReport?.dimerReadJunctions]
-    );
     const multimerClassLegendItems = useMemo(
         () => ([
             { label: 'Monomer-like', value: multimerClassCounts.monomer, color: themeColors.success },
@@ -3050,225 +2971,6 @@ export function NGSToolkit() {
             },
         };
     }, [basePlotlyLayout, multimerMetrics, expectedPlasmidSize, themeColors]);
-    const dimerJunctionPlotData = useMemo<Data[]>(() => {
-        const rows = dimerDisplayEvidenceRows;
-        if (rows.length === 0) return [];
-
-        const denominator = dimerCandidateReads > 0 ? dimerCandidateReads : null;
-        const byPosition = new Map<number, {
-            crossingReads: number;
-            supportReads: number;
-            supportPercent: number | null;
-            method: string;
-            orientation: string;
-            source: string;
-            inBoundaryWindow: boolean | null;
-        }>();
-
-        for (const row of rows) {
-            if (!Number.isFinite(row.positionModRef) || row.positionModRef <= 0) continue;
-            const pos = Math.round(row.positionModRef);
-            const crossingReads = Number.isFinite(row.crossingReads) ? Math.max(0, row.crossingReads) : 0;
-            const supportReads = Number.isFinite(row.supportReads) ? Math.max(0, row.supportReads) : 0;
-            const supportSource = crossingReads > 0 ? crossingReads : supportReads;
-            // For this plot, support % must mean fraction of all dimer reads.
-            // Cluster TSV `support_percent` is crossing/read_count (often ~100%) and
-            // causes misleading spikes if used directly.
-            const supportPercent = denominator
-                ? (supportSource / denominator) * 100
-                : (
-                    Number.isFinite(row.supportPercent as number)
-                        ? Number(row.supportPercent)
-                        : null
-                );
-
-            const existing = byPosition.get(pos);
-            if (!existing) {
-                byPosition.set(pos, {
-                    crossingReads,
-                    supportReads,
-                    supportPercent,
-                    method: row.method || '',
-                    orientation: row.orientation || '',
-                    source: row.source || '',
-                    inBoundaryWindow: row.inBoundaryWindow ?? null,
-                });
-                continue;
-            }
-
-            existing.crossingReads = Math.max(existing.crossingReads, crossingReads);
-            existing.supportReads = Math.max(existing.supportReads, supportReads);
-            if (supportPercent != null) {
-                existing.supportPercent = existing.supportPercent == null
-                    ? supportPercent
-                    : Math.max(existing.supportPercent, supportPercent);
-            }
-            if (!existing.method && row.method) existing.method = row.method;
-            if (!existing.orientation && row.orientation) existing.orientation = row.orientation;
-            if (!existing.source && row.source) existing.source = row.source;
-            if (existing.inBoundaryWindow == null) existing.inBoundaryWindow = row.inBoundaryWindow ?? null;
-        }
-
-        const aggregatedRows = Array.from(byPosition.entries())
-            .map(([positionModRef, value]) => ({
-                positionModRef,
-                ...value,
-            }))
-            .sort((a, b) => a.positionModRef - b.positionModRef);
-
-        if (aggregatedRows.length === 0) return [];
-
-        const referenceSpan = Number.isFinite(dimerReferenceLength as number) && (dimerReferenceLength as number) > 0
-            ? Math.round(dimerReferenceLength as number)
-            : (Number.isFinite(multimerReport?.referenceLength as number) && (multimerReport?.referenceLength as number) > 0
-                ? Math.round(multimerReport?.referenceLength as number)
-                : Math.round(aggregatedRows[aggregatedRows.length - 1]?.positionModRef || 0) || null);
-        const boundaryW = Number.isFinite(boundaryWindowBp as number) && (boundaryWindowBp as number) > 0
-            ? Math.round(boundaryWindowBp as number)
-            : null;
-
-        let denseRows = aggregatedRows;
-        if (referenceSpan && referenceSpan <= 25000) {
-            const byPosDense = new Map<number, typeof aggregatedRows[number]>();
-            for (const row of aggregatedRows) {
-                byPosDense.set(row.positionModRef, row);
-            }
-            denseRows = [];
-            for (let pos = 1; pos <= referenceSpan; pos++) {
-                const row = byPosDense.get(pos);
-                if (row) {
-                    denseRows.push(row);
-                    continue;
-                }
-                denseRows.push({
-                    positionModRef: pos,
-                    crossingReads: 0,
-                    supportReads: 0,
-                    supportPercent: 0,
-                    method: '',
-                    orientation: '',
-                    source: 'profile',
-                    inBoundaryWindow: boundaryW != null ? (pos <= boundaryW || pos > (referenceSpan - boundaryW)) : null,
-                });
-            }
-        }
-
-        const MAX_PLOT_POINTS = 12000;
-        const nonZeroRows = denseRows.filter((row) => (row.crossingReads > 0 || row.supportReads > 0));
-        const zeroRows = denseRows.filter((row) => (row.crossingReads <= 0 && row.supportReads <= 0));
-
-        let plotRows = denseRows;
-        if (denseRows.length > MAX_PLOT_POINTS) {
-            if (nonZeroRows.length >= MAX_PLOT_POINTS) {
-                // Keep informative points only when signal is dense.
-                plotRows = nonZeroRows.slice(0, MAX_PLOT_POINTS).sort((a, b) => a.positionModRef - b.positionModRef);
-            } else {
-                // Preserve all signal peaks and sample the long zero runs for continuity.
-                const keepZeros = Math.max(0, MAX_PLOT_POINTS - nonZeroRows.length);
-                const zeroStride = keepZeros > 0 ? Math.ceil(zeroRows.length / keepZeros) : Number.MAX_SAFE_INTEGER;
-                const sampledZeroRows = keepZeros > 0
-                    ? zeroRows.filter((_, idx) => idx % zeroStride === 0).slice(0, keepZeros)
-                    : [];
-                plotRows = [...nonZeroRows, ...sampledZeroRows].sort((a, b) => a.positionModRef - b.positionModRef);
-            }
-        }
-
-        const barRows = plotRows.filter((row) => (row.crossingReads > 0 || row.supportReads > 0));
-        const xValues = plotRows.map((row) => row.positionModRef);
-        const yCrossing = barRows.map((row) => (row.crossingReads > 0 ? row.crossingReads : row.supportReads));
-        const ySupportPercent = plotRows.map((row) => (
-            Number.isFinite(row.supportPercent as number) ? row.supportPercent : 0
-        ));
-
-        return [
-            {
-                type: 'bar',
-                name: 'Crossing support',
-                x: barRows.map((row) => row.positionModRef),
-                y: yCrossing,
-                marker: {
-                    color: barRows.map((row) => (
-                        row.inBoundaryWindow === true ? themeColors.warning : themeColors.accentPrimary
-                    )),
-                    line: { color: themeColors.textPrimary, width: 0.5 },
-                },
-                customdata: barRows.map((row) => [
-                    row.crossingReads,
-                    row.supportReads,
-                    Number.isFinite(row.supportPercent as number) ? row.supportPercent : 0,
-                    row.method || '',
-                    row.orientation || '',
-                    row.source,
-                    row.inBoundaryWindow === true ? 'boundary-window' : 'non-boundary',
-                ]),
-                hovertemplate: [
-                    'Junction position: %{x}',
-                    'Crossing reads: %{customdata[0]}',
-                    'Support reads: %{customdata[1]}',
-                    'Support %: %{customdata[2]:.2f}%',
-                    'Method: %{customdata[3]}',
-                    'Orientation: %{customdata[4]}',
-                    'Source: %{customdata[5]}',
-                    'Region: %{customdata[6]}',
-                    '<extra></extra>',
-                ].join('<br>'),
-            },
-            {
-                type: 'scatter',
-                mode: 'lines',
-                name: 'Support (% of dimer reads)',
-                x: xValues,
-                y: ySupportPercent,
-                line: { color: themeColors.warning, width: 2 },
-                connectgaps: true,
-                hovertemplate: 'Junction position: %{x}<br>Support: %{y:.2f}%<extra></extra>',
-                yaxis: 'y2',
-            },
-        ];
-    }, [
-        dimerDisplayEvidenceRows,
-        dimerCandidateReads,
-        dimerReferenceLength,
-        multimerReport?.referenceLength,
-        boundaryWindowBp,
-        themeColors.accentPrimary,
-        themeColors.warning,
-        themeColors.textPrimary,
-    ]);
-    const dimerJunctionLayout = useMemo<Partial<Layout>>(() => ({
-        ...basePlotlyLayout,
-        margin: { l: 44, r: 44, t: 20, b: 48 },
-        legend: {
-            orientation: 'h',
-            x: 0,
-            xanchor: 'left',
-            y: 1.02,
-            yanchor: 'bottom',
-            font: { color: themeColors.textSecondary, size: 11 },
-        },
-        xaxis: {
-            title: { text: 'Junction Position on Reference (bp)', font: { color: themeColors.textSecondary } },
-            tickfont: { color: themeColors.textSecondary },
-            gridcolor: `${themeColors.borderPrimary}55`,
-            ...(Number.isFinite(dimerReferenceLength as number) && (dimerReferenceLength as number) > 0
-                ? { range: [1, Math.round(dimerReferenceLength as number)] as [number, number] }
-                : {}),
-        },
-        yaxis: {
-            title: { text: 'Crossing Read Count', font: { color: themeColors.textSecondary } },
-            tickfont: { color: themeColors.textSecondary },
-            gridcolor: `${themeColors.borderPrimary}66`,
-            rangemode: 'tozero',
-        },
-        yaxis2: {
-            title: { text: 'Support (% of dimer reads)', font: { color: themeColors.textSecondary } },
-            tickfont: { color: themeColors.textSecondary },
-            overlaying: 'y',
-            side: 'right',
-            rangemode: 'tozero',
-            ticksuffix: '%',
-        },
-    }), [basePlotlyLayout, themeColors, dimerReferenceLength]);
     const multimerPlotConfig = useMemo(
         () => ({ responsive: true, displaylogo: false, scrollZoom: true }),
         []
@@ -3344,18 +3046,8 @@ export function NGSToolkit() {
                 || multimerArtifacts.lengthsUrl
                 || multimerArtifacts.candidatesUrl
                 || multimerArtifacts.dimerSummaryUrl
-                || multimerArtifacts.dimerJunctionUrl
-                || multimerArtifacts.dimerJunctionEventsUrl
-                || multimerArtifacts.dimerJunctionClustersUrl
-                || multimerArtifacts.dimerJunctionHotspotsUrl
-                || multimerArtifacts.dimerReadsUrl
-                || multimerArtifacts.dimerReadLedgerUrl
-                || multimerArtifacts.dimerBreakpointReadsUrl
-                || multimerArtifacts.dimerRotatedRemapSummaryUrl
-                || multimerArtifacts.dimerRotatedRemapBreakpointsUrl
                 || multimerArtifacts.dimerConsensusUrl
                 || multimerArtifacts.dominantDimerConsensusUrl
-                || multimerArtifacts.dominantDimerConsensusMetadataUrl
             );
             if (!hasAnyMultimerOutput) {
                 setMultimerLoading(false);
@@ -3372,17 +3064,8 @@ export function NGSToolkit() {
                 let readLengths: number[] = [];
                 let candidates: MultimerCandidateRow[] = [];
                 let dimerSummary: SummaryTable | null = null;
-                let dimerJunctionRows: DimerJunctionProfileRow[] = [];
-                let dimerJunctionClusters: DimerJunctionClusterRow[] = [];
-                let dimerJunctionHotspots: DimerJunctionClusterRow[] = [];
-                let dimerBreakpointScreenRows: DimerBreakpointScreenRow[] = [];
-                let dimerReadJunctions: DimerReadJunctionRow[] = [];
-                let legacyDimerReadRows: DimerReadJunctionRow[] = [];
-                let ledgerDimerReadRows: DimerReadJunctionRow[] = [];
-                let eventDimerReadRows: DimerReadJunctionRow[] = [];
                 let dimerConsensusPreview: string | null = null;
                 let dominantDimerConsensusPreview: string | null = null;
-                let dominantDimerConsensusMetadata: SummaryTable | null = null;
                 let referenceName: string | null = null;
                 let referenceLength: number | null = null;
                 let referenceSequence: string | null = null;
@@ -3427,151 +3110,6 @@ export function NGSToolkit() {
                     }
                 }
 
-                if (multimerArtifacts.dimerJunctionUrl) {
-                    try {
-                        const dimerJunctionText = await fetchTextRange(multimerArtifacts.dimerJunctionUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        dimerJunctionRows = parseDimerJunctionProfile(dimerJunctionText, 5000);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer junction profile unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-
-                if (multimerArtifacts.dimerReadsUrl) {
-                    try {
-                        const dimerReadsText = await fetchTextRange(multimerArtifacts.dimerReadsUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        legacyDimerReadRows = parseDimerReadJunctions(dimerReadsText, 1500);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer read-junction table unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-                if (multimerArtifacts.dimerReadLedgerUrl) {
-                    try {
-                        const dimerLedgerText = await fetchTextRange(multimerArtifacts.dimerReadLedgerUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        ledgerDimerReadRows = parseDimerReadJunctions(dimerLedgerText, 5000);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer full read ledger unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-
-                if (multimerArtifacts.dimerJunctionEventsUrl) {
-                    try {
-                        const dimerEventsText = await fetchTextRange(multimerArtifacts.dimerJunctionEventsUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        eventDimerReadRows = parseDimerJunctionEvents(dimerEventsText, 1500);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer junction events unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-
-                if (multimerArtifacts.dimerJunctionClustersUrl) {
-                    try {
-                        const dimerClustersText = await fetchTextRange(multimerArtifacts.dimerJunctionClustersUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        dimerJunctionClusters = parseDimerJunctionClusters(dimerClustersText, 5000);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer junction clusters unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-                if (multimerArtifacts.dimerJunctionHotspotsUrl) {
-                    try {
-                        const dimerHotspotsText = await fetchTextRange(multimerArtifacts.dimerJunctionHotspotsUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        dimerJunctionHotspots = parseDimerJunctionClusters(dimerHotspotsText, 5000, 'hotspots');
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer hotspot table unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-                if (multimerArtifacts.dimerBreakpointScreenUrl) {
-                    try {
-                        const dimerBreakpointText = await fetchTextRange(multimerArtifacts.dimerBreakpointScreenUrl, MULTIMER_CANDIDATES_MAX_BYTES);
-                        dimerBreakpointScreenRows = parseDimerBreakpointScreen(dimerBreakpointText, 5000);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dimer breakpoint screen unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
-
-                if (ledgerDimerReadRows.length > 0) {
-                    const eventByReadId = new Map<string, DimerReadJunctionRow>();
-                    for (const row of eventDimerReadRows) {
-                        if (!row.readId) continue;
-                        eventByReadId.set(row.readId, row);
-                    }
-                    dimerReadJunctions = ledgerDimerReadRows.map((row) => {
-                        if (!row.readId) return row;
-                        const eventRow = eventByReadId.get(row.readId);
-                        if (!eventRow) return row;
-                        return {
-                            ...row,
-                            start: eventRow.start ?? row.start,
-                            end: eventRow.end ?? row.end,
-                            positionModRef: eventRow.positionModRef ?? row.positionModRef,
-                            crossesJunction: eventRow.crossesJunction ?? row.crossesJunction,
-                            method: eventRow.method ?? row.method,
-                            orientation: eventRow.orientation ?? row.orientation,
-                            missingLeftBp: eventRow.missingLeftBp ?? row.missingLeftBp,
-                            missingRightBp: eventRow.missingRightBp ?? row.missingRightBp,
-                            source: eventRow.source,
-                        };
-                    });
-                } else {
-                    dimerReadJunctions = eventDimerReadRows.length > 0 ? eventDimerReadRows : legacyDimerReadRows;
-                }
-                if (dimerJunctionClusters.length === 0) {
-                    if (eventDimerReadRows.length > 0) {
-                        dimerJunctionClusters = clustersFromEvents(eventDimerReadRows);
-                    } else if (dimerJunctionRows.length > 0) {
-                        dimerJunctionClusters = clustersFromLegacyProfile(dimerJunctionRows);
-                    }
-                }
-                if (dimerJunctionRows.length === 0 && dimerJunctionClusters.length > 0) {
-                    dimerJunctionRows = dimerJunctionClusters
-                        .map((row) => ({
-                            positionModRef: row.positionModRef,
-                            readCount: row.supportReads,
-                            spanningReads: row.crossingReads,
-                        }))
-                        .sort((a, b) => a.positionModRef - b.positionModRef);
-                }
-
-                if (dimerJunctionHotspots.length > 0) {
-                    const hotspotByPos = new Map<number, DimerJunctionClusterRow>();
-                    for (const hotspot of dimerJunctionHotspots) {
-                        hotspotByPos.set(hotspot.positionModRef, hotspot);
-                    }
-
-                    if (dimerJunctionClusters.length > 0) {
-                        const mergedPositions = new Set<number>();
-                        dimerJunctionClusters = dimerJunctionClusters.map((row) => {
-                            const hotspot = hotspotByPos.get(row.positionModRef);
-                            if (!hotspot) return row;
-                            mergedPositions.add(row.positionModRef);
-                            return {
-                                ...row,
-                                supportPercent: row.supportPercent ?? hotspot.supportPercent,
-                                inBoundaryWindow: hotspot.inBoundaryWindow ?? row.inBoundaryWindow,
-                            };
-                        });
-                        for (const hotspot of dimerJunctionHotspots) {
-                            if (mergedPositions.has(hotspot.positionModRef)) continue;
-                            dimerJunctionClusters.push(hotspot);
-                        }
-                        dimerJunctionClusters.sort((a, b) => a.positionModRef - b.positionModRef);
-                    } else {
-                        dimerJunctionClusters = dimerJunctionHotspots;
-                    }
-                }
-
                 if (multimerArtifacts.dimerConsensusUrl) {
                     try {
                         const consensusText = await fetchTextRange(multimerArtifacts.dimerConsensusUrl, DIMER_CONSENSUS_MAX_BYTES);
@@ -3602,16 +3140,6 @@ export function NGSToolkit() {
                         }
                     }
                 }
-                if (multimerArtifacts.dominantDimerConsensusMetadataUrl) {
-                    try {
-                        const dominantMetadataText = await fetchTextRange(multimerArtifacts.dominantDimerConsensusMetadataUrl, MULTIMER_SUMMARY_MAX_BYTES);
-                        dominantDimerConsensusMetadata = parseSummaryTable(dominantMetadataText);
-                    } catch (err) {
-                        if (!isFetchNotFoundError(err)) {
-                            warnings.push(`Dominant dimer consensus metadata unavailable (${err instanceof Error ? err.message : String(err)})`);
-                        }
-                    }
-                }
 
                 if (selectedReferenceFastaUrl) {
                     try {
@@ -3637,13 +3165,13 @@ export function NGSToolkit() {
                     readLengths,
                     candidates,
                     dimerSummary,
-                    dimerJunctionRows,
-                    dimerJunctionClusters,
-                    dimerBreakpointScreenRows,
-                    dimerReadJunctions,
+                    dimerJunctionRows: [],
+                    dimerJunctionClusters: [],
+                    dimerBreakpointScreenRows: [],
+                    dimerReadJunctions: [],
                     dimerConsensusPreview,
                     dominantDimerConsensusPreview,
-                    dominantDimerConsensusMetadata,
+                    dominantDimerConsensusMetadata: null,
                     referenceName,
                     referenceLength,
                     referenceSequence,
@@ -3672,15 +3200,8 @@ export function NGSToolkit() {
         multimerArtifacts.lengthsUrl,
         multimerArtifacts.candidatesUrl,
         multimerArtifacts.dimerSummaryUrl,
-        multimerArtifacts.dimerJunctionUrl,
-        multimerArtifacts.dimerJunctionEventsUrl,
-        multimerArtifacts.dimerJunctionClustersUrl,
-        multimerArtifacts.dimerJunctionHotspotsUrl,
-        multimerArtifacts.dimerBreakpointScreenUrl,
-        multimerArtifacts.dimerReadsUrl,
         multimerArtifacts.dimerConsensusUrl,
         multimerArtifacts.dominantDimerConsensusUrl,
-        multimerArtifacts.dominantDimerConsensusMetadataUrl,
         selectedReferenceFastaUrl,
         multimerArtifacts.missingReason,
     ]);
@@ -3746,9 +3267,9 @@ export function NGSToolkit() {
                 }
 
                 if (bedRecords.length > 0) {
-                    if (igvArtifacts.fastaUrl) {
+                    if (activeIgvFastaUrl) {
                         try {
-                            const fastaText = await fetchTextRange(igvArtifacts.fastaUrl, REFERENCE_FASTA_MAX_BYTES);
+                            const fastaText = await fetchTextRange(activeIgvFastaUrl, REFERENCE_FASTA_MAX_BYTES);
                             const motifCalls = buildDamDcmCalls(bedRecords, fastaText);
                             damSites = motifCalls.damSites;
                             dcmSites = motifCalls.dcmSites;
@@ -3802,7 +3323,7 @@ export function NGSToolkit() {
         methylationArtifacts.summaryUrl,
         methylationArtifacts.bedUrl,
         methylationArtifacts.missingReason,
-        igvArtifacts.fastaUrl,
+        activeIgvFastaUrl,
     ]);
 
     useEffect(() => {
@@ -3811,13 +3332,17 @@ export function NGSToolkit() {
             setIgvLoading(false);
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
-            setIgvError(igvArtifacts.missingReason);
+            setIgvAutoLoadAttempted(false);
+            igvLoadedSourceKeyRef.current = '';
+            setIgvError(igvMissingReason);
             return;
         }
         if (!igvContainerRef.current) {
             setIgvLoading(false);
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
+            setIgvAutoLoadAttempted(false);
+            igvLoadedSourceKeyRef.current = '';
             return;
         }
 
@@ -3829,32 +3354,54 @@ export function NGSToolkit() {
         const initIgv = async () => {
             setIgvLoading(true);
             setIgvError(null);
+            setIgvVersion(null);
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
+            setIgvAutoLoadAttempted(false);
+            igvLoadedSourceKeyRef.current = '';
             if (igvContainerRef.current) {
                 igvContainerRef.current.innerHTML = '';
             }
 
             try {
-                const igv = await withTimeout(
+                const { igv, version } = await withTimeout(
                     loadIgvLibrary(),
                     IGV_INIT_TIMEOUT_MS,
-                    `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading script`
+                    `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading IGV library`
                 );
                 if (cancelled || !igvContainerRef.current) return;
+                if (isCurrentLoad() && !cancelled) {
+                    setIgvVersion(version);
+                }
+                const igvAny = igv as any;
+                if (typeof igvAny.setDefaults === 'function') {
+                    igvAny.setDefaults({
+                        showControls: true,
+                        showNavigation: true,
+                        showRuler: true,
+                        showCenterGuideButton: true,
+                        showCenterGuide: true,
+                        showTrackLabelButton: true,
+                        showTrackLabels: true,
+                        showCursorTrackingGuideButton: true,
+                        showCursorTrackingGuide: true,
+                        showSVGButton: true,
+                        showSampleNames: true,
+                    });
+                }
                 const initialLocus = await withTimeout(
-                    detectInitialLocusFromFasta(igvArtifacts.fastaUrl),
+                    detectInitialLocusFromFasta(activeIgvFastaUrl),
                     Math.max(5000, Math.floor(IGV_INIT_TIMEOUT_MS / 2)),
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while preparing reference`
                 );
                 if (cancelled || !igvContainerRef.current) return;
 
                 igvBrowser = await withTimeout(
-                    igv.createBrowser(igvContainerRef.current, {
+                    igvAny.createBrowser(igvContainerRef.current, {
                         ...(initialLocus ? { locus: initialLocus } : {}),
                         reference: {
-                            fastaURL: igvArtifacts.fastaUrl,
-                            indexURL: igvArtifacts.faiUrl,
+                            fastaURL: activeIgvFastaUrl,
+                            indexURL: activeIgvFaiUrl,
                             indexed: true,
                         },
                         tracks: [],
@@ -3862,6 +3409,8 @@ export function NGSToolkit() {
                     IGV_INIT_TIMEOUT_MS,
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`
                 );
+                ensureIgvThemeStyles(igvContainerRef.current);
+                patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
 
                 if (isCurrentLoad() && !cancelled) {
@@ -3877,11 +3426,12 @@ export function NGSToolkit() {
             } catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
                 if (isCurrentLoad()) {
-                    const needsScriptHint = /igv-script|load igv script|window\.igv|unavailable/i.test(msg);
-                    const suffix = needsScriptHint
-                        ? ' Ensure local igv.min.js is available to /api/files/igv-script.'
+                    const needsLibraryHint = /igv|module|import|createBrowser|version/i.test(msg);
+                    const suffix = needsLibraryHint
+                        ? ` Ensure \`igv@${IGV_REQUIRED_VERSION}\` is installed and the frontend bundle is rebuilt.`
                         : '';
                     setIgvError(`Failed to initialize IGV viewer: ${msg}.${suffix}`);
+                    setIgvVersion(null);
                 }
                 try {
                     igvBrowser?.dispose?.();
@@ -3908,6 +3458,7 @@ export function NGSToolkit() {
             igvBrowserRef.current = null;
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
+            setIgvAutoLoadAttempted(false);
             if (igvContainerRef.current) {
                 igvContainerRef.current.innerHTML = '';
             }
@@ -3915,54 +3466,297 @@ export function NGSToolkit() {
     }, [
         igvModalOpen,
         igvReady,
-        igvArtifacts.fastaUrl,
-        igvArtifacts.faiUrl,
-        igvArtifacts.missingReason,
+        activeIgvFastaUrl,
+        activeIgvFaiUrl,
+        igvMissingReason,
     ]);
 
     const handleLoadIgvReadsTrack = useCallback(async () => {
-        if (igvReadsTrackLoaded || igvReadsTrackLoading) return;
+        if (igvReadsTrackLoading) return;
         const browser = igvBrowserRef.current;
         if (!browser || typeof browser.loadTrack !== 'function') {
             setIgvError('IGV browser is not ready yet.');
             return;
         }
-        if (!igvArtifacts.bamUrl || !igvArtifacts.baiUrl) {
+        if (!activeIgvBamUrl || !activeIgvBaiUrl) {
             setIgvError('Aligned BAM and index are required to load reads track.');
             return;
         }
         setIgvReadsTrackLoading(true);
         setIgvError(null);
         try {
-            await browser.loadTrack({
+            if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
+                const existingTracks = browser.findTracks((track: any) => track && track.type !== 'ruler');
+                if (Array.isArray(existingTracks)) {
+                    for (const track of existingTracks) {
+                        try {
+                            browser.removeTrack(track);
+                        } catch {
+                            // keep loading remaining tracks
+                        }
+                    }
+                }
+            }
+
+            const auxiliaryTracks: Array<Record<string, unknown>> = [];
+            if (igvArtifacts.coverageDepthUrl) {
+                auxiliaryTracks.push({
+                    name: 'Coverage Depth',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.coverageDepthUrl,
+                    graphType: 'bar',
+                    autoscale: true,
+                    color: '#4ea6ff',
+                    height: 56,
+                });
+            }
+            if (igvArtifacts.positionGradientUrl) {
+                auxiliaryTracks.push({
+                    name: 'Position Gradient',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.positionGradientUrl,
+                    graphType: 'heatmap',
+                    min: 0,
+                    max: 1,
+                    autoscale: false,
+                    colorScale: {
+                        min: 0,
+                        max: 1,
+                        minColor: '#1d4ed8',
+                        maxColor: '#f59e0b',
+                    },
+                    height: 40,
+                });
+            }
+            if (igvArtifacts.gcContentUrl) {
+                auxiliaryTracks.push({
+                    name: 'GC Content (%)',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.gcContentUrl,
+                    graphType: 'heatmap',
+                    min: 0,
+                    max: 100,
+                    autoscale: false,
+                    colorScale: {
+                        min: 0,
+                        max: 100,
+                        minColor: '#2563eb',
+                        maxColor: '#ef4444',
+                    },
+                    height: 52,
+                });
+            }
+            if (igvArtifacts.gcZscoreUrl) {
+                auxiliaryTracks.push({
+                    name: 'GC Z-score',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.gcZscoreUrl,
+                    graphType: 'line',
+                    autoscale: true,
+                    color: '#f6d32d',
+                    height: 48,
+                });
+            }
+            if (igvArtifacts.splitDensityUrl) {
+                auxiliaryTracks.push({
+                    name: 'Split-read Density',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.splitDensityUrl,
+                    graphType: 'bar',
+                    autoscale: true,
+                    color: '#ff7800',
+                    height: 44,
+                });
+            }
+            if (igvArtifacts.softclipDensityUrl) {
+                auxiliaryTracks.push({
+                    name: 'Soft-clip Density',
+                    type: 'wig',
+                    format: 'bedgraph',
+                    url: igvArtifacts.softclipDensityUrl,
+                    graphType: 'bar',
+                    autoscale: true,
+                    color: '#e01b24',
+                    height: 44,
+                });
+            }
+            if (igvArtifacts.junctionHotspotsUrl) {
+                auxiliaryTracks.push({
+                    name: 'Junction Hotspots',
+                    type: 'annotation',
+                    format: 'bed',
+                    url: igvArtifacts.junctionHotspotsUrl,
+                    color: '#ffbe6f',
+                    displayMode: 'EXPANDED',
+                    height: 36,
+                });
+            }
+
+            const auxiliaryTrackHeightPx = auxiliaryTracks.reduce((sum, track) => (
+                sum + (typeof track.height === 'number' ? track.height : 0)
+            ), 0);
+            const readsTrackHeight = resolveIgvReadsTrackHeight(igvContainerRef.current, auxiliaryTrackHeightPx);
+            const alignmentTrack: Record<string, unknown> = {
                 name: 'Aligned Reads',
                 type: 'alignment',
                 format: 'bam',
-                url: igvArtifacts.bamUrl,
-                indexURL: igvArtifacts.baiUrl,
+                url: activeIgvBamUrl,
+                indexURL: activeIgvBaiUrl,
                 showSoftClips: true,
-                showCoverage: false,
+                showCoverage: true,
+                showMismatches: true,
+                showAllBases: true,
+                showInsertionText: true,
+                autoHeight: false,
+                height: readsTrackHeight,
+                displayMode: igvAlignmentDisplayMode,
                 // FASTQ/dimer runs are typically small enough to render across full plasmids.
                 // A tiny visibilityWindow can make tracks appear "empty" until deep zoom.
                 visibilityWindow: -1,
                 samplingWindowSize: 40,
-                samplingDepth: 2000,
-                maxRows: 60,
+                samplingDepth: 10000,
+                maxRows: 500,
+                alignmentRowHeight: 9,
+                squishedRowHeight: 4,
+            };
+            if (igvAlignmentColorBy !== 'none') {
+                alignmentTrack.colorBy = igvAlignmentColorBy;
+            }
+            if (igvAlignmentGroupBy !== 'none') {
+                alignmentTrack.groupBy = igvAlignmentGroupBy;
+            }
+            const loadedAlignmentTrack = await browser.loadTrack(alignmentTrack);
+            applyIgvAlignmentOptionsToTrack(loadedAlignmentTrack, {
+                displayMode: igvAlignmentDisplayMode,
+                colorBy: igvAlignmentColorBy,
+                groupBy: igvAlignmentGroupBy,
             });
+
+            for (const trackConfig of auxiliaryTracks) {
+                await browser.loadTrack(trackConfig);
+            }
+            patchIgvRulerContrast(browser);
+            resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+
             if (typeof browser.search === 'function') {
-                const locus = await detectInitialLocusFromFasta(igvArtifacts.fastaUrl);
+                const locus = await detectInitialLocusFromFasta(activeIgvFastaUrl);
                 if (locus) {
                     await browser.search(locus);
                 }
             }
+            resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+            igvLoadedSourceKeyRef.current = activeIgvSourceKey;
             setIgvReadsTrackLoaded(true);
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
-            setIgvError(`Failed to load aligned reads track: ${msg}`);
+            setIgvError(`Failed to load IGV tracks: ${msg}`);
         } finally {
             setIgvReadsTrackLoading(false);
         }
-    }, [igvReadsTrackLoaded, igvReadsTrackLoading, igvArtifacts.bamUrl, igvArtifacts.baiUrl]);
+    }, [
+        igvReadsTrackLoading,
+        activeIgvBamUrl,
+        activeIgvBaiUrl,
+        activeIgvFastaUrl,
+        activeIgvSourceKey,
+        igvArtifacts.coverageDepthUrl,
+        igvArtifacts.positionGradientUrl,
+        igvArtifacts.gcContentUrl,
+        igvArtifacts.gcZscoreUrl,
+        igvArtifacts.splitDensityUrl,
+        igvArtifacts.softclipDensityUrl,
+        igvArtifacts.junctionHotspotsUrl,
+        igvAlignmentDisplayMode,
+        igvAlignmentColorBy,
+        igvAlignmentGroupBy,
+    ]);
+
+    useEffect(() => {
+        if (!igvModalOpen || !igvReadsTrackLoaded) return;
+        if (igvReadsTrackLoading) return;
+        const browser = igvBrowserRef.current;
+        const alignmentTrack = findIgvAlignmentTrack(browser);
+        if (!alignmentTrack) return;
+        applyIgvAlignmentOptionsToTrack(alignmentTrack, {
+            displayMode: igvAlignmentDisplayMode,
+            colorBy: igvAlignmentColorBy,
+            groupBy: igvAlignmentGroupBy,
+        });
+        resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+        patchIgvRulerContrast(browser);
+    }, [
+        igvModalOpen,
+        igvReadsTrackLoaded,
+        igvReadsTrackLoading,
+        igvAlignmentDisplayMode,
+        igvAlignmentColorBy,
+        igvAlignmentGroupBy,
+    ]);
+
+    useEffect(() => {
+        if (!igvModalOpen || !igvReadsTrackLoaded) return;
+        const browser = igvBrowserRef.current;
+        if (!browser) return;
+
+        let frameHandle = 0;
+        const applyResize = () => {
+            if (frameHandle) {
+                window.cancelAnimationFrame(frameHandle);
+            }
+            frameHandle = window.requestAnimationFrame(() => {
+                resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+                patchIgvRulerContrast(browser);
+            });
+        };
+
+        applyResize();
+        window.addEventListener('resize', applyResize);
+        return () => {
+            window.removeEventListener('resize', applyResize);
+            if (frameHandle) {
+                window.cancelAnimationFrame(frameHandle);
+            }
+        };
+    }, [igvModalOpen, igvReadsTrackLoaded, igvIsFullscreen]);
+
+    useEffect(() => {
+        if (!igvModalOpen) return;
+        if (!igvReady || igvLoading) return;
+        if (igvReadsTrackLoading || igvReadsTrackLoaded) return;
+        if (igvAutoLoadAttempted) return;
+        if (!igvBrowserRef.current) return;
+        setIgvAutoLoadAttempted(true);
+        void handleLoadIgvReadsTrack();
+    }, [
+        igvModalOpen,
+        igvReady,
+        igvLoading,
+        igvReadsTrackLoading,
+        igvReadsTrackLoaded,
+        igvAutoLoadAttempted,
+        handleLoadIgvReadsTrack,
+    ]);
+
+    useEffect(() => {
+        if (!igvModalOpen) return;
+        if (!igvReady) return;
+        if (!igvReadsTrackLoaded || igvReadsTrackLoading) return;
+        if (!activeIgvSourceKey) return;
+        if (igvLoadedSourceKeyRef.current === activeIgvSourceKey) return;
+        void handleLoadIgvReadsTrack();
+    }, [
+        igvModalOpen,
+        igvReady,
+        igvReadsTrackLoaded,
+        igvReadsTrackLoading,
+        activeIgvSourceKey,
+        handleLoadIgvReadsTrack,
+    ]);
 
     const handleViewLogs = async (jobId: string) => {
         setLogsModalOpen(true);
@@ -4191,8 +3985,8 @@ export function NGSToolkit() {
                             {selectedJob && (
                                 <div className="flex items-center gap-2">
                                     <button
-                                        onClick={() => setIgvModalOpen(true)}
-                                        title={igvArtifacts.missingReason || 'Open IGV genome viewer'}
+                                        onClick={() => void openIgvModal()}
+                                        title={igvMissingReason || 'Open IGV genome viewer'}
                                         className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
                                     >
                                         Open IGV
@@ -4240,7 +4034,8 @@ export function NGSToolkit() {
                                         ['Min qscore', selectedJob.params?.min_qscore],
                                         ['Trim adapters', selectedJob.params?.trim_adapters],
                                         ['Run modkit', selectedJob.params?.run_modkit],
-                                        ['Run multimer QC', selectedJob.params?.run_multimer_qc],
+                                        ['Run FASTQ QC', selectedJob.params?.run_fastq_qc],
+                                        ['Run multimer QC (legacy)', selectedJob.params?.run_multimer_qc],
                                         ['Expected plasmid size', selectedJob.params?.expected_plasmid_size],
 
                                         ['Min FASTQ read length', selectedJob.params?.min_fastq_read_length],
@@ -4287,9 +4082,33 @@ export function NGSToolkit() {
                                             </div>
                                         ))}
                                     </div>
+                                    <div className="pt-1">
+                                        <div className="text-[11px] text-[var(--text-secondary)] mb-1">Optional analysis tracks</div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                            {igvAuxReadinessChecks.map((check) => (
+                                                <div
+                                                    key={check.label}
+                                                    className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2"
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-xs text-[var(--text-primary)]">{check.label}</div>
+                                                        <div className={`text-[10px] px-2 py-0.5 rounded ${check.ok
+                                                            ? 'bg-emerald-500/20 text-emerald-400'
+                                                            : 'bg-slate-500/20 text-slate-300'
+                                                            }`}>
+                                                            {check.ok ? 'found' : 'missing'}
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-1 text-[10px] text-[var(--text-secondary)] font-mono break-all">
+                                                        {check.path || 'No resolved path'}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                     {!igvReady && (
                                         <p className="text-xs text-[var(--text-secondary)]">
-                                            IGV unavailable: {igvArtifacts.missingReason}
+                                            IGV unavailable: {igvMissingReason}
                                         </p>
                                     )}
                                     {isFastqOnlyRun && !igvReady && (
@@ -4297,16 +4116,37 @@ export function NGSToolkit() {
                                             FASTQ-only runs require `reference_fasta` + `fastq_align` outputs to inspect alignments in IGV.
                                         </p>
                                     )}
+                                    {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
+                                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                                            {igvReportDownloadHref && (
+                                                <a
+                                                    href={igvReportDownloadHref}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                >
+                                                    Open IGV report
+                                                </a>
+                                            )}
+                                            {igvTrackConfigDownloadHref && (
+                                                <a
+                                                    href={igvTrackConfigDownloadHref}
+                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                >
+                                                    Download track config
+                                                </a>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
-
                                 {shouldShowMultimerInspector && (
                                     <div className="space-y-2">
-                                        <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ Multimer QC</h4>
+                                        <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC</h4>
                                         {multimerLoading ? (
-                                            <p className="text-sm text-[var(--text-secondary)]">Loading multimer QC outputs...</p>
+                                            <p className="text-sm text-[var(--text-secondary)]">Loading FASTQ QC outputs...</p>
                                         ) : multimerReport === null ? (
                                             <p className="text-sm text-[var(--text-secondary)]">
-                                                {multimerError || multimerArtifacts.missingReason || 'No multimer QC outputs available for this run.'}
+                                                {multimerError || multimerArtifacts.missingReason || 'No FASTQ QC outputs available for this run.'}
                                             </p>
                                         ) : (
                                             <div className="space-y-3">
@@ -4316,7 +4156,7 @@ export function NGSToolkit() {
                                                             href={multimerSummaryDownloadHref}
                                                             className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                         >
-                                                            Download multimer summary
+                                                            Download QC summary
                                                         </a>
                                                     )}
                                                     {multimerLengthsDownloadHref && (
@@ -4332,583 +4172,147 @@ export function NGSToolkit() {
                                                             href={multimerCandidatesDownloadHref}
                                                             className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                         >
-                                                            Download candidate sites
+                                                            Download multimer candidates
                                                         </a>
                                                     )}
-                                                    {dimerFastqDownloadHref && (
+                                                    {fastqAlignmentSummaryDownloadHref && (
                                                         <a
-                                                            href={dimerFastqDownloadHref}
+                                                            href={fastqAlignmentSummaryDownloadHref}
                                                             className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                         >
-                                                            Download dimer FASTQ
+                                                            Download alignment stats
                                                         </a>
                                                     )}
-                                                    {dimerFastaDownloadHref && (
+                                                    {fastqConsensusDownloadHref && (
                                                         <a
-                                                            href={dimerFastaDownloadHref}
+                                                            href={fastqConsensusDownloadHref}
                                                             className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                         >
-                                                            Download dimer FASTA
+                                                            Download consensus
                                                         </a>
                                                     )}
-                                                    {dimerLengthsDownloadHref && (
+                                                    {fastqQcLogDownloadHref && (
                                                         <a
-                                                            href={dimerLengthsDownloadHref}
+                                                            href={fastqQcLogDownloadHref}
                                                             className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                         >
-                                                            Download dimer lengths
-                                                        </a>
-                                                    )}
-                                                    {dimerSummaryDownloadHref && (
-                                                        <a
-                                                            href={dimerSummaryDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download dimer summary
-                                                        </a>
-                                                    )}
-                                                    {dimerConsensusDownloadHref && (
-                                                        <a
-                                                            href={dimerConsensusDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download dimer consensus
-                                                        </a>
-                                                    )}
-                                                    {dominantDimerConsensusDownloadHref && (
-                                                        <a
-                                                            href={dominantDimerConsensusDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download dominant dimer consensus
-                                                        </a>
-                                                    )}
-                                                    {dominantDimerConsensusMetadataDownloadHref && (
-                                                        <a
-                                                            href={dominantDimerConsensusMetadataDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download dominant consensus metadata
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download junction profile
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionEventsDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionEventsDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download junction events
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionClustersDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionClustersDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download junction clusters
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionHotspotsDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionHotspotsDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download hotspot table
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionRotatedDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionRotatedDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download rotated profile
-                                                        </a>
-                                                    )}
-                                                    {dimerJunctionRotationSummaryDownloadHref && (
-                                                        <a
-                                                            href={dimerJunctionRotationSummaryDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download rotation summary
-                                                        </a>
-                                                    )}
-                                                    {dimerBreakpointScreenDownloadHref && (
-                                                        <a
-                                                            href={dimerBreakpointScreenDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download breakpoint screen
-                                                        </a>
-                                                    )}
-                                                    {dimerBreakpointSequencesDownloadHref && (
-                                                        <a
-                                                            href={dimerBreakpointSequencesDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download breakpoint sequences
-                                                        </a>
-                                                    )}
-                                                    {dimerSecondaryAnomaliesDownloadHref && (
-                                                        <a
-                                                            href={dimerSecondaryAnomaliesDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download secondary anomalies
-                                                        </a>
-                                                    )}
-                                                    {dimerSecondarySummaryDownloadHref && (
-                                                        <a
-                                                            href={dimerSecondarySummaryDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download secondary summary
-                                                        </a>
-                                                    )}
-                                                    {dimerReadsDownloadHref && (
-                                                        <a
-                                                            href={dimerReadsDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download read-junction table
-                                                        </a>
-                                                    )}
-                                                    {dimerReadLedgerDownloadHref && (
-                                                        <a
-                                                            href={dimerReadLedgerDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download full read ledger
-                                                        </a>
-                                                    )}
-                                                    {dimerBreakpointReadsDownloadHref && (
-                                                        <a
-                                                            href={dimerBreakpointReadsDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download breakpoint read list
-                                                        </a>
-                                                    )}
-                                                    {dimerRotatedRemapSummaryDownloadHref && (
-                                                        <a
-                                                            href={dimerRotatedRemapSummaryDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download frame-scan summary
-                                                        </a>
-                                                    )}
-                                                    {dimerRotatedRemapBreakpointsDownloadHref && (
-                                                        <a
-                                                            href={dimerRotatedRemapBreakpointsDownloadHref}
-                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                        >
-                                                            Download frame-scan breakpoints
+                                                            Download QC log
                                                         </a>
                                                     )}
                                                 </div>
-
                                                 {(multimerArtifacts.summaryPath
                                                     || multimerArtifacts.lengthsPath
                                                     || multimerArtifacts.candidatesPath
                                                     || multimerArtifacts.dimerSummaryPath
                                                     || multimerArtifacts.dimerConsensusPath
                                                     || multimerArtifacts.dominantDimerConsensusPath
-                                                    || multimerArtifacts.dominantDimerConsensusMetadataPath
-                                                    || multimerArtifacts.dimerJunctionPath
-                                                    || multimerArtifacts.dimerJunctionEventsPath
-                                                    || multimerArtifacts.dimerJunctionClustersPath
-                                                    || multimerArtifacts.dimerJunctionHotspotsPath
-                                                    || multimerArtifacts.dimerJunctionRotatedPath
-                                                    || multimerArtifacts.dimerJunctionRotationSummaryPath
-                                                    || multimerArtifacts.dimerBreakpointScreenPath
-                                                    || multimerArtifacts.dimerBreakpointSequencesPath
-                                                    || multimerArtifacts.dimerSecondaryAnomaliesPath
-                                                    || multimerArtifacts.dimerSecondarySummaryPath
-                                                    || multimerArtifacts.dimerReadsPath
-                                                    || multimerArtifacts.dimerReadLedgerPath
-                                                    || multimerArtifacts.dimerBreakpointReadsPath
-                                                    || multimerArtifacts.dimerRotatedRemapSummaryPath
-                                                    || multimerArtifacts.dimerRotatedRemapBreakpointsPath) && (
-                                                    <div className="text-[11px] text-[var(--text-secondary)] font-mono break-all">
-                                                        {multimerArtifacts.summaryPath && <div>summary: {multimerArtifacts.summaryPath}</div>}
-                                                        {multimerArtifacts.lengthsPath && <div>lengths: {multimerArtifacts.lengthsPath}</div>}
-                                                        {multimerArtifacts.candidatesPath && <div>candidates: {multimerArtifacts.candidatesPath}</div>}
-                                                        {multimerArtifacts.dimerSummaryPath && <div>dimer summary: {multimerArtifacts.dimerSummaryPath}</div>}
-                                                        {multimerArtifacts.dimerConsensusPath && <div>dimer consensus: {multimerArtifacts.dimerConsensusPath}</div>}
-                                                        {multimerArtifacts.dominantDimerConsensusPath && <div>dominant dimer consensus: {multimerArtifacts.dominantDimerConsensusPath}</div>}
-                                                        {multimerArtifacts.dominantDimerConsensusMetadataPath && <div>dominant consensus metadata: {multimerArtifacts.dominantDimerConsensusMetadataPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionPath && <div>dimer junction profile: {multimerArtifacts.dimerJunctionPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionEventsPath && <div>dimer junction events: {multimerArtifacts.dimerJunctionEventsPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionClustersPath && <div>dimer junction clusters: {multimerArtifacts.dimerJunctionClustersPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionHotspotsPath && <div>dimer hotspot table: {multimerArtifacts.dimerJunctionHotspotsPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionRotatedPath && <div>dimer rotated profile: {multimerArtifacts.dimerJunctionRotatedPath}</div>}
-                                                        {multimerArtifacts.dimerJunctionRotationSummaryPath && <div>dimer rotation summary: {multimerArtifacts.dimerJunctionRotationSummaryPath}</div>}
-                                                        {multimerArtifacts.dimerBreakpointScreenPath && <div>dimer breakpoint screen: {multimerArtifacts.dimerBreakpointScreenPath}</div>}
-                                                        {multimerArtifacts.dimerBreakpointSequencesPath && <div>dimer breakpoint sequences: {multimerArtifacts.dimerBreakpointSequencesPath}</div>}
-                                                        {multimerArtifacts.dimerSecondaryAnomaliesPath && <div>dimer secondary anomalies: {multimerArtifacts.dimerSecondaryAnomaliesPath}</div>}
-                                                        {multimerArtifacts.dimerSecondarySummaryPath && <div>dimer secondary summary: {multimerArtifacts.dimerSecondarySummaryPath}</div>}
-                                                        {multimerArtifacts.dimerReadsPath && <div>dimer read junctions: {multimerArtifacts.dimerReadsPath}</div>}
-                                                        {multimerArtifacts.dimerReadLedgerPath && <div>dimer read ledger: {multimerArtifacts.dimerReadLedgerPath}</div>}
-                                                        {multimerArtifacts.dimerBreakpointReadsPath && <div>dimer breakpoint reads: {multimerArtifacts.dimerBreakpointReadsPath}</div>}
-                                                        {multimerArtifacts.dimerRotatedRemapSummaryPath && <div>dimer frame-scan summary: {multimerArtifacts.dimerRotatedRemapSummaryPath}</div>}
-                                                        {multimerArtifacts.dimerRotatedRemapBreakpointsPath && <div>dimer frame-scan breakpoints: {multimerArtifacts.dimerRotatedRemapBreakpointsPath}</div>}
-                                                    </div>
-                                                )}
+                                                    || multimerArtifacts.logPath) && (
+                                                        <div className="text-[11px] text-[var(--text-secondary)] font-mono break-all">
+                                                            {multimerArtifacts.summaryPath && <div>summary: {multimerArtifacts.summaryPath}</div>}
+                                                            {multimerArtifacts.lengthsPath && <div>read lengths: {multimerArtifacts.lengthsPath}</div>}
+                                                            {multimerArtifacts.candidatesPath && <div>candidates: {multimerArtifacts.candidatesPath}</div>}
+                                                            {multimerArtifacts.dimerSummaryPath && <div>alignment stats: {multimerArtifacts.dimerSummaryPath}</div>}
+                                                            {multimerArtifacts.dominantDimerConsensusPath && <div>consensus (dominant): {multimerArtifacts.dominantDimerConsensusPath}</div>}
+                                                            {!multimerArtifacts.dominantDimerConsensusPath && multimerArtifacts.dimerConsensusPath && <div>consensus: {multimerArtifacts.dimerConsensusPath}</div>}
+                                                            {multimerArtifacts.logPath && <div>log: {multimerArtifacts.logPath}</div>}
+                                                        </div>
+                                                    )}
 
                                                 {multimerError && (
                                                     <p className="text-xs text-amber-300">{multimerError}</p>
                                                 )}
 
-                                                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                                                    <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-tertiary)]">
-                                                        <div className="text-[var(--text-secondary)]">Total reads</div>
-                                                        <div className="text-[var(--text-primary)] font-mono">{Math.round(multimerMetrics.total_reads ?? 0)}</div>
-                                                    </div>
-                                                    <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-tertiary)]">
-                                                        <div className="text-[var(--text-secondary)]">Monomer-like</div>
-                                                        <div className="text-[var(--text-primary)] font-mono">{Math.round(multimerClassCounts.monomer)}</div>
-                                                    </div>
-                                                    <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-tertiary)]">
-                                                        <div className="text-[var(--text-secondary)]">Dimer candidates</div>
-                                                        <div className="text-[var(--text-primary)] font-mono">{Math.round(multimerClassCounts.dimer)}</div>
-                                                    </div>
-                                                    <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-tertiary)]">
-                                                        <div className="text-[var(--text-secondary)]">Higher-order</div>
-                                                        <div className="text-[var(--text-primary)] font-mono">{Math.round(multimerClassCounts.trimer + multimerClassCounts.highOrder)}</div>
-                                                    </div>
-                                                    <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-tertiary)]">
-                                                        <div className="text-[var(--text-secondary)]">Mean length</div>
-                                                        <div className="text-[var(--text-primary)] font-mono">
-                                                            {Number.isFinite(multimerMetrics.mean_read_length) ? `${multimerMetrics.mean_read_length.toFixed(1)} bp` : '—'}
+                                                {!hasFastqQcDetails ? (
+                                                    <p className="text-sm text-[var(--text-secondary)]">FASTQ QC completed but no parsed summary rows are available yet.</p>
+                                                ) : (
+                                                    <>
+                                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Monomer-like</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{multimerClassCounts.monomer}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Dimer candidates</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{multimerClassCounts.dimer}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Trimer candidates</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{multimerClassCounts.trimer}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Higher-order</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{multimerClassCounts.highOrder}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Classified total</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{totalClassifiedReads}</div>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                </div>
 
-                                                <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">Read length distribution + class composition</div>
-                                                    {multimerHistogramPlotData.length > 0 ? (
-                                                        <Plot
-                                                            data={multimerHistogramPlotData}
-                                                            layout={multimerHistogramLayout}
-                                                            config={multimerPlotConfig}
-                                                            style={{ width: '100%', height: '320px' }}
-                                                            useResizeHandler
-                                                        />
-                                                    ) : (
-                                                        <p className="text-xs text-[var(--text-secondary)]">No parseable read lengths available.</p>
-                                                    )}
-                                                    {multimerClassLegendItems.length > 0 && (
-                                                        <div className="flex flex-wrap gap-2 mt-2">
-                                                            {multimerClassLegendItems.map((item) => (
-                                                                <div
-                                                                    key={`multimer-class-${item.label}`}
-                                                                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-primary)] text-[11px] text-[var(--text-primary)]"
-                                                                >
-                                                                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
-                                                                    <span>{item.label}</span>
-                                                                    <span className="font-mono text-[var(--text-secondary)]">{Math.round(item.value)}</span>
-                                                                </div>
-                                                            ))}
+                                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Aligned reads</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{alignedReadCount ?? '—'}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Read lengths rows</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{multimerReport.readLengths.length}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Expected plasmid size</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{Number.isFinite(expectedPlasmidSize) ? `${Math.round(expectedPlasmidSize)} bp` : '—'}</div>
+                                                            </div>
+                                                            <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
+                                                                <div className="text-xs text-[var(--text-secondary)]">Consensus status</div>
+                                                                <div className="text-[var(--text-primary)] font-mono">{consensusStatus || 'n/a'}</div>
+                                                            </div>
                                                         </div>
-                                                    )}
-                                                    {Number.isFinite(expectedPlasmidSize) && expectedPlasmidSize > 0 && (
-                                                        <p className="text-xs text-[var(--text-secondary)] mt-2">
-                                                            Expected plasmid size: <span className="font-mono">{Math.round(expectedPlasmidSize)} bp</span>
-                                                        </p>
-                                                    )}
-                                                </div>
 
-                                                {multimerReport.candidates.length > 0 && (
-                                                    <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                        <div className="text-xs text-[var(--text-secondary)] mb-2">Multimer candidates (first 200)</div>
-                                                        <div className="overflow-x-auto">
-                                                            <table className="w-full text-xs">
-                                                                <thead>
-                                                                    <tr className="border-b border-[var(--border-primary)]">
-                                                                        <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Read index</th>
-                                                                        <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Length (bp)</th>
-                                                                        <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Classification</th>
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody>
-                                                                    {multimerReport.candidates.slice(0, 200).map((row, idx) => (
-                                                                        <tr key={`multimer-candidate-${idx}`} className="border-b border-[var(--border-primary)]/40">
-                                                                            <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.readIndex ?? '—'}</td>
-                                                                            <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.readLength ?? '—'}</td>
-                                                                            <td className="px-2 py-1 text-[var(--text-primary)]">{row.classification}</td>
-                                                                        </tr>
-                                                                    ))}
-                                                                </tbody>
-                                                            </table>
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {(multimerReport.dimerSummary
-                                                    || multimerReport.dimerJunctionRows.length > 0
-                                                    || multimerReport.dimerJunctionClusters.length > 0
-                                                    || multimerReport.dimerBreakpointScreenRows.length > 0
-                                                    || multimerReport.dimerReadJunctions.length > 0
-                                                    || multimerReport.dimerConsensusPreview
-                                                    || multimerReport.dominantDimerConsensusPreview
-                                                    || multimerReport.dominantDimerConsensusMetadata
-                                                    || dimerSummaryDownloadHref
-                                                    || dimerConsensusDownloadHref
-                                                    || dominantDimerConsensusDownloadHref
-                                                    || dominantDimerConsensusMetadataDownloadHref
-                                                    || dimerJunctionDownloadHref
-                                                    || dimerJunctionEventsDownloadHref
-                                                    || dimerJunctionClustersDownloadHref
-                                                    || dimerJunctionHotspotsDownloadHref
-                                                    || dimerJunctionRotatedDownloadHref
-                                                    || dimerJunctionRotationSummaryDownloadHref
-                                                    || dimerBreakpointScreenDownloadHref) && (
-                                                    <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 space-y-3">
-                                                        <div className="text-xs text-[var(--text-secondary)]">Dimer junction evidence</div>
-                                                        <div className="grid grid-cols-2 md:grid-cols-8 gap-2 text-xs">
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Dimer reads</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{dimerCandidateReads}</div>
+                                                        {multimerClassLegendItems.length > 0 && (
+                                                            <div className="flex flex-wrap gap-3 text-[11px] text-[var(--text-secondary)]">
+                                                                {multimerClassLegendItems.map((item) => (
+                                                                    <span key={item.label} className="inline-flex items-center gap-1.5">
+                                                                        <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
+                                                                        <span>{item.label}</span>
+                                                                    </span>
+                                                                ))}
                                                             </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Aligned dimer reads</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{alignedDimerReads ?? '—'}</div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Crossing-support reads</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{junctionSpanningReads ?? '—'}</div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Top hotspot (view)</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{hasSplitSupportedEvidence ? (topDimerHotspot?.positionModRef ?? '—') : 'pending'}</div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Likely non-boundary hotspot</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{likelyDimerizationLocus?.positionModRef ?? '—'}</div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Rotated hotspot</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{rotationDominantPosModRef != null ? Math.round(rotationDominantPosModRef) : '—'}</div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Dominant split hotspot</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">
-                                                                    {dominantSplitPos != null ? Math.round(dominantSplitPos) : (topSplitHotspot?.positionModRef ?? '—')}
-                                                                </div>
-                                                            </div>
-                                                            <div className="rounded border border-[var(--border-primary)] px-2 py-2 bg-[var(--bg-secondary)]">
-                                                                <div className="text-[var(--text-secondary)]">Reference length</div>
-                                                                <div className="text-[var(--text-primary)] font-mono">{dimerReferenceLength ? `${dimerReferenceLength} bp` : '—'}</div>
-                                                            </div>
-                                                        </div>
-                                                        {(boundaryWindowSupportPct != null || likelyDimerizationLocus || dominantSplitSupportReads != null || breakpointModelStatus) && (
-                                                            <p className="text-xs text-[var(--text-secondary)]">
-                                                                {boundaryWindowSupportPct != null ? (
-                                                                    <>Boundary-window support (±{boundaryWindowBp != null ? Math.round(boundaryWindowBp) : '—'} bp): <span className="font-mono text-[var(--text-primary)]">{boundaryWindowSupportReads != null ? Math.round(boundaryWindowSupportReads) : '—'}</span> reads (<span className="font-mono text-[var(--text-primary)]">{boundaryWindowSupportPct.toFixed(2)}%</span>). </>
-                                                                ) : null}
-                                                                {dominantSplitSupportReads != null ? (
-                                                                    <> Split-only support: <span className="font-mono text-[var(--text-primary)]">{splitSupportReads != null ? Math.round(splitSupportReads) : Math.max(0, splitJunctionHotspots.reduce((sum, row) => sum + row.supportReads, 0))}</span> reads total; dominant split locus <span className="font-mono text-[var(--text-primary)]">{dominantSplitPos != null ? Math.round(dominantSplitPos) : (topSplitHotspot?.positionModRef ?? '—')}</span> with <span className="font-mono text-[var(--text-primary)]">{Math.round(dominantSplitSupportReads)}</span> reads {dominantSplitSupportPct != null ? <>({dominantSplitSupportPct.toFixed(2)}% of all junction support)</> : null}{dominantSplitSupportPctOfSplit != null ? <> / <span className="font-mono text-[var(--text-primary)]">{dominantSplitSupportPctOfSplit.toFixed(2)}%</span> of split support</> : null}. </>
-                                                                ) : null}
-                                                                {screenedPrimaryBreakpointPos != null && screenedPrimaryBreakpointSupportReads != null && screenedPrimaryBreakpointSupportReads > 0 ? (
-                                                                    <> Screened breakpoint call: <span className="font-mono text-[var(--text-primary)]">{Math.round(screenedPrimaryBreakpointPos)}</span> with <span className="font-mono text-[var(--text-primary)]">{Math.round(screenedPrimaryBreakpointSupportReads)}</span> supporting split reads (confidence <span className="font-mono text-[var(--text-primary)]">{screenedPrimaryBreakpointConfidence || 'unknown'}</span>). </>
-                                                                ) : (
-                                                                    <> Screened breakpoint call: insufficient split-supported evidence in this run. </>
-                                                                )}
-                                                                {screenedPrimaryBreakpointPos != null && screenedPrimaryBreakpointSupportReads != null && screenedPrimaryBreakpointSupportReads > 0 ? (
-                                                                    <> Screen metrics: boundary-start fraction <span className="font-mono text-[var(--text-primary)]">{screenedPrimaryBreakpointBoundaryStartFraction != null ? `${screenedPrimaryBreakpointBoundaryStartFraction.toFixed(2)}%` : '—'}</span>, seam fraction <span className="font-mono text-[var(--text-primary)]">{screenedPrimaryBreakpointSeamFraction != null ? `${screenedPrimaryBreakpointSeamFraction.toFixed(2)}%` : '—'}</span>, split:seam ratio <span className="font-mono text-[var(--text-primary)]">{screenedPrimaryBreakpointSplitToSeamRatio != null ? screenedPrimaryBreakpointSplitToSeamRatio.toFixed(3) : '—'}</span>. </>
-                                                                ) : null}
-                                                                {breakpointModelStatus ? (
-                                                                    <> Breakpoint model status: <span className="font-mono text-[var(--text-primary)]">{breakpointModelStatus}</span> (informative <span className="font-mono text-[var(--text-primary)]">{informativeBreakpointCount != null ? Math.round(informativeBreakpointCount) : '—'}</span>, artifact <span className="font-mono text-[var(--text-primary)]">{artifactBreakpointCount != null ? Math.round(artifactBreakpointCount) : '—'}</span>, seam-only unresolved flag <span className="font-mono text-[var(--text-primary)]">{seamOnlyUnresolvedFlag != null ? Math.round(seamOnlyUnresolvedFlag) : '—'}</span>). </>
-                                                                ) : null}
-                                                                {likelyDimerizationLocus ? (
-                                                                    <>Most likely non-boundary locus: <span className="font-mono text-[var(--text-primary)]">{likelyDimerizationLocus.positionModRef}</span> with <span className="font-mono text-[var(--text-primary)]">{Math.round(likelyDimerizationLocus.supportReads)}</span> supporting reads{likelyDimerizationLocus.supportPercent != null ? <> (<span className="font-mono text-[var(--text-primary)]">{likelyDimerizationLocus.supportPercent.toFixed(2)}%</span>)</> : null}.</>
-                                                                ) : (
-                                                                    <>No split-supported non-boundary hotspot reported in current outputs.</>
-                                                                )}
-                                                                {rotationSelectedOffsetBp != null && rotationDominantPosModRef != null ? (
-                                                                    <> Rotating-frame normalization: offset <span className="font-mono text-[var(--text-primary)]">{Math.round(rotationSelectedOffsetBp)}</span> bp, hotspot <span className="font-mono text-[var(--text-primary)]">{Math.round(rotationDominantPosModRef)}</span> (rotated position <span className="font-mono text-[var(--text-primary)]">{rotationDominantPosRotated != null ? Math.round(rotationDominantPosRotated) : '—'}</span>) with boundary support <span className="font-mono text-[var(--text-primary)]">{rotationBoundarySupportPct != null ? `${rotationBoundarySupportPct.toFixed(2)}%` : '—'}</span>.</>
-                                                                ) : null}
-                                                            </p>
-                                                        )}
-                                                        {splitEvidencePending && (
-                                                            <p className="text-xs text-amber-300">
-                                                                Split support is not yet sufficient for a high-confidence breakpoint call. Seam-only junction signal is treated as unresolved and may reflect read-start/linearization effects.
-                                                            </p>
-                                                        )}
-                                                        {boundaryDominantArtifactLikely && (
-                                                            <p className="text-xs text-amber-300">
-                                                                Boundary-window signal dominates this run and non-boundary support is below confidence thresholds. Treat position-1 hotspots as likely linearization/read-start artifact unless split-support increases.
-                                                            </p>
                                                         )}
 
-                                                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                                                            <span className="text-[var(--text-secondary)]">Hotspot view:</span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setIncludeBoundaryJunctions(false)}
-                                                                className={`px-2 py-1 rounded border transition-colors ${!includeBoundaryJunctions
-                                                                    ? 'text-[var(--text-primary)]'
-                                                                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                                                    }`}
-                                                                style={{
-                                                                    borderColor: 'var(--border-primary)',
-                                                                    backgroundColor: !includeBoundaryJunctions ? 'var(--bg-secondary)' : 'transparent',
-                                                                }}
-                                                            >
-                                                                Non-boundary only
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setIncludeBoundaryJunctions(true)}
-                                                                className={`px-2 py-1 rounded border transition-colors ${includeBoundaryJunctions
-                                                                    ? 'text-[var(--text-primary)]'
-                                                                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                                                    }`}
-                                                                style={{
-                                                                    borderColor: 'var(--border-primary)',
-                                                                    backgroundColor: includeBoundaryJunctions ? 'var(--bg-secondary)' : 'transparent',
-                                                                }}
-                                                            >
-                                                                Include boundary
-                                                            </button>
-                                                        </div>
-
-                                                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                                        {multimerHistogramPlotData.length > 0 ? (
                                                             <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Junction crossing support profile</div>
-                                                                {dimerJunctionPlotData.length > 0 ? (
-                                                                    <Plot
-                                                                        data={dimerJunctionPlotData}
-                                                                        layout={dimerJunctionLayout}
-                                                                        config={multimerPlotConfig}
-                                                                        style={{ width: '100%', height: '320px' }}
-                                                                        useResizeHandler
-                                                                    />
-                                                                ) : (
-                                                                    <p className="text-xs text-[var(--text-secondary)]">
-                                                                        No parseable junction evidence yet. Run with FASTQ + reference to generate junction events or profiles.
-                                                                    </p>
-                                                                )}
+                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Read length distribution</div>
+                                                                <Plot
+                                                                    data={multimerHistogramPlotData}
+                                                                    layout={multimerHistogramLayout}
+                                                                    config={multimerPlotConfig}
+                                                                    className="w-full h-[260px]"
+                                                                    style={{ width: '100%', height: '260px' }}
+                                                                    useResizeHandler
+                                                                />
                                                             </div>
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">
-                                                                    Top junction hotspots (first 20{includeBoundaryJunctions ? ', including boundary positions' : ', non-boundary only'})
-                                                                </div>
-                                                                {hasSplitSupportedEvidence && dimerHotspotRows.length > 0 ? (
-                                                                    <div className="overflow-x-auto">
-                                                                        <table className="w-full text-xs">
-                                                                            <thead>
-                                                                                <tr className="border-b border-[var(--border-primary)]">
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Position</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Crossing reads</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Support reads</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Support %</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Boundary</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Method</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Orientation</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Source</th>
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">~100 bp window</th>
-                                                                                </tr>
-                                                                            </thead>
-                                                                            <tbody>
-                                                                                {dimerHotspotRows.map((row, idx) => (
-                                                                                    <tr key={`dimer-hotspot-${idx}`} className="border-b border-[var(--border-primary)]/40">
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.positionModRef}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.crossingReads}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.supportReads}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">
-                                                                                            {row.supportPercent != null ? `${row.supportPercent.toFixed(1)}%` : '—'}
-                                                                                        </td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">
-                                                                                            {row.inBoundaryWindow == null ? '—' : (row.inBoundaryWindow ? 'yes' : 'no')}
-                                                                                        </td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">{row.method || '—'}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">{row.orientation || '—'}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">{row.source}</td>
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">
-                                                                                            {row.window100bp && row.windowLabel
-                                                                                                ? `${row.windowLabel} ${row.window100bp}`
-                                                                                                : 'n/a'}
-                                                                                        </td>
-                                                                                    </tr>
-                                                                                ))}
-                                                                            </tbody>
-                                                                        </table>
-                                                                    </div>
-                                                                ) : (
-                                                                    <p className="text-xs text-[var(--text-secondary)]">
-                                                                        {splitEvidencePending
-                                                                            ? 'Split-aware hotspot ranking pending; current run is seam-dominant without sufficient split support.'
-                                                                            : (includeBoundaryJunctions
-                                                                                ? 'No hotspot rows available.'
-                                                                                : 'No non-boundary hotspot rows available. Switch to "Include boundary" to inspect linearization-window loci.')}
-                                                                    </p>
-                                                                )}
-                                                                {dimerSummaryLookup.get('consensus_status') && (
-                                                                    <p className="text-xs text-[var(--text-secondary)] mt-2">
-                                                                        Consensus status: <span className="font-mono text-[var(--text-primary)]">{dimerSummaryLookup.get('consensus_status')}</span>
-                                                                    </p>
-                                                                )}
-                                                                {hasSplitSupportedEvidence && likelyDimerizationLocus && (
-                                                                    <p className="text-xs text-[var(--text-secondary)] mt-2">
-                                                                        Estimated non-boundary dimerization locus: <span className="font-mono text-[var(--text-primary)]">{likelyDimerizationLocus.positionModRef}</span>
-                                                                        {' '}(<span className="font-mono text-[var(--text-primary)]">{Math.round(likelyDimerizationLocus.supportReads)}</span> supporting reads)
-                                                                        {multimerReport.referenceName ? (
-                                                                            <> on <span className="font-mono text-[var(--text-primary)]">{multimerReport.referenceName}</span></>
-                                                                        ) : null}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        </div>
+                                                        ) : (
+                                                            <p className="text-xs text-[var(--text-secondary)]">Read length table unavailable; histogram not shown.</p>
+                                                        )}
 
-                                                        {dimerBreakpointScreenTopRows.length > 0 && (
+                                                        {topMultimerCandidates.length > 0 && (
                                                             <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Artifact-screened breakpoint ranking (split-aware)</div>
+                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Multimer candidate preview (first 40)</div>
                                                                 <div className="overflow-x-auto">
                                                                     <table className="w-full text-xs">
                                                                         <thead>
                                                                             <tr className="border-b border-[var(--border-primary)]">
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Position</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Total support</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Seam</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Split</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Split % (position)</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Split % (all split)</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Boundary-start %</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Seam %</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Split:Seam</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Boundary</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Artifact</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Confidence</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">~100 bp window</th>
+                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Read #</th>
+                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Length (bp)</th>
+                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Classification</th>
                                                                             </tr>
                                                                         </thead>
                                                                         <tbody>
-                                                                            {dimerBreakpointScreenTopRows.map((row, idx) => (
-                                                                                <tr key={`dimer-screen-${idx}`} className="border-b border-[var(--border-primary)]/40">
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.positionModRef}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.totalSupportReads}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.seamSupportReads}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.splitSupportReads}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.splitPctOfPosition != null ? `${row.splitPctOfPosition.toFixed(2)}%` : '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.splitPctOfAllSplit != null ? `${row.splitPctOfAllSplit.toFixed(2)}%` : '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.boundaryStartFraction != null ? `${row.boundaryStartFraction.toFixed(2)}%` : '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.seamFraction != null ? `${row.seamFraction.toFixed(2)}%` : '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.splitToSeamRatio != null ? row.splitToSeamRatio.toFixed(3) : '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">{row.inBoundaryWindow == null ? '—' : (row.inBoundaryWindow ? 'yes' : 'no')}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">{row.artifactFlag == null ? '—' : (row.artifactFlag ? 'yes' : 'no')}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">{row.confidence || '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">
-                                                                                        {row.junctionWindowSeq
-                                                                                            ? `${row.junctionWindowLabel || ''} ${row.junctionWindowSeq}`.trim()
-                                                                                            : 'n/a'}
-                                                                                    </td>
+                                                                            {topMultimerCandidates.map((row, idx) => (
+                                                                                <tr key={`multimer-candidate-${idx}`} className="border-b border-[var(--border-primary)]/40">
+                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.readIndex ?? '—'}</td>
+                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.readLength ?? '—'}</td>
+                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">{row.classification || '—'}</td>
                                                                                 </tr>
                                                                             ))}
                                                                         </tbody>
@@ -4917,162 +4321,15 @@ export function NGSToolkit() {
                                                             </div>
                                                         )}
 
-                                                        {dimerReferenceSequenceRows.length > 0 && hasSplitSupportedEvidence && (
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3 space-y-2">
-                                                                <div className="text-xs text-[var(--text-secondary)]">Linear reference map (left-to-right) with dimer junction overlays</div>
-                                                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-secondary)]">
-                                                                    <span>Read-support intensity scale:</span>
-                                                                    <span className="font-mono">1 → {Math.max(1, dimerMaxSupportReads)}</span>
-                                                                    <span className="inline-block w-20 h-2 rounded" style={{ background: `linear-gradient(to right, ${toAlphaColor(themeColors.warning, 0.18)}, ${toAlphaColor(themeColors.warning, 0.92)})` }} />
-                                                                </div>
-                                                                <div className="max-h-72 overflow-auto border border-[var(--border-primary)] rounded bg-[var(--bg-tertiary)] p-2">
-                                                                    {dimerReferenceSequenceRows.map((row) => {
-                                                                        const segments = buildDimerHighlightedSequenceSegments(row, dimerSequenceHighlightsByPosition);
-                                                                        return (
-                                                                            <div key={`dimer-seq-row-${row.start}`} className="flex gap-2 items-start mb-1 last:mb-0">
-                                                                                <span className="w-24 shrink-0 text-right text-[10px] text-[var(--text-secondary)] font-mono pt-0.5">
-                                                                                    {row.start}-{row.end}
-                                                                                </span>
-                                                                                <span className="font-mono text-[11px] leading-5 break-all text-[var(--text-primary)]">
-                                                                                    {segments.map((segment, idx) => (
-                                                                                        segment.highlight ? (
-                                                                                            <span
-                                                                                                key={`dimer-seg-${row.start}-${idx}`}
-                                                                                                style={{ backgroundColor: segment.highlight.backgroundColor }}
-                                                                                                className="rounded-[2px] px-[1px]"
-                                                                                                title={`pos ${segment.position} | support ${segment.highlight.readCount} read${segment.highlight.readCount === 1 ? '' : 's'}${segment.highlight.supportPercent != null ? ` (${segment.highlight.supportPercent.toFixed(2)}%)` : ''}`}
-                                                                                            >
-                                                                                                {segment.text}
-                                                                                            </span>
-                                                                                        ) : (
-                                                                                            <span key={`dimer-seg-${row.start}-${idx}`}>{segment.text}</span>
-                                                                                        )
-                                                                                    ))}
-                                                                                </span>
-                                                                            </div>
-                                                                        );
-                                                                    })}
-                                                                </div>
-                                                                <p className="text-xs text-[var(--text-secondary)]">
-                                                                    Highlighted bases are junction right-breakpoint positions from {includeBoundaryJunctions ? 'all hotspot evidence' : 'non-boundary hotspot evidence'}; darker color means higher supporting read count.
-                                                                </p>
-                                                            </div>
-                                                        )}
-                                                        {dimerReferenceSequenceRows.length > 0 && !hasSplitSupportedEvidence && (
+                                                        {consensusPreview && (
                                                             <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <p className="text-xs text-[var(--text-secondary)]">
-                                                                    Reference overlay is hidden until split-supported breakpoint evidence is detected. Current run is seam-dominant and may reflect read-start/linearization effects.
-                                                                </p>
-                                                            </div>
-                                                        )}
-
-                                                        {multimerReport.dimerReadJunctions.length > 0 && (
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Read-level junction evidence (first 200)</div>
-                                                                <div className="overflow-x-auto">
-                                                                    <table className="w-full text-xs">
-                                                                        <thead>
-                                                                            <tr className="border-b border-[var(--border-primary)]">
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Read ID</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Start</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">End</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Position (mod ref)</th>
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Crosses junction</th>
-                                                                                {dimerReadTableHasMethod && (
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Method</th>
-                                                                                )}
-                                                                                {dimerReadTableHasOrientation && (
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Orientation</th>
-                                                                                )}
-                                                                                {dimerReadTableHasMissingLeft && (
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Missing left (bp)</th>
-                                                                                )}
-                                                                                {dimerReadTableHasMissingRight && (
-                                                                                    <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Missing right (bp)</th>
-                                                                                )}
-                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Source</th>
-                                                                            </tr>
-                                                                        </thead>
-                                                                        <tbody>
-                                                                            {multimerReport.dimerReadJunctions.slice(0, 200).map((row, idx) => (
-                                                                                <tr key={`dimer-read-junction-${idx}`} className="border-b border-[var(--border-primary)]/40">
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.readId || '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.start ?? '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.end ?? '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.positionModRef ?? '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">
-                                                                                        {row.crossesJunction == null ? '—' : (row.crossesJunction ? 'yes' : 'no')}
-                                                                                    </td>
-                                                                                    {dimerReadTableHasMethod && (
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">{row.method || '—'}</td>
-                                                                                    )}
-                                                                                    {dimerReadTableHasOrientation && (
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)]">{row.orientation || '—'}</td>
-                                                                                    )}
-                                                                                    {dimerReadTableHasMissingLeft && (
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.missingLeftBp ?? '—'}</td>
-                                                                                    )}
-                                                                                    {dimerReadTableHasMissingRight && (
-                                                                                        <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row.missingRightBp ?? '—'}</td>
-                                                                                    )}
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)]">{row.source}</td>
-                                                                                </tr>
-                                                                            ))}
-                                                                        </tbody>
-                                                                    </table>
-                                                                </div>
-                                                            </div>
-                                                        )}
-
-                                                        {multimerReport.dimerConsensusPreview && (
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Dimer consensus preview</div>
+                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Consensus preview</div>
                                                                 <pre className="text-[11px] leading-relaxed text-[var(--text-primary)] font-mono whitespace-pre-wrap break-words max-h-[280px] overflow-auto">
-                                                                    {multimerReport.dimerConsensusPreview}
+                                                                    {consensusPreview}
                                                                 </pre>
                                                             </div>
                                                         )}
-                                                        {multimerReport.dominantDimerConsensusPreview && (
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Dominant dimer consensus preview</div>
-                                                                <pre className="text-[11px] leading-relaxed text-[var(--text-primary)] font-mono whitespace-pre-wrap break-words max-h-[280px] overflow-auto">
-                                                                    {multimerReport.dominantDimerConsensusPreview}
-                                                                </pre>
-                                                                <p className="text-[11px] text-[var(--text-secondary)] mt-2">
-                                                                    This sequence is generated from the dominant breakpoint-supported subset when available, otherwise from the most abundant exact dimer read.
-                                                                </p>
-                                                            </div>
-                                                        )}
-                                                        {multimerReport.dominantDimerConsensusMetadata && (
-                                                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Dominant consensus metadata</div>
-                                                                <div className="overflow-x-auto">
-                                                                    <table className="w-full text-xs">
-                                                                        <thead>
-                                                                            <tr className="border-b border-[var(--border-primary)]">
-                                                                                {multimerReport.dominantDimerConsensusMetadata.header.slice(0, 2).map((column, idx) => (
-                                                                                    <th
-                                                                                        key={`dominant-consensus-meta-col-${idx}`}
-                                                                                        className="text-left font-medium text-[var(--text-secondary)] px-2 py-1"
-                                                                                    >
-                                                                                        {column || `col_${idx + 1}`}
-                                                                                    </th>
-                                                                                ))}
-                                                                            </tr>
-                                                                        </thead>
-                                                                        <tbody>
-                                                                            {multimerReport.dominantDimerConsensusMetadata.rows.slice(0, 30).map((row, idx) => (
-                                                                                <tr key={`dominant-consensus-meta-row-${idx}`} className="border-b border-[var(--border-primary)]/40">
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">{row[0] || '—'}</td>
-                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] break-all">{row[1] || '—'}</td>
-                                                                                </tr>
-                                                                            ))}
-                                                                        </tbody>
-                                                                    </table>
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
+                                                    </>
                                                 )}
                                             </div>
                                         )}
@@ -5567,75 +4824,132 @@ export function NGSToolkit() {
             )}
 
             {igvModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm">
-                    <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl shadow-2xl w-[96vw] h-[94vh] max-w-none max-h-none flex flex-col">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-primary)]">
-                            <div>
-                                <h2 className="text-xl font-semibold text-[var(--text-primary)]">IGV Alignment Viewer</h2>
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-0 bg-black/80 backdrop-blur-sm">
+                    <div className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl w-screen h-screen max-w-none max-h-none flex flex-col ${igvIsFullscreen ? 'rounded-none border-0' : 'rounded-none'}`}>
+                        <div className="flex items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
+                            <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+                                <span className="text-xs font-semibold text-[var(--text-primary)]">IGV</span>
                                 {selectedJob && (
-                                    <p className="text-sm text-[var(--text-secondary)] mt-1">
+                                    <span className="truncate max-w-[40vw]" title={selectedJob.name}>
                                         {selectedJob.name}
-                                    </p>
+                                    </span>
                                 )}
-                                <p className="text-xs text-[var(--text-secondary)] mt-1">
-                                    Performance mode: IGV starts reference-only. Load heavy tracks manually.
-                                </p>
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleLoadIgvReadsTrack()}
-                                        disabled={igvLoading || igvReadsTrackLoaded || igvReadsTrackLoading || !igvArtifacts.bamUrl || !igvArtifacts.baiUrl}
-                                        className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {igvReadsTrackLoaded ? 'Reads track loaded' : igvReadsTrackLoading ? 'Loading reads...' : 'Load reads track'}
-                                    </button>
-                                </div>
+                                <span>IGV.js {igvVersion || `loading (>= ${IGV_REQUIRED_VERSION})`}</span>
+                                <span>{igvIsFullscreen ? 'FS on' : 'FS off'}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <select
+                                    value={igvSelectedBamPath}
+                                    onChange={(event) => setIgvSelectedBamPath(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading || igvAlignmentSources.length === 0}
+                                    title="Alignment BAM source"
+                                    className="max-w-[230px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                >
+                                    {igvAlignmentSources.length === 0 && (
+                                        <option value="">No BAM sources</option>
+                                    )}
+                                    {igvAlignmentSources.map((source) => (
+                                        <option key={source.bamPath} value={source.bamPath}>
+                                            {source.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={igvSelectedReferencePath}
+                                    onChange={(event) => setIgvSelectedReferencePath(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading || igvReferenceSources.length === 0}
+                                    title="Reference FASTA source"
+                                    className="max-w-[230px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                >
+                                    {igvReferenceSources.length === 0 && (
+                                        <option value="">No FASTA sources</option>
+                                    )}
+                                    {igvReferenceSources.map((source) => (
+                                        <option key={source.fastaPath} value={source.fastaPath}>
+                                            {source.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={igvAlignmentDisplayMode}
+                                    onChange={(event) => setIgvAlignmentDisplayMode(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                >
+                                    {IGV_ALIGNMENT_DISPLAY_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={igvAlignmentColorBy}
+                                    onChange={(event) => setIgvAlignmentColorBy(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                >
+                                    {IGV_ALIGNMENT_COLOR_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={igvAlignmentGroupBy}
+                                    onChange={(event) => setIgvAlignmentGroupBy(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+                                >
+                                    {IGV_ALIGNMENT_GROUP_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
                             <button
-                                onClick={() => {
-                                    setIgvModalOpen(false);
-                                    setIgvError(null);
-                                }}
-                                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-2xl font-light transition-colors"
+                                type="button"
+                                onClick={() => void handleLoadIgvReadsTrack()}
+                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
+                            </button>
+                            <button
+                                onClick={() => void closeIgvModal()}
+                                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-lg leading-none px-1.5 py-0.5 transition-colors"
                             >
                                 ×
                             </button>
                         </div>
 
-                        <div className="flex-1 overflow-hidden p-4 min-h-0">
-                            <div className="relative w-full h-full min-h-[520px]">
+                        <div className="flex-1 overflow-hidden min-h-0">
+                            <div className="relative w-full h-full">
                                 <div
                                     ref={igvContainerRef}
-                                    className="w-full h-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded"
+                                    className="absolute inset-0 bg-[var(--bg-primary)]"
                                 />
                                 {igvLoading && (
-                                    <div className="absolute inset-0 rounded flex items-center justify-center bg-[var(--bg-primary)]/65 text-[var(--text-secondary)]">
+                                    <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]/65 text-[var(--text-secondary)] text-xs">
                                         Loading IGV viewer...
                                     </div>
                                 )}
                                 {!igvLoading && igvError && (
-                                    <div className="absolute top-3 left-3 right-3 rounded border border-red-500/40 bg-red-500/10 text-red-300 text-xs px-3 py-2">
+                                    <div className="absolute top-2 left-2 right-2 rounded border border-red-500/40 bg-red-500/10 text-red-300 text-xs px-2 py-1.5">
                                         {igvError}
                                     </div>
                                 )}
                                 {!igvLoading && !igvError && !igvReadsTrackLoaded && (
-                                    <div className="absolute bottom-3 left-3 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-3 py-2">
-                                        Reference loaded. Click "Load reads track" to render alignments.
+                                    <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
+                                        Reference loaded. Tracks autoload once viewer initializes, or click 'Load tracks'.
+                                    </div>
+                                )}
+                                {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (
+                                    <div className="absolute bottom-2 left-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
+                                        Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
                                     </div>
                                 )}
                             </div>
-                        </div>
-
-                        <div className="flex justify-end px-6 py-4 border-t border-[var(--border-primary)]">
-                            <button
-                                onClick={() => {
-                                    setIgvModalOpen(false);
-                                    setIgvError(null);
-                                }}
-                                className="px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] text-[var(--text-primary)] rounded-lg transition-colors"
-                            >
-                                Close
-                            </button>
                         </div>
                     </div>
                 </div>

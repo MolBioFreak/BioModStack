@@ -7,7 +7,7 @@ version: "1.0.0"
 category: sequence_analysis
 description: >
   Oxford Nanopore analysis workflow supporting POD5 re-basecalling via Dorado,
-  direct tagged-BAM methylation summarization with modkit, and FASTQ multimer QC.
+  direct tagged-BAM methylation summarization with modkit, and FASTQ plasmid QC.
 container: dorado.sif
 
 ui_icon: waveform
@@ -26,7 +26,7 @@ outputs:
 modes:
   - id: methylation_analysis
     name: Methylation Analysis
-    description: POD5/BAM methylation analysis plus optional FASTQ multimerization QC
+    description: POD5/BAM methylation analysis plus optional FASTQ plasmid QC
     params:
       - pod5_dir
       - bam_path
@@ -41,11 +41,9 @@ modes:
       - dorado_batch_size
       - run_modkit
       - modkit_filter_threshold
+      - run_fastq_qc
       - run_multimer_qc
       - expected_plasmid_size
-      - enable_rotating_reference_frames
-      - rotation_scan_step_bp
-      - multimer_ratio_threshold
       - min_fastq_read_length
       - run_assembly
       - wf_clone_workflow_dir
@@ -74,7 +72,7 @@ params:
 
   - name: fastq_path
     type: file
-    description: FASTQ(.gz) input for read-length multimerization QC
+    description: FASTQ(.gz) input for alignment-based plasmid QC
     required: false
     file_type: fastq
 
@@ -158,43 +156,28 @@ params:
     minimum: 0.0
     maximum: 1.0
 
+  - name: run_fastq_qc
+    type: boolean
+    description: Run FASTQ plasmid QC (alignment summary, coverage, consensus)
+    required: false
+    default: true
+
   - name: run_multimer_qc
     type: boolean
-    description: Run FASTQ read-length based multimerization QC
+    description: Legacy alias for FASTQ QC enablement (kept for backward compatibility)
     required: false
     default: false
 
   - name: expected_plasmid_size
     type: integer
-    description: Expected monomer plasmid size (bp) for dimer/multimer detection
+    description: Expected plasmid size (bp) used for coarse copy-number/read-length context
     required: false
     default: 7000
     minimum: 1
 
-  - name: enable_rotating_reference_frames
-    type: boolean
-    description: Rotate circular reference origin during dimer hotspot scan to minimize linearization-boundary bias
-    required: false
-    default: true
-
-  - name: rotation_scan_step_bp
-    type: integer
-    description: Step size for rotating-origin scan (bp); 1 is most precise, larger values are faster
-    required: false
-    default: 1
-    minimum: 1
-
-  - name: multimer_ratio_threshold
-    type: number
-    description: Length ratio cutoff versus expected plasmid size for dimer candidates
-    required: false
-    default: 1.8
-    minimum: 1.0
-    maximum: 10.0
-
   - name: min_fastq_read_length
     type: integer
-    description: Ignore FASTQ reads shorter than this length for multimer QC
+    description: Ignore FASTQ reads shorter than this length before computing FASTQ QC metrics
     required: false
     default: 0
     minimum: 0
