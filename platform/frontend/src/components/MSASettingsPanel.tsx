@@ -14,6 +14,7 @@ export interface MSASettings {
     msa_min_depth_warning?: number;
     msa_min_depth_fail?: number;
     msa_force_refresh?: boolean;
+    msa_allow_empty_fallback?: boolean;
 }
 
 // Default settings per workflow type
@@ -304,6 +305,20 @@ export function MSASettingsPanel({
                                         </label>
                                         <span className="text-xs text-slate-500">Ignore cached MSA</span>
                                     </div>
+
+                                    {/* Empty fallback override */}
+                                    <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.msa_allow_empty_fallback ?? false}
+                                                onChange={(e) => update({ msa_allow_empty_fallback: e.target.checked })}
+                                                className="w-4 h-4 rounded border-slate-600 bg-slate-700"
+                                            />
+                                            <span className="text-sm text-slate-300">Allow Empty MSA Fallback</span>
+                                        </label>
+                                        <span className="text-xs text-slate-500">Continue with `msa: empty` if chain MSA generation fails</span>
+                                    </div>
                                 </div>
                             )}
                         </>
@@ -365,6 +380,9 @@ export function extractMSAParams(settings: MSASettings): Record<string, any> {
     }
     if (settings.msa_force_refresh) {
         params.msa_force_refresh = true;
+    }
+    if (settings.msa_allow_empty_fallback) {
+        params.msa_allow_empty_fallback = true;
     }
 
     return params;

@@ -617,6 +617,24 @@ async def launch_msa_batch_job(
     else:
         msa_use_gpu = bool(msa_use_gpu_raw)
     msa_max_seqs = params.get('msa_max_seqs')
+    msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
+    msa_use_expand = params.get('msa_use_expand')
+    msa_use_env = params.get('msa_use_env')
+    msa_num_iterations = params.get('msa_num_iterations')
+    msa_evalue = params.get('msa_evalue')
+    msa_min_seq_id = params.get('msa_min_seq_id')
+    msa_min_coverage = params.get('msa_min_coverage')
+    msa_taxon_list = params.get('msa_taxon_list')
+    msa_min_depth_warning = params.get('msa_min_depth_warning')
+    msa_min_depth_fail = params.get('msa_min_depth_fail')
+    msa_gpu_mode = params.get('msa_gpu_mode')
+    msa_gpu_threshold = params.get('msa_gpu_threshold')
+    msa_preferred_gpus = params.get('msa_preferred_gpus')
+    msa_excluded_gpus = params.get('msa_excluded_gpus')
+    msa_gpu_server_mode = params.get('msa_gpu_server_mode')
+    msa_gpu_server_wait_timeout = params.get('msa_gpu_server_wait_timeout')
+    msa_gpu_server_db_load_mode = params.get('msa_gpu_server_db_load_mode')
+    msa_gpu_server_startup_wait = params.get('msa_gpu_server_startup_wait')
     
     # Build batch_msa.py command
     from paths import get_colabfold_db, get_msa_cache_dir
@@ -630,6 +648,7 @@ async def launch_msa_batch_job(
         "--db_path", db_path,
         "--cache_dir", cache_dir,
         "--gpu_id", str(gpu_id),
+        "--preset", msa_preset,
     ]
     if reference_sequence:
         cmd.extend(["--reference_sequence", reference_sequence])
@@ -639,10 +658,64 @@ async def launch_msa_batch_job(
         cmd.append("--cpu-only")
     if msa_max_seqs is not None:
         cmd.extend(["--max-seqs", str(msa_max_seqs)])
+    if msa_use_expand is not None:
+        cmd.extend(["--use-expand", "1" if _coerce_bool(msa_use_expand) else "0"])
+    if msa_use_env is not None:
+        cmd.extend(["--use-env", "1" if _coerce_bool(msa_use_env) else "0"])
+    if msa_num_iterations is not None:
+        cmd.extend(["--num-iterations", str(msa_num_iterations)])
+    if msa_evalue is not None:
+        cmd.extend(["--evalue", str(msa_evalue)])
+    if msa_min_seq_id is not None:
+        cmd.extend(["--min-seq-id", str(msa_min_seq_id)])
+    if msa_min_coverage is not None:
+        cmd.extend(["--min-coverage", str(msa_min_coverage)])
+    if msa_taxon_list:
+        cmd.extend(["--taxon-list", str(msa_taxon_list)])
+    if msa_min_depth_warning is not None:
+        cmd.extend(["--min-depth-warning", str(msa_min_depth_warning)])
+    if msa_min_depth_fail is not None:
+        cmd.extend(["--min-depth-fail", str(msa_min_depth_fail)])
+    if msa_gpu_mode:
+        cmd.extend(["--gpu-mode", str(msa_gpu_mode)])
+    if msa_gpu_threshold is not None:
+        cmd.extend(["--gpu-threshold", str(msa_gpu_threshold)])
+    if msa_preferred_gpus:
+        if isinstance(msa_preferred_gpus, list):
+            preferred = ",".join(str(v) for v in msa_preferred_gpus if str(v).strip())
+        else:
+            preferred = str(msa_preferred_gpus).strip()
+        if preferred:
+            cmd.extend(["--preferred-gpus", preferred])
+    if msa_excluded_gpus:
+        if isinstance(msa_excluded_gpus, list):
+            excluded = ",".join(str(v) for v in msa_excluded_gpus if str(v).strip())
+        else:
+            excluded = str(msa_excluded_gpus).strip()
+        if excluded:
+            cmd.extend(["--excluded-gpus", excluded])
+    if msa_gpu_server_mode:
+        cmd.extend(["--gpu-server-mode", str(msa_gpu_server_mode)])
+    if msa_gpu_server_wait_timeout is not None:
+        cmd.extend(["--gpu-server-wait-timeout", str(msa_gpu_server_wait_timeout)])
+    if msa_gpu_server_db_load_mode is not None:
+        cmd.extend(["--gpu-server-db-load-mode", str(msa_gpu_server_db_load_mode)])
+    if msa_gpu_server_startup_wait is not None:
+        cmd.extend(["--gpu-server-startup-wait", str(msa_gpu_server_startup_wait)])
     
     logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
     
     try:
+        from services.msa_server import touch_query_activity
+        touch_query_activity(
+            {
+                "event": "msa_batch_start",
+                "job_id": job_id,
+                "gpu_id": gpu_id if msa_use_gpu else None,
+                "preset": msa_preset,
+            }
+        )
+
         # Run batch_msa.py
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -670,6 +743,14 @@ async def launch_msa_batch_job(
                 job.completed_at = datetime.utcnow()
                 job.msa_manifest_path = str(Path(output_dir) / "msa_manifest.json")
                 logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
+                touch_query_activity(
+                    {
+                        "event": "msa_batch_complete",
+                        "job_id": job_id,
+                        "gpu_id": gpu_id if msa_use_gpu else None,
+                        "preset": msa_preset,
+                    }
+                )
                 
                 # Unlock child inference jobs
                 await session.commit()
@@ -679,10 +760,32 @@ async def launch_msa_batch_job(
                 job.queue_status = 'failed'
                 job.error_message = f"MSA batch failed with exit code {exit_code}"
                 logger.error(f"[MSA BATCH] Job {job_id} failed: exit code {exit_code}")
+                touch_query_activity(
+                    {
+                        "event": "msa_batch_failed",
+                        "job_id": job_id,
+                        "gpu_id": gpu_id if msa_use_gpu else None,
+                        "preset": msa_preset,
+                        "exit_code": exit_code,
+                    }
+                )
                 await session.commit()
     
     except Exception as e:
         logger.error(f"[MSA BATCH] Job {job_id} error: {e}")
+        try:
+            from services.msa_server import touch_query_activity
+            touch_query_activity(
+                {
+                    "event": "msa_batch_error",
+                    "job_id": job_id,
+                    "gpu_id": gpu_id if msa_use_gpu else None,
+                    "preset": msa_preset,
+                    "error": str(e),
+                }
+            )
+        except Exception:
+            pass
         async with async_session() as session:
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -733,8 +836,12 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
         # Update each child job
         import hashlib
         for job in child_jobs:
-            sequence = job.params.get("sequence", "")
-            seq_hash = hashlib.sha256(sequence.encode()).hexdigest()
+            seq_hash = job.params.get("msa_sequence_hash")
+            if not isinstance(seq_hash, str) or not seq_hash:
+                sequence = job.params.get("sequence") or job.params.get("sequence_input") or ""
+                ref_sequence = job.params.get("msa_reference_sequence") or ""
+                hash_source = str(ref_sequence or sequence)
+                seq_hash = hashlib.sha256(hash_source.encode()).hexdigest() if hash_source else ""
             msa_path = msa_paths.get(seq_hash)
             if msa_path:
                 job.params = {**job.params, "msa_path": msa_path}
@@ -1154,7 +1261,26 @@ async def launch_nextflow_job(
                             (ln.strip() for ln in full_log if "CUDA out of memory" in ln),
                             None,
                         )
-                        if resume_lock_line:
+                        # Check for zero-yield (HQ filter culled all designs)
+                        zero_yield_report = Path(output_dir) / "zero_yield_report.json"
+                        if zero_yield_report.exists():
+                            import json as _json
+                            try:
+                                report_data = _json.loads(zero_yield_report.read_text())
+                                reason = report_data.get("reason", "unknown")
+                                recommendation = report_data.get("recommendation", "")
+                                job.status = "completed"
+                                job.error_message = (
+                                    f"Completed with 0 validated designs: {reason}. "
+                                    f"{recommendation}"
+                                )
+                                logger.warning(
+                                    f"Job {job_id} zero-yield: {reason}"
+                                )
+                            except Exception:
+                                job.status = "completed"
+                                job.error_message = "Completed with 0 validated designs (zero_yield_report found)"
+                        elif resume_lock_line:
                             job.error_message = (
                                 f"Nextflow resume lock contention after retries: {resume_lock_line}"
                             )
@@ -1468,6 +1594,7 @@ def build_nextflow_command(
         'msa_min_coverage': 'msa_min_coverage',
         'msa_min_depth_warning': 'msa_min_depth_warning',
         'msa_min_depth_fail': 'msa_min_depth_fail',
+        'msa_allow_empty_fallback': 'msa_allow_empty_fallback',
         'msa_force_refresh': 'msa_force_refresh',
         'msa_gpu_server_mode': 'msa_gpu_server_mode',
         'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchJobs, fetchBatchAnalytics } from '../lib/api';
 import type { Job } from '../lib/api';
@@ -9,6 +9,17 @@ interface BatchComparePaneProps {
     initialJobId?: string;
 }
 
+const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
+    const modelId = (job.model_id || '').toLowerCase();
+    const mode = (job.mode || '').toLowerCase();
+    return (
+        modelId === 'nanopore' ||
+        modelId.includes('nanopore') ||
+        mode === 'methylation_analysis' ||
+        mode === 'nanopore_methylation'
+    );
+};
+
 export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     const [selectedJobIds, setSelectedJobIds] = useState<string[]>(initialJobId ? [initialJobId] : []);
 
@@ -17,7 +28,20 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
         queryKey: ['jobs'],
         queryFn: () => fetchJobs(),
     });
-    const jobs = jobsData?.data.jobs ?? [];
+    const jobs = useMemo(
+        () => (jobsData?.data.jobs ?? []).filter((j: Job) => !isNgsJob(j)),
+        [jobsData]
+    );
+
+    useEffect(() => {
+        if (!jobs.length) {
+            if (selectedJobIds.length > 0) {
+                setSelectedJobIds([]);
+            }
+            return;
+        }
+        setSelectedJobIds((prev) => prev.filter((id) => jobs.some((j) => j.id === id)));
+    }, [jobs, selectedJobIds.length]);
 
     // Fetch batch analytics for selected jobs
     const { data: batchData, isLoading } = useQuery({
@@ -60,30 +84,36 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
                     <p className="text-xs text-slate-500 mt-1">Select multiple jobs to compare</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    {jobs.map((job: Job) => (
-                        <div
-                            key={job.id}
-                            onClick={() => toggleJob(job.id)}
-                            className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border ${selectedJobIds.includes(job.id)
-                                ? 'bg-blue-500/10 border-blue-500/50'
-                                : 'bg-transparent border-transparent hover:bg-slate-800'
-                                }`}
-                        >
-                            <div className="flex items-start justify-between">
-                                <span className={`text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
-                                    {job.name}
-                                </span>
-                                {selectedJobIds.includes(job.id) && (
-                                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5" />
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-                                <span>{job.mode}</span>
-                                <span>•</span>
-                                <span>{new Date(job.created_at).toLocaleDateString()}</span>
-                            </div>
+                    {jobs.length === 0 ? (
+                        <div className="p-3 text-sm text-slate-500">
+                            No protein workflow jobs available for comparison.
                         </div>
-                    ))}
+                    ) : (
+                        jobs.map((job: Job) => (
+                            <div
+                                key={job.id}
+                                onClick={() => toggleJob(job.id)}
+                                className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border ${selectedJobIds.includes(job.id)
+                                    ? 'bg-blue-500/10 border-blue-500/50'
+                                    : 'bg-transparent border-transparent hover:bg-slate-800'
+                                    }`}
+                            >
+                                <div className="flex items-start justify-between">
+                                    <span className={`text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
+                                        {job.name}
+                                    </span>
+                                    {selectedJobIds.includes(job.id) && (
+                                        <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5" />
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+                                    <span>{job.mode}</span>
+                                    <span>•</span>
+                                    <span>{new Date(job.created_at).toLocaleDateString()}</span>
+                                </div>
+                            </div>
+                        ))
+                    )}
                 </div>
             </div>
 

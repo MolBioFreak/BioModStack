@@ -10,6 +10,17 @@ import { SystemResources } from './dashboard/SystemResources';
 import { JobQueueTable } from './dashboard/JobQueueTable';
 import { JobFilters } from './dashboard/JobFilters';
 
+const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
+    const modelId = (job.model_id || '').toLowerCase();
+    const mode = (job.mode || '').toLowerCase();
+    return (
+        modelId === 'nanopore' ||
+        modelId.includes('nanopore') ||
+        mode === 'methylation_analysis' ||
+        mode === 'nanopore_methylation'
+    );
+};
+
 export function Dashboard() {
     const queryClient = useQueryClient();
 
@@ -19,6 +30,7 @@ export function Dashboard() {
     const [logsLoading, setLogsLoading] = useState(false);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [showNgsJobs, setShowNgsJobs] = useState(true);
     const [visibleCount, setVisibleCount] = useState(25); // Start with 25 jobs visible
     // Debug mode is read from localStorage (toggled via Layout's DebugMenu or browser dev tools)
     const debugMode = (() => {
@@ -204,6 +216,8 @@ export function Dashboard() {
                     onSearchChange={setSearch}
                     status={statusFilter}
                     onStatusChange={setStatusFilter}
+                    showNgsJobs={showNgsJobs}
+                    onShowNgsJobsChange={setShowNgsJobs}
                 />
 
                 {(() => {
@@ -212,7 +226,8 @@ export function Dashboard() {
                             job.name.toLowerCase().includes(search.toLowerCase()) ||
                             job.id.includes(search);
                         const matchesStatus = statusFilter === 'all' || job.status === statusFilter;
-                        return matchesSearch && matchesStatus;
+                        const matchesNgs = showNgsJobs || !isNgsJob(job);
+                        return matchesSearch && matchesStatus && matchesNgs;
                     });
                     const displayedJobs = filteredJobs.slice(0, visibleCount);
                     const hasMore = filteredJobs.length > visibleCount;
@@ -380,8 +395,6 @@ function LogsModal({
         </div>
     );
 }
-
-
 
 
 

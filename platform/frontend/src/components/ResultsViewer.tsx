@@ -59,6 +59,17 @@ const getBindingTier = (iptm: number | null | undefined, epitopeContacts: number
     return { tier: 'D', color: 'text-red-300', bgColor: 'bg-red-500/30 border-red-500/50', label: 'Low' };
 };
 
+const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
+    const modelId = (job.model_id || '').toLowerCase();
+    const mode = (job.mode || '').toLowerCase();
+    return (
+        modelId === 'nanopore' ||
+        modelId.includes('nanopore') ||
+        mode === 'methylation_analysis' ||
+        mode === 'nanopore_methylation'
+    );
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -96,20 +107,53 @@ export function ResultsViewer() {
         queryFn: () => fetchJobs({ include_children: true }),
     });
     const jobs = jobsData?.data.jobs ?? [];
+    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
+    const activeJob = useMemo(
+        () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
+        [nonNgsJobs, selectedJobId]
+    );
 
     // Sync URL with selection
     useEffect(() => {
-        if (jobId && jobId !== selectedJobId) {
-            setSelectedJobId(jobId);
-        } else if (!jobId && jobs.length > 0 && !selectedJobId) {
-            const completedJobs = jobs.filter((j: Job) => j.status === 'completed');
-            if (completedJobs.length > 0) {
-                const recent = completedJobs[0];
-                setSelectedJobId(recent.id);
-                navigate(`/designs/${recent.id}`, { replace: true });
+        const fallbackJob = nonNgsJobs.find((j: Job) => j.status === 'completed') ?? nonNgsJobs[0];
+
+        if (nonNgsJobs.length === 0) {
+            if (selectedJobId) {
+                setSelectedJobId('');
+                setSelectedDesignId('');
             }
+            if (jobId) {
+                navigate('/designs', { replace: true });
+            }
+            return;
         }
-    }, [jobId, jobs, selectedJobId, navigate]);
+
+        if (jobId) {
+            const requestedJob = nonNgsJobs.find((j: Job) => j.id === jobId);
+            if (requestedJob) {
+                if (selectedJobId !== requestedJob.id) {
+                    setSelectedJobId(requestedJob.id);
+                    setSelectedDesignId('');
+                }
+                return;
+            }
+
+            if (fallbackJob) {
+                if (selectedJobId !== fallbackJob.id) {
+                    setSelectedJobId(fallbackJob.id);
+                    setSelectedDesignId('');
+                }
+                navigate(`/designs/${fallbackJob.id}`, { replace: true });
+            }
+            return;
+        }
+
+        if (!activeJob && fallbackJob) {
+            setSelectedJobId(fallbackJob.id);
+            setSelectedDesignId('');
+            navigate(`/designs/${fallbackJob.id}`, { replace: true });
+        }
+    }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate]);
 
     const handleJobChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newId = e.target.value;
@@ -140,7 +184,7 @@ export function ResultsViewer() {
             rfd_rog_min: rfdRogMinValue,
             rfd_rog_max: rfdRogMaxValue,
         }),
-        enabled: !!selectedJobId,
+        enabled: !!activeJob,
     });
     const designs = designsData?.data.designs ?? [];
     const totalDesigns = designsData?.data.total ?? 0;
@@ -150,7 +194,7 @@ export function ResultsViewer() {
     const { data: backboneSummaryData } = useQuery({
         queryKey: ['backboneSummary', selectedJobId],
         queryFn: () => fetchBackboneSummary(selectedJobId),
-        enabled: !!selectedJobId,
+        enabled: !!activeJob,
     });
     const backboneSummary = backboneSummaryData?.data;
 
@@ -273,8 +317,6 @@ export function ResultsViewer() {
         }
     }, [designs, selectedDesignId]);
 
-    const activeJob = jobs.find((j: Job) => j.id === selectedJobId);
-
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
     useEffect(() => {
@@ -367,7 +409,7 @@ export function ResultsViewer() {
                             >
                                 <option value="">Select a job...</option>
                                 {(() => {
-                                    const sortedJobs = [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                                    const sortedJobs = [...nonNgsJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
                                     // Build batch-based aggregation map for jobs sharing batch_id
                                     // This handles mutagenesis workflows where child jobs have batch_id but no parent_job_id
@@ -470,7 +512,13 @@ export function ResultsViewer() {
                     </div>
                 </div>
 
-                {selectedJobId && (
+                {nonNgsJobs.length === 0 && (
+                    <div className="bg-slate-900/50 rounded-xl border border-slate-800 p-8 text-center text-slate-400">
+                        No protein workflow jobs available for Data Viewer. NGS jobs are available in NGS Data Visualization Toolkit.
+                    </div>
+                )}
+
+                {activeJob && (
                     <>
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">

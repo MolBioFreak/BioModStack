@@ -29,6 +29,7 @@ type ModifiedBases =
     | '5hmCG'
     | 'none';
 type AssemblyTool = 'flye' | 'canu';
+type MinimapPreset = 'map-ont' | 'lr:hq' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath' | 'wfCloneWorkflowDir';
 type PathPickerMode = 'file' | 'directory';
@@ -103,6 +104,14 @@ const GPU_OPTIONS = [
     { id: 2, name: '3090#1' },
     { id: 3, name: '3090#2' },
 ];
+
+const FASTQ_MINIMAP_PRESETS: Record<MinimapPreset, string> = {
+    'map-ont': 'map-ont (legacy ONT noisy long reads)',
+    'lr:hq': 'lr:hq (recommended for Q20+/R10.4.1)',
+    'map-hifi': 'map-hifi (PacBio HiFi)',
+    'map-pb': 'map-pb (PacBio CLR)',
+    'sr': 'sr (short reads)',
+};
 
 const REFERENCE_LIBRARY_STORAGE_KEY = 'bms.nanopore.referenceLibrary.v1';
 
@@ -391,6 +400,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
+    const [bamForceRealign, setBamForceRealign] = useState<boolean>(
+        (initialValues?.bamForceRealign as boolean | undefined)
+        ?? (initialValues?.bam_force_realign as boolean | undefined)
+        ?? false
+    );
     const [fastqPath, setFastqPath] = useState(initialValues?.fastqPath as string || '');
     const [referencePath, setReferencePath] = useState(initialValues?.referencePath as string || '');
 
@@ -404,6 +418,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: QC Settings
     // ============================================================================
     const [minQscore, setMinQscore] = useState<number>((initialValues?.minQscore as number | undefined) ?? 10);
+    const [bamMinMapq, setBamMinMapq] = useState<number>(() => {
+        const raw = Number(
+            (initialValues?.bamMinMapq as number | undefined)
+            ?? (initialValues?.bam_min_mapq as number | undefined)
+            ?? 0
+        );
+        if (!Number.isFinite(raw)) return 0;
+        return Math.min(60, Math.max(0, Math.round(raw)));
+    });
     const [trimAdapters, setTrimAdapters] = useState(initialValues?.trimAdapters !== false);
 
     // ============================================================================
@@ -417,6 +440,31 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
     const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<number>(initialValues?.expectedPlasmidSize as number || 7000);
     const [minFastqReadLength, setMinFastqReadLength] = useState<number>(initialValues?.minFastqReadLength as number || 0);
+    const [fastqMinimap2Preset, setFastqMinimap2Preset] = useState<MinimapPreset>(
+        ((initialValues?.fastqMinimap2Preset as MinimapPreset | undefined)
+            ?? (initialValues?.fastq_minimap2_preset as MinimapPreset | undefined)
+            ?? 'lr:hq')
+    );
+    const [fastqMinimap2AllowSecondary, setFastqMinimap2AllowSecondary] = useState<boolean>(
+        (initialValues?.fastqMinimap2AllowSecondary as boolean | undefined)
+        ?? (initialValues?.fastq_minimap2_allow_secondary as boolean | undefined)
+        ?? true
+    );
+    const [igvTrackWindowBp, setIgvTrackWindowBp] = useState<number>(
+        (initialValues?.igvTrackWindowBp as number | undefined)
+        ?? (initialValues?.igv_track_window_bp as number | undefined)
+        ?? 100
+    );
+    const [igvReportMaxSites, setIgvReportMaxSites] = useState<number>(
+        (initialValues?.igvReportMaxSites as number | undefined)
+        ?? (initialValues?.igv_report_max_sites as number | undefined)
+        ?? 40
+    );
+    const [igvReportFlankingBp, setIgvReportFlankingBp] = useState<number>(
+        (initialValues?.igvReportFlankingBp as number | undefined)
+        ?? (initialValues?.igv_report_flanking_bp as number | undefined)
+        ?? 200
+    );
     const [runAssembly, setRunAssembly] = useState(initialValues?.runAssembly as boolean || false);
     const [assemblyTool, setAssemblyTool] = useState<AssemblyTool>(initialValues?.assemblyTool as AssemblyTool || 'flye');
     const [assemblyApproxSize, setAssemblyApproxSize] = useState<number>(initialValues?.assemblyApproxSize as number || 7000);
@@ -497,6 +545,64 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
     const methylationEnabled = modifiedBases !== 'none';
     const canRunModkit = inputSource !== 'fastq' && (inputSource === 'bam' || methylationEnabled);
+    const pipelineOverviewSteps = useMemo(() => {
+        if (inputSource === 'fastq') {
+            const steps = [
+                'FASTQ import',
+                `minimap2 (${fastqMinimap2Preset})`,
+            ];
+            if (runFastqQc) {
+                steps.push('plasmid QC + consensus', 'IGV/report tracks');
+            }
+            return steps;
+        }
+
+        if (inputSource === 'bam') {
+            const steps = [bamForceRealign ? 'BAM input' : 'BAM pass-through'];
+            if (referencePath.trim()) {
+                steps.push(bamForceRealign ? 'dorado realignment' : 'reference-context analysis');
+            } else {
+                steps.push('mapped-BAM validation');
+            }
+            if (bamMinMapq > 0) steps.push(`MAPQ>=${bamMinMapq} filter`);
+            if (runModkit) steps.push('modkit methylation');
+            if (runAssembly) steps.push('wf-clone assembly');
+            return steps;
+        }
+
+        const steps = ['Dorado basecalling', 'alignment'];
+        if (runModkit) steps.push('modkit methylation');
+        if (runAssembly) steps.push('wf-clone assembly');
+        return steps;
+    }, [bamForceRealign, bamMinMapq, fastqMinimap2Preset, inputSource, referencePath, runAssembly, runFastqQc, runModkit]);
+    const fastqCliPreview = useMemo(() => {
+        if (inputSource !== 'fastq' || !runFastqQc) return '';
+        const referenceHint = referencePath.trim() || '<uploaded/pasted FASTA>';
+        return [
+            `--fastq_path ${fastqPath || '<fastq path>'}`,
+            `--reference_fasta ${referenceHint}`,
+            `--run_fastq_qc true`,
+            `--expected_plasmid_size ${expectedPlasmidSize}`,
+            `--min_fastq_read_length ${minFastqReadLength}`,
+            `--fastq_minimap2_preset ${fastqMinimap2Preset}`,
+            `--fastq_minimap2_allow_secondary ${fastqMinimap2AllowSecondary}`,
+            `--igv_track_window_bp ${igvTrackWindowBp}`,
+            `--igv_report_max_sites ${igvReportMaxSites}`,
+            `--igv_report_flanking_bp ${igvReportFlankingBp}`,
+        ].join(' \\\n  ');
+    }, [
+        expectedPlasmidSize,
+        fastqMinimap2AllowSecondary,
+        fastqMinimap2Preset,
+        fastqPath,
+        igvReportFlankingBp,
+        igvReportMaxSites,
+        igvTrackWindowBp,
+        inputSource,
+        minFastqReadLength,
+        referencePath,
+        runFastqQc,
+    ]);
 
     const applySavedReferences = (entries: SavedReferenceEntry[]) => {
         const sorted = [...entries].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -677,7 +783,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 pinned_gpu: isCpuOnly ? null : (pinnedGpus.length === 1 ? pinnedGpus[0] : null),
                 params: {
                     reference_fasta: effectiveReferencePath || undefined,
-                    min_qscore: isCpuOnly ? undefined : minQscore,
+                    min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
                     run_fastq_qc: inputSource === 'fastq' ? runFastqQc : false,
                     run_multimer_qc: inputSource === 'fastq' ? runFastqQc : false,
@@ -694,11 +800,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     }),
                     ...(inputSource === 'bam' && {
                         bam_path: bamPath,
+                        bam_force_realign: bamForceRealign,
+                        bam_min_mapq: bamMinMapq,
                     }),
                     ...(inputSource === 'fastq' && {
                         fastq_path: fastqPath,
                         expected_plasmid_size: expectedPlasmidSize,
                         min_fastq_read_length: minFastqReadLength,
+                        fastq_minimap2_preset: fastqMinimap2Preset,
+                        fastq_minimap2_allow_secondary: fastqMinimap2AllowSecondary,
+                        igv_track_window_bp: igvTrackWindowBp,
+                        igv_report_max_sites: igvReportMaxSites,
+                        igv_report_flanking_bp: igvReportFlankingBp,
                     }),
                     ...(inputSource !== 'fastq' && runAssembly && {
                         wf_clone_assembly_tool: assemblyTool,
@@ -826,7 +939,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                     <div>
                         <h1 className="text-2xl font-bold text-[var(--text-primary)]">Nanopore Sequencing</h1>
-                        <p className="text-sm text-[var(--text-secondary)]">Methylation-aware basecalling and analysis from ONT POD5 data</p>
+                        <p className="text-sm text-[var(--text-secondary)]">Mode-aware ONT pipeline for POD5, BAM, and FASTQ QC workflows</p>
                     </div>
                 </div>
             </div>
@@ -841,15 +954,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             >
                 <div className="font-medium text-[var(--accent-secondary)] mb-1">Pipeline Overview</div>
                 <div className="text-[var(--text-secondary)] text-xs flex flex-wrap gap-x-4 gap-y-1">
-                    <span>Dorado GPU basecalling</span>
-                    <span>
-                        <svg className="w-3 h-3 inline opacity-40" viewBox="0 0 20 20" fill="currentColor"><path d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" /></svg>
-                    </span>
-                    <span>minimap2 alignment</span>
-                    <span>
-                        <svg className="w-3 h-3 inline opacity-40" viewBox="0 0 20 20" fill="currentColor"><path d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" /></svg>
-                    </span>
-                    <span>modkit methylation</span>
+                    {pipelineOverviewSteps.map((step, idx) => (
+                        <span key={`${step}-${idx}`} className="inline-flex items-center gap-2">
+                            {idx > 0 && (
+                                <svg className="w-3 h-3 inline opacity-40" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" />
+                                </svg>
+                            )}
+                            <span>{step}</span>
+                        </span>
+                    ))}
                 </div>
             </div>
 
@@ -1012,9 +1126,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-1">Use BAMs with MM/ML tags. If BAM is unaligned, provide Reference FASTA so the pipeline can align before modkit/assembly.</p>
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">
+                            Use BAMs with MM/ML tags. BAM mode defaults to pass-through processing (sort/index only) for direct vendor-vs-recall comparison.
+                        </p>
                         <p className="text-xs text-amber-300 mt-1">
-                            BAM mode reuses existing modification tags; for authoritative methylation comparison against negative controls, prefer POD5 re-basecalling.
+                            BAM mode reuses existing modification tags; enable force realignment only when you explicitly want to re-map reads before modkit/assembly.
+                            MAPQ filtering is configurable below in Analysis Options.
                         </p>
                     </>
                 )}
@@ -1290,11 +1407,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
             )}
 
-            {/* Quality Filtering — Slider */}
-            {inputSource !== 'fastq' && (
+            {/* POD5 basecall quality filter */}
+            {inputSource === 'pod5' && (
                 <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                        Read Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
+                        Basecall Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
                         <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{getQscoreLabel(minQscore)}</span>
                     </label>
                     <input
@@ -1313,6 +1430,34 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <span>Q20</span>
                         <span>Q30 (ultra-strict)</span>
                     </div>
+                </div>
+            )}
+
+            {/* BAM alignment quality filter */}
+            {inputSource === 'bam' && (
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                        Alignment Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={0}
+                        max={60}
+                        step={1}
+                        value={bamMinMapq}
+                        onChange={(e) => setBamMinMapq(Math.max(0, Math.min(60, parseInt(e.target.value, 10))))}
+                        className="w-full mt-2 accent-[var(--accent-secondary)]"
+                    />
+                    <div className="flex justify-between text-[10px] text-[var(--text-secondary)] mt-1">
+                        <span>0 (off)</span>
+                        <span>10</span>
+                        <span>20</span>
+                        <span>30</span>
+                        <span>60</span>
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
+                        Applied with <code>samtools view -q</code> while preparing BAM for downstream modkit/assembly.
+                    </p>
                 </div>
             )}
 
@@ -1348,7 +1493,27 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Run modkit analysis</span>
                             <p className="text-xs text-[var(--text-secondary)]">
-                                Generate per-site BED (with reference) and per-read summary methylation tables
+                                {inputSource === 'bam'
+                                    ? 'Summarize existing MM/ML tags into per-read tables and optional per-site BED (no re-calling).'
+                                    : 'Generate per-site BED (with reference) and per-read summary methylation tables.'}
+                            </p>
+                        </div>
+                    </label>
+                )}
+
+                {/* BAM realignment toggle */}
+                {inputSource === 'bam' && (
+                    <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={bamForceRealign}
+                            onChange={(e) => setBamForceRealign(e.target.checked)}
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                        />
+                        <div>
+                            <span className="text-sm text-[var(--text-primary)]">Force BAM realignment (Dorado aligner)</span>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                Default is pass-through BAM processing for apples-to-apples vendor comparison. Enable only when you intentionally want realignment.
                             </p>
                         </div>
                     </label>
@@ -1389,30 +1554,57 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 )}
 
                 {inputSource === 'fastq' && runFastqQc && (
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 border-t border-[var(--border-primary)] pt-3">
-                        <label className="text-xs text-[var(--text-secondary)]">
-                            Expected plasmid size (bp)
+                    <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
+                        <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC core controls</div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <label className="text-xs text-[var(--text-secondary)]">
+                                Expected plasmid size (bp)
+                                <input
+                                    type="number"
+                                    min={1}
+                                    value={expectedPlasmidSize}
+                                    onChange={(e) => setExpectedPlasmidSize(Math.max(1, parseInt(e.target.value || '7000', 10)))}
+                                    className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                />
+                            </label>
+
+                            <label className="text-xs text-[var(--text-secondary)]">
+                                Min read length (bp)
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={minFastqReadLength}
+                                    onChange={(e) => setMinFastqReadLength(Math.max(0, parseInt(e.target.value || '0', 10)))}
+                                    className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                />
+                            </label>
+
+                            <label className="text-xs text-[var(--text-secondary)]">
+                                Alignment preset (`minimap2 -x`)
+                                <select
+                                    value={fastqMinimap2Preset}
+                                    onChange={(e) => setFastqMinimap2Preset(e.target.value as MinimapPreset)}
+                                    className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                >
+                                    {Object.entries(FASTQ_MINIMAP_PRESETS).map(([preset, label]) => (
+                                        <option key={preset} value={preset}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+
+                        <label className="flex items-center gap-2 cursor-pointer">
                             <input
-                                type="number"
-                                min={1}
-                                value={expectedPlasmidSize}
-                                onChange={(e) => setExpectedPlasmidSize(Math.max(1, parseInt(e.target.value || '7000', 10)))}
-                                className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                type="checkbox"
+                                checked={fastqMinimap2AllowSecondary}
+                                onChange={(e) => setFastqMinimap2AllowSecondary(e.target.checked)}
+                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                             />
+                            <span className="text-xs text-[var(--text-secondary)]">Keep secondary alignments (docs/default minimap2 behavior)</span>
                         </label>
 
-                        <label className="text-xs text-[var(--text-secondary)]">
-                            Min read length
-                            <input
-                                type="number"
-                                min={0}
-                                value={minFastqReadLength}
-                                onChange={(e) => setMinFastqReadLength(Math.max(0, parseInt(e.target.value || '0', 10)))}
-                                className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
-                            />
-                        </label>
-                        <div className="text-xs text-[var(--text-secondary)] md:col-span-2 self-end pb-1">
-                            This stage emits `fastq_qc_summary.tsv`, `fastq_alignment_stats.tsv`, `fastq_coverage.tsv`, and `fastq_consensus.fasta`.
+                        <div className="text-xs text-[var(--text-secondary)]">
+                            Outputs include `fastq_qc_summary.tsv`, `fastq_alignment_stats.tsv`, `fastq_coverage.tsv`, `fastq_consensus.fasta`, and IGV report tracks.
                         </div>
                     </div>
                 )}
@@ -1427,8 +1619,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <svg className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
                     </svg>
-                    <span className="font-medium">Advanced Settings</span>
+                    <span className="font-medium">Expert Controls &amp; Pipeline Flags</span>
                 </button>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                    Optional low-level parameters. Defaults are safe; only change these when tuning behavior intentionally.
+                </p>
                 {showAdvanced && (
                     <div className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
                         {inputSource === 'pod5' && (
@@ -1508,6 +1703,55 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 <div className="text-[10px] text-[var(--text-secondary)]">
                                     Auto lets modkit infer a dataset-specific threshold; strict modes reduce false positives in negative controls.
                                 </div>
+                            </div>
+                        )}
+                        {inputSource === 'fastq' && runFastqQc && (
+                            <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
+                                <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">IGV track/report tuning</div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        IGV track window (bp)
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={igvTrackWindowBp}
+                                            onChange={(e) => setIgvTrackWindowBp(Math.max(1, parseInt(e.target.value || '100', 10)))}
+                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        IGV report max sites
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={igvReportMaxSites}
+                                            onChange={(e) => setIgvReportMaxSites(Math.max(1, parseInt(e.target.value || '40', 10)))}
+                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        IGV report flanking (bp)
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            value={igvReportFlankingBp}
+                                            onChange={(e) => setIgvReportFlankingBp(Math.max(0, parseInt(e.target.value || '200', 10)))}
+                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="text-[10px] text-[var(--text-secondary)]">
+                                    Controls the derived IGV analysis tracks and hotspot report context for FASTQ plasmid QC outputs.
+                                </div>
+                            </div>
+                        )}
+                        {inputSource === 'fastq' && runFastqQc && fastqCliPreview && (
+                            <div className="space-y-2 border-t border-[var(--border-primary)] pt-3">
+                                <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">CLI parameter preview</div>
+                                <pre className="text-[11px] leading-5 whitespace-pre-wrap break-all bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 text-[var(--text-primary)] font-mono">
+nextflow run main.nf \
+  {fastqCliPreview}
+                                </pre>
                             </div>
                         )}
                         {runAssembly && inputSource !== 'fastq' && (
