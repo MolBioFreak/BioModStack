@@ -214,7 +214,7 @@ process RunMaturationFAMPNN {
     cp "\${mature_json}" "${meta.id}_matured.json"
 
     if [ -n "${params.out_dir}" ]; then
-        mkdir -p "${params.out_dir}/run/ppiflow/results"
+        mkdir -p "${params.out_dir}/run/ppiflow/results" 2>/dev/null || true
         cp results/*.pdb "${params.out_dir}/run/ppiflow/results/" 2>/dev/null || true
         cp results/*.json "${params.out_dir}/run/ppiflow/results/" 2>/dev/null || true
     fi

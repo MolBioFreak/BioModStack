@@ -334,10 +334,9 @@ const MODKIT_STAGE_ALIASES = ['modkit', 'modkitpileup', 'modkitsummary'];
 const MULTIMER_STAGE_ALIASES = ['fastq_qc', 'fastqqc', 'fastqplasmidqc', 'multimer_qc', 'multimerqc', 'fastqmultimerqc'];
 const DIMER_STAGE_ALIASES = ['dimer_analysis', 'dimeranalysis', 'fastqdimeranalysis'];
 const METHYLATION_STRAND_FILTERS = ['both', '+', '-'] as const;
-const MOTIF_CONCORDANCE_DELTA_PERCENT = 20;
+const MOTIF_CONCORDANCE_DELTA_PERCENT = 5;
 const RELEVANT_METHYLATION_CODES = new Set(['a', 'm']);
 const IGV_ALIGNMENT_DISPLAY_OPTIONS = [
-    { value: 'COLLAPSED', label: 'Collapsed' },
     { value: 'EXPANDED', label: 'Expanded' },
     { value: 'SQUISHED', label: 'Squished' },
     { value: 'FULL', label: 'Full' },
@@ -361,7 +360,6 @@ const IGV_ALIGNMENT_GROUP_OPTIONS = [
     { value: 'chimeric', label: 'Group: Chimeric' },
     { value: 'supplementary', label: 'Group: Supplementary' },
     { value: 'readOrder', label: 'Group: Read Order' },
-    { value: 'phase', label: 'Group: Phase (HP)' },
 ];
 let igvLibraryPromise: Promise<{ igv: IgvLibrary; version: string }> | null = null;
 
@@ -1250,24 +1248,10 @@ function parseModkitBedRecords(text: string): ParsedBedRecord[] {
     return rows;
 }
 
-function inferPercentScaleFromBedText(text: string): number {
-    // modkit bedMethyl outputs percent values (0..100), where low values commonly appear as decimals (e.g. 0.65%).
-    // Some tools emit fractions (0..1). Detect scale once per file.
-    let inspected = 0;
-    let maxObserved = Number.NEGATIVE_INFINITY;
-    for (const rawLine of text.split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith('#')) continue;
-        const cols = line.split('\t');
-        if (cols.length < 11) continue;
-        const value = Number.parseFloat(cols[10] ?? '');
-        if (!Number.isFinite(value)) continue;
-        if (value > maxObserved) maxObserved = value;
-        inspected += 1;
-        if (inspected >= 2000 || maxObserved > 1.0) break;
-    }
-    if (!Number.isFinite(maxObserved)) return 1;
-    return maxObserved > 1.0 ? 1 : 100;
+function inferPercentScaleFromBedText(_text: string): number {
+    // modkit pileup bedMethyl uses column 11 as percent modified (0..100).
+    // Keep scale fixed at 1 to avoid 100x inflation when controls have only sub-1% calls.
+    return 1;
 }
 
 function aggregateMethylationSeries(records: ParsedBedRecord[]): MethylationSeries[] {
@@ -1419,6 +1403,26 @@ function lookupCodePercent(
     return { percent, coverage };
 }
 
+function pickDominantCytosineCall(
+    mCall: { percent: number | null; coverage: number | null },
+    hCall: { percent: number | null; coverage: number | null }
+): { percent: number | null; coverage: number | null } {
+    const mPercent = mCall.percent;
+    const hPercent = hCall.percent;
+    const hasM = mPercent != null;
+    const hasH = hPercent != null;
+
+    if (!hasM && !hasH) {
+        return { percent: null, coverage: null };
+    }
+
+    const coverage = Math.max(mCall.coverage || 0, hCall.coverage || 0) || null;
+    if (!hasH || (hasM && (mPercent as number) >= (hPercent as number))) {
+        return { percent: mPercent, coverage };
+    }
+    return { percent: hPercent, coverage };
+}
+
 function buildDamDcmCalls(
     records: ParsedBedRecord[],
     fastaText: string
@@ -1484,12 +1488,12 @@ function buildDamDcmCalls(
         const pairKey = `${chrom}:Dcm:${hit.start + 1}`;
 
         const plusM = lookupCodePercent(lookup, chrom, plusPos, 'm');
-        const plusPct = plusM.percent;
-        const plusCov = plusM.coverage;
+        const plusH = lookupCodePercent(lookup, chrom, plusPos, 'h');
+        const plus = pickDominantCytosineCall(plusM, plusH);
 
         const minusM = lookupCodePercent(lookup, chrom, minusPos, 'm');
-        const minusPct = minusM.percent;
-        const minusCov = minusM.coverage;
+        const minusH = lookupCodePercent(lookup, chrom, minusPos, 'h');
+        const minus = pickDominantCytosineCall(minusM, minusH);
 
         dcmSites.push({
             chrom,
@@ -1498,8 +1502,8 @@ function buildDamDcmCalls(
             context: hit.context,
             strand: '+',
             pairKey,
-            percentModified: plusPct,
-            coverage: plusCov,
+            percentModified: plus.percent,
+            coverage: plus.coverage,
         });
         dcmSites.push({
             chrom,
@@ -1508,8 +1512,8 @@ function buildDamDcmCalls(
             context: hit.context,
             strand: '-',
             pairKey,
-            percentModified: minusPct,
-            coverage: minusCov,
+            percentModified: minus.percent,
+            coverage: minus.coverage,
         });
     }
 
@@ -1758,6 +1762,9 @@ function applyIgvAlignmentOptionsToTrack(
     const colorChanged = alignmentTrack.colorBy !== nextColorBy;
     const groupChanged = alignmentTrack.groupBy !== nextGroupBy;
     const trackView = alignmentTrack.trackView || bamTrack?.trackView || track.trackView;
+    const targets = [alignmentTrack, bamTrack, track].filter((candidate, idx, arr) => (
+        candidate && arr.indexOf(candidate) === idx
+    ));
 
     if (typeof alignmentTrack.setDisplayMode === 'function') {
         alignmentTrack.setDisplayMode(displayMode);
@@ -1771,31 +1778,37 @@ function applyIgvAlignmentOptionsToTrack(
         trackView?.checkContentHeight?.();
     }
 
-    alignmentTrack.colorBy = nextColorBy;
-    if (alignmentTrack.config) {
-        alignmentTrack.config.colorBy = nextColorBy;
+    for (const target of targets) {
+        target.colorBy = nextColorBy;
+        if (target.config) {
+            target.config.colorBy = nextColorBy;
+        }
+        target.groupBy = nextGroupBy;
+        if (target.config) {
+            target.config.groupBy = nextGroupBy;
+        }
     }
 
-    alignmentTrack.groupBy = nextGroupBy;
-    if (alignmentTrack.config) {
-        alignmentTrack.config.groupBy = nextGroupBy;
-    }
-
-    if (groupChanged && typeof alignmentTrack.repackAlignments === 'function') {
-        alignmentTrack.repackAlignments();
-        return;
+    if (groupChanged) {
+        const repackTarget = targets.find((candidate) => typeof candidate?.repackAlignments === 'function');
+        if (repackTarget) {
+            repackTarget.repackAlignments();
+            return;
+        }
     }
 
     if (groupChanged && typeof alignmentTrack.getCachedAlignmentContainers === 'function') {
         const containers = alignmentTrack.getCachedAlignmentContainers();
+        const packTarget = targets.find((candidate) => typeof candidate?.setDisplayMode === 'function') || alignmentTrack;
         if (Array.isArray(containers)) {
             for (const container of containers) {
                 if (container && typeof container.pack === 'function') {
-                    container.pack(alignmentTrack);
+                    container.pack(packTarget);
                 }
             }
         }
         trackView?.checkContentHeight?.();
+        return;
     }
 
     if (colorChanged || groupChanged) {
@@ -2072,6 +2085,8 @@ function normalizeInitialValues(job: Job | null): Record<string, unknown> | unde
         inputSource,
         pod5Dir: p.pod5_dir || '',
         bamPath: p.bam_path || '',
+        bamForceRealign: p.bam_force_realign === true,
+        bamMinMapq: p.bam_min_mapq ?? 0,
         fastqPath: p.fastq_path || '',
         referencePath: p.reference_fasta || '',
         doradoModel: p.dorado_model || 'sup',
@@ -2085,6 +2100,11 @@ function normalizeInitialValues(job: Job | null): Record<string, unknown> | unde
         rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
 
         minFastqReadLength: p.min_fastq_read_length ?? 0,
+        fastqMinimap2Preset: p.fastq_minimap2_preset ?? 'lr:hq',
+        fastqMinimap2AllowSecondary: p.fastq_minimap2_allow_secondary ?? true,
+        igvTrackWindowBp: p.igv_track_window_bp ?? 100,
+        igvReportMaxSites: p.igv_report_max_sites ?? 40,
+        igvReportFlankingBp: p.igv_report_flanking_bp ?? 200,
         runAssembly: p.run_assembly === true,
         assemblyTool: p.wf_clone_assembly_tool || 'flye',
         assemblyApproxSize: p.wf_clone_approx_size ?? 7000,
@@ -2370,9 +2390,7 @@ export function NGSToolkit() {
             ? 'BAM index (.bai/.csi) not found yet.'
             : !activeIgvFastaUrl
                 ? 'Reference FASTA not found yet.'
-                : !activeIgvFaiUrl
-                    ? 'Reference FASTA index (.fai) not found yet.'
-                    : null;
+                : null;
     const igvReady = !igvMissingReason;
     const igvReadinessChecks = useMemo(
         () => [
@@ -2392,7 +2410,7 @@ export function NGSToolkit() {
                 path: activeIgvFastaPath,
             },
             {
-                label: 'Reference FASTA index (.fai)',
+                label: 'Reference FASTA index (.fai, optional)',
                 ok: Boolean(activeIgvFaiUrl),
                 path: activeIgvFaiPath,
             },
@@ -3401,8 +3419,14 @@ export function NGSToolkit() {
                         ...(initialLocus ? { locus: initialLocus } : {}),
                         reference: {
                             fastaURL: activeIgvFastaUrl,
-                            indexURL: activeIgvFaiUrl,
-                            indexed: true,
+                            ...(activeIgvFaiUrl
+                                ? {
+                                    indexURL: activeIgvFaiUrl,
+                                    indexed: true,
+                                }
+                                : {
+                                    indexed: false,
+                                }),
                         },
                         tracks: [],
                     }),
@@ -3610,7 +3634,7 @@ export function NGSToolkit() {
                 showSoftClips: true,
                 showCoverage: true,
                 showMismatches: true,
-                showAllBases: true,
+                showAllBases: false,
                 showInsertionText: true,
                 autoHeight: false,
                 height: readsTrackHeight,
@@ -4027,18 +4051,24 @@ export function NGSToolkit() {
                                         ['Lock GPUs', selectedJob.params?.lock_gpus],
                                         ['POD5 directory', selectedJob.params?.pod5_dir],
                                         ['BAM path', selectedJob.params?.bam_path],
+                                        ['BAM force realign', selectedJob.params?.bam_force_realign],
+                                        ['BAM min MAPQ', selectedJob.params?.bam_min_mapq],
                                         ['FASTQ path', selectedJob.params?.fastq_path],
                                         ['Reference FASTA', selectedJob.params?.reference_fasta],
                                         ['Dorado model', selectedJob.params?.dorado_model],
                                         ['Modified bases', selectedJob.params?.modified_bases],
-                                        ['Min qscore', selectedJob.params?.min_qscore],
+                                        ['Min qscore (POD5 basecalling)', selectedJob.params?.min_qscore],
                                         ['Trim adapters', selectedJob.params?.trim_adapters],
                                         ['Run modkit', selectedJob.params?.run_modkit],
                                         ['Run FASTQ QC', selectedJob.params?.run_fastq_qc],
                                         ['Run multimer QC (legacy)', selectedJob.params?.run_multimer_qc],
                                         ['Expected plasmid size', selectedJob.params?.expected_plasmid_size],
-
                                         ['Min FASTQ read length', selectedJob.params?.min_fastq_read_length],
+                                        ['FASTQ minimap2 preset', selectedJob.params?.fastq_minimap2_preset],
+                                        ['FASTQ keep secondary', selectedJob.params?.fastq_minimap2_allow_secondary],
+                                        ['IGV track window (bp)', selectedJob.params?.igv_track_window_bp],
+                                        ['IGV report max sites', selectedJob.params?.igv_report_max_sites],
+                                        ['IGV report flanking (bp)', selectedJob.params?.igv_report_flanking_bp],
                                         ['Run assembly', selectedJob.params?.run_assembly],
                                         ['Assembly tool', selectedJob.params?.wf_clone_assembly_tool],
                                         ['Approx size (bp)', selectedJob.params?.wf_clone_approx_size],
@@ -4461,7 +4491,7 @@ export function NGSToolkit() {
                                                 &gt;5% sites: <span className="font-mono">{filteredMotifHighSites.length}</span>.
                                             </div>
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                Control note: for non-methylating strains, most motif sites should typically remain at or below ~5% at adequate depth (default {motifMinCoverage}x + strand concordance required).
+                                                Control note: for non-methylating strains, most motif sites should typically remain at or below ~5% at adequate depth (default {motifMinCoverage}x + strand concordance required with +/- agreement within {MOTIF_CONCORDANCE_DELTA_PERCENT}%).
                                             </div>
 
                                             {methylationPlotData.length > 0 ? (

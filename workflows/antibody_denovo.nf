@@ -1298,8 +1298,26 @@ workflow ANTIBODY_DENOVO {
             }
 
         design_sequences = design_sequences.ifEmpty {
-            error "No sequences available for Boltz validation (upstream produced zero designs)"
-        }
+                log.warn("=" * 80)
+                log.warn("ZERO-YIELD: No sequences available for Boltz validation.")
+                log.warn("All designs were filtered by FAMPNN HQ settings or upstream child jobs crashed.")
+                log.warn("=" * 80)
+
+                // Write a machine-readable zero-yield report before exiting
+                def report = new File("${params.out_dir}/zero_yield_report.json")
+                report.parentFile?.mkdirs()
+                report.text = groovy.json.JsonOutput.prettyPrint(
+                    groovy.json.JsonOutput.toJson([
+                        status: "completed_zero_yield",
+                        reason: "No sequences survived upstream filtering or upstream child jobs failed",
+                        fampnn_psce_threshold: params.fampnn_psce_threshold ?: "default",
+                        fampnn_temperature: params.fampnn_temperature ?: "default",
+                        recommendation: "Check child job logs, or consider relaxing FAMPNN stringency settings"
+                    ])
+                )
+
+                error "ZERO_YIELD: 0 candidates met the design stringency threshold (this is not a crash)"
+            }
         
         // Step 2: Generate MSA ONCE using first design's sequence
         first_design_for_msa = design_sequences
