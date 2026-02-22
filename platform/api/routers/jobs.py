@@ -1739,6 +1739,7 @@ async def resume_job(
             **job.params,
             "resume_job_id": job_id,
             "resume_work_dir": resume_work_dir,
+            "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
             # We don't need manual stage skipping params because we use -resume
         },
         output_dir=output_dir,
