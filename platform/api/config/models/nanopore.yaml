@@ -30,6 +30,8 @@ modes:
     params:
       - pod5_dir
       - bam_path
+      - bam_force_realign
+      - bam_min_mapq
       - fastq_path
       - reference_fasta
       - dorado_model
@@ -45,6 +47,11 @@ modes:
       - run_multimer_qc
       - expected_plasmid_size
       - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
       - run_assembly
       - wf_clone_workflow_dir
       - wf_clone_source
@@ -66,9 +73,23 @@ params:
 
   - name: bam_path
     type: file
-    description: Existing BAM input (MM/ML supported); unaligned BAMs should be paired with reference_fasta for alignment
+    description: Existing BAM input (MM/ML supported)
     required: false
     file_type: bam
+
+  - name: bam_force_realign
+    type: boolean
+    description: Realign existing BAM to reference via dorado aligner (disabled by default for BAM pass-through)
+    required: false
+    default: false
+
+  - name: bam_min_mapq
+    type: integer
+    description: Minimum MAPQ retained when preparing/analyzing BAM input
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 60
 
   - name: fastq_path
     type: file
@@ -78,7 +99,7 @@ params:
 
   - name: reference_fasta
     type: file
-    description: Optional reference FASTA; required for BAM auto-alignment and modkit pileup BED output
+    description: Optional reference FASTA; required for modkit pileup BED output and optional BAM force-realignment
     required: false
     file_type: fasta
 
@@ -117,7 +138,7 @@ params:
 
   - name: min_qscore
     type: integer
-    description: Minimum read Q-score threshold
+    description: Minimum read Q-score threshold for Dorado basecalling (POD5 mode)
     required: false
     default: 10
     minimum: 0
@@ -180,6 +201,45 @@ params:
     description: Ignore FASTQ reads shorter than this length before computing FASTQ QC metrics
     required: false
     default: 0
+    minimum: 0
+
+  - name: fastq_minimap2_preset
+    type: string
+    description: minimap2 preset used for FASTQ-to-reference alignment (docs-first default targets modern high-accuracy ONT)
+    required: false
+    default: lr:hq
+    enum:
+      - map-ont
+      - lr:hq
+      - map-hifi
+      - map-pb
+      - sr
+
+  - name: fastq_minimap2_allow_secondary
+    type: boolean
+    description: Keep minimap2 secondary alignments in FASTQ alignment output
+    required: false
+    default: true
+
+  - name: igv_track_window_bp
+    type: integer
+    description: Window size (bp) used to aggregate IGV analysis tracks for FASTQ QC
+    required: false
+    default: 100
+    minimum: 1
+
+  - name: igv_report_max_sites
+    type: integer
+    description: Maximum number of hotspot sites to include in generated IGV report artifacts
+    required: false
+    default: 40
+    minimum: 1
+
+  - name: igv_report_flanking_bp
+    type: integer
+    description: Flanking context (bp) around each IGV report hotspot site
+    required: false
+    default: 200
     minimum: 0
 
   - name: run_assembly

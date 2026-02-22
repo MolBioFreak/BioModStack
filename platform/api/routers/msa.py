@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime
 from pathlib import Path
 import uuid
@@ -143,15 +143,27 @@ async def get_msa_server_status(
     max_seqs: int = 300,
     prefilter_mode: int = 1,
     db_load_mode: int = 0,
+    session: AsyncSession = Depends(get_session),
 ):
     """Get current persistent MSA server state for the selected/default GPU."""
     try:
+        active_batch_result = await session.execute(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.model_id == "msa_batch",
+                Job.queue_status == "running",
+            )
+        )
+        has_active_batch_job = int(active_batch_result.scalar() or 0) > 0
+
         return server_status(
             gpu_id=gpu_id,
             include_envdb=include_envdb,
             max_seqs=max_seqs,
             prefilter_mode=prefilter_mode,
             db_load_mode=db_load_mode,
+            has_active_batch_job=has_active_batch_job,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read MSA server status: {exc}")
