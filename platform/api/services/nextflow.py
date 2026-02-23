@@ -1286,17 +1286,16 @@ async def launch_nextflow_job(
                                 report_data = _json.loads(zero_yield_report.read_text())
                                 reason = report_data.get("reason", "unknown")
                                 recommendation = report_data.get("recommendation", "")
-                                job.status = "completed"
+                                # FAIL LOUD: zero-yield is a real failure, not a silent completion
                                 job.error_message = (
-                                    f"Completed with 0 validated designs: {reason}. "
+                                    f"ZERO YIELD: {reason}. "
                                     f"{recommendation}"
                                 )
                                 logger.warning(
-                                    f"Job {job_id} zero-yield: {reason}"
+                                    f"Job {job_id} FAILED zero-yield: {reason}"
                                 )
                             except Exception:
-                                job.status = "completed"
-                                job.error_message = "Completed with 0 validated designs (zero_yield_report found)"
+                                job.error_message = "ZERO YIELD: 0 validated designs (see zero_yield_report.json)"
                         elif resume_lock_line:
                             job.error_message = (
                                 f"Nextflow resume lock contention after retries: {resume_lock_line}"
