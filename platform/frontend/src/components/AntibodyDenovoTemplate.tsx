@@ -286,6 +286,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             return;
         }
 
+        // Validate that a SAbDab framework was actually selected
+        if (frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
+            alert('Please select a specific framework from the SAbDab database before submitting, or select a different framework preset.');
+            return;
+        }
+
         try {
             // Step 1: Determine PDB path based on source
             // - targetSource.path: file from previous run, preset, or RCSB PDB  
@@ -351,16 +357,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const blob = await response.blob();
                     const fwFile = new File([blob], `${sabdabFramework.pdbCode}_framework.pdb`, { type: 'chemical/x-pdb' });
-                    
+
                     const uploadResp = await uploadFile('inputs/antibody', fwFile);
                     frameworkPath = `inputs/antibody/${fwFile.name}`;
                     console.log('[ANTIBODY_DENOVO] SAbDab framework uploaded:', frameworkPath, uploadResp);
-                    
+
                     // Route as 'custom' framework type so Nextflow uses the path, not a preset
                     effectiveFrameworkType = 'custom';
-                    
-                    // Determine antibody chains based on SAbDab type
-                    effectiveAntibodyType = sabdabFramework.antibodyType?.toLowerCase() === 'vhh' ? 'vhh' : 'fab';
+
+                    // Determine antibody chains based on SAbDab type (VHH lacks a light chain)
+                    effectiveAntibodyType = !sabdabFramework.lChain ? 'vhh' : 'fab';
                 } catch (err) {
                     console.error('[ANTIBODY_DENOVO] Failed to process SAbDab framework:', err);
                     alert(`Failed to download SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
