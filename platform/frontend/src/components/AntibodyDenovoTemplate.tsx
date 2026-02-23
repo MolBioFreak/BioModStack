@@ -333,11 +333,39 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Step 2: Upload custom framework if provided
             let frameworkPath = customFrameworkPath;
+            let effectiveFrameworkType = frameworkType;
+            let effectiveAntibodyType = frameworkType === 'nanobody' ? 'vhh' : 'scfv';
+
             if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) {
                 const response = await uploadFile('inputs/antibody', customFrameworkFile);
                 frameworkPath = `inputs/antibody/${customFrameworkFile.name}`;
                 setCustomFrameworkPath(frameworkPath);
                 console.log('[ANTIBODY_DENOVO] Custom framework uploaded:', frameworkPath, response);
+                effectiveAntibodyType = 'custom';
+            } else if (frameworkType === 'sabdab' && sabdabFramework?.pdbCode) {
+                // Fetch the SAbDab PDB and upload it as a custom framework
+                try {
+                    const rcsbUrl = `https://files.rcsb.org/download/${sabdabFramework.pdbCode.toUpperCase()}.pdb`;
+                    console.log(`[ANTIBODY_DENOVO] Fetching SAbDab framework from ${rcsbUrl}`);
+                    const response = await fetch(rcsbUrl);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const blob = await response.blob();
+                    const fwFile = new File([blob], `${sabdabFramework.pdbCode}_framework.pdb`, { type: 'chemical/x-pdb' });
+                    
+                    const uploadResp = await uploadFile('inputs/antibody', fwFile);
+                    frameworkPath = `inputs/antibody/${fwFile.name}`;
+                    console.log('[ANTIBODY_DENOVO] SAbDab framework uploaded:', frameworkPath, uploadResp);
+                    
+                    // Route as 'custom' framework type so Nextflow uses the path, not a preset
+                    effectiveFrameworkType = 'custom';
+                    
+                    // Determine antibody chains based on SAbDab type
+                    effectiveAntibodyType = sabdabFramework.antibodyType?.toLowerCase() === 'vhh' ? 'vhh' : 'fab';
+                } catch (err) {
+                    console.error('[ANTIBODY_DENOVO] Failed to process SAbDab framework:', err);
+                    alert(`Failed to download SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
+                    return;
+                }
             }
 
             // Step 3: Submit job with uploaded file path
@@ -377,8 +405,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
                     lock_gpus: lockGpus && pinnedGpus.length > 0, // GPU locking
                     // Framework configuration
-                    framework_type: frameworkType,
-                    framework_pdb: frameworkPath || undefined, // Only if custom
+                    framework_type: effectiveFrameworkType,
+                    framework_pdb: frameworkPath || undefined, // Only if custom or sabdab
                     // Pipeline configuration
                     rfd_mode: 'antibody_denovo_pipeline', // Explicitly set for backend mapping
                     antibody_pipeline_steps: pipelineSteps,
@@ -402,7 +430,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Preserve detected IMGT ranges for RFantibody when available.
                     rfantibody_design_loops: rfantibodyLoopSpec,
                     protect_vhh_tetrad: protectTetrad,
-                    antibody_chains: frameworkType === 'nanobody' ? 'H' : 'H,L',
+                    antibody_chains: effectiveAntibodyType === 'vhh' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
                     rfantibody_diffusion_steps: Math.min(qualitySettings.rfantibody_diffusion_steps, 50),
                     rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
