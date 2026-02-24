@@ -28,8 +28,7 @@ process IdentifyAnchorResidues {
 
 process RunPartialFlow {
     label 'gpu'
-    container "${params.container_dir}/ppiflow.sif"
-    containerOptions { params.ppiflow_weights_dir ? "--nv --bind ${params.ppiflow_weights_dir}:/opt/ppiflow/ckpt" : "--nv" }
+    label 'PPIFlow'
 
     input:
     tuple val(meta), path(complex_pdb), path(anchors_json), path(cdr_positions)

@@ -110,42 +110,47 @@ def align_structures(args):
         io.set_structure(boltz_structure)
         io.save(str(out_pdb))
 
-        # Write new JSON with only the requested fields
+        # Build output JSON even when confidence JSON is missing.
+        data = {}
         if src_json.exists():
-            with open(src_json, 'r') as f:
-                data = json.load(f)
+            try:
+                with open(src_json, 'r') as f:
+                    data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not parse confidence JSON {src_json}: {e}")
+        else:
+            logger.warning(f"Confidence JSON not found for {boltz_path.name}: expected {src_json}")
 
-            # Build output dictionary
-            if design_type == 'binder':
-                out_json = {
-                    "fold_id": fold_id,
-                    "seq_id": seq_id,
-                    "description": boltz_path.name,
-                    "boltz_overall_rmsd": round(data.get("boltz_overall_rmsd", rmsd_data.get("boltz_overall_rmsd", 0)), 2),
-                    "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
-                    "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
-                    "boltz_conf_score": round(data.get("confidence_score", 0), 3),
-                    "boltz_ptm": round(data.get("ptm", 0), 3),
-                    "boltz_ptm_interface": round(data.get("iptm", 0), 3),
-                    "boltz_plddt": round(data.get("complex_plddt", 0), 3),
-                    "boltz_plddt_interface": round(data.get("complex_iplddt", 0), 3),
-                    "boltz_pde": round(data.get("complex_pde", 0), 2),
-                    "boltz_pde_interface": round(data.get("complex_ipde", 0), 2)
-                }
-            else:
-                out_json = {
-                    "fold_id": fold_id,
-                    "seq_id": seq_id,
-                    "description": boltz_path.name,
-                    "boltz_overall_rmsd": round(data.get("boltz_overall_rmsd", rmsd_data.get("boltz_overall_rmsd", 0)), 2),
-                    "boltz_conf_score": round(data.get("confidence_score", 0), 3),
-                    "boltz_ptm": round(data.get("ptm", 0), 3),
-                    "boltz_plddt": round(data.get("complex_plddt", 0), 3),
-                    "boltz_pde": round(data.get("complex_pde", 0), 2),
-                }
+        if design_type == 'binder':
+            out_json = {
+                "fold_id": fold_id,
+                "seq_id": seq_id,
+                "description": boltz_path.name,
+                "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
+                "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
+                "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
+                "boltz_conf_score": round(data.get("confidence_score", 0), 3),
+                "boltz_ptm": round(data.get("ptm", 0), 3),
+                "boltz_ptm_interface": round(data.get("iptm", 0), 3),
+                "boltz_plddt": round(data.get("complex_plddt", 0), 3),
+                "boltz_plddt_interface": round(data.get("complex_iplddt", 0), 3),
+                "boltz_pde": round(data.get("complex_pde", 0), 2),
+                "boltz_pde_interface": round(data.get("complex_ipde", 0), 2)
+            }
+        else:
+            out_json = {
+                "fold_id": fold_id,
+                "seq_id": seq_id,
+                "description": boltz_path.name,
+                "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
+                "boltz_conf_score": round(data.get("confidence_score", 0), 3),
+                "boltz_ptm": round(data.get("ptm", 0), 3),
+                "boltz_plddt": round(data.get("complex_plddt", 0), 3),
+                "boltz_pde": round(data.get("complex_pde", 0), 2),
+            }
 
-            with open(dst_json, 'w') as f:
-                json.dump(out_json, f, indent=2)
+        with open(dst_json, 'w') as f:
+            json.dump(out_json, f, indent=2)
 
         return (boltz_path.name, rmsd_data.get('boltz_overall_rmsd'), None)
 
@@ -228,6 +233,10 @@ def main():
             seq_id,
             args.design_type
         ))
+
+    if not tasks:
+        logger.error("No Boltz prediction files matched design files for RMSD alignment")
+        sys.exit(1)
     
     # Log processing start
     logger.info(f"Starting alignment of {len(tasks)} Boltz structures")
@@ -252,6 +261,9 @@ def main():
         for name, _, error in results:
             if error:
                 logger.info(f"  {name}: {error}")
+    if successes == 0:
+        logger.error("RMSD alignment produced zero successful outputs")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
