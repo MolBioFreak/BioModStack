@@ -13,6 +13,7 @@ interface JobQueueTableProps {
     onCancel: (jobId: string, name: string) => void;
     onResubmit: (jobId: string, name: string) => void;
     onResume: (job: Job) => void;
+    onResumeWithSettings?: (job: Job) => void;
     onViewLogs: (jobId: string) => void;
     onViewQuick: (jobId: string) => void;
     onClone?: (job: Job) => void;
@@ -28,6 +29,7 @@ export function JobQueueTable({
     onCancel,
     onResubmit,
     onResume,
+    onResumeWithSettings,
     onViewLogs,
     onViewQuick,
     onClone,
@@ -399,6 +401,17 @@ export function JobQueueTable({
                                                             >
                                                                 Resume
                                                             </button>
+                                                            {onResumeWithSettings && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        onResumeWithSettings(job);
+                                                                    }}
+                                                                    className="px-2 py-1 text-xs bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300 rounded transition-colors"
+                                                                >
+                                                                    Resume+
+                                                                </button>
+                                                            )}
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();

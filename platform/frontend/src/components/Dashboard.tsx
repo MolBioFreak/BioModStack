@@ -21,6 +21,52 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
     );
 };
 
+interface ResumeSettingsForm {
+    rfantibodyNumDesigns: number;
+    seqsPerDesign: number;
+    rfantibodyDiffusionSteps: number;
+    rfantibodyGuideScale: number;
+    fampnnMaxPsce: number;
+    fampnnMaxResiduePsce: number;
+    boltzMaxBinderRmsd: number;
+    boltzMinPtmInterface: number;
+    runMaturation: boolean;
+    runThermoMPNN: boolean;
+    runAnarciiPost: boolean;
+}
+
+type ResumeNumericField =
+    | 'rfantibodyNumDesigns'
+    | 'seqsPerDesign'
+    | 'rfantibodyDiffusionSteps'
+    | 'rfantibodyGuideScale'
+    | 'fampnnMaxPsce'
+    | 'fampnnMaxResiduePsce'
+    | 'boltzMaxBinderRmsd'
+    | 'boltzMinPtmInterface';
+
+const DEFAULT_RESUME_SETTINGS_FORM: ResumeSettingsForm = {
+    rfantibodyNumDesigns: 10,
+    seqsPerDesign: 8,
+    rfantibodyDiffusionSteps: 50,
+    rfantibodyGuideScale: 10,
+    fampnnMaxPsce: 2.0,
+    fampnnMaxResiduePsce: 4.0,
+    boltzMaxBinderRmsd: 2.0,
+    boltzMinPtmInterface: 0.5,
+    runMaturation: false,
+    runThermoMPNN: false,
+    runAnarciiPost: false,
+};
+
+const toNumber = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
+
 export function Dashboard() {
     const queryClient = useQueryClient();
 
@@ -28,6 +74,11 @@ export function Dashboard() {
     const [logsModalJobId, setLogsModalJobId] = useState<string | null>(null);
     const [logsData, setLogsData] = useState<JobLogs | null>(null);
     const [logsLoading, setLogsLoading] = useState(false);
+    const [resumeSettingsJob, setResumeSettingsJob] = useState<Job | null>(null);
+    const [resumeSettingsFromStage, setResumeSettingsFromStage] = useState<string>('auto');
+    const [resumeSettingsNameSuffix, setResumeSettingsNameSuffix] = useState<string>('retuned');
+    const [resumeSettingsForm, setResumeSettingsForm] = useState<ResumeSettingsForm>(DEFAULT_RESUME_SETTINGS_FORM);
+    const [resumeSettingsError, setResumeSettingsError] = useState<string | null>(null);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [showNgsJobs, setShowNgsJobs] = useState(true);
@@ -92,10 +143,21 @@ export function Dashboard() {
     };
 
     const resumeMutation = useMutation({
-        mutationFn: ({ jobId, fromStage }: { jobId: string; fromStage?: string }) =>
-            resumeJob(jobId, fromStage),
+        mutationFn: ({
+            jobId,
+            fromStage,
+            paramOverrides,
+            nameSuffix,
+        }: {
+            jobId: string;
+            fromStage?: string;
+            paramOverrides?: Record<string, unknown>;
+            nameSuffix?: string;
+        }) => resumeJob(jobId, fromStage, paramOverrides, nameSuffix),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            setResumeSettingsJob(null);
+            setResumeSettingsError(null);
             alert(`Job resumed! New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}`);
         },
         onError: (error: any) => {
@@ -110,6 +172,101 @@ export function Dashboard() {
         if (confirm(`Resume job "${job.name}" ${resumePoint}?`)) {
             resumeMutation.mutate({ jobId: job.id });
         }
+    };
+
+    const handleResumeWithSettings = (job: Job) => {
+        const p = job.params || {};
+        setResumeSettingsJob(job);
+        setResumeSettingsFromStage('auto');
+        setResumeSettingsNameSuffix('retuned');
+        setResumeSettingsForm({
+            rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
+            seqsPerDesign: clamp(Math.round(toNumber(p.seqs_per_design, DEFAULT_RESUME_SETTINGS_FORM.seqsPerDesign)), 1, 32),
+            rfantibodyDiffusionSteps: clamp(Math.round(toNumber(p.rfantibody_diffusion_steps, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyDiffusionSteps)), 10, 50),
+            rfantibodyGuideScale: clamp(Math.round(toNumber(p.rfantibody_guide_scale, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyGuideScale)), 1, 20),
+            fampnnMaxPsce: clamp(toNumber(p.fampnn_max_psce, DEFAULT_RESUME_SETTINGS_FORM.fampnnMaxPsce), 0.1, 8),
+            fampnnMaxResiduePsce: clamp(toNumber(p.fampnn_max_residue_psce, DEFAULT_RESUME_SETTINGS_FORM.fampnnMaxResiduePsce), 0.1, 12),
+            boltzMaxBinderRmsd: clamp(toNumber(p.boltz_max_binder_rmsd, DEFAULT_RESUME_SETTINGS_FORM.boltzMaxBinderRmsd), 0.1, 6),
+            boltzMinPtmInterface: clamp(toNumber(p.boltz_min_ptm_interface, DEFAULT_RESUME_SETTINGS_FORM.boltzMinPtmInterface), 0, 1),
+            runMaturation: !!p.run_maturation,
+            runThermoMPNN: !!(p.run_thermompnn ?? p.run_stability_scoring),
+            runAnarciiPost: !!p.run_anarcii_post,
+        });
+        setResumeSettingsError(null);
+    };
+
+    const applyResumePreset = (preset: 'more_designs' | 'relax_filter' | 'strict_filter') => {
+        setResumeSettingsForm((prev) => {
+            if (preset === 'more_designs') {
+                return {
+                    ...prev,
+                    rfantibodyNumDesigns: clamp(prev.rfantibodyNumDesigns + 4, 1, 64),
+                    seqsPerDesign: clamp(prev.seqsPerDesign + 2, 1, 32),
+                };
+            }
+            if (preset === 'relax_filter') {
+                return {
+                    ...prev,
+                    fampnnMaxPsce: 3.0,
+                    fampnnMaxResiduePsce: 5.0,
+                    boltzMaxBinderRmsd: 2.5,
+                };
+            }
+            return {
+                ...prev,
+                fampnnMaxPsce: 1.5,
+                fampnnMaxResiduePsce: 3.0,
+                boltzMaxBinderRmsd: 1.5,
+            };
+        });
+        setResumeSettingsError(null);
+    };
+
+    const setResumeNumberField = (field: ResumeNumericField, value: number) => {
+        setResumeSettingsForm((prev) => ({ ...prev, [field]: value }));
+    };
+
+    const submitResumeWithSettings = () => {
+        if (!resumeSettingsJob) return;
+        setResumeSettingsError(null);
+        const p = resumeSettingsJob.params || {};
+        const parsedOverrides: Record<string, unknown> = {};
+        const maybeSetNumber = (key: string, nextValue: number) => {
+            const prevRaw = p[key];
+            const prevValue = Number(prevRaw);
+            if (prevRaw === undefined || !Number.isFinite(prevValue) || Math.abs(prevValue - nextValue) > 1e-9) {
+                parsedOverrides[key] = nextValue;
+            }
+        };
+        const maybeSetBool = (key: string, nextValue: boolean) => {
+            const prevRaw = p[key];
+            if (prevRaw === undefined || Boolean(prevRaw) !== nextValue) {
+                parsedOverrides[key] = nextValue;
+            }
+        };
+
+        maybeSetNumber('rfantibody_num_designs', Math.round(resumeSettingsForm.rfantibodyNumDesigns));
+        maybeSetNumber('seqs_per_design', Math.round(resumeSettingsForm.seqsPerDesign));
+        maybeSetNumber('rfantibody_diffusion_steps', Math.round(resumeSettingsForm.rfantibodyDiffusionSteps));
+        maybeSetNumber('rfantibody_guide_scale', Math.round(resumeSettingsForm.rfantibodyGuideScale));
+        maybeSetNumber('fampnn_max_psce', Number(resumeSettingsForm.fampnnMaxPsce.toFixed(2)));
+        maybeSetNumber('fampnn_max_residue_psce', Number(resumeSettingsForm.fampnnMaxResiduePsce.toFixed(2)));
+        maybeSetNumber('boltz_max_binder_rmsd', Number(resumeSettingsForm.boltzMaxBinderRmsd.toFixed(2)));
+        maybeSetNumber('boltz_min_ptm_interface', Number(resumeSettingsForm.boltzMinPtmInterface.toFixed(2)));
+        maybeSetBool('run_maturation', resumeSettingsForm.runMaturation);
+        maybeSetBool('run_thermompnn', resumeSettingsForm.runThermoMPNN);
+        maybeSetBool('run_stability_scoring', resumeSettingsForm.runThermoMPNN);
+        maybeSetBool('run_anarcii_post', resumeSettingsForm.runAnarciiPost);
+
+        const effectiveStage = resumeSettingsFromStage === 'auto' ? undefined : resumeSettingsFromStage;
+        const effectiveSuffix = resumeSettingsNameSuffix.trim() || undefined;
+
+        resumeMutation.mutate({
+            jobId: resumeSettingsJob.id,
+            fromStage: effectiveStage,
+            paramOverrides: parsedOverrides,
+            nameSuffix: effectiveSuffix,
+        });
     };
 
     // DEBUG: Permanent delete mutation
@@ -192,6 +349,370 @@ export function Dashboard() {
                 />
             )}
 
+            {resumeSettingsJob && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+                            <div>
+                                <h2 className="text-xl font-semibold text-slate-100">Resume With Settings</h2>
+                                <p className="text-sm text-slate-400 mt-1">
+                                    {resumeSettingsJob.name}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setResumeSettingsJob(null);
+                                    setResumeSettingsError(null);
+                                }}
+                                className="text-slate-400 hover:text-slate-200 text-2xl font-light transition-colors"
+                                disabled={resumeMutation.isPending}
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-auto space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label className="text-sm text-slate-300">
+                                    Resume Stage
+                                    <select
+                                        value={resumeSettingsFromStage}
+                                        onChange={(e) => setResumeSettingsFromStage(e.target.value)}
+                                        className="mt-1 w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-100"
+                                        disabled={resumeMutation.isPending}
+                                    >
+                                        <option value="auto">auto</option>
+                                        {(resumeSettingsJob.all_stages || []).map((stage) => (
+                                            <option key={stage} value={stage}>{stage}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="text-sm text-slate-300">
+                                    New Job Name Suffix
+                                    <input
+                                        type="text"
+                                        value={resumeSettingsNameSuffix}
+                                        onChange={(e) => setResumeSettingsNameSuffix(e.target.value)}
+                                        placeholder="retuned"
+                                        className="mt-1 w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-100"
+                                        disabled={resumeMutation.isPending}
+                                    />
+                                </label>
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-3">
+                                    <p className="text-sm text-slate-300">Tuning Controls</p>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={() => applyResumePreset('more_designs')}
+                                            className="px-2 py-1 text-xs bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 rounded"
+                                            disabled={resumeMutation.isPending}
+                                        >
+                                            More Designs
+                                        </button>
+                                        <button
+                                            onClick={() => applyResumePreset('relax_filter')}
+                                            className="px-2 py-1 text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 rounded"
+                                            disabled={resumeMutation.isPending}
+                                        >
+                                            Relax Filter
+                                        </button>
+                                        <button
+                                            onClick={() => applyResumePreset('strict_filter')}
+                                            className="px-2 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 rounded"
+                                            disabled={resumeMutation.isPending}
+                                        >
+                                            Tighten Filter
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>RFantibody Designs</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.rfantibodyNumDesigns}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={1}
+                                                max={64}
+                                                step={1}
+                                                value={resumeSettingsForm.rfantibodyNumDesigns}
+                                                onChange={(e) => setResumeNumberField('rfantibodyNumDesigns', clamp(Math.round(toNumber(e.target.value, 10)), 1, 64))}
+                                                className="w-full accent-cyan-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={64}
+                                                value={resumeSettingsForm.rfantibodyNumDesigns}
+                                                onChange={(e) => setResumeNumberField('rfantibodyNumDesigns', clamp(Math.round(toNumber(e.target.value, 10)), 1, 64))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>Sequences per Design</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.seqsPerDesign}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={1}
+                                                max={32}
+                                                step={1}
+                                                value={resumeSettingsForm.seqsPerDesign}
+                                                onChange={(e) => setResumeNumberField('seqsPerDesign', clamp(Math.round(toNumber(e.target.value, 8)), 1, 32))}
+                                                className="w-full accent-cyan-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={32}
+                                                value={resumeSettingsForm.seqsPerDesign}
+                                                onChange={(e) => setResumeNumberField('seqsPerDesign', clamp(Math.round(toNumber(e.target.value, 8)), 1, 32))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>Diffusion Steps</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.rfantibodyDiffusionSteps}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={10}
+                                                max={50}
+                                                step={1}
+                                                value={resumeSettingsForm.rfantibodyDiffusionSteps}
+                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 10, 50))}
+                                                className="w-full accent-blue-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={10}
+                                                max={50}
+                                                value={resumeSettingsForm.rfantibodyDiffusionSteps}
+                                                onChange={(e) => setResumeNumberField('rfantibodyDiffusionSteps', clamp(Math.round(toNumber(e.target.value, 50)), 10, 50))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>Guide Scale</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.rfantibodyGuideScale}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={1}
+                                                max={20}
+                                                step={1}
+                                                value={resumeSettingsForm.rfantibodyGuideScale}
+                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 20))}
+                                                className="w-full accent-blue-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={20}
+                                                value={resumeSettingsForm.rfantibodyGuideScale}
+                                                onChange={(e) => setResumeNumberField('rfantibodyGuideScale', clamp(Math.round(toNumber(e.target.value, 10)), 1, 20))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>FAMPNN Max Avg PSCE</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.fampnnMaxPsce.toFixed(2)}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={0.1}
+                                                max={8}
+                                                step={0.1}
+                                                value={resumeSettingsForm.fampnnMaxPsce}
+                                                onChange={(e) => setResumeNumberField('fampnnMaxPsce', clamp(toNumber(e.target.value, 2), 0.1, 8))}
+                                                className="w-full accent-amber-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={0.1}
+                                                max={8}
+                                                step={0.1}
+                                                value={resumeSettingsForm.fampnnMaxPsce}
+                                                onChange={(e) => setResumeNumberField('fampnnMaxPsce', clamp(toNumber(e.target.value, 2), 0.1, 8))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>FAMPNN Max Residue PSCE</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.fampnnMaxResiduePsce.toFixed(2)}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={0.1}
+                                                max={12}
+                                                step={0.1}
+                                                value={resumeSettingsForm.fampnnMaxResiduePsce}
+                                                onChange={(e) => setResumeNumberField('fampnnMaxResiduePsce', clamp(toNumber(e.target.value, 4), 0.1, 12))}
+                                                className="w-full accent-amber-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={0.1}
+                                                max={12}
+                                                step={0.1}
+                                                value={resumeSettingsForm.fampnnMaxResiduePsce}
+                                                onChange={(e) => setResumeNumberField('fampnnMaxResiduePsce', clamp(toNumber(e.target.value, 4), 0.1, 12))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>Boltz Max Binder RMSD</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.boltzMaxBinderRmsd.toFixed(2)}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={0.1}
+                                                max={6}
+                                                step={0.1}
+                                                value={resumeSettingsForm.boltzMaxBinderRmsd}
+                                                onChange={(e) => setResumeNumberField('boltzMaxBinderRmsd', clamp(toNumber(e.target.value, 2), 0.1, 6))}
+                                                className="w-full accent-emerald-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={0.1}
+                                                max={6}
+                                                step={0.1}
+                                                value={resumeSettingsForm.boltzMaxBinderRmsd}
+                                                onChange={(e) => setResumeNumberField('boltzMaxBinderRmsd', clamp(toNumber(e.target.value, 2), 0.1, 6))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                        <div className="flex items-center justify-between text-sm text-slate-300 mb-2">
+                                            <span>Boltz Min pTM Interface</span>
+                                            <span className="font-mono text-slate-400">{resumeSettingsForm.boltzMinPtmInterface.toFixed(2)}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={1}
+                                                step={0.01}
+                                                value={resumeSettingsForm.boltzMinPtmInterface}
+                                                onChange={(e) => setResumeNumberField('boltzMinPtmInterface', clamp(toNumber(e.target.value, 0.5), 0, 1))}
+                                                className="w-full accent-emerald-400"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={1}
+                                                step={0.01}
+                                                value={resumeSettingsForm.boltzMinPtmInterface}
+                                                onChange={(e) => setResumeNumberField('boltzMinPtmInterface', clamp(toNumber(e.target.value, 0.5), 0, 1))}
+                                                className="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-100 text-sm"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="mt-3 bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+                                    <p className="text-sm text-slate-300 mb-2">Optional Stages</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-slate-300">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={resumeSettingsForm.runMaturation}
+                                                onChange={(e) => setResumeSettingsForm((prev) => ({ ...prev, runMaturation: e.target.checked }))}
+                                                className="rounded bg-slate-900 border-slate-600"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            PPIFlow maturation
+                                        </label>
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={resumeSettingsForm.runThermoMPNN}
+                                                onChange={(e) => setResumeSettingsForm((prev) => ({ ...prev, runThermoMPNN: e.target.checked }))}
+                                                className="rounded bg-slate-900 border-slate-600"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            ThermoMPNN scoring
+                                        </label>
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={resumeSettingsForm.runAnarciiPost}
+                                                onChange={(e) => setResumeSettingsForm((prev) => ({ ...prev, runAnarciiPost: e.target.checked }))}
+                                                className="rounded bg-slate-900 border-slate-600"
+                                                disabled={resumeMutation.isPending}
+                                            />
+                                            ANARCII post-annotation
+                                        </label>
+                                    </div>
+                                </div>
+                                {resumeSettingsError && (
+                                    <p className="mt-2 text-sm text-red-400">{resumeSettingsError}</p>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 px-6 py-4 border-t border-slate-700">
+                            <button
+                                onClick={() => {
+                                    setResumeSettingsJob(null);
+                                    setResumeSettingsError(null);
+                                }}
+                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+                                disabled={resumeMutation.isPending}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={submitResumeWithSettings}
+                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors disabled:opacity-50"
+                                disabled={resumeMutation.isPending}
+                            >
+                                {resumeMutation.isPending ? 'Resuming...' : 'Resume Job'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Quick Viewer - Compact structure preview */}
             <section className="mb-8">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -240,6 +761,7 @@ export function Dashboard() {
                                 onCancel={handleCancel}
                                 onResubmit={handleResubmit}
                                 onResume={handleResume}
+                                onResumeWithSettings={handleResumeWithSettings}
                                 onViewLogs={handleViewLogs}
                                 onViewQuick={setQuickViewJobId}
                                 onClone={handleClone}
@@ -395,6 +917,3 @@ function LogsModal({
         </div>
     );
 }
-
-
-

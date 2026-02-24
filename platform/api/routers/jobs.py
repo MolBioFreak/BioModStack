@@ -2,11 +2,11 @@
 Jobs API router - Create, list, cancel pipeline jobs.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from copy import deepcopy
 import asyncio
 import uuid
@@ -15,6 +15,7 @@ import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,13 @@ router = APIRouter()
 
 # Project root for resolving code-relative paths
 CODE_ROOT = get_code_root()
+
+
+class ResumeJobRequest(BaseModel):
+    """Optional payload for resume calls that need runtime param overrides."""
+    from_stage: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+    name_suffix: Optional[str] = None
 
 NANOPORE_PATH_PARAM_KEYS = {
     "pod5_dir",
@@ -589,6 +597,36 @@ async def create_job(
         logger.info(f"[MUTAGENESIS] Detected {num_jobs} variants in batch submission")
     elif num_jobs is None or num_jobs < 1:
         num_jobs = 1
+
+    # ColabFold API mode is currently scoped to single structure-prediction jobs.
+    msa_provider = str(job_data.params.get("msa_provider", "local") or "local").strip().lower()
+    if msa_provider not in {"local", "colabfold_api"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid msa_provider '{msa_provider}'. Allowed: local, colabfold_api",
+        )
+
+    if msa_provider == "colabfold_api":
+        is_structure_model = job_data.model_id in {"boltz2", "rf3", "protenix"}
+        is_structure_mode = job_data.mode in {"predict", "complex"}
+        if not is_structure_model or not is_structure_mode:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "msa_provider=colabfold_api is currently supported only for "
+                    "single structure_prediction jobs (boltz2/rf3/protenix predict|complex)."
+                ),
+            )
+        if mutagenesis_variants:
+            raise HTTPException(
+                status_code=422,
+                detail="msa_provider=colabfold_api is not yet supported for mutagenesis batch jobs.",
+            )
+        if num_jobs > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
+            )
     
     # Create output directory (base for all jobs in batch)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -695,6 +733,7 @@ async def create_job(
                 'sequences_json': json_lib.dumps(sequences_for_msa),
                 'reference_sequence': job_data.params.get('msa_reference_sequence'),
                 'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
+                'msa_cache_only': job_data.params.get('msa_cache_only', False),
                 'msa_use_gpu': job_data.params.get('msa_use_gpu', True),
                 'msa_max_seqs': job_data.params.get('msa_max_seqs'),
                 'msa_preset': job_data.params.get('msa_preset', 'fast'),
@@ -1690,6 +1729,7 @@ async def get_job_stages(
 async def resume_job(
     job_id: str,
     from_stage: str = None,
+    request: Optional[ResumeJobRequest] = Body(default=None),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -1712,6 +1752,19 @@ async def resume_job(
     
     completed = job.completed_stages or []
     # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
+
+    # Allow body payload to override query-provided from_stage.
+    effective_from_stage = (request.from_stage if request and request.from_stage else from_stage)
+    requested_overrides = dict(request.param_overrides) if request else {}
+    requested_name_suffix = request.name_suffix if request else None
+
+    # Prevent callers from overriding resume control fields directly.
+    reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir"}
+    param_overrides = {
+        key: value
+        for key, value in requested_overrides.items()
+        if key not in reserved_resume_keys
+    }
     
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
@@ -1722,13 +1775,21 @@ async def resume_job(
     import uuid
     new_job_id = str(uuid.uuid4())
     base_name = job.name.replace("_resubmit", "").replace("_resumed", "")
-    new_name = f"{base_name}_resumed"
+    suffix = requested_name_suffix.strip() if requested_name_suffix else "_resumed"
+    if not suffix.startswith("_"):
+        suffix = f"_{suffix}"
+    new_name = f"{base_name}{suffix}"
     
     # Generate output directory for the resumed job
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
+    merged_params = {
+        **(job.params or {}),
+        **param_overrides,
+    }
+
     new_job = Job(
         id=new_job_id,
         name=new_name,
@@ -1736,7 +1797,7 @@ async def resume_job(
         model_id=job.model_id,
         mode=job.mode,
         params={
-            **job.params,
+            **merged_params,
             "resume_job_id": job_id,
             "resume_work_dir": resume_work_dir,
             "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
@@ -1767,8 +1828,9 @@ async def resume_job(
         "original_job_id": job_id,
         "new_job_id": new_job_id,
         "new_job_name": new_name,
-        "resume_from_stage": from_stage or "auto",
-        "preserved_stages": []
+        "resume_from_stage": effective_from_stage or "auto",
+        "preserved_stages": [],
+        "applied_overrides": sorted(param_overrides.keys())
     }
 
 

@@ -16,6 +16,14 @@ process PrepFAMPNN {
     def antibodyChains = params.antibody_chains ?: 'H,L'
     def constraintMode = (params.fampnn_constraint_mode ?: 'generic').toString().trim().toLowerCase()
     def useAntibodyConstraints = ['antibody', 'cdr', 'cdr_only', 'antibody_cdr', 'antibody_constraints'].contains(constraintMode)
+
+    // Parse rfantibody_design_loops_custom if available by removing brackets
+    def customCdrPositions = ''
+    if (params.rfantibody_design_loops_custom) {
+        customCdrPositions = params.rfantibody_design_loops_custom.replace('[', '').replace(']', '')
+    }
+    def customCdrFlag = customCdrPositions ? "--cdr_positions \"${customCdrPositions}\"" : ""
+
     def constraintCmd = useAntibodyConstraints
         ? """
     # Generate CDR-aware constraints based on design mode
@@ -25,6 +33,7 @@ process PrepFAMPNN {
         --out_mpnn "mpnn_fixed_chains.json" \\
         --design_mode "${designMode}" \\
         --design_loops "${designLoops}" \\
+        ${customCdrFlag} \\
         --protect_tetrad "${protectTetrad}" \\
         --antibody_chains "${antibodyChains}"
     """

@@ -16,6 +16,7 @@ const AA3TO1: Record<string, string> = {
 export interface Residue {
     chainId: string;
     resNum: number;
+    iCode?: string;   // Insertion code (e.g. 'A' in 111A)
     resName: string;  // 3-letter code
     aa: string;       // 1-letter code
 }
@@ -49,17 +50,19 @@ export function parsePDB(pdbContent: string): ParsedPDB {
         }
 
         // Parse ATOM records (not HETATM for standard residues)
-        if (line.startsWith('ATOM  ')) {
+        if (line.startsWith('ATOM  ') || line.startsWith('HETATM')) {
             const resName = line.slice(17, 20).trim();
             const chainId = line.slice(21, 22).trim() || 'A';
             const resNum = parseInt(line.slice(22, 26).trim());
+            const iCode = line.slice(26, 27).trim() || undefined;
 
             // Skip if not a standard amino acid
             const aa = AA3TO1[resName];
             if (!aa) continue;
 
             // Create unique key to avoid duplicates
-            const key = `${chainId}:${resNum}`;
+            // Explicitly handle insertion codes so 111A and 111B aren't dropped
+            const key = `${chainId}:${resNum}${iCode || ''}`;
             if (seenResidues.has(key)) continue;
             seenResidues.add(key);
 
@@ -70,6 +73,7 @@ export function parsePDB(pdbContent: string): ParsedPDB {
             chainMap.get(chainId)!.push({
                 chainId,
                 resNum,
+                iCode,
                 resName,
                 aa
             });
@@ -79,8 +83,13 @@ export function parsePDB(pdbContent: string): ParsedPDB {
     // Convert to sorted chains
     const chains: Chain[] = [];
     for (const [id, residues] of chainMap.entries()) {
-        // Sort by residue number
-        residues.sort((a, b) => a.resNum - b.resNum);
+        // Sort by residue number, then insertion code
+        residues.sort((a, b) => {
+            if (a.resNum !== b.resNum) return a.resNum - b.resNum;
+            const codeA = a.iCode || '';
+            const codeB = b.iCode || '';
+            return codeA.localeCompare(codeB);
+        });
         chains.push({
             id,
             sequence: residues.map(r => r.aa).join(''),
@@ -107,24 +116,28 @@ export async function parsePDBFile(file: File): Promise<ParsedPDB> {
 }
 
 /**
- * Format selected residues for backend (e.g., "A45,A46,B100")
+ * Format selected residues for backend (e.g., "A45", "B100A")
  */
 export function formatSelectedResidues(residues: Residue[]): string {
-    return residues.map(r => `${r.chainId}${r.resNum}`).join(',');
+    return residues.map(r => `${r.chainId}${r.resNum}${r.iCode || ''}`).join(',');
 }
 
 /**
  * Parse residue string back to residue refs
  */
-export function parseResidueString(str: string): Array<{ chain: string; resNum: number }> {
-    const results: Array<{ chain: string; resNum: number }> = [];
+export function parseResidueString(str: string): Array<{ chain: string; resNum: number; iCode?: string }> {
+    const results: Array<{ chain: string; resNum: number; iCode?: string }> = [];
     const parts = str.split(',').map(s => s.trim()).filter(Boolean);
 
     for (const part of parts) {
-        // Match patterns like "A45", "B100", etc.
-        const match = part.match(/^([A-Z])(\d+)$/);
+        // Match patterns like "A45", "B100A", etc.
+        const match = part.match(/^([A-Z])(\d+)([A-Z]?)$/);
         if (match) {
-            results.push({ chain: match[1], resNum: parseInt(match[2]) });
+            results.push({
+                chain: match[1],
+                resNum: parseInt(match[2]),
+                iCode: match[3] || undefined
+            });
         }
     }
 
