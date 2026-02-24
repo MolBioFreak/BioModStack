@@ -63,7 +63,17 @@ export function CDRRangeSelector({
     const displayChain = chains.find(c => c.id === activeChain) || chains[0];
 
     // Create residue key
-    const getResKey = (r: Residue) => `${r.chainId}${r.resNum}`;
+    const getResKey = (r: Residue) => `${r.chainId}${r.resNum}${r.iCode || ''}`;
+    const getResLabel = (r: Residue) => `${r.resNum}${r.iCode || ''}`;
+
+    const parseResidueKey = (resKey: string): { chain: string; num: number; iCode: string } => {
+        const match = resKey.match(/^([A-Za-z0-9])(\d+)([A-Za-z]?)$/);
+        return {
+            chain: match?.[1] || '',
+            num: match?.[2] ? parseInt(match[2], 10) : Number.MAX_SAFE_INTEGER,
+            iCode: match?.[3] || '',
+        };
+    };
 
     // Check if residue belongs to any CDR
     const getCDRForResidue = (resKey: string): CDRDefinition | null => {
@@ -231,7 +241,7 @@ export function CDRRangeSelector({
                             <button
                                 key={resKey}
                                 onClick={(e) => handleResidueClick(residue, e)}
-                                title={`${residue.resName} ${residue.resNum} (${residue.chainId})`}
+                                title={`${residue.resName} ${residue.resNum}${residue.iCode || ''} (${residue.chainId})`}
                                 className={`
                                     w-8 h-6 text-[10px] font-mono rounded transition-all
                                     ${isSelected
@@ -242,7 +252,7 @@ export function CDRRangeSelector({
                                     }
                                 `}
                             >
-                                {residue.resNum}
+                                {getResLabel(residue)}
                             </button>
                         );
                     })}
@@ -262,9 +272,15 @@ export function CDRRangeSelector({
                         {cdrDefinitions.map(cdr => {
                             const colors = CDR_COLORS[cdr.id] || CDR_COLORS['custom'];
                             const residueList = Array.from(cdr.residues).sort((a, b) => {
-                                const numA = parseInt(a.replace(/[^0-9]/g, ''));
-                                const numB = parseInt(b.replace(/[^0-9]/g, ''));
-                                return numA - numB;
+                                const parsedA = parseResidueKey(a);
+                                const parsedB = parseResidueKey(b);
+                                if (parsedA.chain !== parsedB.chain) {
+                                    return parsedA.chain.localeCompare(parsedB.chain);
+                                }
+                                if (parsedA.num !== parsedB.num) {
+                                    return parsedA.num - parsedB.num;
+                                }
+                                return parsedA.iCode.localeCompare(parsedB.iCode);
                             });
                             const range = residueList.length > 0
                                 ? `${residueList[0]}-${residueList[residueList.length - 1]}`

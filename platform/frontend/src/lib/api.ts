@@ -207,6 +207,29 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface MsaCacheEntry {
+    name: string;
+    profile: string;
+    path: string;
+    size_bytes: number;
+    modified_at: string;
+    depth: number | null;
+    canonical: boolean;
+}
+
+export interface MsaCacheInfo {
+    sequence_hash: string;
+    cache_dir: string;
+    canonical_exists: boolean;
+    canonical_path: string | null;
+    cache_entries: number;
+    best_depth: number | null;
+    entries: MsaCacheEntry[];
+}
+
+export const fetchMsaCacheInfo = (sequence: string) =>
+    api.get<MsaCacheInfo>('/api/msa/cache-info', { params: { sequence } });
+
 // Get job logs with parsed errors
 export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
     return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
@@ -226,7 +249,21 @@ export const fetchJobStages = (jobId: string) => {
 };
 
 // Resume a failed job from checkpoint
-export const resumeJob = (jobId: string, fromStage?: string) => {
+export const resumeJob = (
+    jobId: string,
+    fromStage?: string,
+    paramOverrides?: Record<string, unknown>,
+    nameSuffix?: string
+) => {
+    const hasOverrides = !!paramOverrides && Object.keys(paramOverrides).length > 0;
+    const hasNameSuffix = !!nameSuffix && nameSuffix.trim().length > 0;
+    const requestBody = (hasOverrides || hasNameSuffix)
+        ? {
+            ...(hasOverrides ? { param_overrides: paramOverrides } : {}),
+            ...(hasNameSuffix ? { name_suffix: nameSuffix } : {}),
+        }
+        : null;
+
     return api.post<{
         message: string;
         original_job_id: string;
@@ -234,7 +271,8 @@ export const resumeJob = (jobId: string, fromStage?: string) => {
         new_job_name: string;
         resume_from_stage: string;
         preserved_stages: string[];
-    }>(`/api/jobs/${jobId}/resume`, null, { params: { from_stage: fromStage } });
+        applied_overrides?: string[];
+    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
 };
 
 // Models API
@@ -1072,6 +1110,13 @@ export interface CDRAnnotationResponse {
     cdr_l1_range?: [number, number] | null;
     cdr_l2_range?: [number, number] | null;
     cdr_l3_range?: [number, number] | null;
+    // Sequential 0-indexed string ranges mapped to PDB arrays
+    cdr_h1_seq_range?: [number, number] | null;
+    cdr_h2_seq_range?: [number, number] | null;
+    cdr_h3_seq_range?: [number, number] | null;
+    cdr_l1_seq_range?: [number, number] | null;
+    cdr_l2_seq_range?: [number, number] | null;
+    cdr_l3_seq_range?: [number, number] | null;
 }
 
 export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') =>

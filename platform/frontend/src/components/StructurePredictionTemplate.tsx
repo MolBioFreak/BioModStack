@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob } from '../lib/api';
+import { submitJob, fetchMsaCacheInfo, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -72,11 +72,27 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [msaMinDepthWarning, setMsaMinDepthWarning] = useState(initialValues?.msa_min_depth_warning ?? 100);
     const [msaMinDepthFail, setMsaMinDepthFail] = useState(initialValues?.msa_min_depth_fail ?? 0);  // 0 = no fail, just warn
     const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
+    const [msaCacheOnly, setMsaCacheOnly] = useState(initialValues?.msa_cache_only ?? false);  // Skip generation, require cache hit
     const [msaAllowEmptyFallback, setMsaAllowEmptyFallback] = useState(initialValues?.msa_allow_empty_fallback ?? false);
+    const [msaCacheInfo, setMsaCacheInfo] = useState<MsaCacheInfo | null>(null);
+    const [msaCacheLoading, setMsaCacheLoading] = useState(false);
+    const [msaCacheError, setMsaCacheError] = useState<string | null>(null);
     // NEW: Expansion, EnvDB, and Iterations controls
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
+    const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
+        initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+    );
+    const [colabfoldApiHost, setColabfoldApiHost] = useState<string>(
+        initialValues?.colabfold_api_host || 'https://api.colabfold.com'
+    );
+    const [colabfoldApiMinInterval, setColabfoldApiMinInterval] = useState<number>(
+        initialValues?.colabfold_api_min_interval ?? 6
+    );
+    const [colabfoldApiPollInterval, setColabfoldApiPollInterval] = useState<number>(
+        initialValues?.colabfold_api_poll_interval ?? 6
+    );
 
     // Complex components (ligands, DNA, RNA)
     // Initialize from cloned job data if present (complex_components array)
@@ -111,6 +127,80 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             navigate('/');
         }
     });
+
+    const applyMsaPreset = (preset: 'maximum' | 'balanced' | 'fast') => {
+        setMsaPreset(preset);
+        // Preset selection should clear advanced overrides so behavior matches the preset label.
+        setMsaUseExpand(undefined);
+        setMsaUseEnv(undefined);
+        setMsaNumIterations(undefined);
+    };
+
+    const msaNeeded =
+        ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
+        ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
+        ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
+
+    useEffect(() => {
+        if (numParallelJobs > 1 && msaProvider === 'colabfold_api') {
+            setMsaProvider('local');
+        }
+    }, [numParallelJobs, msaProvider]);
+
+    useEffect(() => {
+        const normalizedSequence = sequence.replace(/\s+/g, '').trim();
+
+        if (!msaNeeded || !normalizedSequence) {
+            setMsaCacheInfo(null);
+            setMsaCacheError(null);
+            setMsaCacheLoading(false);
+            if (msaCacheOnly) {
+                setMsaCacheOnly(false);
+            }
+            return;
+        }
+
+        let active = true;
+        setMsaCacheLoading(true);
+        setMsaCacheError(null);
+
+        const timer = setTimeout(() => {
+            fetchMsaCacheInfo(normalizedSequence)
+                .then((resp) => {
+                    if (!active) return;
+                    setMsaCacheInfo(resp.data);
+                    if (msaCacheOnly && resp.data.cache_entries < 1) {
+                        setMsaCacheOnly(false);
+                    }
+                })
+                .catch((err: any) => {
+                    if (!active) return;
+                    setMsaCacheInfo(null);
+                    setMsaCacheError(err?.response?.data?.detail || err?.message || 'Failed to read MSA cache');
+                    if (msaCacheOnly) {
+                        setMsaCacheOnly(false);
+                    }
+                })
+                .finally(() => {
+                    if (active) {
+                        setMsaCacheLoading(false);
+                    }
+                });
+        }, 300);
+
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
+    }, [sequence, msaNeeded, msaCacheOnly]);
+
+    const msaCacheSummary = msaCacheLoading
+        ? 'Cache: checking...'
+        : msaCacheError
+            ? 'Cache: unavailable'
+            : (msaCacheInfo && msaCacheInfo.cache_entries > 0)
+                ? `Cache: ${msaCacheInfo.cache_entries} entr${msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}`
+                : 'Cache: none';
 
     const handleSubmit = () => {
         if (!sequence.trim()) {
@@ -154,11 +244,17 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.protenix_use_template = protenixUseTemplate;
         }
 
+        if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
+            alert('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
+            return;
+        }
+
+        if (msaNeeded && msaCacheOnly && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)) {
+            alert('Use Cache Only is enabled, but no cached MSA exists for this sequence.');
+            return;
+        }
+
         // MSA Quality parameters (when MSA is enabled for any predictor)
-        const msaNeeded =
-            ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
-            ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
-            ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
         if (msaNeeded) {
             params.msa_preset = msaPreset;  // Fast (default), Balanced, or Maximum
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
@@ -167,8 +263,15 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             if (msaMinCoverage) params.msa_min_coverage = parseFloat(msaMinCoverage);
             params.msa_min_depth_warning = msaMinDepthWarning;
             params.msa_min_depth_fail = msaMinDepthFail;
-            if (msaForceRefresh) params.msa_force_refresh = true;
+            if (msaForceRefresh && !msaCacheOnly) params.msa_force_refresh = true;
+            if (msaCacheOnly) params.msa_cache_only = true;
             if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
+            params.msa_provider = msaProvider;
+            if (msaProvider === 'colabfold_api') {
+                params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
+                params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);
+                params.colabfold_api_poll_interval = Math.max(1, Number(colabfoldApiPollInterval) || 6);
+            }
             // NEW: Expansion, EnvDB, and Iterations overrides
             if (msaUseExpand !== undefined) params.msa_use_expand = msaUseExpand;
             if (msaUseEnv !== undefined) params.msa_use_env = msaUseEnv;
@@ -198,6 +301,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             },
             pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null
         });
+
+        // Treat force-refresh as a one-shot action to avoid accidental cache-bypass on reruns.
+        if (msaForceRefresh) {
+            setMsaForceRefresh(false);
+        }
     };
 
 
@@ -726,18 +834,79 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-medium text-[var(--text-primary)]">MSA Quality Options</span>
                                 <span className="text-xs text-[var(--text-muted)]">(Advanced)</span>
+                                <span className="text-xs text-[var(--text-muted)]">{msaCacheSummary}</span>
                             </div>
                             <span className="text-[var(--text-secondary)] text-sm">{showMsaOptions ? '▼' : '▶'}</span>
                         </button>
                         {showMsaOptions && (
                             <div className="p-4 space-y-4 bg-[var(--bg-secondary)]">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pb-2 border-b border-[var(--border-primary)]">
+                                    <div className="md:col-span-2">
+                                        <label className="text-xs text-[var(--text-secondary)] block mb-1">MSA Provider</label>
+                                        <select
+                                            value={msaProvider}
+                                            onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
+                                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                        >
+                                            <option value="local">Local MMseqs2 (recommended)</option>
+                                            <option value="colabfold_api" disabled={numParallelJobs > 1}>
+                                                ColabFold API (single-job only)
+                                            </option>
+                                        </select>
+                                    </div>
+                                    <div className="md:col-span-2 text-xs text-[var(--text-muted)] flex items-end">
+                                        {numParallelJobs > 1
+                                            ? 'Remote ColabFold API is disabled when parallel jobs > 1.'
+                                            : 'Remote mode uses paced ticket submission to avoid hammering shared API infrastructure.'}
+                                    </div>
+                                </div>
+
+                                {msaProvider === 'colabfold_api' && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5">
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">ColabFold API Host</label>
+                                            <input
+                                                type="text"
+                                                value={colabfoldApiHost}
+                                                onChange={(e) => setColabfoldApiHost(e.target.value)}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Min Submit Interval (s)</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={1}
+                                                value={colabfoldApiMinInterval}
+                                                onChange={(e) => setColabfoldApiMinInterval(Math.max(0, parseInt(e.target.value) || 0))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Poll Interval (s)</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                step={1}
+                                                value={colabfoldApiPollInterval}
+                                                onChange={(e) => setColabfoldApiPollInterval(Math.max(1, parseInt(e.target.value) || 6))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <p className="md:col-span-3 text-xs text-cyan-200/80">
+                                            Remote provider is scoped to single structure-prediction jobs in this release.
+                                        </p>
+                                    </div>
+                                )}
+
                                 {/* MSA Quality Preset - Primary Setting */}
                                 <div>
                                     <label className="text-sm font-medium text-[var(--text-primary)] block mb-2">MSA Quality Preset</label>
                                     <div className="grid grid-cols-3 gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => setMsaPreset('maximum')}
+                                            onClick={() => applyMsaPreset('maximum')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'maximum'
                                                 ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
                                                 : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
@@ -748,7 +917,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => setMsaPreset('balanced')}
+                                            onClick={() => applyMsaPreset('balanced')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'balanced'
                                                 ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
                                                 : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
@@ -759,7 +928,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => setMsaPreset('fast')}
+                                            onClick={() => applyMsaPreset('fast')}
                                             className={`p-3 rounded-lg border text-left transition-colors ${msaPreset === 'fast'
                                                 ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
                                                 : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)]'
@@ -908,12 +1077,55 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                         />
                                     </div>
                                 </div>
+                                <div className="p-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
+                                    {msaCacheLoading ? (
+                                        <p className="text-xs text-[var(--text-muted)]">Checking local MSA cache...</p>
+                                    ) : msaCacheError ? (
+                                        <p className="text-xs text-[var(--error)]">{msaCacheError}</p>
+                                    ) : msaCacheInfo && msaCacheInfo.cache_entries > 0 ? (
+                                        <div className="space-y-1">
+                                            <p className="text-sm text-[var(--text-primary)] font-medium">
+                                                Cached MSA found: {msaCacheInfo.cache_entries} entr{msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}
+                                            </p>
+                                            <p className="text-xs text-[var(--text-muted)]">
+                                                Canonical cache: {msaCacheInfo.canonical_exists ? 'yes' : 'no'} | Best depth: {msaCacheInfo.best_depth ?? 'unknown'}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-[var(--text-muted)]">No cached MSA found for this sequence.</p>
+                                    )}
+                                </div>
+                                <label className="flex items-center gap-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg cursor-pointer hover:bg-emerald-500/20 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={msaCacheOnly}
+                                        onChange={(e) => {
+                                            const enabled = e.target.checked;
+                                            setMsaCacheOnly(enabled);
+                                            if (enabled) {
+                                                setMsaForceRefresh(false);
+                                            }
+                                        }}
+                                        disabled={!msaCacheLoading && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)}
+                                        className="w-4 h-4 rounded bg-[var(--bg-primary)] border-emerald-500 text-emerald-400 focus:ring-emerald-500 disabled:opacity-50"
+                                    />
+                                    <div>
+                                        <span className="text-emerald-300 font-medium">Use Existing Cache Only</span>
+                                        <p className="text-xs text-emerald-200/70">Skip MSA generation. Job fails if cache is missing.</p>
+                                    </div>
+                                </label>
                                 {/* Force Refresh Toggle */}
                                 <label className="flex items-center gap-3 p-3 bg-[var(--error)]/10 border border-[var(--error)]/30 rounded-lg cursor-pointer hover:bg-[var(--error)]/20 transition-colors">
                                     <input
                                         type="checkbox"
                                         checked={msaForceRefresh}
-                                        onChange={(e) => setMsaForceRefresh(e.target.checked)}
+                                        onChange={(e) => {
+                                            const enabled = e.target.checked;
+                                            setMsaForceRefresh(enabled);
+                                            if (enabled) {
+                                                setMsaCacheOnly(false);
+                                            }
+                                        }}
                                         className="w-4 h-4 rounded bg-[var(--bg-primary)] border-[var(--error)] text-[var(--error)] focus:ring-[var(--error)]"
                                     />
                                     <div>

@@ -84,6 +84,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
 
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
+    const [parsedFrameworkChains, setParsedFrameworkChains] = useState<Chain[]>([]);
     const [selectedChain, setSelectedChain] = useState<string | null>(null);
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
@@ -246,6 +247,88 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [targetPdb]);
 
+    const normalizeChainId = (chainId?: string | null) => (chainId || '').trim().toUpperCase();
+
+    const resolveFrameworkChains = (): { heavyChain?: Chain; lightChain?: Chain } => {
+        if (parsedFrameworkChains.length === 0) {
+            return {};
+        }
+
+        const heavyChainId = normalizeChainId(sabdabFramework?.hChain);
+        const lightChainId = normalizeChainId(sabdabFramework?.lChain || null);
+        const antigenChains = new Set(
+            (sabdabFramework?.antigenChain || '')
+                .split(',')
+                .map((c) => normalizeChainId(c))
+                .filter(Boolean)
+        );
+        const findById = (id: string) =>
+            parsedFrameworkChains.find((chain) => normalizeChainId(chain.id) === id);
+
+        let heavyChain = heavyChainId ? findById(heavyChainId) : undefined;
+        if (!heavyChain) {
+            const nonAntigenChains = parsedFrameworkChains.filter(
+                (chain) => !antigenChains.has(normalizeChainId(chain.id))
+            );
+            const pool = nonAntigenChains.length > 0 ? nonAntigenChains : parsedFrameworkChains;
+            heavyChain = [...pool].sort((a, b) => b.length - a.length)[0];
+        }
+
+        let lightChain = lightChainId ? findById(lightChainId) : undefined;
+        if (!lightChain) {
+            lightChain = parsedFrameworkChains.find(
+                (chain) =>
+                    (!heavyChain || normalizeChainId(chain.id) !== normalizeChainId(heavyChain.id)) &&
+                    !antigenChains.has(normalizeChainId(chain.id))
+            );
+        }
+
+        return { heavyChain, lightChain };
+    };
+
+    const collectResiduesFromDetectedRange = (
+        chain: Chain | undefined,
+        seqRange: [number, number] | null | undefined,
+        imgtRange: [number, number] | null | undefined,
+        chainIdFallback?: string
+    ): Set<string> => {
+        const residues = new Set<string>();
+
+        if (chain) {
+            if (seqRange) {
+                for (let i = seqRange[0]; i <= seqRange[1]; i++) {
+                    if (i < 0 || i >= chain.residues.length) continue;
+                    const res = chain.residues[i];
+                    residues.add(`${res.chainId}${res.resNum}${res.iCode || ''}`);
+                }
+                if (residues.size > 0) {
+                    return residues;
+                }
+            }
+
+            if (imgtRange) {
+                const [start, end] = imgtRange;
+                for (const res of chain.residues) {
+                    if (res.resNum >= start && res.resNum <= end) {
+                        residues.add(`${res.chainId}${res.resNum}${res.iCode || ''}`);
+                    }
+                }
+            }
+        }
+
+        // Last-resort fallback: synthesize residues from IMGT ranges so
+        // "Use These CDRs" still applies detected loops even if parsing/mapping fails.
+        if (residues.size === 0 && imgtRange && chainIdFallback) {
+            const [start, end] = imgtRange;
+            const chainId = normalizeChainId(chainIdFallback) || 'H';
+            for (let pos = start; pos <= end; pos++) {
+                residues.add(`${chainId}${pos}`);
+            }
+        }
+
+        return residues;
+    };
+
     const handleFileUpload = async (file: File) => {
         setIsUploading(true);
         try {
@@ -376,27 +459,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Step 3: Submit job with uploaded file path
             const selectedLoops = Array.from(selectedCDRLoops).sort();
-            const detectedRangeMap: Record<string, [number, number] | null | undefined> = {
-                H1: detectedCDRs?.cdr_h1_range,
-                H2: detectedCDRs?.cdr_h2_range,
-                H3: detectedCDRs?.cdr_h3_range,
-                L1: detectedCDRs?.cdr_l1_range,
-                L2: detectedCDRs?.cdr_l2_range,
-                L3: detectedCDRs?.cdr_l3_range,
-            };
-            const detectedLoopSpecs = selectedLoops.map((loop) => {
-                const loopRange = detectedRangeMap[loop];
-                if (!loopRange || loopRange.length !== 2) {
-                    return null;
+            // Serialize manualCDRDefinitions strictly, dropping the generic 'H1' logic
+            // RFA/FAMPNN needs format: ['H27-H38', 'L56-L65']
+            let customRfalLoopsSpec: string | undefined = undefined;
+            if (manualCDRDefinitions && manualCDRDefinitions.length > 0) {
+                const parts: string[] = [];
+                manualCDRDefinitions.forEach(def => {
+                    if (def.residues.size > 0) {
+                        const resArray = Array.from(def.residues).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+                        // Get the first and last residue ID (e.g., 'H27' and 'H38')
+                        // We rely on the raw PDB order preserving numeric suffix order nicely.
+                        const start = resArray[0];
+                        const end = resArray[resArray.length - 1];
+                        parts.push(`${start.charAt(0)}${start.substring(1)}-${end.substring(1)}`);
+                    }
+                });
+                if (parts.length > 0) {
+                    customRfalLoopsSpec = `[${parts.join(',')}]`;
                 }
-                const [start, end] = loopRange;
-                return `${loop}:${start}-${end}`;
-            });
-            const hasCompleteDetectedRanges =
-                selectedLoops.length > 0 && detectedLoopSpecs.every((spec) => spec !== null);
-            const rfantibodyLoopSpec = hasCompleteDetectedRanges
-                ? `[${detectedLoopSpecs.join(',')}]`
-                : undefined;
+            }
 
             const jobData = {
                 name: jobName,
@@ -433,8 +514,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Design mode settings
                     antibody_design_mode: designMode,
                     antibody_design_loops: selectedLoops.join(','),
-                    // Preserve detected IMGT ranges for RFantibody when available.
-                    rfantibody_design_loops: rfantibodyLoopSpec,
+                    // Use explicit ranges from manualCDRDefinitions built off the true PDB index
+                    rfantibody_design_loops_custom: customRfalLoopsSpec,
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: effectiveAntibodyType === 'vhh' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
@@ -531,6 +612,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             console.error('[ANTIBODY_DENOVO] Submission failed', error);
         }
     };
+
+    const hasFrameworkChainsForCDR = parsedFrameworkChains.length > 0;
+    const cdrEditorChains = hasFrameworkChainsForCDR
+        ? parsedFrameworkChains
+        : (frameworkType === 'sabdab' ? [] : parsedChains);
+    const { heavyChain: cdrEditorHeavyChain } = resolveFrameworkChains();
+    const cdrEditorActiveChain = hasFrameworkChainsForCDR
+        ? (
+            normalizeChainId(sabdabFramework?.hChain) ||
+            normalizeChainId(cdrEditorHeavyChain?.id) ||
+            normalizeChainId(parsedFrameworkChains[0]?.id) ||
+            undefined
+        )
+        : (selectedChain || undefined);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -730,13 +825,73 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         setSabdabFramework(fw);
                                         setDetectedCDRs(null); // Clear previous detection
                                         // Set framework PDB URL for 3D preview if pdbCode available
-                                        if (fw?.pdbCode) {
-                                            // Use RCSB PDB download URL for Mol* viewer
-                                            setFrameworkPdbUrl(`https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`);
+                                        if (fw?.pdbContent) {
+                                            const blob = new Blob([fw.pdbContent], { type: 'text/plain' });
+                                            const url = URL.createObjectURL(blob);
+                                            setFrameworkPdbUrl(url);
                                             setViewerMode('framework');
                                             setShow3DViewer(true);
+                                            setParsedFrameworkChains([]);
+
+                                            const fwFile = new File([blob], `${fw.pdbCode || 'framework'}.pdb`);
+                                            import('../utils/pdbUtils').then(({ parsePDBFile }) =>
+                                                parsePDBFile(fwFile)
+                                            )
+                                                .then((parsed) => setParsedFrameworkChains(parsed.chains))
+                                                .catch((err) => {
+                                                    console.error('Failed to parse selected framework PDB:', err);
+                                                    setParsedFrameworkChains([]);
+                                                });
+                                        } else if (fw?.filePath) {
+                                            const fwUrl = `/api/files/download?path=${encodeURIComponent(fw.filePath)}`;
+                                            setFrameworkPdbUrl(fwUrl);
+                                            setViewerMode('framework');
+                                            setShow3DViewer(true);
+                                            setParsedFrameworkChains([]);
+
+                                            fetch(fwUrl)
+                                                .then((res) => {
+                                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                                    return res.blob();
+                                                })
+                                                .then((blob) => {
+                                                    const fwFile = new File([blob], `${fw.pdbCode || 'framework'}.pdb`);
+                                                    return import('../utils/pdbUtils').then(({ parsePDBFile }) =>
+                                                        parsePDBFile(fwFile)
+                                                    );
+                                                })
+                                                .then((parsed) => setParsedFrameworkChains(parsed.chains))
+                                                .catch((err) => {
+                                                    console.error('Failed to parse cached framework PDB:', err);
+                                                    setParsedFrameworkChains([]);
+                                                });
+                                        } else if (fw?.pdbCode) {
+                                            // Fallback: Use RCSB PDB download URL for Mol* viewer
+                                            const fwUrl = `https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`;
+                                            setFrameworkPdbUrl(fwUrl);
+                                            setViewerMode('framework');
+                                            setShow3DViewer(true);
+                                            setParsedFrameworkChains([]);
+
+                                            fetch(fwUrl)
+                                                .then((res) => {
+                                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                                    return res.blob();
+                                                })
+                                                .then((blob) => {
+                                                    const fwFile = new File([blob], `${fw.pdbCode}.pdb`);
+                                                    return import('../utils/pdbUtils').then(({ parsePDBFile }) =>
+                                                        parsePDBFile(fwFile)
+                                                    );
+                                                })
+                                                .then((parsed) => setParsedFrameworkChains(parsed.chains))
+                                                .catch((err) => {
+                                                    console.error('Failed to parse fallback framework PDB:', err);
+                                                    setParsedFrameworkChains([]);
+                                                });
                                         } else {
                                             setFrameworkPdbUrl(null);
+                                            setParsedFrameworkChains([]);
                                         }
                                     }}
                                     selectedFramework={sabdabFramework}
@@ -828,7 +983,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 <button
                                                     type="button"
                                                     onClick={() => {
-                                                        // Convert detected CDRs to selectedCDRLoops format
+                                                        if (frameworkType === 'sabdab' && parsedFrameworkChains.length === 0) {
+                                                            alert('Framework residues are not parsed yet. Re-select the framework and try CDR detection again.');
+                                                            return;
+                                                        }
+
+                                                        // Toggle standard checkboxes
                                                         const loops = new Set<string>();
                                                         if (detectedCDRs.cdr_h1) loops.add('H1');
                                                         if (detectedCDRs.cdr_h2) loops.add('H2');
@@ -837,8 +997,66 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                         if (detectedCDRs.cdr_l2) loops.add('L2');
                                                         if (detectedCDRs.cdr_l3) loops.add('L3');
                                                         setSelectedCDRLoops(loops);
-                                                        // Note: IMGT position ranges stored in detectedCDRs are available
-                                                        // for passing to backend (rfantibody design_loops param)
+
+                                                        // Explicitly define these as manual CDR zones for tracking.
+                                                        // Prefer raw sequence-index ranges; fall back to IMGT number ranges if needed.
+                                                        const { heavyChain, lightChain } = resolveFrameworkChains();
+                                                        const heavyChainLabel =
+                                                            normalizeChainId(sabdabFramework?.hChain) ||
+                                                            normalizeChainId(heavyChain?.id) ||
+                                                            'H';
+                                                        const lightChainLabel =
+                                                            normalizeChainId(sabdabFramework?.lChain) ||
+                                                            normalizeChainId(lightChain?.id) ||
+                                                            'L';
+
+                                                        const newDefs: import('./CDRRangeSelector').CDRDefinition[] = [];
+
+                                                        // Helper to build definition
+                                                        const buildDef = (
+                                                            id: string,
+                                                            name: string,
+                                                            seqRange: [number, number] | null | undefined,
+                                                            imgtRange: [number, number] | null | undefined,
+                                                            chain: import('../utils/pdbUtils').Chain | undefined,
+                                                            chainLabel: string,
+                                                            colorBase: string
+                                                        ) => {
+                                                            const residues = collectResiduesFromDetectedRange(chain, seqRange, imgtRange, chainLabel);
+                                                            if (residues.size > 0) {
+                                                                newDefs.push({
+                                                                    id, name, residues, color: `bg-${colorBase}-500/30`
+                                                                });
+                                                            }
+                                                        };
+
+                                                        if (heavyChain) {
+                                                            buildDef('H1', 'CDR-H1', detectedCDRs.cdr_h1_seq_range, detectedCDRs.cdr_h1_range, heavyChain, heavyChainLabel, 'blue');
+                                                            buildDef('H2', 'CDR-H2', detectedCDRs.cdr_h2_seq_range, detectedCDRs.cdr_h2_range, heavyChain, heavyChainLabel, 'cyan');
+                                                            buildDef('H3', 'CDR-H3', detectedCDRs.cdr_h3_seq_range, detectedCDRs.cdr_h3_range, heavyChain, heavyChainLabel, 'indigo');
+                                                        } else {
+                                                            buildDef('H1', 'CDR-H1', detectedCDRs.cdr_h1_seq_range, detectedCDRs.cdr_h1_range, undefined, heavyChainLabel, 'blue');
+                                                            buildDef('H2', 'CDR-H2', detectedCDRs.cdr_h2_seq_range, detectedCDRs.cdr_h2_range, undefined, heavyChainLabel, 'cyan');
+                                                            buildDef('H3', 'CDR-H3', detectedCDRs.cdr_h3_seq_range, detectedCDRs.cdr_h3_range, undefined, heavyChainLabel, 'indigo');
+                                                        }
+                                                        if (lightChain) {
+                                                            buildDef('L1', 'CDR-L1', detectedCDRs.cdr_l1_seq_range, detectedCDRs.cdr_l1_range, lightChain, lightChainLabel, 'emerald');
+                                                            buildDef('L2', 'CDR-L2', detectedCDRs.cdr_l2_seq_range, detectedCDRs.cdr_l2_range, lightChain, lightChainLabel, 'teal');
+                                                            buildDef('L3', 'CDR-L3', detectedCDRs.cdr_l3_seq_range, detectedCDRs.cdr_l3_range, lightChain, lightChainLabel, 'green');
+                                                        } else if (detectedCDRs.cdr_l1 || detectedCDRs.cdr_l2 || detectedCDRs.cdr_l3) {
+                                                            buildDef('L1', 'CDR-L1', detectedCDRs.cdr_l1_seq_range, detectedCDRs.cdr_l1_range, undefined, lightChainLabel, 'emerald');
+                                                            buildDef('L2', 'CDR-L2', detectedCDRs.cdr_l2_seq_range, detectedCDRs.cdr_l2_range, undefined, lightChainLabel, 'teal');
+                                                            buildDef('L3', 'CDR-L3', detectedCDRs.cdr_l3_seq_range, detectedCDRs.cdr_l3_range, undefined, lightChainLabel, 'green');
+                                                        }
+
+                                                        if (newDefs.length > 0) {
+                                                            setManualCDRDefinitions(newDefs);
+                                                            // Force the accordion open to show user what happened
+                                                            setDesignMode('cdr_only');
+                                                            setShowCDREditor(true);
+                                                        } else {
+                                                            alert('Could not map detected CDRs to framework residues yet. Try re-selecting the framework and re-running CDR detection.');
+                                                        }
                                                     }}
                                                     className="w-full mt-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all"
                                                 >
@@ -961,42 +1179,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
                                         height={400}
                                         selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
-                                            // When viewing framework, highlight detected CDR residues
+                                            // When viewing framework, highlight detected CDR residues using raw array mapping
                                             const cdrResidues = new Set<string>();
                                             if (detectedCDRs) {
-                                                // Add all residues in detected CDR ranges
-                                                // Use actual chain ID from framework, not hardcoded 'H'
-                                                const chainId = sabdabFramework?.hChain || 'H';
-                                                if (detectedCDRs.cdr_h1_range) {
-                                                    for (let i = detectedCDRs.cdr_h1_range[0]; i <= detectedCDRs.cdr_h1_range[1]; i++) {
-                                                        cdrResidues.add(`${chainId}${i}`);
-                                                    }
+                                                const { heavyChain, lightChain } = resolveFrameworkChains();
+
+                                                if (heavyChain) {
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h1_seq_range, detectedCDRs.cdr_h1_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h2_seq_range, detectedCDRs.cdr_h2_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h3_seq_range, detectedCDRs.cdr_h3_range).forEach((r) => cdrResidues.add(r));
                                                 }
-                                                if (detectedCDRs.cdr_h2_range) {
-                                                    for (let i = detectedCDRs.cdr_h2_range[0]; i <= detectedCDRs.cdr_h2_range[1]; i++) {
-                                                        cdrResidues.add(`${chainId}${i}`);
-                                                    }
-                                                }
-                                                if (detectedCDRs.cdr_h3_range) {
-                                                    for (let i = detectedCDRs.cdr_h3_range[0]; i <= detectedCDRs.cdr_h3_range[1]; i++) {
-                                                        cdrResidues.add(`${chainId}${i}`);
-                                                    }
-                                                }
-                                                // Light chain CDRs (chain 'L' if present)
-                                                if (detectedCDRs.cdr_l1_range) {
-                                                    for (let i = detectedCDRs.cdr_l1_range[0]; i <= detectedCDRs.cdr_l1_range[1]; i++) {
-                                                        cdrResidues.add(`L${i}`);
-                                                    }
-                                                }
-                                                if (detectedCDRs.cdr_l2_range) {
-                                                    for (let i = detectedCDRs.cdr_l2_range[0]; i <= detectedCDRs.cdr_l2_range[1]; i++) {
-                                                        cdrResidues.add(`L${i}`);
-                                                    }
-                                                }
-                                                if (detectedCDRs.cdr_l3_range) {
-                                                    for (let i = detectedCDRs.cdr_l3_range[0]; i <= detectedCDRs.cdr_l3_range[1]; i++) {
-                                                        cdrResidues.add(`L${i}`);
-                                                    }
+                                                if (lightChain) {
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l1_seq_range, detectedCDRs.cdr_l1_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l2_seq_range, detectedCDRs.cdr_l2_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l3_seq_range, detectedCDRs.cdr_l3_range).forEach((r) => cdrResidues.add(r));
                                                 }
                                             }
                                             return cdrResidues;
@@ -1107,17 +1303,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     {showCDREditor ? 'Use Defaults' : 'Define Manually'}
                                 </button>
                             </div>
-                            {showCDREditor && parsedChains.length > 0 && (
+                            {showCDREditor && cdrEditorChains.length > 0 && (
                                 <CDRRangeSelector
-                                    chains={parsedChains}
+                                    chains={cdrEditorChains}
                                     cdrDefinitions={manualCDRDefinitions}
                                     onDefinitionsChange={setManualCDRDefinitions}
-                                    activeChain={selectedChain || undefined}
+                                    activeChain={cdrEditorActiveChain}
                                 />
                             )}
-                            {showCDREditor && parsedChains.length === 0 && (
+                            {showCDREditor && cdrEditorChains.length === 0 && (
                                 <p className="text-sm text-amber-400 italic">
-                                    Load target PDB first to define CDR positions on its structure
+                                    {frameworkType === 'sabdab'
+                                        ? 'Select and parse a SAbDab framework first to map CDR positions correctly.'
+                                        : 'Load target/framework PDB first to define CDR positions.'}
                                 </p>
                             )}
                             {manualCDRDefinitions.length > 0 && !showCDREditor && (
