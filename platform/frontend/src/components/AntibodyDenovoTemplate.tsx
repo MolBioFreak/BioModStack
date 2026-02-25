@@ -247,6 +247,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [targetPdb]);
 
+    // Parse custom framework PDB for accurate CDR mapping when uploaded.
+    useEffect(() => {
+        if (frameworkType !== 'custom') return;
+        if (!customFrameworkFile) {
+            setParsedFrameworkChains([]);
+            return;
+        }
+
+        parsePDBFile(customFrameworkFile)
+            .then((result) => setParsedFrameworkChains(result.chains))
+            .catch((err) => {
+                console.error('[ANTIBODY_DENOVO] Failed to parse custom framework PDB:', err);
+                setParsedFrameworkChains([]);
+            });
+    }, [frameworkType, customFrameworkFile]);
+
     const normalizeChainId = (chainId?: string | null) => (chainId || '').trim().toUpperCase();
 
     const resolveFrameworkChains = (): { heavyChain?: Chain; lightChain?: Chain } => {
@@ -614,9 +630,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     };
 
     const hasFrameworkChainsForCDR = parsedFrameworkChains.length > 0;
-    const cdrEditorChains = hasFrameworkChainsForCDR
-        ? parsedFrameworkChains
-        : (frameworkType === 'sabdab' ? [] : parsedChains);
+    const cdrEditorChains = hasFrameworkChainsForCDR ? parsedFrameworkChains : [];
     const { heavyChain: cdrEditorHeavyChain } = resolveFrameworkChains();
     const cdrEditorActiveChain = hasFrameworkChainsForCDR
         ? (
@@ -625,7 +639,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             normalizeChainId(parsedFrameworkChains[0]?.id) ||
             undefined
         )
-        : (selectedChain || undefined);
+        : undefined;
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1079,6 +1093,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         const file = e.target.files?.[0] || null;
                                         setCustomFrameworkFile(file);
                                         setCustomFrameworkPath(null);
+                                        setDetectedCDRs(null);
+
+                                        if (file) {
+                                            const blobUrl = URL.createObjectURL(file);
+                                            setFrameworkPdbUrl(blobUrl);
+                                            setViewerMode('framework');
+                                            setShow3DViewer(true);
+                                        } else {
+                                            setFrameworkPdbUrl(null);
+                                            setParsedFrameworkChains([]);
+                                        }
                                     }}
                                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer"
                                 />
@@ -1315,7 +1340,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <p className="text-sm text-amber-400 italic">
                                     {frameworkType === 'sabdab'
                                         ? 'Select and parse a SAbDab framework first to map CDR positions correctly.'
-                                        : 'Load target/framework PDB first to define CDR positions.'}
+                                        : frameworkType === 'custom'
+                                            ? 'Upload and parse a custom framework PDB first to map CDR positions correctly.'
+                                            : 'Manual CDR mapping requires a parsed framework (SAbDab or Custom).'}
                                 </p>
                             )}
                             {manualCDRDefinitions.length > 0 && !showCDREditor && (
