@@ -270,6 +270,8 @@ export const resumeJob = (
         new_job_id: string;
         new_job_name: string;
         resume_from_stage: string;
+        resume_stage_mode?: string;
+        resume_stage_note?: string;
         preserved_stages: string[];
         applied_overrides?: string[];
     }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
