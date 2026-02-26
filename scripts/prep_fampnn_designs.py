@@ -62,8 +62,7 @@ def main():
     parser.add_argument('--out_dir', default='./outputpdbs', help='Output directory for updated PDB files')
     args = parser.parse_args()
     
-    # keep pyrosetta quiet
-    pyrosetta.init("-out:levels all:error")
+    pyrosetta.init("-out:levels all:error -ignore_unrecognized_res 1")
         
     # Make list of input PDBs
     input_dir = Path(args.input_dir)
