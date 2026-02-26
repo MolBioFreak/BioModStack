@@ -581,6 +581,19 @@ async def create_job(
         logger.info(f"Job contains {len(job_data.params['complex_components'])} complex components")
     
     # ═══════════════════════════════════════════════════════════════════════════
+    # FORCE FLAGS FOR RFANTIBODY BACKBONE MODE
+    # ═══════════════════════════════════════════════════════════════════════════
+    if job_data.params.get('rfd_mode') == 'rfantibody_backbone':
+        job_data.params['seq_design_fampnn'] = False
+        job_data.params['seq_design_antifold'] = False
+        job_data.params['seq_design_proteinmpnn'] = False
+        job_data.params['run_structure_validation'] = False
+        job_data.params['run_immunogenicity_scoring'] = False
+        job_data.params['run_stability_scoring'] = False
+        job_data.params['run_maturation'] = False
+        logger.info("[QUEUE] rfantibody_backbone mode detected. Silencing downstream validation flags.")
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # JOB MULTIPLIER: Create N separate jobs for multi-GPU distribution
     # ═══════════════════════════════════════════════════════════════════════════
     
