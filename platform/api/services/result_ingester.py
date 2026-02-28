@@ -259,8 +259,109 @@ async def ingest_job_results(
     # Post-ingestion: Check for FrustraMPNN results and attach to designs
     if designs_created > 0:
         await ingest_frustration_data(job_id, output_path, session)
+        await ingest_maturation_data(job_id, output_path, session)
 
     return designs_created
+
+
+async def ingest_maturation_data(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession
+) -> int:
+    """
+    Parse PPIFlow maturation score JSONs and update matching designs.
+    
+    Maturation score JSONs are in {output_dir}/run/ppiflow/results/{name}_maturation_score.json
+    Each contains: delta_interface_score, interface_score_matured, rmsd_backbone, sequence_identity, clash_count_ca
+    """
+    # Check multiple possible locations (maturation_child publishes to run/ppiflow/results/)
+    maturation_dirs = [
+        output_path / "run" / "ppiflow" / "results",
+        output_path / "ppiflow" / "results",
+        output_path,
+    ]
+    
+    score_files = []
+    for d in maturation_dirs:
+        if d.exists():
+            score_files.extend(d.glob("*_maturation_score.json"))
+    
+    if not score_files:
+        return 0
+    
+    # Deduplicate by filename (same file may appear in multiple search paths)
+    seen = set()
+    unique_files = []
+    for f in score_files:
+        if f.name not in seen:
+            seen.add(f.name)
+            unique_files.append(f)
+    score_files = unique_files
+    
+    print(f"[Ingester] Found {len(score_files)} maturation score JSONs to process")
+    
+    updated_count = 0
+    
+    for json_path in score_files:
+        # Extract design name: "designname_maturation_score.json" -> "designname"
+        design_name = json_path.stem.replace("_maturation_score", "")
+        
+        try:
+            import json as json_mod
+            data = json_mod.loads(json_path.read_text())
+        except Exception as e:
+            print(f"[Ingester] Error parsing maturation JSON {json_path}: {e}")
+            continue
+        
+        # Find matching design in DB (try both with and without job_id for child jobs)
+        result = await session.execute(
+            select(Design).where(
+                Design.job_id == job_id,
+                Design.name == design_name
+            )
+        )
+        design = result.scalar_one_or_none()
+        
+        if not design:
+            # Try matching by name only across child jobs
+            from database import Job
+            child_result = await session.execute(
+                select(Job.id).where(Job.parent_job_id == job_id)
+            )
+            child_ids = [row[0] for row in child_result.all()]
+            if child_ids:
+                all_ids = [job_id] + child_ids
+                result = await session.execute(
+                    select(Design).where(
+                        Design.job_id.in_(all_ids),
+                        Design.name == design_name
+                    )
+                )
+                design = result.scalar_one_or_none()
+        
+        if not design:
+            continue
+        
+        # Update design with maturation metrics
+        delta = data.get("delta_interface_score")
+        matured = data.get("interface_score_matured")
+        rmsd_bb = data.get("rmsd_backbone")
+        
+        if delta is not None:
+            design.maturation_delta_interface = float(delta)
+        if matured is not None:
+            design.maturation_interface_score = float(matured)
+        if rmsd_bb is not None:
+            design.maturation_rmsd = float(rmsd_bb)
+        
+        updated_count += 1
+    
+    if updated_count > 0:
+        await session.commit()
+        print(f"[Ingester] Updated {updated_count} designs with maturation metrics")
+    
+    return updated_count
 
 
 async def ingest_frustration_data(

@@ -212,6 +212,13 @@ class Design(Base):
     frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
     frustration_residues = Column(JSON, nullable=True)         # Per-residue: [{pos, chain, frust, class}]
     frustration_csv_path = Column(String(500), nullable=True)  # Path to full CSV
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PPIFLOW MATURATION METRICS
+    # ═══════════════════════════════════════════════════════════════════════════
+    maturation_delta_interface = Column(Float, nullable=True)   # delta_interface_score (REU, more negative = better)
+    maturation_interface_score = Column(Float, nullable=True)   # interface_score_matured (REU)
+    maturation_rmsd = Column(Float, nullable=True)              # rmsd_backbone (Å, matured vs original)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
