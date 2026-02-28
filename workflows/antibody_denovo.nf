@@ -746,6 +746,8 @@ workflow ANTIBODY_DENOVO {
     def num_gpus = available_gpus.size()
     def designs_per_gpu = (total_designs / num_gpus).intValue()
     def remainder = total_designs % num_gpus
+    def designs_per_job = params.designs_per_job ?: 5
+    def planned_child_jobs = Math.ceil(total_designs / (double) designs_per_job).intValue()
     // Use a per-run unique batch key to prevent accidental cross-run child reuse.
     // Reusing a static name (e.g., "antibody_batch") can make fresh jobs skip RFantibody
     // by attaching to completed children from older runs.
@@ -782,7 +784,7 @@ workflow ANTIBODY_DENOVO {
         // ORCHESTRATOR MODE: Spawn child jobs through GPU queue
         // Each child is a separate API job managed by the orchestrator
         // =====================================================================
-        log.info("  Orchestrator mode: Spawning ${total_designs / (params.designs_per_job ?: 5)} child job(s)")
+        log.info("  Orchestrator mode: Spawning ${planned_child_jobs} child job(s)")
         
         // Spawn child jobs via API
         SpawnRFantibodyJobs(
@@ -790,7 +792,7 @@ workflow ANTIBODY_DENOVO {
             epitope_residues ?: "",
             params.framework_type ?: "standard-fv",
             total_designs,
-            params.designs_per_job ?: 5,
+            designs_per_job,
             params.job_id ?: "unknown",
             orchestrator_batch_name
         )
@@ -1317,8 +1319,6 @@ workflow ANTIBODY_DENOVO {
                         recommendation: "Check child job logs, or consider relaxing FAMPNN stringency settings"
                     ])
                 )
-
-                error "ZERO_YIELD: 0 candidates met the design stringency threshold (this is not a crash)"
             }
         
         // Step 2: Generate MSA ONCE using first design's sequence
