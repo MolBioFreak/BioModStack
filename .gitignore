@@ -145,3 +145,7 @@ backups/
 # Transient local directories
 output/
 platform/api/inputs/
+
+# Scratch test scripts
+test_*.nf
+spawn_result.json

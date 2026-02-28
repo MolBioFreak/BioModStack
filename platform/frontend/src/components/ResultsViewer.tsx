@@ -32,7 +32,7 @@ const formatMetric = (val: number | null | undefined, decimals = 2): string =>
 
 const getMetricColor = (metric: string, value: number | null): string => {
     if (value == null) return 'text-slate-500';
-    if (metric === 'plddt_overall' || metric === 'plddt_binder') {
+    if (metric === 'plddt_overall' || metric === 'plddt_binder' || metric === 'plddt_target') {
         return value >= 80 ? 'text-emerald-400' : value >= 60 ? 'text-amber-400' : 'text-red-400';
     }
     if (metric === 'pae_overall' || metric === 'pae_interaction') {
@@ -40,6 +40,9 @@ const getMetricColor = (metric: string, value: number | null): string => {
     }
     if (metric === 'ptm' || metric === 'conf_score') {
         return value >= 0.7 ? 'text-emerald-400' : value >= 0.5 ? 'text-amber-400' : 'text-red-400';
+    }
+    if (metric === 'fampnn_psce') {
+        return value <= 0.2 ? 'text-emerald-400' : value <= 0.4 ? 'text-amber-400' : 'text-red-400';
     }
     return 'text-slate-300';
 };
@@ -340,6 +343,7 @@ export function ResultsViewer() {
         const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
         const epitopeContacts = designs.map(d => d.epitope_contact_count).filter((v): v is number => v != null);
+        const psces = designs.map(d => d.fampnn_psce).filter((v): v is number => v != null);
 
         // Binding tier distribution
         const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
@@ -362,6 +366,7 @@ export function ResultsViewer() {
             avgAffinity: affinities.length ? affinities.reduce((a, b) => a + b, 0) / affinities.length : null,
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             avgEpitopeContacts: epitopeContacts.length ? epitopeContacts.reduce((a, b) => a + b, 0) / epitopeContacts.length : null,
+            avgPsce: psces.length ? psces.reduce((a, b) => a + b, 0) / psces.length : null,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
             highContacts: epitopeContacts.filter(v => v >= 5).length,
@@ -616,6 +621,7 @@ export function ResultsViewer() {
                                                 <StatCard label="Total Designs" value={stats.total.toLocaleString()} />
                                                 <StatCard label="Favorites" value={stats.favorites} color="text-yellow-400" />
                                                 <StatCard label="Avg pLDDT" value={formatMetric(stats.avgPlddt, 1)} color="text-blue-400" />
+                                                <StatCard label="Avg pSCE" value={formatMetric(stats.avgPsce, 2)} subtitle="FAMPNN" color="text-cyan-400" />
                                                 <StatCard label="Avg Affinity" value={formatMetric(stats.avgAffinity, 2)} color="text-emerald-400" />
                                                 <StatCard label="Avg Binder %" value={stats.avgBinderProb ? (stats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
@@ -1011,15 +1017,24 @@ export function ResultsViewer() {
                                                                 { key: 'binder_length', label: 'Size' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
                                                                 { key: 'epitope_contact_count', label: 'Contacts' },
+                                                                { key: 'epitope_min_distance', label: 'Min Dist' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
+                                                                { key: 'fampnn_psce', label: 'pSCE' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
+                                                                { key: 'plddt_binder', label: 'pLDDT Bd' },
+                                                                { key: 'plddt_target', label: 'pLDDT Tgt' },
                                                                 { key: 'pae_overall', label: 'PAE' },
+                                                                { key: 'pae_interaction', label: 'iPAE' },
                                                                 { key: 'ptm', label: 'pTM' },
                                                                 { key: 'iptm', label: 'iPTM' },
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
-                                                                { key: 'rmsd_binder', label: 'RMSD' },
+                                                                { key: 'rmsd_binder', label: 'RMSD Bd' },
+                                                                { key: 'rmsd_overall', label: 'RMSD All' },
+                                                                { key: 'has_clash', label: 'Clash' },
+                                                                { key: 'maturation_delta_interface', label: 'ΔIface' },
+                                                                { key: 'maturation_rmsd', label: 'Mat RMSD' },
                                                                 { key: 'rog', label: 'RoG' },
                                                                 { key: 'rfd_rog', label: 'RFD RoG' },
                                                                 { key: 'fr2_contacts', label: 'FR2' },
@@ -1081,6 +1096,12 @@ export function ResultsViewer() {
                                                                     {d.epitope_contact_count ?? '—'}
                                                                 </td>
 
+                                                                {/* Epitope Min Distance */}
+                                                                <td className={`px-3 py-2 font-mono ${d.epitope_min_distance != null && d.epitope_min_distance <= 4 ? 'text-emerald-400' :
+                                                                    d.epitope_min_distance != null && d.epitope_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.epitope_min_distance, 1)}
+                                                                </td>
+
                                                                 {/* Affinity */}
                                                                 <td className={`px-3 py-2 font-mono ${d.affinity_score != null && d.affinity_score > 6 ? 'text-emerald-400' :
                                                                     d.affinity_score != null && d.affinity_score > 4 ? 'text-white' : 'text-slate-500'}`}>
@@ -1093,11 +1114,23 @@ export function ResultsViewer() {
                                                                     {d.binder_probability ? (d.binder_probability * 100).toFixed(0) + '%' : '—'}
                                                                 </td>
 
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('fampnn_psce', d.fampnn_psce)}`}>
+                                                                    {formatMetric(d.fampnn_psce, 2)}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
+                                                                    {formatMetric(d.plddt_binder, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_target', d.plddt_target)}`}>
+                                                                    {formatMetric(d.plddt_target, 1)}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
+                                                                    {formatMetric(d.pae_interaction, 1)}
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
@@ -1117,6 +1150,16 @@ export function ResultsViewer() {
                                                                     {formatMetric(d.conf_score, 2)}
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
+                                                                <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>
+                                                                    {d.has_clash == null ? '—' : d.has_clash ? '✗' : '✓'}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.maturation_delta_interface != null && d.maturation_delta_interface < 0 ? 'text-emerald-400' :
+                                                                    d.maturation_delta_interface != null && d.maturation_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
+                                                                    title={d.maturation_delta_interface != null ? `ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                    {formatMetric(d.maturation_delta_interface, 1)}
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>
