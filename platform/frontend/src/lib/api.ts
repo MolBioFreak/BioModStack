@@ -216,7 +216,21 @@ export type AntibodyIterationAction =
     | 'validate_protenix'
     | 'ppiflow_maturation'
     | 'fampnn_redesign'
-    | 'frustrampnn';
+    | 'frustrampnn'
+    | 'cdr_indel_round';
+
+export interface AntibodyCdrIndelConfig {
+    loop_ids: string[];
+    variants_per_design: number;
+    allow_insertions: boolean;
+    allow_deletions: boolean;
+    indel_sizes: number[];
+    indel_probability: number;
+    allowed_aas?: string[];
+    blocked_aas?: string[];
+    predictor: 'boltz2' | 'protenix';
+    msa_provider: 'local' | 'colabfold_api';
+}
 
 export interface LaunchAntibodyIterationRequest {
     source_job_id: string;
@@ -224,6 +238,7 @@ export interface LaunchAntibodyIterationRequest {
     action: AntibodyIterationAction;
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
+    cdr_indel_config?: AntibodyCdrIndelConfig;
 }
 
 export interface LaunchAntibodyIterationResponse {
@@ -414,7 +429,7 @@ export interface DesignFilters {
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone';
+    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;

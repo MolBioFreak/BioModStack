@@ -17,6 +17,27 @@ import requests
 from pathlib import Path
 
 
+def _normalize_pinned_gpus(raw_value):
+    if raw_value in (None, "", []):
+        return None
+    if isinstance(raw_value, list):
+        values = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        values = [part.strip() for part in text.split(",") if part.strip()]
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
 def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
     """
     Check if completed children already exist for this parent job and stage.
@@ -207,6 +228,19 @@ def spawn_rfantibody_jobs(
             extra_params = json.loads(params_json)
         except json.JSONDecodeError:
             print(f"[SPAWN-RFA] Warning: Failed to parse params_json", file=sys.stderr)
+
+    pinned_gpus = _normalize_pinned_gpus(extra_params.get("pinned_gpus"))
+    if pinned_gpus is not None:
+        extra_params["pinned_gpus"] = pinned_gpus
+    raw_pinned_gpu = extra_params.get("pinned_gpu")
+    pinned_gpu = None
+    if raw_pinned_gpu not in (None, ""):
+        try:
+            pinned_gpu = int(raw_pinned_gpu)
+        except (TypeError, ValueError):
+            pinned_gpu = None
+    if pinned_gpu is None and pinned_gpus and len(pinned_gpus) == 1:
+        pinned_gpu = pinned_gpus[0]
     
     created = []
     failed = 0
@@ -237,6 +271,8 @@ def spawn_rfantibody_jobs(
             "child_stage": "rfantibody",
             "sequence_length": 250,  # Approximate for VRAM estimation
         }
+        if pinned_gpu is not None:
+            job_data["pinned_gpu"] = pinned_gpu
         if framework_pdb:
             job_data["params"]["framework_pdb"] = framework_pdb
         

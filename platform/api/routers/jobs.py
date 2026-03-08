@@ -15,6 +15,8 @@ import hashlib
 import logging
 import json
 import shutil
+import random
+import re
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -54,6 +56,20 @@ class OpenStageGateRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
+class AntibodyCdrIndelConfig(BaseModel):
+    """Configuration for viewer-launched CDR indel rounds."""
+    loop_ids: List[str] = Field(default_factory=list)
+    variants_per_design: int = Field(default=8, ge=1, le=200)
+    allow_insertions: bool = True
+    allow_deletions: bool = True
+    indel_sizes: List[int] = Field(default_factory=lambda: [1])
+    indel_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+    allowed_aas: List[str] = Field(default_factory=list)
+    blocked_aas: List[str] = Field(default_factory=list)
+    predictor: str = Field(default="protenix")
+    msa_provider: str = Field(default="local")
+
+
 class AntibodyIterationLaunchRequest(BaseModel):
     """Launch a new antibody round from selected design structures."""
     source_job_id: str = Field(..., min_length=1)
@@ -61,6 +77,7 @@ class AntibodyIterationLaunchRequest(BaseModel):
     action: str = Field(..., min_length=1)
     name_suffix: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
+    cdr_indel_config: Optional[AntibodyCdrIndelConfig] = None
 
 
 class AntibodyIterationLaunchResponse(BaseModel):
@@ -155,7 +172,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         normalized_gate_stage = gate_stage.strip().lower()
         if normalized_gate_stage == "post_boltz_validation":
             normalized_gate_stage = "post_structure_validation"
-        if normalized_gate_stage not in {"post_fampnn", "post_structure_validation"}:
+        if normalized_gate_stage not in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
             normalized_gate_stage = "post_fampnn"
         normalized["interactive_gate_stage"] = normalized_gate_stage
 
@@ -388,6 +405,435 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
     return _normalize_antibody_job_params(pruned)
 
 
+AA_CODES = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+}
+
+STANDARD_AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
+DEFAULT_CDR_POSITION_RANGES = {
+    "H1": (27, 38),
+    "H2": (56, 65),
+    "H3": (105, 117),
+    "L1": (27, 38),
+    "L2": (56, 65),
+    "L3": (105, 117),
+}
+
+
+def _parse_chain_list(raw_value: Any) -> List[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        values = raw_value
+    else:
+        values = [part.strip() for part in str(raw_value).split(",")]
+    return [str(value).strip().upper() for value in values if str(value).strip()]
+
+
+def _extract_chain_records_from_pdb(pdb_path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    chain_records: Dict[str, List[Dict[str, Any]]] = {}
+    seen_residues: Dict[str, set[tuple[int, str]]] = {}
+    with pdb_path.open() as handle:
+        for line in handle:
+            if not line.startswith("ATOM") or len(line) < 27:
+                continue
+            if line[12:16].strip() != "CA":
+                continue
+            res_name = line[17:20].strip()
+            chain_id = (line[21].strip() or "_").upper()
+            aa = AA_CODES.get(res_name)
+            if aa is None:
+                continue
+            try:
+                resseq = int(line[22:26].strip())
+            except ValueError:
+                continue
+            icode = line[26].strip()
+            residue_key = (resseq, icode)
+            if chain_id not in chain_records:
+                chain_records[chain_id] = []
+                seen_residues[chain_id] = set()
+            if residue_key in seen_residues[chain_id]:
+                continue
+            seen_residues[chain_id].add(residue_key)
+            chain_records[chain_id].append(
+                {
+                    "resseq": resseq,
+                    "icode": icode,
+                    "aa": aa,
+                }
+            )
+    return chain_records
+
+
+def _resolve_loop_region_map(root_job: Job) -> Dict[str, tuple[int, int]]:
+    params = root_job.params if isinstance(root_job.params, dict) else {}
+    region_map: Dict[str, tuple[int, int]] = {}
+
+    manual_defs = params.get("manual_cdr_definitions")
+    if isinstance(manual_defs, list):
+        for entry in manual_defs:
+            if not isinstance(entry, dict):
+                continue
+            loop_id = str(entry.get("id") or "").strip().upper()
+            residues = entry.get("residues") or []
+            residue_numbers: List[int] = []
+            for residue in residues:
+                match = str(residue).strip().upper()
+                parsed = match[1:] if match[:1].isalpha() else match
+                if parsed.isdigit():
+                    residue_numbers.append(int(parsed))
+            if loop_id and residue_numbers:
+                region_map[loop_id] = (min(residue_numbers), max(residue_numbers))
+
+    if region_map:
+        return region_map
+
+    selected_loops_raw = params.get("selected_cdr_loops")
+    if isinstance(selected_loops_raw, list):
+        selected_loops = [str(loop_id).strip().upper() for loop_id in selected_loops_raw if str(loop_id).strip()]
+    else:
+        selected_loops = [str(loop_id).strip().upper() for loop_id in str(params.get("antibody_design_loops") or "").split(",") if str(loop_id).strip()]
+
+    raw_spec = str(params.get("rfantibody_design_loops_custom") or "").strip()
+    if raw_spec.startswith("[") and raw_spec.endswith("]") and selected_loops:
+        tokens = [token.strip() for token in raw_spec[1:-1].split(",") if token.strip()]
+        for loop_id, token in zip(selected_loops, tokens):
+            match = re.match(r"^([A-Za-z])(\d+)-(\d+)$", token)
+            if not match:
+                continue
+            start = int(match.group(2))
+            end = int(match.group(3))
+            if end < start:
+                start, end = end, start
+            region_map[loop_id] = (start, end)
+
+    if region_map:
+        return region_map
+
+    return dict(DEFAULT_CDR_POSITION_RANGES)
+
+
+def _resolve_loop_target_chain(root_job: Job, loop_ids: List[str], available_chain_ids: List[str]) -> str:
+    loop_prefixes = {loop_id[:1].upper() for loop_id in loop_ids if loop_id}
+    if not loop_prefixes:
+        raise HTTPException(status_code=422, detail="At least one CDR loop must be selected for indel generation.")
+    if len(loop_prefixes) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="CDR indel rounds currently require all selected loops to belong to the same chain family (all H or all L).",
+        )
+
+    prefix = next(iter(loop_prefixes))
+    antibody_chains = _parse_chain_list((root_job.params or {}).get("antibody_chains") if isinstance(root_job.params, dict) else None)
+    candidate = None
+    if prefix == "H" and antibody_chains:
+        candidate = antibody_chains[0]
+    elif prefix == "L" and len(antibody_chains) > 1:
+        candidate = antibody_chains[1]
+
+    if candidate and candidate in available_chain_ids:
+        return candidate
+
+    if len(available_chain_ids) == 1:
+        return available_chain_ids[0]
+
+    for chain_id in available_chain_ids:
+        if chain_id.startswith(prefix):
+            return chain_id
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Could not resolve binder chain for selected loops {', '.join(loop_ids)} from chains {', '.join(available_chain_ids)}.",
+    )
+
+
+def _build_mutation_regions(
+    chain_records: List[Dict[str, Any]],
+    region_map: Dict[str, tuple[int, int]],
+    loop_ids: List[str],
+) -> List[tuple[int, int]]:
+    regions: List[tuple[int, int]] = []
+    for loop_id in loop_ids:
+        loop_key = loop_id.strip().upper()
+        bounds = region_map.get(loop_key) or DEFAULT_CDR_POSITION_RANGES.get(loop_key)
+        if not bounds:
+            continue
+        start_resseq, end_resseq = bounds
+        positions = [
+            index
+            for index, residue in enumerate(chain_records, start=1)
+            if start_resseq <= int(residue["resseq"]) <= end_resseq
+        ]
+        if positions:
+            regions.append((min(positions), max(positions)))
+    return regions
+
+
+def _normalize_aa_pool(allowed_aas: List[str], blocked_aas: List[str]) -> List[str]:
+    allowed = [aa.strip().upper() for aa in allowed_aas if aa and aa.strip().upper() in STANDARD_AMINO_ACIDS]
+    blocked = {aa.strip().upper() for aa in blocked_aas if aa and aa.strip().upper() in STANDARD_AMINO_ACIDS}
+    pool = allowed if allowed else STANDARD_AMINO_ACIDS
+    filtered = [aa for aa in pool if aa not in blocked]
+    return filtered or STANDARD_AMINO_ACIDS
+
+
+def _generate_cdr_indel_variants(
+    base_sequence: str,
+    base_name: str,
+    regions: List[tuple[int, int]],
+    config: AntibodyCdrIndelConfig,
+) -> List[Dict[str, Any]]:
+    if not base_sequence:
+        raise HTTPException(status_code=422, detail=f"Selected design '{base_name}' is missing a binder sequence.")
+    if not regions:
+        raise HTTPException(status_code=422, detail=f"Could not map selected CDR loops onto '{base_name}'.")
+    if not config.allow_insertions and not config.allow_deletions:
+        raise HTTPException(status_code=422, detail="Enable insertions, deletions, or both for a CDR indel round.")
+
+    indel_sizes = sorted({size for size in config.indel_sizes if isinstance(size, int) and size > 0})
+    if not indel_sizes:
+        raise HTTPException(status_code=422, detail="At least one positive indel size is required.")
+
+    position_pool = sorted({pos for start, end in regions for pos in range(start, end + 1)})
+    if not position_pool:
+        raise HTTPException(status_code=422, detail=f"No mutable positions were found in the requested CDR loops for '{base_name}'.")
+
+    aa_pool = _normalize_aa_pool(config.allowed_aas, config.blocked_aas)
+    variants: List[Dict[str, Any]] = []
+    seen_sequences = {base_sequence}
+
+    max_attempts = max(config.variants_per_design * 20, 50)
+    attempts = 0
+    while len(variants) < config.variants_per_design and attempts < max_attempts:
+        attempts += 1
+        seq_chars = list(base_sequence)
+        mutation_meta: Dict[str, Any] | None = None
+        choose_indel = random.random() <= config.indel_probability
+        if not choose_indel:
+            continue
+
+        allowed_ops: List[str] = []
+        if config.allow_insertions:
+            allowed_ops.append("insertion")
+        if config.allow_deletions:
+            allowed_ops.append("deletion")
+        op = random.choice(allowed_ops)
+        size = random.choice(indel_sizes)
+
+        if op == "insertion":
+            pos = random.choice(position_pool)
+            inserted = "".join(random.choice(aa_pool) for _ in range(size))
+            seq_chars[pos:pos] = list(inserted)
+            mutation_meta = {
+                "type": "insertion",
+                "position": pos,
+                "from": "",
+                "to": inserted,
+                "summary": f"ins{pos}{inserted}",
+            }
+        else:
+            delete_candidates = [
+                pos
+                for pos in position_pool
+                if any(start <= pos and (pos + size - 1) <= end for start, end in regions)
+                and (pos + size - 1) <= len(base_sequence)
+            ]
+            if not delete_candidates:
+                continue
+            pos = random.choice(delete_candidates)
+            deleted = "".join(seq_chars[pos - 1:pos - 1 + size])
+            del seq_chars[pos - 1:pos - 1 + size]
+            mutation_meta = {
+                "type": "deletion",
+                "position": pos,
+                "from": deleted,
+                "to": "",
+                "summary": f"del{pos}-{pos + size - 1}" if size > 1 else f"del{pos}{deleted}",
+            }
+
+        variant_sequence = "".join(seq_chars)
+        if not variant_sequence or variant_sequence in seen_sequences:
+            continue
+
+        seen_sequences.add(variant_sequence)
+        variants.append(
+            {
+                "name": f"{base_name}_{mutation_meta['summary']}_{len(variants) + 1}",
+                "sequence": variant_sequence,
+                "mutation": mutation_meta,
+            }
+        )
+
+    if not variants:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not generate unique CDR indel variants for '{base_name}' with the requested settings.",
+        )
+
+    return variants
+
+
+def _build_cdr_indel_iteration_job(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    config: AntibodyCdrIndelConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    loop_ids = [loop_id.strip().upper() for loop_id in config.loop_ids if isinstance(loop_id, str) and loop_id.strip()]
+    if not loop_ids:
+        raise HTTPException(status_code=422, detail="Select at least one CDR loop for the indel round.")
+
+    predictor = str(config.predictor or "protenix").strip().lower()
+    if predictor not in {"protenix", "boltz2"}:
+        raise HTTPException(status_code=422, detail="CDR indel rounds currently support predictor='protenix' or 'boltz2'.")
+
+    msa_provider = str(config.msa_provider or "local").strip().lower()
+    if msa_provider not in {"local", "colabfold_api"}:
+        raise HTTPException(status_code=422, detail="msa_provider must be 'local' or 'colabfold_api'.")
+
+    region_map = _resolve_loop_region_map(root_job)
+    variants: List[Dict[str, Any]] = []
+
+    for design in designs:
+        design_path = _resolve_design_structure_path(design.pdb_path)
+        chain_records = _extract_chain_records_from_pdb(design_path)
+        if not chain_records:
+            raise HTTPException(status_code=422, detail=f"Could not extract chain sequences from '{design.name}'.")
+
+        available_chain_ids = list(chain_records.keys())
+        binder_chain_id = _resolve_loop_target_chain(root_job, loop_ids, available_chain_ids)
+        binder_records = chain_records.get(binder_chain_id) or []
+        mutation_regions = _build_mutation_regions(binder_records, region_map, loop_ids)
+        base_sequence = "".join(record["aa"] for record in binder_records)
+
+        design_variants = _generate_cdr_indel_variants(
+            base_sequence=base_sequence,
+            base_name=design.name,
+            regions=mutation_regions,
+            config=config,
+        )
+
+        for variant in design_variants:
+            complex_components = []
+            for chain_id, records in chain_records.items():
+                sequence = variant["sequence"] if chain_id == binder_chain_id else "".join(record["aa"] for record in records)
+                complex_components.append({
+                    "type": "protein",
+                    "id": chain_id,
+                    "sequence": sequence,
+                })
+            variants.append(
+                {
+                    "name": variant["name"],
+                    "sequence": variant["sequence"],
+                    "complex_components": complex_components,
+                    "source_design_id": design.id,
+                    "source_design_name": design.name,
+                    "binder_chain_id": binder_chain_id,
+                    "loop_ids": loop_ids,
+                    "mutation": variant["mutation"],
+                }
+            )
+
+    if not variants:
+        raise HTTPException(status_code=422, detail="No CDR indel variants were generated from the selected designs.")
+
+    effective_msa_provider = msa_provider
+    if len(variants) > 1 and msa_provider == "colabfold_api":
+        effective_msa_provider = "local"
+
+    base_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
+    launch_params: Dict[str, Any] = {
+        "pred_method": "protenix" if predictor == "protenix" else "boltz",
+        "mutagenesis_variants": variants,
+        "msa_force_refresh": True,
+        "msa_provider": effective_msa_provider,
+        "pinned_gpus": base_params.get("pinned_gpus"),
+        "lock_gpus": base_params.get("lock_gpus"),
+        "iteration_source_job_id": source_job.id,
+        "iteration_source_root_job_id": root_job.id,
+        "iteration_source_design_ids": [design.id for design in designs],
+        "iteration_action": "cdr_indel_round",
+        "cdr_indel_config": config.model_dump(),
+        "run_frustrampnn": False,
+        "openmm_enabled": False,
+    }
+
+    if predictor == "protenix":
+        for key in (
+            "protenix_model_weights",
+            "protenix_seeds",
+            "protenix_n_sample",
+            "protenix_n_step",
+            "protenix_n_cycle",
+            "protenix_use_msa",
+            "protenix_use_template",
+            "protenix_enable_cache",
+            "protenix_enable_fusion",
+            "protenix_msa_backend",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+    else:
+        for key in (
+            "boltz_use_msa",
+            "boltz_sampling_steps",
+            "boltz_recycling_steps",
+            "boltz_num_samples",
+            "boltz_use_potentials",
+            "boltz_step_scale",
+            "boltz_predict_affinity",
+            "boltz_diffusion_samples_affinity",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+
+    if param_overrides:
+        launch_params.update(param_overrides)
+
+    suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "cdr_indel_round"
+    model_id = "protenix" if predictor == "protenix" else "boltz2"
+    launch_request = JobCreate(
+        name=f"{root_job.name}_{suffix}",
+        model_id=model_id,
+        mode="complex",
+        params=launch_params,
+        pinned_gpu=root_job.pinned_gpu,
+    )
+    message_note = ""
+    if msa_provider == "colabfold_api" and effective_msa_provider == "local":
+        message_note = " ColabFold API was downgraded to local MSA because the indel round generated multiple variants."
+    return launch_request, len(variants), message_note
+
+
 def _materialize_antibody_selection(
     root_job: Job,
     source_job: Job,
@@ -590,7 +1036,7 @@ def _build_antibody_iteration_job(
             status_code=422,
             detail=(
                 f"Unsupported antibody iteration action '{action}'. "
-                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn."
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round."
             ),
         )
 
@@ -1334,12 +1780,19 @@ async def create_job(
             # This prevents GPU contention and enables single-model-load optimization
             job_params.pop('run_frustrampnn', None)
             
+            variant_complex_components = variant.get('complex_components')
             # Construct complex_components for BoltzFromComplex if any non-protein components present
             # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
             ligand_components = job_params.pop('ligands', [])
             
+            if variant_complex_components:
+                job_params['complex_components'] = variant_complex_components
+                logger.info(
+                    f"[MUTAGENESIS] Using variant-specific complex_components with "
+                    f"{len(variant_complex_components)} entries for variant {variant.get('name')}"
+                )
             # Check if any components need the complex workflow (DNA, RNA, ligands, ions, peptides)
-            if ligand_components:
+            elif ligand_components:
                 # Build complex_components array: protein + all other components
                 complex_comps = [
                     {'type': 'protein', 'id': 'A', 'sequence': variant.get('sequence')}
@@ -1490,20 +1943,39 @@ async def launch_antibody_iteration_from_designs(
 
     ordered_designs = [design_by_id[design_id] for design_id in design_ids]
     selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
-    launch_request = _build_antibody_iteration_job(
-        root_job=root_job,
-        source_job=source_job,
-        action=request.action,
-        selection_dir=selection_dir,
-        design_ids=design_ids,
-        name_suffix=request.name_suffix,
-        param_overrides=request.param_overrides,
-    )
+    action = request.action.strip().lower()
+    variant_note = ""
+    variant_count = len(ordered_designs)
+    if action == "cdr_indel_round":
+        if request.cdr_indel_config is None:
+            raise HTTPException(status_code=422, detail="cdr_indel_config is required for action 'cdr_indel_round'.")
+        launch_request, variant_count, variant_note = _build_cdr_indel_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            designs=ordered_designs,
+            config=request.cdr_indel_config,
+            name_suffix=request.name_suffix,
+            param_overrides=request.param_overrides,
+        )
+    else:
+        launch_request = _build_antibody_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            action=action,
+            selection_dir=selection_dir,
+            design_ids=design_ids,
+            name_suffix=request.name_suffix,
+            param_overrides=request.param_overrides,
+        )
     launched_job = await create_job(launch_request, background_tasks, session)
 
     return AntibodyIterationLaunchResponse(
-        message=f"Launched antibody iteration action '{request.action}' from {len(ordered_designs)} selected designs.",
-        action=request.action,
+        message=(
+            f"Launched antibody iteration action '{action}' from {len(ordered_designs)} selected designs."
+            + (f" Generated {variant_count} indel variants." if action == "cdr_indel_round" else "")
+            + variant_note
+        ),
+        action=action,
         source_job_id=source_job.id,
         root_job_id=root_job.id,
         selection_dir=str(selection_dir),
@@ -2428,12 +2900,16 @@ async def resume_job(
     if job.awaiting_input:
         awaiting_payload = dict(job.awaiting_payload or {})
         candidate_dir = awaiting_payload.get("candidate_dir")
+        if candidate_dir and job.awaiting_stage == "post_rfantibody":
+            param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
         if candidate_dir and job.awaiting_stage == "post_fampnn":
             param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
         param_overrides.setdefault("interactive_gate_continue", True)
         param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
         param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
-        if not effective_from_stage and job.awaiting_stage == "post_fampnn":
+        if not effective_from_stage and job.awaiting_stage == "post_rfantibody":
+            effective_from_stage = "rfantibody"
+        elif not effective_from_stage and job.awaiting_stage == "post_fampnn":
             effective_from_stage = "fampnn"
         elif not effective_from_stage and job.awaiting_stage == "post_structure_validation":
             effective_from_stage = "structure_validation"

@@ -77,7 +77,7 @@ process RFANTIBODY {
 
     // Start with RFantibody-specific loop spec if provided, then UI loop selection,
     // then framework defaults.
-    def rawLoops = params.get('rfantibody_design_loops_custom') ?: params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
+    def rawLoops = params.get('rfantibody_loop_length_ranges') ?: params.get('rfantibody_design_loops_custom') ?: params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
 
     def design_loops
     if (rawLoops && rawLoops.startsWith('[') && rawLoops.endsWith(']')) {
