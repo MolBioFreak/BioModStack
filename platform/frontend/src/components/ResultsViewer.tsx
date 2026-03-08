@@ -146,7 +146,13 @@ export function ResultsViewer() {
         msa_provider: 'local',
     });
 
-    const [paramOverridesText, setParamOverridesText] = useState('');
+    const [pipelineOverrides, setPipelineOverrides] = useState({
+        run_structure_validation: false,
+        structure_validator: 'boltz2',
+        run_ppiflow: false,
+        run_frustrampnn: false,
+        interactive_gating: true,
+    });
     const [showParamOverrides, setShowParamOverrides] = useState(false);
 
     // Filter state
@@ -857,27 +863,39 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
-                                                    let parsedOverrides = undefined;
-                                                    if (paramOverridesText.trim()) {
-                                                        try {
-                                                            parsedOverrides = JSON.parse(paramOverridesText);
-                                                        } catch (e) {
-                                                            setIterationMessage({ kind: 'error', text: 'Invalid JSON in parameter overrides.' });
-                                                            return;
-                                                        }
+                                                    let paramOverrides = undefined;
+
+                                                    if (showParamOverrides) {
+                                                        paramOverrides = {
+                                                            ...(pipelineOverrides.run_structure_validation && {
+                                                                run_structure_validation: true,
+                                                                structure_validator: pipelineOverrides.structure_validator,
+                                                                interactive_gate_stage: 'post_structure_validation'
+                                                            }),
+                                                            ...(pipelineOverrides.run_ppiflow && {
+                                                                run_post_validation_maturation: true,
+                                                                run_post_boltz_maturation: true,
+                                                                run_maturation: true
+                                                            }),
+                                                            ...(pipelineOverrides.run_frustrampnn && {
+                                                                run_frustrampnn: true
+                                                            }),
+                                                            interactive_gating: pipelineOverrides.interactive_gating
+                                                        };
                                                     }
-                                                    launchIterationMutation.mutate({ action, paramOverrides: parsedOverrides });
+
+                                                    launchIterationMutation.mutate({ action, paramOverrides });
                                                 }}
                                                 disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
                                                 className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${action === 'validate_protenix'
-                                                        ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
-                                                        : action === 'validate_boltz2'
-                                                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
-                                                            : action === 'ppiflow_maturation'
-                                                                ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
-                                                                : action === 'fampnn_redesign'
-                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
-                                                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
+                                                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
+                                                    : action === 'validate_boltz2'
+                                                        ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
+                                                        : action === 'ppiflow_maturation'
+                                                            ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
+                                                            : action === 'fampnn_redesign'
+                                                                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
+                                                                : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
                                                     }`}
                                                 title={
                                                     action === 'validate_boltz2'
@@ -906,32 +924,100 @@ export function ResultsViewer() {
                                         >
                                             CDR Indels
                                         </button>
+                                        <div className="w-px h-6 bg-slate-700/50 mx-1"></div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                navigate('/?template=antibody_denovo', {
+                                                    state: {
+                                                        refinementMode: true,
+                                                        sourceJobId: activeJob.id,
+                                                        selectedDesignIds: selectedDesignIds
+                                                    }
+                                                });
+                                            }}
+                                            disabled={selectedDesignIds.length === 0}
+                                            className="flex items-center gap-1.5 rounded-lg border border-indigo-500/60 bg-indigo-500/20 px-4 py-2 text-xs font-semibold text-indigo-100 transition-colors hover:border-indigo-400 hover:bg-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm shadow-indigo-900/20"
+                                            title="Re-orchestrate a brand new design pipeline using these highlighted selections as inputs."
+                                        >
+                                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            </svg>
+                                            Custom Refinement Round
+                                        </button>
                                     </div>
                                 </div>
 
                                 {showParamOverrides && (
                                     <div className="mt-4 border-t border-slate-700/50 pt-4">
-                                        <label className="block text-xs text-slate-400 mb-2">
-                                            Parameter Overrides (JSON)
-                                            <span className="ml-2 text-[10px] text-slate-500 font-normal">
-                                                Merged into the source job's configuration. Example: {`{"run_structure_validation": false, "structure_validator": "boltz2"}`}
-                                            </span>
-                                        </label>
-                                        <textarea
-                                            value={paramOverridesText}
-                                            onChange={(e) => setParamOverridesText(e.target.value)}
-                                            placeholder="{\n  \n}"
-                                            className="w-full h-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-indigo-500/50"
-                                            spellCheck={false}
-                                        />
+                                        <div className="text-xs text-indigo-300 font-medium mb-3">Pipeline Add-ons & Overrides</div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_structure_validation}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_structure_validation: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Structure Validation
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <span className="text-slate-400">Validator:</span>
+                                                <select
+                                                    value={pipelineOverrides.structure_validator}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, structure_validator: e.target.value }))}
+                                                    disabled={!pipelineOverrides.run_structure_validation}
+                                                    className="bg-transparent border-none text-indigo-300 focus:ring-0 p-0 text-xs w-full disabled:opacity-50 outline-none"
+                                                >
+                                                    <option value="boltz2">Boltz-2</option>
+                                                    <option value="protenix">Protenix</option>
+                                                </select>
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_ppiflow}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_ppiflow: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                PPIFlow Maturation
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.run_frustrampnn}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                FrustraMPNN
+                                            </label>
+
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pipelineOverrides.interactive_gating}
+                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, interactive_gating: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                />
+                                                Interactive Gating
+                                            </label>
+                                        </div>
+                                        <p className="mt-3 text-[10px] text-slate-500">
+                                            These settings will augment the base preset of the action button you click below.
+                                            For example, checking "Structure Validation" and clicking "FAMPNN" will run FAMPNN followed immediately by your chosen validator.
+                                        </p>
                                     </div>
                                 )}
 
                                 {iterationMessage && (
                                     <div
                                         className={`mt-3 rounded-lg border px-3 py-2 text-xs ${iterationMessage.kind === 'success'
-                                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                                                : 'border-red-500/30 bg-red-500/10 text-red-200'
+                                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                            : 'border-red-500/30 bg-red-500/10 text-red-200'
                                             }`}
                                     >
                                         {iterationMessage.text}
@@ -1141,19 +1227,31 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
-                                                    let parsedOverrides = undefined;
-                                                    if (paramOverridesText.trim()) {
-                                                        try {
-                                                            parsedOverrides = JSON.parse(paramOverridesText);
-                                                        } catch (e) {
-                                                            setIterationMessage({ kind: 'error', text: 'Invalid JSON in parameter overrides.' });
-                                                            return;
-                                                        }
+                                                    let paramOverrides = undefined;
+
+                                                    if (showParamOverrides) {
+                                                        paramOverrides = {
+                                                            ...(pipelineOverrides.run_structure_validation && {
+                                                                run_structure_validation: true,
+                                                                structure_validator: pipelineOverrides.structure_validator,
+                                                                interactive_gate_stage: 'post_structure_validation'
+                                                            }),
+                                                            ...(pipelineOverrides.run_ppiflow && {
+                                                                run_post_validation_maturation: true,
+                                                                run_post_boltz_maturation: true,
+                                                                run_maturation: true
+                                                            }),
+                                                            ...(pipelineOverrides.run_frustrampnn && {
+                                                                run_frustrampnn: true
+                                                            }),
+                                                            interactive_gating: pipelineOverrides.interactive_gating
+                                                        };
                                                     }
+
                                                     launchIterationMutation.mutate({
                                                         action: 'cdr_indel_round',
                                                         cdrIndelConfig,
-                                                        paramOverrides: parsedOverrides,
+                                                        paramOverrides,
                                                     });
                                                 }}
                                                 disabled={
@@ -1592,8 +1690,8 @@ export function ResultsViewer() {
                                                         type="button"
                                                         onClick={() => setOutputSourceFilter(value)}
                                                         className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${outputSourceFilter === value
-                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                                                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
+                                                            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                            : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
                                                             }`}
                                                     >
                                                         {label}
@@ -1686,12 +1784,12 @@ export function ResultsViewer() {
                                                                 <td className="px-3 py-2 max-w-[260px]">
                                                                     <div className="flex items-center gap-2">
                                                                         <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${inferDesignOutputSource(d as any) === 'validation'
-                                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                                                                                : inferDesignOutputSource(d as any) === 'fampnn'
-                                                                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                                                                                    : inferDesignOutputSource(d as any) === 'rfantibody'
-                                                                                        ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
-                                                                                        : 'border-slate-600 bg-slate-800 text-slate-300'
+                                                                            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                            : inferDesignOutputSource(d as any) === 'fampnn'
+                                                                                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                                                                : inferDesignOutputSource(d as any) === 'rfantibody'
+                                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                                                                                    : 'border-slate-600 bg-slate-800 text-slate-300'
                                                                             }`}>
                                                                             {getOutputSourceLabel(d as any)}
                                                                         </span>
@@ -1794,18 +1892,18 @@ export function ResultsViewer() {
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
                                                                 <td className={`px-3 py-2 font-mono ${d.frustration_high_count != null
-                                                                        ? d.frustration_high_count > 5
-                                                                            ? 'text-red-400'
-                                                                            : 'text-emerald-400'
-                                                                        : 'text-slate-500'
+                                                                    ? d.frustration_high_count > 5
+                                                                        ? 'text-red-400'
+                                                                        : 'text-emerald-400'
+                                                                    : 'text-slate-500'
                                                                     }`}>
                                                                     {d.frustration_high_count ?? '—'}
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.frustration_pct_high != null
-                                                                        ? d.frustration_pct_high > 10
-                                                                            ? 'text-orange-400'
-                                                                            : 'text-emerald-400'
-                                                                        : 'text-slate-500'
+                                                                    ? d.frustration_pct_high > 10
+                                                                        ? 'text-orange-400'
+                                                                        : 'text-emerald-400'
+                                                                    : 'text-slate-500'
                                                                     }`}>
                                                                     {d.frustration_pct_high != null ? `${d.frustration_pct_high.toFixed(1)}%` : '—'}
                                                                 </td>
