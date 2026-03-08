@@ -26,6 +26,7 @@ const TABS = [
 
 type TabId = typeof TABS[number]['id'];
 type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
+const OUTPUT_SOURCE_ORDER: OutputSourceFilter[] = ['rfantibody', 'fampnn', 'validation', 'all'];
 
 // Formatting helpers
 const formatMetric = (val: number | null | undefined, decimals = 2): string =>
@@ -98,6 +99,13 @@ const getOutputSourceLabel = (design: { pdb_path?: string | null; confidence_met
     return 'Other';
 };
 
+const getOutputSourceBadgeClass = (source: OutputSourceFilter): string => {
+    if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
+    if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+    if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
+    return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
+};
+
 const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
     const source = inferDesignOutputSource(design);
     const sampleMatch = design.name.match(/_sample_(\d+)$/);
@@ -142,6 +150,7 @@ export function ResultsViewer() {
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
+    const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
     const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
     const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
         loop_ids: [],
@@ -478,6 +487,33 @@ export function ResultsViewer() {
         }
     }, [selectedJobId, isOligoJob, activeJob?.name]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
+    const antibodyDesignGroups = useMemo(() => {
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], validation: [] };
+        for (const design of designs) {
+            const source = inferDesignOutputSource(design);
+            if (source === 'rfantibody' || source === 'fampnn' || source === 'validation') grouped[source].push(design);
+            else grouped.all.push(design);
+        }
+        for (const key of OUTPUT_SOURCE_ORDER) {
+            grouped[key] = [...grouped[key]].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0));
+        }
+        return grouped;
+    }, [designs]);
+    const antibodyTabDesigns = useMemo(() => {
+        if (antibodySourceFilter === 'all') return [...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0));
+        return antibodyDesignGroups[antibodySourceFilter] || [];
+    }, [designs, antibodyDesignGroups, antibodySourceFilter]);
+    const selectedDesignSource = selectedDesign ? inferDesignOutputSource(selectedDesign) : 'all';
+    useEffect(() => {
+        if (activeTab !== 'antibody') return;
+        if (!selectedDesignId && antibodyTabDesigns.length > 0) {
+            setSelectedDesignId(antibodyTabDesigns[0].id);
+            return;
+        }
+        if (selectedDesignId && antibodyTabDesigns.length > 0 && !antibodyTabDesigns.some((d) => d.id === selectedDesignId)) {
+            setSelectedDesignId(antibodyTabDesigns[0].id);
+        }
+    }, [activeTab, antibodyTabDesigns, selectedDesignId]);
     const antibodyLoopRows = useMemo<AntibodyLoopRow[]>(() => {
         if (!selectedDesign) return [];
         const rows: AntibodyLoopRow[] = [
@@ -1474,35 +1510,61 @@ export function ResultsViewer() {
                                             ) : (
                                                 <>
                                                     <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-                                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                                            <div>
-                                                                <div className="text-sm font-semibold text-white">Antibody Design Inspector</div>
-                                                                <div className="mt-1 text-xs text-slate-400">
-                                                                    Inspect CDR annotation, validation metrics, frustration hotspots, and antibody-specific structure overlays for the selected design.
+                                                        <div className="flex flex-col gap-4">
+                                                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                                                <div>
+                                                                    <div className="text-sm font-semibold text-white">Antibody Design Inspector</div>
+                                                                    <div className="mt-1 text-xs text-slate-400">
+                                                                        Inspect CDR annotation, validation metrics, frustration hotspots, and antibody-specific structure overlays for the selected design.
+                                                                    </div>
+                                                                </div>
+                                                                <div className="relative">
+                                                                    <select
+                                                                        value={selectedDesignId ?? ''}
+                                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                                        className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
+                                                                    >
+                                                                        {(['rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[])
+                                                                            .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
+                                                                            .map((source) => (
+                                                                                <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
+                                                                                    {antibodyDesignGroups[source].map((d) => (
+                                                                                        <option key={d.id} value={d.id}>
+                                                                                            {getFriendlyDesignName(d)}{d.plddt_overall ? ` | pLDDT ${d.plddt_overall.toFixed(0)}` : ''}
+                                                                                        </option>
+                                                                                    ))}
+                                                                                </optgroup>
+                                                                            ))}
+                                                                    </select>
+                                                                    <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</div>
                                                                 </div>
                                                             </div>
-                                                            <div className="relative">
-                                                                <select
-                                                                    value={selectedDesignId ?? ''}
-                                                                    onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                                    className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[240px]"
-                                                                >
-                                                                    {[...designs]
-                                                                        .sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0))
-                                                                        .map((d) => (
-                                                                            <option key={d.id} value={d.id}>
-                                                                                {getFriendlyDesignName(d)}{getOutputSourceLabel(d) ? ` | ${getOutputSourceLabel(d)}` : ''}{d.plddt_overall ? ` | pLDDT ${d.plddt_overall.toFixed(0)}` : ''}
-                                                                            </option>
-                                                                        ))}
-                                                                </select>
-                                                                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {(['all', 'rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                    const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
+                                                                    if (source !== 'all' && count === 0) return null;
+                                                                    const active = antibodySourceFilter === source;
+                                                                    return (
+                                                                        <button
+                                                                            key={source}
+                                                                            type="button"
+                                                                            onClick={() => setAntibodySourceFilter(source)}
+                                                                            className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${active ? getOutputSourceBadgeClass(source) : 'border-slate-700 bg-slate-900/50 text-slate-400 hover:border-slate-600'}`}
+                                                                        >
+                                                                            {source === 'all' ? 'All Outputs' : getOutputSourceLabel(antibodyDesignGroups[source][0] || selectedDesign || {})} <span className="opacity-70">{count}</span>
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <div className="text-[11px] text-slate-500">
+                                                                Current set: {antibodyTabDesigns.length} design{antibodyTabDesigns.length === 1 ? '' : 's'}{selectedDesign ? ` • inspecting ${getOutputSourceLabel(selectedDesign)}` : ''}.
                                                             </div>
                                                         </div>
                                                     </div>
 
                                                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
                                                         {[
-                                                            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: 'text-cyan-300' },
+                                                            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
                                                             { label: 'Antibody Type', value: selectedDesign.antibody_type?.toUpperCase() || '—', tone: 'text-slate-200' },
                                                             { label: 'pLDDT', value: formatMetric(selectedDesign.plddt_overall, 1), tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall) },
                                                             { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
