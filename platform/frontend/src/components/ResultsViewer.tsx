@@ -585,7 +585,7 @@ export function ResultsViewer() {
                 <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-violet-500/5 rounded-full blur-[150px]" />
             </div>
 
-            <div className={`relative z-10 px-4 md:px-6 lg:px-8 ${activeTab === 'charts' ? 'w-full' : 'max-w-[1800px] mx-auto'}`}>
+            <div className="relative z-10 w-full px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8">
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                     <div>
@@ -1604,8 +1604,8 @@ export function ResultsViewer() {
                                                 </span>
                                             </div>
                                             {/* Table */}
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-sm">
+                                            <div className="w-full overflow-x-auto pb-2">
+                                                <table className="w-full min-w-max text-sm">
                                                     <thead>
                                                         <tr className="border-b border-slate-700">
                                                             {[
