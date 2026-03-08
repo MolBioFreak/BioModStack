@@ -171,6 +171,7 @@ export function ResultsViewer() {
     const [rogMax, setRogMax] = useState<string>('');
     const [rfdRogMin, setRfdRogMin] = useState<string>('');
     const [rfdRogMax, setRfdRogMax] = useState<string>('');
+    const [epitopeMaxDist, setEpitopeMaxDist] = useState<string>('');
     // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
@@ -379,6 +380,11 @@ export function ResultsViewer() {
         if (contactsMin > 0) {
             filtered = filtered.filter(d => (d.epitope_contact_count ?? 0) >= contactsMin);
         }
+        // Max Epitope Distance filter
+        const parsedEpitopeDist = parseFloat(epitopeMaxDist);
+        if (!isNaN(parsedEpitopeDist) && parsedEpitopeDist > 0) {
+            filtered = filtered.filter(d => d.epitope_min_distance != null && d.epitope_min_distance <= parsedEpitopeDist);
+        }
         // RoG filter
         if (rogMinValue !== undefined) {
             filtered = filtered.filter(d => (d.rog ?? 0) >= rogMinValue);
@@ -410,7 +416,7 @@ export function ResultsViewer() {
             }
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
+    }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, epitopeMaxDist]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
     const tableDesigns = useMemo(() => {
         if (outputSourceFilter === 'all') return sortedDesigns;
@@ -928,7 +934,7 @@ export function ResultsViewer() {
                                         <button
                                             type="button"
                                             onClick={() => {
-                                                navigate('/?template=antibody_denovo', {
+                                                navigate('/submit?template=antibody_denovo', {
                                                     state: {
                                                         refinementMode: true,
                                                         sourceJobId: activeJob.id,
@@ -1576,95 +1582,110 @@ export function ResultsViewer() {
                                                             </button>
                                                         ))}
                                                     </div>
-                                                    {/* Quality Filters */}
-                                                    <div className="flex items-center gap-4 pt-2 border-t border-slate-700/50">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">pLDDT ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="100"
-                                                                value={plddtMin}
-                                                                onChange={(e) => setPlddtMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                                            />
-                                                            <span className="text-xs text-blue-400 font-mono w-8">{plddtMin}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">iPTM ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="1"
-                                                                step="0.05"
-                                                                value={iptmMin}
-                                                                onChange={(e) => setIptmMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                                                            />
-                                                            <span className="text-xs text-emerald-400 font-mono w-8">{iptmMin.toFixed(2)}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">Contacts ≥</span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="20"
-                                                                value={contactsMin}
-                                                                onChange={(e) => setContactsMin(Number(e.target.value))}
-                                                                className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                                                            />
-                                                            <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">RoG</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rogMin}
-                                                                onChange={(e) => setRogMin(e.target.value)}
-                                                                placeholder="min"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                            <span className="text-xs text-slate-500">–</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rogMax}
-                                                                onChange={(e) => setRogMax(e.target.value)}
-                                                                placeholder="max"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-xs text-slate-500">RFD RoG</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rfdRogMin}
-                                                                onChange={(e) => setRfdRogMin(e.target.value)}
-                                                                placeholder="min"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                            <span className="text-xs text-slate-500">–</span>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.1"
-                                                                value={rfdRogMax}
-                                                                onChange={(e) => setRfdRogMax(e.target.value)}
-                                                                placeholder="max"
-                                                                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
-                                                            />
-                                                        </div>
-                                                        <span className="text-xs text-slate-500 ml-auto">
-                                                            Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
-                                                        </span>
-                                                    </div>
                                                 </div>
                                             )}
+
+                                            {/* Quality Filters */}
+                                            <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                                                <div className="flex items-center gap-4 flex-wrap">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">pLDDT ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="100"
+                                                            value={plddtMin}
+                                                            onChange={(e) => setPlddtMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                                        />
+                                                        <span className="text-xs text-blue-400 font-mono w-8">{plddtMin}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">iPTM ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="1"
+                                                            step="0.05"
+                                                            value={iptmMin}
+                                                            onChange={(e) => setIptmMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                                                        />
+                                                        <span className="text-xs text-emerald-400 font-mono w-8">{iptmMin.toFixed(2)}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">Contacts ≥</span>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="20"
+                                                            value={contactsMin}
+                                                            onChange={(e) => setContactsMin(Number(e.target.value))}
+                                                            className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                                        />
+                                                        <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500" title="RMSD / Distance limit from target AAs to CDR loop atoms">Max Dist ≤</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.5"
+                                                            value={epitopeMaxDist}
+                                                            onChange={(e) => setEpitopeMaxDist(e.target.value)}
+                                                            placeholder="max (Å)"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">RoG</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rogMin}
+                                                            onChange={(e) => setRogMin(e.target.value)}
+                                                            placeholder="min"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                        <span className="text-xs text-slate-500">–</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rogMax}
+                                                            onChange={(e) => setRogMax(e.target.value)}
+                                                            placeholder="max"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500">RFD RoG</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rfdRogMin}
+                                                            onChange={(e) => setRfdRogMin(e.target.value)}
+                                                            placeholder="min"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                        <span className="text-xs text-slate-500">–</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.1"
+                                                            value={rfdRogMax}
+                                                            onChange={(e) => setRfdRogMax(e.target.value)}
+                                                            placeholder="max"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <span className="text-xs text-slate-500 ml-auto">
+                                                        Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
+                                                    </span>
+                                                </div>
+                                            </div>
                                             {/* Text Filter + Annotate CDRs */}
                                             <div className="mb-4 flex items-center gap-4">
                                                 <input
