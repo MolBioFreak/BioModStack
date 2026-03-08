@@ -94,12 +94,17 @@ async def list_queue(
     sync_result = await session.execute(
         select(Job).where(
             Job.queue_status.in_(['running', 'queued']),
-            Job.status.in_(['completed', 'failed', 'cancelled'])
+            Job.status.in_(['completed', 'failed', 'cancelled', 'awaiting_input'])
         )
     )
     stale_jobs = sync_result.scalars().all()
     for job in stale_jobs:
-        job.queue_status = 'completed' if job.status == 'completed' else 'failed'
+        if job.status == 'completed':
+            job.queue_status = 'completed'
+        elif job.status == 'awaiting_input':
+            job.queue_status = 'paused'
+        else:
+            job.queue_status = 'failed'
     if stale_jobs:
         await session.commit()
     
@@ -422,4 +427,3 @@ async def force_launch_job(
     except Exception as e:
         logger.error(f"[FORCE-LAUNCH FAILED] {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
-

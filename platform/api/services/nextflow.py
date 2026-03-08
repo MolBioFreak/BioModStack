@@ -9,15 +9,23 @@ import subprocess
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Track running processes
-_running_processes: Dict[str, subprocess.Popen] = {}
+_running_processes: Dict[str, asyncio.subprocess.Process] = {}
 
-from paths import get_code_root, get_db_path
+from paths import (
+    get_code_root,
+    get_db_path,
+    get_data_root,
+    get_weights_root,
+    get_rfd_models_dir,
+    get_colabfold_db,
+    get_msa_cache_dir,
+)
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
@@ -133,6 +141,200 @@ def sanitize_filename(name: str) -> str:
     sanitized = sanitized.strip('_')
     # Ensure not empty
     return sanitized if sanitized else "unnamed"
+
+
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_protenix_job(model_id: str, params: Dict[str, Any]) -> bool:
+    if (model_id or "").lower() == "protenix":
+        return True
+    pred_method = str(params.get("pred_method", "")).strip().lower()
+    return pred_method == "protenix"
+
+
+def _is_esm_model(model_name: str) -> bool:
+    lowered = (model_name or "").lower()
+    return "esm" in lowered or "ism" in lowered
+
+
+def _normalize_msa_preset(value: object) -> str:
+    preset = str(value).strip().lower() if value is not None else "fast"
+    if preset in {"maximum", "max"}:
+        return "maximum"
+    if preset in {"balanced", "balance", "medium"}:
+        return "balanced"
+    if preset in {"fast", "quick", "default"}:
+        return "fast"
+    return "fast"
+
+
+def _estimate_protenix_token_count(params: Dict[str, Any]) -> int:
+    """
+    Approximate Protenix token count from input payload.
+
+    Protenix memory scales primarily with total tokens over protein/DNA/RNA/peptide
+    entities, not with only the longest chain.
+    """
+    components = params.get("complex_components")
+    total_tokens = 0
+    if isinstance(components, list):
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            comp_type = str(comp.get("type", "")).strip().lower()
+            if comp_type not in {"protein", "peptide", "dna", "rna"}:
+                continue
+            seq = comp.get("sequence")
+            if not isinstance(seq, str):
+                continue
+            count = max(1, _coerce_int(comp.get("count", 1), 1))
+            total_tokens += len(seq) * count
+
+    if total_tokens > 0:
+        return total_tokens
+
+    for key in ("sequence_input", "sequence"):
+        seq = params.get(key)
+        if isinstance(seq, str) and seq:
+            return len(seq)
+
+    return 300
+
+
+def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Apply conservative Protenix-only launch guardrails before first run.
+
+    This avoids obvious OOM scenarios without touching non-Protenix workflows.
+    """
+    tuned = dict(params)
+    notes: List[str] = []
+
+    token_count = _estimate_protenix_token_count(tuned)
+    use_msa = _coerce_bool(tuned.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(tuned.get("msa_preset", "fast"))
+
+    n_sample = max(1, _coerce_int(tuned.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(tuned.get("protenix_n_cycle", 10), 10))
+
+    tier = "low"
+    if use_msa:
+        if token_count >= 1700 or (token_count >= 1400 and msa_preset in {"balanced", "maximum"}):
+            tier = "high"
+        elif token_count >= 1200 or msa_preset == "maximum":
+            tier = "medium"
+    else:
+        if token_count >= 2400:
+            tier = "high"
+        elif token_count >= 1800:
+            tier = "medium"
+
+    if tier == "medium":
+        if use_msa and msa_preset == "maximum":
+            tuned["msa_preset"] = "balanced"
+            notes.append("msa_preset: maximum -> balanced")
+        if n_sample > 3:
+            tuned["protenix_n_sample"] = 3
+            notes.append(f"protenix_n_sample: {n_sample} -> 3")
+        if n_cycle > 8:
+            tuned["protenix_n_cycle"] = 8
+            notes.append(f"protenix_n_cycle: {n_cycle} -> 8")
+
+    if tier == "high":
+        if n_sample > 1:
+            tuned["protenix_n_sample"] = 1
+            notes.append(f"protenix_n_sample: {n_sample} -> 1")
+        if n_cycle > 4:
+            tuned["protenix_n_cycle"] = 4
+            notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+        if use_msa and msa_preset != "fast":
+            tuned["msa_preset"] = "fast"
+            notes.append(f"msa_preset: {msa_preset} -> fast")
+
+    # Allow override; default to 2 OOM retries for protenix jobs.
+    if "protenix_oom_retry_attempts" not in tuned:
+        tuned["protenix_oom_retry_attempts"] = 2
+    if "protenix_auto_oom_retry" not in tuned:
+        tuned["protenix_auto_oom_retry"] = True
+
+    if notes:
+        notes.insert(0, f"tier={tier}, token_estimate={token_count}, use_msa={use_msa}")
+    return tuned, notes
+
+
+def _attempt_has_cuda_oom(lines: List[str]) -> bool:
+    oom_markers = (
+        "CUDA out of memory",
+        "torch.OutOfMemoryError",
+        "OutOfMemoryError",
+        "CUBLAS_STATUS_ALLOC_FAILED",
+    )
+    joined = "\n".join(lines)
+    return any(marker in joined for marker in oom_markers)
+
+
+def _apply_protenix_oom_retry_downshift(params: Dict[str, Any], rung: int) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    OOM retry ladder for Protenix.
+
+    rung=1: reduce sample/cycle and force fast MSA.
+    rung=2: disable MSA and switch to mini ESM if needed.
+    rung=3: reduce diffusion/inference steps.
+    """
+    tuned = dict(params)
+    changes: List[str] = []
+
+    n_sample = max(1, _coerce_int(tuned.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(tuned.get("protenix_n_cycle", 10), 10))
+    n_step = max(1, _coerce_int(tuned.get("protenix_n_step", 200), 200))
+    use_msa = _coerce_bool(tuned.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(tuned.get("msa_preset", "fast"))
+    model_name = str(tuned.get("protenix_model_weights", "protenix_base_20250630_v1.0.0"))
+
+    if rung >= 1:
+        if n_sample > 1:
+            tuned["protenix_n_sample"] = 1
+            changes.append(f"protenix_n_sample: {n_sample} -> 1")
+        if n_cycle > 4:
+            tuned["protenix_n_cycle"] = 4
+            changes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+        if use_msa and msa_preset != "fast":
+            tuned["msa_preset"] = "fast"
+            changes.append(f"msa_preset: {msa_preset} -> fast")
+
+    if rung >= 2:
+        if use_msa:
+            tuned["protenix_use_msa"] = False
+            changes.append("protenix_use_msa: true -> false")
+        if not _is_esm_model(model_name):
+            tuned["protenix_model_weights"] = "protenix_mini_esm_v0.5.0"
+            changes.append(f"protenix_model_weights: {model_name} -> protenix_mini_esm_v0.5.0")
+
+    if rung >= 3:
+        if n_step > 100:
+            tuned["protenix_n_step"] = 100
+            changes.append(f"protenix_n_step: {n_step} -> 100")
+
+    return tuned, changes
 
 
 def _is_antibody_job(job) -> bool:
@@ -397,13 +599,42 @@ async def launch_msa_batch_job(
     
     # Get sequences JSON and GPU ID
     sequences_json = params.get('sequences_json', '[]')
-    raw_gpu_id = params.get('gpu_id', 0)
+    if isinstance(sequences_json, (list, dict)):
+        import json as _json
+        sequences_json = _json.dumps(sequences_json)
+    elif not isinstance(sequences_json, str):
+        sequences_json = '[]'
+    raw_gpu_id = params.get('gpu_id')
     try:
-        gpu_id = int(raw_gpu_id)
+        gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
     except (TypeError, ValueError):
-        gpu_id = 0
+        gpu_id = None
     reference_sequence = params.get('reference_sequence', '')
     force_refresh = params.get('msa_force_refresh', False)
+    msa_use_gpu_raw = params.get('msa_use_gpu', True)
+    if isinstance(msa_use_gpu_raw, str):
+        msa_use_gpu = msa_use_gpu_raw.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        msa_use_gpu = bool(msa_use_gpu_raw)
+    msa_max_seqs = params.get('msa_max_seqs')
+    msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
+    msa_use_expand = params.get('msa_use_expand')
+    msa_use_env = params.get('msa_use_env')
+    msa_num_iterations = params.get('msa_num_iterations')
+    msa_evalue = params.get('msa_evalue')
+    msa_min_seq_id = params.get('msa_min_seq_id')
+    msa_min_coverage = params.get('msa_min_coverage')
+    msa_taxon_list = params.get('msa_taxon_list')
+    msa_min_depth_warning = params.get('msa_min_depth_warning')
+    msa_min_depth_fail = params.get('msa_min_depth_fail')
+    msa_gpu_mode = params.get('msa_gpu_mode')
+    msa_gpu_threshold = params.get('msa_gpu_threshold')
+    msa_preferred_gpus = params.get('msa_preferred_gpus')
+    msa_excluded_gpus = params.get('msa_excluded_gpus')
+    msa_gpu_server_mode = params.get('msa_gpu_server_mode')
+    msa_gpu_server_wait_timeout = params.get('msa_gpu_server_wait_timeout')
+    msa_gpu_server_db_load_mode = params.get('msa_gpu_server_db_load_mode')
+    msa_gpu_server_startup_wait = params.get('msa_gpu_server_startup_wait')
     
     # Build batch_msa.py command
     from paths import get_colabfold_db, get_msa_cache_dir
@@ -416,16 +647,76 @@ async def launch_msa_batch_job(
         "--output_dir", output_dir,
         "--db_path", db_path,
         "--cache_dir", cache_dir,
-        "--gpu_id", str(gpu_id),
+        "--preset", msa_preset,
     ]
+    if gpu_id is not None:
+        cmd.extend(["--gpu_id", str(gpu_id)])
     if reference_sequence:
         cmd.extend(["--reference_sequence", reference_sequence])
     if force_refresh:
         cmd.append("--force_refresh")
+    if msa_use_gpu is False:
+        cmd.append("--cpu-only")
+    if msa_max_seqs is not None:
+        cmd.extend(["--max-seqs", str(msa_max_seqs)])
+    if msa_use_expand is not None:
+        cmd.extend(["--use-expand", "1" if _coerce_bool(msa_use_expand) else "0"])
+    if msa_use_env is not None:
+        cmd.extend(["--use-env", "1" if _coerce_bool(msa_use_env) else "0"])
+    if msa_num_iterations is not None:
+        cmd.extend(["--num-iterations", str(msa_num_iterations)])
+    if msa_evalue is not None:
+        cmd.extend(["--evalue", str(msa_evalue)])
+    if msa_min_seq_id is not None:
+        cmd.extend(["--min-seq-id", str(msa_min_seq_id)])
+    if msa_min_coverage is not None:
+        cmd.extend(["--min-coverage", str(msa_min_coverage)])
+    if msa_taxon_list:
+        cmd.extend(["--taxon-list", str(msa_taxon_list)])
+    if msa_min_depth_warning is not None:
+        cmd.extend(["--min-depth-warning", str(msa_min_depth_warning)])
+    if msa_min_depth_fail is not None:
+        cmd.extend(["--min-depth-fail", str(msa_min_depth_fail)])
+    if msa_gpu_mode:
+        cmd.extend(["--gpu-mode", str(msa_gpu_mode)])
+    if msa_gpu_threshold is not None:
+        cmd.extend(["--gpu-threshold", str(msa_gpu_threshold)])
+    if msa_preferred_gpus:
+        if isinstance(msa_preferred_gpus, list):
+            preferred = ",".join(str(v) for v in msa_preferred_gpus if str(v).strip())
+        else:
+            preferred = str(msa_preferred_gpus).strip()
+        if preferred:
+            cmd.extend(["--preferred-gpus", preferred])
+    if msa_excluded_gpus:
+        if isinstance(msa_excluded_gpus, list):
+            excluded = ",".join(str(v) for v in msa_excluded_gpus if str(v).strip())
+        else:
+            excluded = str(msa_excluded_gpus).strip()
+        if excluded:
+            cmd.extend(["--excluded-gpus", excluded])
+    if msa_gpu_server_mode:
+        cmd.extend(["--gpu-server-mode", str(msa_gpu_server_mode)])
+    if msa_gpu_server_wait_timeout is not None:
+        cmd.extend(["--gpu-server-wait-timeout", str(msa_gpu_server_wait_timeout)])
+    if msa_gpu_server_db_load_mode is not None:
+        cmd.extend(["--gpu-server-db-load-mode", str(msa_gpu_server_db_load_mode)])
+    if msa_gpu_server_startup_wait is not None:
+        cmd.extend(["--gpu-server-startup-wait", str(msa_gpu_server_startup_wait)])
     
     logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
     
     try:
+        from services.msa_server import touch_query_activity
+        touch_query_activity(
+            {
+                "event": "msa_batch_start",
+                "job_id": job_id,
+                "gpu_id": gpu_id if msa_use_gpu else None,
+                "preset": msa_preset,
+            }
+        )
+
         # Run batch_msa.py
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -453,6 +744,14 @@ async def launch_msa_batch_job(
                 job.completed_at = datetime.utcnow()
                 job.msa_manifest_path = str(Path(output_dir) / "msa_manifest.json")
                 logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
+                touch_query_activity(
+                    {
+                        "event": "msa_batch_complete",
+                        "job_id": job_id,
+                        "gpu_id": gpu_id if msa_use_gpu else None,
+                        "preset": msa_preset,
+                    }
+                )
                 
                 # Unlock child inference jobs
                 await session.commit()
@@ -462,10 +761,32 @@ async def launch_msa_batch_job(
                 job.queue_status = 'failed'
                 job.error_message = f"MSA batch failed with exit code {exit_code}"
                 logger.error(f"[MSA BATCH] Job {job_id} failed: exit code {exit_code}")
+                touch_query_activity(
+                    {
+                        "event": "msa_batch_failed",
+                        "job_id": job_id,
+                        "gpu_id": gpu_id if msa_use_gpu else None,
+                        "preset": msa_preset,
+                        "exit_code": exit_code,
+                    }
+                )
                 await session.commit()
     
     except Exception as e:
         logger.error(f"[MSA BATCH] Job {job_id} error: {e}")
+        try:
+            from services.msa_server import touch_query_activity
+            touch_query_activity(
+                {
+                    "event": "msa_batch_error",
+                    "job_id": job_id,
+                    "gpu_id": gpu_id if msa_use_gpu else None,
+                    "preset": msa_preset,
+                    "error": str(e),
+                }
+            )
+        except Exception:
+            pass
         async with async_session() as session:
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -516,8 +837,12 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
         # Update each child job
         import hashlib
         for job in child_jobs:
-            sequence = job.params.get("sequence", "")
-            seq_hash = hashlib.sha256(sequence.encode()).hexdigest()
+            seq_hash = job.params.get("msa_sequence_hash")
+            if not isinstance(seq_hash, str) or not seq_hash:
+                sequence = job.params.get("sequence") or job.params.get("sequence_input") or ""
+                ref_sequence = job.params.get("msa_reference_sequence") or ""
+                hash_source = str(ref_sequence or sequence)
+                seq_hash = hashlib.sha256(hash_source.encode()).hexdigest() if hash_source else ""
             msa_path = msa_paths.get(seq_hash)
             if msa_path:
                 job.params = {**job.params, "msa_path": msa_path}
@@ -553,10 +878,19 @@ async def launch_nextflow_job(
     if model_id == 'msa_batch':
         await launch_msa_batch_job(job_id, params, output_dir)
         return
-    
-    # Build Nextflow command - pass job_id for spawn-wait-collect tracking
-    cmd = build_nextflow_command(model_id, mode, params, output_dir, job_id=job_id)
-    logger.info(f"Nextflow command: {' '.join(cmd)}")
+
+    # Use a mutable launch-params copy so retries can downshift Protenix safely.
+    launch_params: Dict[str, Any] = dict(params or {})
+
+    preflight_notes: List[str] = []
+    is_protenix = _is_protenix_job(model_id, launch_params)
+    if is_protenix:
+        launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
+        if preflight_notes:
+            logger.warning(
+                f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
+                + " | ".join(preflight_notes)
+            )
     
     async with async_session() as session:
         # Update job to running
@@ -587,7 +921,7 @@ async def launch_nextflow_job(
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
             # Extract gpu_id from params (set by orchestrator)
-            gpu_id = params.get('gpu_id')
+            gpu_id = launch_params.get('gpu_id')
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
@@ -602,123 +936,274 @@ async def launch_nextflow_job(
                 logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id_str} via CUDA_VISIBLE_DEVICES")
             else:
                 logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
+            if is_protenix:
+                # Reduces allocator fragmentation spikes on large pair/MSA tensors.
+                env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             
-            # Run Nextflow with stdout piped for real-time monitoring
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(PROJECT_ROOT),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env
-            )
-            
-            # Store process reference for potential cancellation
-            _running_processes[job_id] = process
-            
-            # Store the Nextflow run ID (PID for now)
-            job.nextflow_run_id = str(process.pid)
-            await session.commit()
+            # ═══════════════════════════════════════════════════════════════
+            # PER-JOB SESSION ISOLATION (NXF_CACHE_DIR)
+            # ═══════════════════════════════════════════════════════════════
+            # Each job gets its own .nextflow cache directory so concurrent
+            # runs and resumes never collide on LevelDB locks.
+            # Ref: https://www.nextflow.io/docs/latest/reference/env-vars.html
+            resume_source_dir = launch_params.get("resume_source_dir")
+            if resume_source_dir:
+                # Resume: use the ORIGINAL job's cache to find its session
+                job_cache_dir = str(Path(resume_source_dir) / ".nextflow")
+                logger.info(f"[JOB {job_id}] NXF_CACHE_DIR → original job cache: {job_cache_dir}")
+            else:
+                # Fresh run: create cache in this job's output dir
+                job_cache_dir = str(Path(output_dir) / ".nextflow")
+                logger.info(f"[JOB {job_id}] NXF_CACHE_DIR → {job_cache_dir}")
+            env["NXF_CACHE_DIR"] = job_cache_dir
             
             # ═══════════════════════════════════════════════════════════════════
-            # STREAM OUTPUT & MONITOR PROGRESS
+            # RUN NEXTFLOW + STREAM OUTPUT (with resume-lock retry hardening)
             # ═══════════════════════════════════════════════════════════════════
             full_log = []
+            if preflight_notes:
+                full_log.append(
+                    "[PROTENIX-GUARDRAIL] Preflight downshift: " + " | ".join(preflight_notes) + "\n"
+                )
             import re
             # Regex to capture process name: "[... ] process > PROCESS_NAME (tag) [ 10%]"
             # We want "PROCESS_NAME"
             process_regex = re.compile(r"process >\s+([^(\[]+)")
-            
-            last_stage = None
-            
-            # Read line by line
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                    
-                line_str = line.decode('utf-8', errors='replace')
-                full_log.append(line_str)
-                
-                # Check for stage update
-                # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
-                match = process_regex.search(line_str)
-                if match:
-                    # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
-                    raw_stage = match.group(1).strip()
-                    # Clean up: Remove workflow prefix if present
-                    stage_clean = raw_stage.split(':')[-1].lower()
-                    
-                    # Map to frontend stage IDs
-                    stage = stage_clean
-                    if 'fampnn' in stage_clean:
-                        stage = 'fampnn'
-                    elif 'rfantibody' in stage_clean:
-                        stage = 'rfantibody'
-                    elif 'boltz' in stage_clean:
-                        stage = 'boltz2' # Frontend uses boltz2
-                    elif 'rf3' in stage_clean:
-                        stage = 'rf3'
-                    # ──────────────────────────────────────────────────────────────
-                    # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
-                    # Order matters: most specific first, generic last
-                    # ──────────────────────────────────────────────────────────────
-                    elif 'frustra' in stage_clean:
-                        stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
-                    elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
-                        stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
-                    elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
-                        stage = 'thermompnn'   # ThermoMPNN (thermal stability)
-                    elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
-                        stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
-                    elif 'af2' in stage_clean:
-                        stage = 'af2'
-                    elif 'rfdiffusion' in stage_clean:
-                        stage = 'rfdiffusion'
-                    
-                    if stage != last_stage:
-                        logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
-                        last_stage = stage
-                        
-                        # Update DB (separate session to avoid long-held locks)
-                        try:
-                            async with async_session() as update_session:
-                                j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                                j = j_stats.scalar_one_or_none()
-                                if j:
-                                    j.current_stage = stage
-                                    j.stage_progress = None  # Reset progress on new stage
-                                    await update_session.commit()
-                        except Exception as db_err:
-                            logger.warning(f"Failed to update stage for {job_id}: {db_err}")
-                
-                # Check for work directory in TaskHandler output
-                # Example: "workDir: /home/.../work/91/0cd0da..."
-                import re
-                workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
-                if workdir_match:
-                    current_work_dir = workdir_match.group(1)
-                    
-                    # Update work dir and parse progress
-                    try:
-                        async with async_session() as update_session:
-                            j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
-                            j = j_stats.scalar_one_or_none()
-                            if j:
-                                j.stage_work_dir = current_work_dir
-                                # Parse progress from the work dir log
-                                progress = parse_stage_progress(
-                                    current_work_dir, 
-                                    j.current_stage,
-                                    j.params.get('rfantibody_num_designs') if j.params else None
-                                )
-                                if progress:
-                                    j.stage_progress = progress
-                                await update_session.commit()
-                    except Exception as db_err:
-                        logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
+            resume_lock_pattern = "Unable to acquire lock on session with ID"
 
-            # Wait for process to fully exit
-            exit_code = await process.wait()
+            # Respect global retry policy: if retries are disabled, fail fast to
+            # surface chokepoints instead of auto-healing them.
+            allow_retries_raw = launch_params.get("allow_retries", False)
+            if isinstance(allow_retries_raw, str):
+                allow_retries = allow_retries_raw.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                allow_retries = bool(allow_retries_raw)
+
+            max_resume_lock_retries = 0
+            if launch_params.get("resume_work_dir") and allow_retries:
+                try:
+                    max_resume_lock_retries = int(launch_params.get("resume_lock_retry_attempts", 2))
+                except (TypeError, ValueError):
+                    max_resume_lock_retries = 2
+                max_resume_lock_retries = max(0, min(5, max_resume_lock_retries))
+
+            max_protenix_oom_retries = 0
+            if is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", True), default=True):
+                max_protenix_oom_retries = max(
+                    0,
+                    min(3, _coerce_int(launch_params.get("protenix_oom_retry_attempts", 2), 2)),
+                )
+
+            last_stage = None
+            exit_code = 1
+            resume_lock_retries_used = 0
+            protenix_oom_retries_used = 0
+            attempt = 1
+
+            while True:
+                cmd = build_nextflow_command(model_id, mode, launch_params, output_dir, job_id=job_id)
+                logger.info(
+                    f"[JOB {job_id}] Launch attempt {attempt} "
+                    f"(resume_retries={resume_lock_retries_used}/{max_resume_lock_retries}, "
+                    f"protenix_oom_retries={protenix_oom_retries_used}/{max_protenix_oom_retries})"
+                )
+
+                # Run Nextflow with stdout piped for real-time monitoring
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(PROJECT_ROOT),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    close_fds=True
+                )
+                # Store process reference for potential cancellation
+                _running_processes[job_id] = process
+                # Store the Nextflow run ID (PID for now)
+                job.nextflow_run_id = str(process.pid)
+                await session.commit()
+
+                attempt_log: List[str] = []
+                try:
+                    # Read line by line
+                    while True:
+                        line = await process.stdout.readline()
+                        if not line:
+                            break
+
+                        line_str = line.decode('utf-8', errors='replace')
+                        attempt_log.append(line_str)
+                        full_log.append(line_str)
+
+                        # Check for stage update
+                        # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
+                        match = process_regex.search(line_str)
+                        if match:
+                            # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
+                            raw_stage = match.group(1).strip()
+                            # Clean up: Remove workflow prefix if present
+                            stage_clean = raw_stage.split(':')[-1].lower()
+
+                            # Map to frontend stage IDs
+                            stage = stage_clean
+                            if 'fampnn' in stage_clean:
+                                stage = 'fampnn'
+                            elif 'rfantibody' in stage_clean:
+                                stage = 'rfantibody'
+                            elif 'boltz' in stage_clean:
+                                stage = 'boltz2' # Frontend uses boltz2
+                            elif 'rf3' in stage_clean:
+                                stage = 'rf3'
+                            # ──────────────────────────────────────────────────────────────
+                            # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
+                            # Order matters: most specific first, generic last
+                            # ──────────────────────────────────────────────────────────────
+                            elif 'frustra' in stage_clean:
+                                stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
+                            elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
+                                stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
+                            elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
+                                stage = 'thermompnn'   # ThermoMPNN (thermal stability)
+                            elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
+                                stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
+                            elif 'protenix' in stage_clean:
+                                stage = 'protenix'  # Protenix structure prediction
+                            elif 'doradobasecall' in stage_clean:
+                                stage = 'dorado_basecall'
+                            elif 'doradoalign' in stage_clean:
+                                stage = 'dorado_align'
+                            elif (
+                                'bamprepare' in stage_clean
+                                or 'bam_prepare' in stage_clean
+                                or 'preparebamforanalysis' in stage_clean
+                                or 'bammappedcheck' in stage_clean
+                                or 'bam_mapped_check' in stage_clean
+                                or 'referenceprepareforigv' in stage_clean
+                                or 'reference_prepare' in stage_clean
+                            ):
+                                stage = 'bam_prepare'
+                            elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
+                                stage = 'fastq_align'
+                            elif (
+                                'fastqplasmidqc' in stage_clean
+                                or 'fastq_qc' in stage_clean
+                                or 'fastqqc' in stage_clean
+                            ):
+                                stage = 'fastq_qc'
+                            elif 'modkit' in stage_clean:
+                                stage = 'modkit'
+                            elif 'multimer' in stage_clean:
+                                stage = 'multimer_qc'
+                            elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
+                                stage = 'dimer_analysis'
+                            elif (
+                                'runclonevalidation' in stage_clean
+                                or 'clonevalidation' in stage_clean
+                                or 'clone-validation' in stage_clean
+                                or 'wf_clone' in stage_clean
+                                or 'wf-clone' in stage_clean
+                            ):
+                                stage = 'wf_clone_validation'
+                            elif 'af2' in stage_clean:
+                                stage = 'af2'
+                            elif 'rfdiffusion' in stage_clean:
+                                stage = 'rfdiffusion'
+
+                            if stage != last_stage:
+                                logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
+                                last_stage = stage
+
+                                # Update DB (separate session to avoid long-held locks)
+                                try:
+                                    async with async_session() as update_session:
+                                        j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                        j = j_stats.scalar_one_or_none()
+                                        if j:
+                                            j.current_stage = stage
+                                            j.stage_progress = None  # Reset progress on new stage
+                                            await update_session.commit()
+                                except Exception as db_err:
+                                    logger.warning(f"Failed to update stage for {job_id}: {db_err}")
+
+                        # Check for work directory in TaskHandler output
+                        # Example: "workDir: /home/.../work/91/0cd0da..."
+                        workdir_match = re.search(r'workDir:\s*(/[^\s\]]+)', line_str)
+                        if workdir_match:
+                            current_work_dir = workdir_match.group(1)
+
+                            # Update work dir and parse progress
+                            try:
+                                async with async_session() as update_session:
+                                    j_stats = await update_session.execute(select(Job).where(Job.id == job_id))
+                                    j = j_stats.scalar_one_or_none()
+                                    if j:
+                                        j.stage_work_dir = current_work_dir
+                                        # Parse progress from the work dir log
+                                        progress = parse_stage_progress(
+                                            current_work_dir,
+                                            j.current_stage,
+                                            j.params.get('rfantibody_num_designs') if j.params else None
+                                        )
+                                        if progress:
+                                            j.stage_progress = progress
+                                        await update_session.commit()
+                            except Exception as db_err:
+                                logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
+
+                    # Wait for process to fully exit
+                    exit_code = await process.wait()
+                finally:
+                    pass
+
+                lock_failed = (
+                    exit_code != 0
+                    and any(resume_lock_pattern in ln for ln in attempt_log)
+                )
+                if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
+                    resume_lock_retries_used += 1
+                    _running_processes.pop(job_id, None)
+                    sleep_s = min(20, 5 * resume_lock_retries_used)
+                    msg = (
+                        f"[BMS] Resume lock retry {resume_lock_retries_used}/{max_resume_lock_retries}; "
+                        f"sleeping {sleep_s}s before relaunch."
+                    )
+                    logger.warning(msg)
+                    full_log.append(msg + "\n")
+                    await asyncio.sleep(sleep_s)
+                    attempt += 1
+                    continue
+
+                protenix_oom_failed = (
+                    is_protenix
+                    and exit_code != 0
+                    and _attempt_has_cuda_oom(attempt_log)
+                )
+                if protenix_oom_failed and protenix_oom_retries_used < max_protenix_oom_retries:
+                    selected_changes: List[str] = []
+                    while protenix_oom_retries_used < max_protenix_oom_retries:
+                        next_rung = protenix_oom_retries_used + 1
+                        tuned_params, downshift_changes = _apply_protenix_oom_retry_downshift(
+                            launch_params, next_rung
+                        )
+                        protenix_oom_retries_used = next_rung
+                        if downshift_changes:
+                            launch_params = tuned_params
+                            selected_changes = downshift_changes
+                            break
+
+                    if selected_changes:
+                        _running_processes.pop(job_id, None)
+                        msg = (
+                            f"[PROTENIX-GUARDRAIL] OOM retry {protenix_oom_retries_used}/{max_protenix_oom_retries}: "
+                            + " | ".join(selected_changes)
+                        )
+                        logger.warning(msg)
+                        full_log.append(msg + "\n")
+                        await asyncio.sleep(min(20, 3 * protenix_oom_retries_used))
+                        attempt += 1
+                        continue
+
+                break
             
             # Save Nextflow execution log to output directory
             try:
@@ -728,9 +1213,6 @@ async def launch_nextflow_job(
                     f.writelines(full_log)
             except Exception as log_err:
                 logger.warning(f"Failed to save nextflow.log: {log_err}")
-            
-            # Remove from running processes
-            _running_processes.pop(job_id, None)
             
             # Update final status
             result = await session.execute(select(Job).where(Job.id == job_id))
@@ -744,11 +1226,19 @@ async def launch_nextflow_job(
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
                     job.queue_status = 'cancelled'
                     
-                elif job.status == JobStatus.RUNNING.value:
+                else:
                     if exit_code == 0:
-                        job.status = JobStatus.COMPLETED.value
-                        job.queue_status = 'completed'  # Update queue_status so job leaves the queue UI
-                        job.current_stage = "Complete" # Clear stage
+                        # Allow launcher finalization to heal stale reconciliations where
+                        # the orchestrator may have prematurely marked this job complete.
+                        if job.awaiting_input:
+                            job.status = JobStatus.AWAITING_INPUT.value
+                            job.queue_status = 'paused'
+                            job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
+                        else:
+                            job.status = JobStatus.COMPLETED.value
+                            job.queue_status = 'completed'
+                            job.current_stage = "Complete"
+                        job.error_message = None
                         
                         # Ingest results into Design table
                         try:
@@ -779,14 +1269,50 @@ async def launch_nextflow_job(
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
                         job.status = JobStatus.CANCELLED.value
-                        job.queue_status = 'cancelled'  # Update queue_status
+                        job.queue_status = 'cancelled'
                         job.error_message = "Job cancelled by user"
                         logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
                         
                     else:
                         job.status = JobStatus.FAILED.value
-                        job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
-                        job.error_message = f"Nextflow exited with code {exit_code}"
+                        job.queue_status = 'failed'
+                        resume_lock_line = next(
+                            (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
+                            None,
+                        )
+                        oom_line = next(
+                            (ln.strip() for ln in full_log if "CUDA out of memory" in ln),
+                            None,
+                        )
+                        # Check for zero-yield (HQ filter culled all designs)
+                        zero_yield_report = Path(output_dir) / "zero_yield_report.json"
+                        if zero_yield_report.exists():
+                            import json as _json
+                            try:
+                                report_data = _json.loads(zero_yield_report.read_text())
+                                reason = report_data.get("reason", "unknown")
+                                recommendation = report_data.get("recommendation", "")
+                                # FAIL LOUD: zero-yield is a real failure, not a silent completion
+                                job.error_message = (
+                                    f"ZERO YIELD: {reason}. "
+                                    f"{recommendation}"
+                                )
+                                logger.warning(
+                                    f"Job {job_id} FAILED zero-yield: {reason}"
+                                )
+                            except Exception:
+                                job.error_message = "ZERO YIELD: 0 validated designs (see zero_yield_report.json)"
+                        elif resume_lock_line:
+                            job.error_message = (
+                                f"Nextflow resume lock contention after retries: {resume_lock_line}"
+                            )
+                        elif oom_line:
+                            stage = job.current_stage or "unknown-stage"
+                            job.error_message = (
+                                f"Nextflow {stage} failed with CUDA OOM: {oom_line[:400]}"
+                            )
+                        else:
+                            job.error_message = f"Nextflow exited with code {exit_code}"
                         logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
                         
                         # Log last few lines
@@ -794,6 +1320,7 @@ async def launch_nextflow_job(
                 
                 job.completed_at = datetime.utcnow()
                 await session.commit()
+                _running_processes.pop(job_id, None)
                 
         except Exception as e:
             logger.exception(f"Error running job {job_id}")
@@ -824,6 +1351,9 @@ def build_nextflow_command(
     
     Converts all params to --key value flags.
     """
+    # Never mutate caller params; launch retries may reuse the same dict.
+    params = dict(params or {})
+
     # DEBUG: Log all params to trace complex_components
     logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
     if 'complex_components' in params:
@@ -846,6 +1376,9 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
+        # BindCraft API modes route to the binder profile; workflow is selected via rfd_mode
+        ('bindcraft', 'minibinder'): 'binder_denovo',
+        ('bindcraft', 'peptide'): 'binder_denovo',
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
@@ -861,7 +1394,33 @@ def build_nextflow_command(
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
         # Oligo Designer (RFDpoly multi-polymer design)
         ('oligo_design', 'oligo_design'): 'oligo_design',
+        # Nanopore basecalling + methylation analysis
+        ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
+        # Protenix structure prediction
+        ('protenix', 'predict'): 'protenix',
+        ('protenix', 'complex'): 'protenix',
     }
+
+    def resolve_antibody_validation_profile(default_profile: str) -> str:
+        antibody_modes = {
+            ('antibody_denovo', 'antibody_denovo_pipeline'),
+            ('antibody_denovo', 'default'),
+            ('template_antibody_denovo', 'antibody_denovo_pipeline'),
+            ('template_antibody_denovo', 'default'),
+            ('antibody_child', 'validation_batch'),
+        }
+        if (model_id, mode) not in antibody_modes:
+            return default_profile
+
+        validator = str(
+            params.get('structure_validator')
+            or params.get('validation_predictor')
+            or params.get('pred_method')
+            or 'boltz2'
+        ).strip().lower()
+        if validator == 'boltz':
+            validator = 'boltz2'
+        return 'protenix' if validator == 'protenix' else 'boltz'
     
     # Determine profile based on model and mode
     if (model_id, mode) in model_mode_to_profile:
@@ -870,6 +1429,8 @@ def build_nextflow_command(
         effective_profile = mode_to_profile[mode]
     else:
         effective_profile = mode
+
+    effective_profile = resolve_antibody_validation_profile(effective_profile)
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
@@ -892,6 +1453,35 @@ def build_nextflow_command(
     if model_id == 'boltzgen':
         profile = "boltzgen,workstation_ryzen7960x"
 
+    # Resolve runtime roots explicitly so Nextflow doesn't fall back to stale defaults.
+    explicit_data_root = params.get("data_root")
+    if not explicit_data_root:
+        env_data_root = os.getenv("BMS_DATA")
+        if env_data_root:
+            explicit_data_root = env_data_root
+        else:
+            out_path = Path(output_dir).expanduser()
+            for candidate in [out_path] + list(out_path.parents):
+                if candidate.name == "bms_results":
+                    explicit_data_root = str(candidate.parent)
+                    break
+    if not explicit_data_root:
+        explicit_data_root = str(get_data_root())
+
+    explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
+    explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
+    explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
+    explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_container_dir = (
+        params.get("container_dir")
+        or os.getenv("BMS_CONTAINER_DIR")
+        or str(Path(explicit_data_root) / "apptainer")
+    )
+    explicit_rfd_models = params.get("rfd_models") or os.getenv("BMS_RFD_MODELS") or str(get_rfd_models_dir())
+    explicit_af2_models = params.get("af2_models") or os.getenv("BMS_AF2_MODELS") or str(Path(explicit_weights_root) / "alphafold" / "params")
+    explicit_boltz_models = params.get("boltz_models") or os.getenv("BMS_BOLTZ_MODELS") or str(Path(explicit_weights_root) / "boltz")
+    explicit_alphafold_params = params.get("alphafold_params") or str(Path(explicit_weights_root) / "alphafold" / "params")
+
     
     # Base command
     # Base command logic with Resumption support
@@ -905,6 +1495,9 @@ def build_nextflow_command(
             "-resume",
             "--out_dir", output_dir,
         ]
+        # Log the resume_source_dir if set (for NXF_CACHE_DIR tracing)
+        if params.get('resume_source_dir'):
+            logger.info(f"Resume cache source: {params['resume_source_dir']}")
     else:
         cmd = [
             "nextflow", "run", "main.nf",
@@ -915,6 +1508,84 @@ def build_nextflow_command(
     # Add job_id for spawn-wait-collect tracking
     if job_id:
         cmd.extend(["--job_id", job_id])
+
+    # Force core path params so moved data/model drives are always honored.
+    # Only apply defaults when caller didn't explicitly provide a value.
+    explicit_path_defaults = {
+        "code_root": explicit_code_root,
+        "data_root": explicit_data_root,
+        "weights_root": explicit_weights_root,
+        "msa_local_db": explicit_msa_db,
+        "msa_cache_dir": explicit_msa_cache,
+        "container_dir": explicit_container_dir,
+        "rfd_models": explicit_rfd_models,
+        "af2_models": explicit_af2_models,
+        "boltz_models": explicit_boltz_models,
+        "alphafold_params": explicit_alphafold_params,
+    }
+    for key, value in explicit_path_defaults.items():
+        if params.get(key) in (None, ""):
+            cmd.extend([f"--{key}", str(value)])
+
+    # Inject MSA GPU policy defaults when caller did not explicitly specify them.
+    # Precedence:
+    # 1) job params
+    # 2) persisted MSA Server Settings GPU pin
+    # 3) scheduler global MSA preference list
+    try:
+        from services.gpu_config import read_scheduler_config
+        from services.msa_server import read_server_settings
+
+        scheduler_cfg = read_scheduler_config() or {}
+        global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
+        overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+        msa_server_settings = read_server_settings() or {}
+
+        if params.get("msa_preferred_gpus") in (None, ""):
+            preferred_ids = []
+            preferred_source = None
+            raw_pinned_gpu = msa_server_settings.get("pinned_gpu_id")
+            if raw_pinned_gpu not in (None, ""):
+                try:
+                    preferred_ids = [int(raw_pinned_gpu)]
+                except (TypeError, ValueError):
+                    preferred_ids = []
+                if preferred_ids:
+                    preferred_source = "persisted MSA server settings"
+            if not preferred_ids:
+                raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
+                seen_preferred = set()
+                if isinstance(raw_preferred, list):
+                    for gpu_id in raw_preferred:
+                        try:
+                            normalized_id = int(gpu_id)
+                        except (TypeError, ValueError):
+                            continue
+                        if normalized_id in seen_preferred:
+                            continue
+                        seen_preferred.add(normalized_id)
+                        preferred_ids.append(normalized_id)
+                if preferred_ids:
+                    preferred_source = "scheduler config"
+            if preferred_ids:
+                params["msa_preferred_gpus"] = preferred_ids
+                logger.info(f"[MSA] Injected preferred GPUs from {preferred_source}: {params['msa_preferred_gpus']}")
+
+        if params.get("msa_excluded_gpus") in (None, ""):
+            excluded_ids = []
+            if isinstance(overrides_cfg, dict):
+                for gpu_key, override in overrides_cfg.items():
+                    if not isinstance(override, dict) or not override.get("disabled", False):
+                        continue
+                    try:
+                        excluded_ids.append(int(gpu_key))
+                    except (TypeError, ValueError):
+                        continue
+            if excluded_ids:
+                params["msa_excluded_gpus"] = sorted(set(excluded_ids))
+                logger.info(f"[MSA] Injected excluded GPUs from scheduler config: {params['msa_excluded_gpus']}")
+    except Exception as exc:
+        logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
     
     # Map model-specific params to Nextflow params
     param_mapping = {
@@ -966,6 +1637,17 @@ def build_nextflow_command(
         'rf3_num_recycles': 'rf3_num_recycles',
         'rf3_num_samples': 'rf3_num_samples',
         'rf3_early_stopping_plddt': 'rf3_early_stopping_plddt',
+        # Protenix structure prediction params
+        'protenix_model_weights': 'protenix_model_weights',
+        'protenix_seeds': 'protenix_seeds',
+        'protenix_n_sample': 'protenix_n_sample',
+        'protenix_n_step': 'protenix_n_step',
+        'protenix_n_cycle': 'protenix_n_cycle',
+        'protenix_use_msa': 'protenix_use_msa',
+        'protenix_msa_backend': 'protenix_msa_backend',
+        'protenix_use_template': 'protenix_use_template',
+        'protenix_enable_cache': 'protenix_enable_cache',
+        'protenix_enable_fusion': 'protenix_enable_fusion',
         # Sequence input
         'sequence': 'sequence_input',
         'sequence_name': 'sequence_name',
@@ -975,13 +1657,31 @@ def build_nextflow_command(
         'target_protein_seq': 'target_protein_seq',
         'target_dna_seq': 'target_dna_seq',
         # MSA Quality Parameters (passed through to BoltzFromComplex/GenerateLocalMSA)
+        'msa_preset': 'msa_preset',
         'msa_taxon_list': 'msa_taxon_list',
         'msa_evalue': 'msa_evalue',
         'msa_min_seq_id': 'msa_min_seq_id',
         'msa_min_coverage': 'msa_min_coverage',
         'msa_min_depth_warning': 'msa_min_depth_warning',
         'msa_min_depth_fail': 'msa_min_depth_fail',
+        'msa_allow_empty_fallback': 'msa_allow_empty_fallback',
         'msa_force_refresh': 'msa_force_refresh',
+        'msa_cache_only': 'msa_cache_only',
+        'msa_provider': 'msa_provider',
+        'colabfold_api_host': 'colabfold_api_host',
+        'colabfold_api_min_interval': 'colabfold_api_min_interval',
+        'colabfold_api_poll_interval': 'colabfold_api_poll_interval',
+        'msa_gpu_server_mode': 'msa_gpu_server_mode',
+        'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
+        'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
+        'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
+        # NA-MPNN sequence design params (Oligo Designer)
+        'nampnn_temperature': 'nampnn_temperature',
+        'nampnn_num_seqs': 'nampnn_num_seqs',
+        'nampnn_fixed_residues': 'nampnn_fixed_residues',
+        'nampnn_chains_to_design': 'nampnn_chains_to_design',
+        'nampnn_design_na_only': 'nampnn_design_na_only',
+        'nampnn_seed': 'nampnn_seed',
     }
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
@@ -1002,7 +1702,11 @@ def build_nextflow_command(
         # For BoltzGen: Apply all BoltzGen-specific parameter mappings
         # These were previously in global param_mapping and broke other workflows!
         boltzgen_mappings = {
-            'target_pdb': 'boltzgen_target_pdb',
+            # Schema-native keys
+            'target_pdb': 'boltzgen_target_pdb_path',
+            'input_pdb': 'boltzgen_input_pdb',
+            'ligand_pdb': 'boltzgen_ligand_pdb',
+            'ligand_smiles': 'boltzgen_ligand_smiles',
             'ligand_description': 'boltzgen_ligand_smiles',
             'protein_sequence': 'boltzgen_protein_sequence',
             'dna_template_seq': 'boltzgen_dna_template_seq',
@@ -1014,10 +1718,73 @@ def build_nextflow_command(
             'ntp_type': 'boltzgen_ntp_type',
             'binding_site_residues': 'boltzgen_binding_site_residues',
             'catalytic_site': 'boltzgen_catalytic_site',
+            # Filtering and protocol aliases
+            'budget': 'boltzgen_budget',
+            'alpha': 'boltzgen_alpha',
+            'max_rmsd': 'boltzgen_max_rmsd',
+            'min_plddt': 'boltzgen_min_plddt',
+            'secondary_structure': 'boltzgen_secondary_structure',
+            'protocol': 'boltzgen_protocol',
         }
         for src_key, dest_key in boltzgen_mappings.items():
             if src_key in params:
                 params[dest_key] = params.pop(src_key)
+    elif model_id == 'bindcraft':
+        # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
+        bindcraft_mappings = {
+            'target_pdb': 'bindcraft_target_pdb',
+            'hotspot_residues': 'bindcraft_hotspot_residues',
+            'chains': 'bindcraft_chains',
+            'binder_lengths': 'bindcraft_binder_lengths',
+            'num_final_designs': 'bindcraft_num_final_designs',
+            'design_mode': 'bindcraft_design_mode',
+            'scaffold_pdb': 'bindcraft_scaffold_pdb',
+            'binder_chain': 'bindcraft_binder_chain',
+            'design_algorithm': 'bindcraft_design_algorithm',
+            'use_multimer_design': 'bindcraft_use_multimer_design',
+            'num_recycles_design': 'bindcraft_num_recycles_design',
+            'num_recycles_validation': 'bindcraft_num_recycles_validation',
+            'mpnn_weights': 'bindcraft_mpnn_weights',
+            'num_mpnn_sequences': 'bindcraft_num_mpnn_sequences',
+            'mpnn_fix_interface': 'bindcraft_mpnn_fix_interface',
+            'min_iptm': 'bindcraft_min_iptm',
+            'max_hotspot_rmsd': 'bindcraft_max_hotspot_rmsd',
+            'min_plddt': 'bindcraft_min_plddt',
+            'zip_animations': 'bindcraft_zip_animations',
+            'zip_plots': 'bindcraft_zip_plots',
+            'remove_unrelaxed_trajectory': 'bindcraft_remove_unrelaxed_trajectory',
+            'remove_unrelaxed_complex': 'bindcraft_remove_unrelaxed_complex',
+            'remove_binder_monomer': 'bindcraft_remove_binder_monomer',
+            'save_trajectory_pickle': 'bindcraft_save_trajectory_pickle',
+            'total_trajectories': 'bindcraft_total_trajectories',
+            'trajectories_per_job': 'bindcraft_trajectories_per_job',
+            'use_swa': 'bindcraft_use_swa',
+            'budget': 'bindcraft_budget',
+            'alpha': 'bindcraft_alpha',
+            'boltz_validation': 'bindcraft_boltz_validation',
+            # Advanced options used by the BindCraft workflow
+            'mask_mode': 'bindcraft_mask_mode',
+            'redesign_ranges': 'bindcraft_redesign_ranges',
+            'rm_template_seq_design': 'bindcraft_rm_template_seq_design',
+            'rm_template_sc_design': 'bindcraft_rm_template_sc_design',
+            'predict_initial_guess': 'bindcraft_predict_initial_guess',
+            'use_termini_distance_loss': 'bindcraft_use_termini_distance_loss',
+            'cdr_sampling_enabled': 'bindcraft_cdr_sampling_enabled',
+            'cdr_sampling_count': 'bindcraft_cdr_sampling_count',
+            'cdr_length_mode': 'bindcraft_cdr_length_mode',
+            'cdr_h1_range': 'bindcraft_cdr_h1_range',
+            'cdr_h2_range': 'bindcraft_cdr_h2_range',
+            'cdr_h3_range': 'bindcraft_cdr_h3_range',
+        }
+        for src_key, dest_key in bindcraft_mappings.items():
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        # Ensure main.nf routes into the BindCraft workflow branch.
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'bindcraft'
     
     if complex_components:
         import json
@@ -1074,5 +1841,5 @@ def get_running_jobs() -> Dict[str, int]:
     return {
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 
-        if proc.poll() is None
+        if proc.returncode is None
     }

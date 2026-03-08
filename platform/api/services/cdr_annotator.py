@@ -35,13 +35,21 @@ class CDRAnnotation:
     cdr_l2_length: Optional[int] = None
     cdr_l3_length: Optional[int] = None
     
-    # IMGT position ranges
+    # IMGT position ranges (classic)
     cdr_h1_range: Optional[tuple] = None
     cdr_h2_range: Optional[tuple] = None
     cdr_h3_range: Optional[tuple] = None
     cdr_l1_range: Optional[tuple] = None
     cdr_l2_range: Optional[tuple] = None
     cdr_l3_range: Optional[tuple] = None
+
+    # Raw Sequence 0-indexed ranges (for UI selection match)
+    cdr_h1_seq_range: Optional[tuple] = None
+    cdr_h2_seq_range: Optional[tuple] = None
+    cdr_h3_seq_range: Optional[tuple] = None
+    cdr_l1_seq_range: Optional[tuple] = None
+    cdr_l2_seq_range: Optional[tuple] = None
+    cdr_l3_seq_range: Optional[tuple] = None
     
     # Framework contact hotspots (Zavrtanik et al. 2018)
     # These FR positions mediate antigen contacts in nanobodies
@@ -66,6 +74,12 @@ class CDRAnnotation:
             "cdr_l1_length": self.cdr_l1_length,
             "cdr_l2_length": self.cdr_l2_length,
             "cdr_l3_length": self.cdr_l3_length,
+            "cdr_h1_seq_range": self.cdr_h1_seq_range,
+            "cdr_h2_seq_range": self.cdr_h2_seq_range,
+            "cdr_h3_seq_range": self.cdr_h3_seq_range,
+            "cdr_l1_seq_range": self.cdr_l1_seq_range,
+            "cdr_l2_seq_range": self.cdr_l2_seq_range,
+            "cdr_l3_seq_range": self.cdr_l3_seq_range,
             "fr2_contacts": self.fr2_contacts,
             "de_loop": self.de_loop,
             "fr3_contacts": self.fr3_contacts,
@@ -73,9 +87,10 @@ class CDRAnnotation:
         }
 
 
-# Project root for container paths
-from paths import get_code_root
-PROJECT_ROOT = get_code_root()
+# Container path resolution - uses BMS_DATA/BMS_CONTAINER_DIR for correct NVMe paths
+from paths import get_container_path
+import logging
+logger = logging.getLogger(__name__)
 
 
 def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> Dict[str, str]:
@@ -216,10 +231,10 @@ def run_anarcii(sequence: str, scheme: str = "imgt") -> Optional[Dict]:
     Returns dict with chain type and CDR regions extracted from IMGT numbering.
     CDR definitions (IMGT): H1=27-38, H2=56-65, H3=105-117, L1=27-38, L2=56-65, L3=105-117
     """
-    container_path = PROJECT_ROOT / "apptainer" / "antibody_tools.sif"
+    container_path = get_container_path("antibody_tools.sif")
     
     if not container_path.exists():
-        print(f"[CDR Annotator] Container not found: {container_path}")
+        logger.error(f"[CDR Annotator] Container not found: {container_path}")
         return None
     
     try:
@@ -251,18 +266,31 @@ for seq_name, data in result.items():
     cdr2_positions = []
     cdr3_positions = []
     
+    # Track raw sequence indices
+    cdr1_seq_indices = []
+    cdr2_seq_indices = []
+    cdr3_seq_indices = []
+    
+    seq_idx = -1
+    
     for (pos, insertion), aa in numbering:
-        if aa == "-":
+        if aa != "-":
+            seq_idx += 1
+        else:
             continue
+            
         if 27 <= pos <= 38:
             cdr1_residues.append(aa)
             cdr1_positions.append(pos)
+            cdr1_seq_indices.append(seq_idx)
         elif 56 <= pos <= 65:
             cdr2_residues.append(aa)
             cdr2_positions.append(pos)
+            cdr2_seq_indices.append(seq_idx)
         elif 105 <= pos <= 117:
             cdr3_residues.append(aa)
             cdr3_positions.append(pos)
+            cdr3_seq_indices.append(seq_idx)
     
     output[chain_type] = {{
         "cdr1": "".join(cdr1_residues),
@@ -271,6 +299,9 @@ for seq_name, data in result.items():
         "cdr1_range": [min(cdr1_positions), max(cdr1_positions)] if cdr1_positions else None,
         "cdr2_range": [min(cdr2_positions), max(cdr2_positions)] if cdr2_positions else None,
         "cdr3_range": [min(cdr3_positions), max(cdr3_positions)] if cdr3_positions else None,
+        "cdr1_seq_range": [min(cdr1_seq_indices), max(cdr1_seq_indices)] if cdr1_seq_indices else None,
+        "cdr2_seq_range": [min(cdr2_seq_indices), max(cdr2_seq_indices)] if cdr2_seq_indices else None,
+        "cdr3_seq_range": [min(cdr3_seq_indices), max(cdr3_seq_indices)] if cdr3_seq_indices else None,
         "scheme": data.get("scheme", "imgt"),
     }}
 
@@ -303,7 +334,10 @@ print(json.dumps(output))
         return None
 
 
-def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
+def annotate_pdb(
+    pdb_path: str,
+    preferred_chains: Optional[Dict[str, str]] = None,
+) -> Optional[CDRAnnotation]:
     """
     Annotate CDR regions for an antibody PDB file.
     
@@ -325,8 +359,25 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
         print(f"[CDR Annotator] No sequences extracted from {pdb_path}")
         return None
     
-    # Identify antibody chains (H and/or L)
-    binder_chains = identify_binder_chains(sequences, str(pdb_path))
+    # Identify antibody chains (H and/or L).
+    # Prefer explicit chain hints when available (e.g. SAbDab metadata),
+    # then fall back to sequence-signature auto-detection.
+    binder_chains: Dict[str, str] = {}
+    if preferred_chains:
+        for chain_type in ("H", "L"):
+            chain_id = preferred_chains.get(chain_type)
+            if not chain_id:
+                continue
+            chain_id = str(chain_id).strip()
+            if chain_id in sequences:
+                binder_chains[chain_type] = chain_id
+        if binder_chains:
+            print(f"[CDR Annotator] Using preferred chains: {binder_chains}")
+        else:
+            print("[CDR Annotator] Preferred chains not found in parsed PDB, falling back to auto-detection")
+
+    if not binder_chains:
+        binder_chains = identify_binder_chains(sequences, str(pdb_path))
     if not binder_chains:
         print(f"[CDR Annotator] Could not identify binder chain")
         return None
@@ -371,6 +422,15 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
                 annotation.cdr_h2_range = tuple(h_data["cdr2_range"])
             if h_data.get("cdr3_range"):
                 annotation.cdr_h3_range = tuple(h_data["cdr3_range"])
+            
+            # Extract raw sequential ranges for seamless frontend mapping
+            if h_data.get("cdr1_seq_range"):
+                annotation.cdr_h1_seq_range = tuple(h_data["cdr1_seq_range"])
+            if h_data.get("cdr2_seq_range"):
+                annotation.cdr_h2_seq_range = tuple(h_data["cdr2_seq_range"])
+            if h_data.get("cdr3_seq_range"):
+                annotation.cdr_h3_seq_range = tuple(h_data["cdr3_seq_range"])
+                
             # Mark as TCR if detected
             if "B" in anarcii_result or "G" in anarcii_result:
                 annotation.antibody_type = "tcr"
@@ -390,6 +450,15 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
                 annotation.cdr_l2_range = tuple(l_data["cdr2_range"])
             if l_data.get("cdr3_range"):
                 annotation.cdr_l3_range = tuple(l_data["cdr3_range"])
+                
+            # Extract raw sequential ranges for seamless frontend mapping
+            if l_data.get("cdr1_seq_range"):
+                annotation.cdr_l1_seq_range = tuple(l_data["cdr1_seq_range"])
+            if l_data.get("cdr2_seq_range"):
+                annotation.cdr_l2_seq_range = tuple(l_data["cdr2_seq_range"])
+            if l_data.get("cdr3_seq_range"):
+                annotation.cdr_l3_seq_range = tuple(l_data["cdr3_seq_range"])
+                
             if "A" in anarcii_result or "D" in anarcii_result:
                 annotation.antibody_type = "tcr"
             elif annotation.antibody_type != "tcr":
@@ -409,10 +478,10 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
     
     Returns dict of {pdb_path: CDRAnnotation}
     """
-    container_path = PROJECT_ROOT / "apptainer" / "antibody_tools.sif"
+    container_path = get_container_path("antibody_tools.sif")
     
     if not container_path.exists():
-        print(f"[CDR Annotator] Container not found: {container_path}")
+        logger.error(f"[CDR Annotator] Container not found: {container_path}")
         return {}
     
     # Step 1: Extract all binder sequences from PDBs
@@ -486,22 +555,34 @@ for seq_name, data in results.items():
     cdr2_residues = []
     cdr3_residues = []
     
+    cdr1_seq_indices = []
+    cdr2_seq_indices = []
+    cdr3_seq_indices = []
+    
     # FR contact hotspots
     fr2_residues = []
     de_loop_residues = []
     fr3_residues = []
     fr4_residues = []
     
+    seq_idx = -1
+    
     for (pos, insertion), aa in numbering:
-        if aa == "-":
+        if aa != "-":
+            seq_idx += 1
+        else:
             continue
+            
         # CDRs (IMGT)
         if 27 <= pos <= 38:
             cdr1_residues.append(aa)
+            cdr1_seq_indices.append(seq_idx)
         elif 56 <= pos <= 65:
             cdr2_residues.append(aa)
+            cdr2_seq_indices.append(seq_idx)
         elif 105 <= pos <= 117:
             cdr3_residues.append(aa)
+            cdr3_seq_indices.append(seq_idx)
         
         # FR contact hotspots
         if pos in FR2_POSITIONS:
@@ -518,6 +599,9 @@ for seq_name, data in results.items():
         "cdr1": "".join(cdr1_residues),
         "cdr2": "".join(cdr2_residues),
         "cdr3": "".join(cdr3_residues),
+        "cdr1_seq_range": [min(cdr1_seq_indices), max(cdr1_seq_indices)] if cdr1_seq_indices else None,
+        "cdr2_seq_range": [min(cdr2_seq_indices), max(cdr2_seq_indices)] if cdr2_seq_indices else None,
+        "cdr3_seq_range": [min(cdr3_seq_indices), max(cdr3_seq_indices)] if cdr3_seq_indices else None,
         "fr2_contacts": "".join(fr2_residues),
         "de_loop": "".join(de_loop_residues),
         "fr3_contacts": "".join(fr3_residues),
@@ -596,6 +680,14 @@ print(json.dumps(output))
             annotation.de_loop = result.get("de_loop", "")
             annotation.fr3_contacts = result.get("fr3_contacts", "")
             annotation.fr4_contacts = result.get("fr4_contacts", "")
+            # Extract raw sequential ranges for seamless frontend mapping
+            if result.get("cdr1_seq_range"):
+                annotation.cdr_h1_seq_range = tuple(result["cdr1_seq_range"])
+            if result.get("cdr2_seq_range"):
+                annotation.cdr_h2_seq_range = tuple(result["cdr2_seq_range"])
+            if result.get("cdr3_seq_range"):
+                annotation.cdr_h3_seq_range = tuple(result["cdr3_seq_range"])
+                
             # Mark as TCR if detected
             if chain_type in ("B", "G"):
                 annotation.antibody_type = "tcr"
@@ -606,6 +698,15 @@ print(json.dumps(output))
             annotation.cdr_l1_length = len(annotation.cdr_l1) if annotation.cdr_l1 else None
             annotation.cdr_l2_length = len(annotation.cdr_l2) if annotation.cdr_l2 else None
             annotation.cdr_l3_length = len(annotation.cdr_l3) if annotation.cdr_l3 else None
+            
+            # Extract raw sequential ranges for seamless frontend mapping
+            if result.get("cdr1_seq_range"):
+                annotation.cdr_l1_seq_range = tuple(result["cdr1_seq_range"])
+            if result.get("cdr2_seq_range"):
+                annotation.cdr_l2_seq_range = tuple(result["cdr2_seq_range"])
+            if result.get("cdr3_seq_range"):
+                annotation.cdr_l3_seq_range = tuple(result["cdr3_seq_range"])
+                
             if chain_type in ("A", "D"):
                 annotation.antibody_type = "tcr"
             elif annotation.antibody_type != "tcr":

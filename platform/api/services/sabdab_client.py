@@ -331,64 +331,121 @@ async def get_structure_summary(pdb_code: str) -> Optional[Dict[str, Any]]:
 
 def convert_sabdab_to_hlt(
     pdb_content: str,
+    heavy_chain: Optional[str] = None,
+    light_chain: Optional[str] = None,
+    antigen_chain: Optional[str] = None,
     target_chain: str = "T"
 ) -> str:
     """
     Convert SAbDab IMGT-numbered PDB to HLT format.
     
-    SAbDab IMGT files already have proper numbering, but we need to:
-    1. Rename chains to H/L/T convention
-    2. Add CDR REMARK lines
+    SAbDab IMGT files already have proper numbering, but RFantibody expects:
+    1. Antibody chains relabeled to H/L
+    2. Optional antigen chain relabeled to T
+    3. Residues renumbered sequentially across the retained chains
+    4. HLT REMARK loop labels using the renumbered residue indices
     
     Args:
         pdb_content: IMGT-numbered PDB from SAbDab
+        heavy_chain: Original heavy/VHH chain ID in the SAbDab structure
+        light_chain: Original light chain ID in the SAbDab structure
+        antigen_chain: Original antigen chain ID in the SAbDab structure
         target_chain: Chain ID to use as target (T)
     
     Returns:
         HLT-formatted PDB content
     """
-    # For VHH (nanobodies), there's only H chain
-    # We just need to ensure chain ID is 'H' and add CDR REMARKs
-    
-    lines = pdb_content.split("\n")
-    output_lines = []
-    
-    # CDR positions (IMGT)
-    cdr_h1 = range(27, 39)   # 27-38
-    cdr_h2 = range(56, 66)   # 56-65
-    cdr_h3 = range(105, 118) # 105-117
-    
-    cdr_residues = {"H1": [], "H2": [], "H3": []}
-    
-    for line in lines:
-        if line.startswith("ATOM") or line.startswith("HETATM"):
-            # Parse residue number
-            try:
-                res_num_str = line[22:27].strip()
-                # Handle insertion codes
-                res_num = int(''.join(c for c in res_num_str if c.isdigit() or c == '-'))
-            except ValueError:
-                output_lines.append(line)
+    def _norm_chain(chain_id: Optional[str]) -> Optional[str]:
+        if not chain_id:
+            return None
+        chain_id = chain_id.strip()
+        return chain_id[:1] if chain_id else None
+
+    def _residue_number(line: str) -> Optional[int]:
+        token = line[22:27].strip()
+        digits = ''.join(ch for ch in token if ch.isdigit() or ch == '-')
+        if not digits:
+            return None
+        return int(digits)
+
+    heavy_chain = _norm_chain(heavy_chain)
+    light_chain = _norm_chain(light_chain)
+    antigen_chain = _norm_chain(antigen_chain)
+    target_chain = _norm_chain(target_chain) or "T"
+
+    chain_map: Dict[str, str] = {}
+    chain_order: List[str] = []
+
+    for original, renamed in (
+        (heavy_chain, "H"),
+        (light_chain, "L"),
+        (antigen_chain, target_chain),
+    ):
+        if original and original not in chain_map:
+            chain_map[original] = renamed
+            chain_order.append(original)
+
+    if not chain_map:
+        # Conservative fallback: treat the first chain in the file as the heavy chain.
+        for line in pdb_content.splitlines():
+            if line.startswith(("ATOM", "HETATM")):
+                inferred_chain = _norm_chain(line[21:22])
+                if inferred_chain:
+                    chain_map[inferred_chain] = "H"
+                    chain_order.append(inferred_chain)
+                    break
+
+    cdr_ranges = {
+        "H": {"H1": range(27, 39), "H2": range(56, 66), "H3": range(105, 118)},
+        "L": {"L1": range(27, 39), "L2": range(56, 66), "L3": range(105, 118)},
+    }
+
+    chain_lines: Dict[str, List[str]] = {chain_id: [] for chain_id in chain_order}
+    for line in pdb_content.splitlines():
+        record = line[:6].strip()
+        if record in {"ATOM", "HETATM"}:
+            source_chain = _norm_chain(line[21:22])
+            if source_chain not in chain_map:
                 continue
-            
-            # Track CDR residues
-            if res_num in cdr_h1:
-                cdr_residues["H1"].append(res_num)
-            elif res_num in cdr_h2:
-                cdr_residues["H2"].append(res_num)
-            elif res_num in cdr_h3:
-                cdr_residues["H3"].append(res_num)
-        
-        output_lines.append(line)
-    
-    # Add CDR REMARK lines at the end (HLT format)
-    for cdr_name, positions in cdr_residues.items():
-        if positions:
-            unique_pos = sorted(set(positions))
-            for pos in unique_pos:
-                output_lines.append(f"REMARK PDBinfo-LABEL: {pos:4d} H  {cdr_name}")
-    
-    return "\n".join(output_lines)
+            chain_lines.setdefault(source_chain, []).append(line)
+
+    next_residue_index = 1
+    residue_map: Dict[tuple[str, str, str], tuple[str, int]] = {}
+    cdr_positions: Dict[str, List[int]] = {name: [] for group in cdr_ranges.values() for name in group.keys()}
+    output_lines: List[str] = []
+
+    for source_chain in chain_order:
+        for line in chain_lines.get(source_chain, []):
+            resseq = line[22:26]
+            icode = line[26:27]
+            residue_key = (source_chain or "", resseq, icode)
+
+            if residue_key not in residue_map:
+                residue_map[residue_key] = (chain_map[source_chain], next_residue_index)
+                renamed_chain = chain_map[source_chain]
+                original_resnum = _residue_number(line)
+                if original_resnum is not None and renamed_chain in cdr_ranges:
+                    for cdr_name, residue_range in cdr_ranges[renamed_chain].items():
+                        if original_resnum in residue_range:
+                            cdr_positions[cdr_name].append(next_residue_index)
+                            break
+                next_residue_index += 1
+
+            renamed_chain, new_resnum = residue_map[residue_key]
+            rebuilt = f"{line[:21]}{renamed_chain}{new_resnum:4d} {line[27:]}"
+            output_lines.append(rebuilt)
+
+        if chain_lines.get(source_chain):
+            output_lines.append("TER")
+
+    for cdr_name in ("H1", "H2", "H3", "L1", "L2", "L3"):
+        for pos in sorted(set(cdr_positions.get(cdr_name, []))):
+            output_lines.append(f"REMARK PDBinfo-LABEL: {pos:4d} {cdr_name}")
+
+    if output_lines and output_lines[-1].strip() != "END":
+        output_lines.append("END")
+
+    return "\n".join(output_lines) + "\n"
 
 
 # Sync wrappers for non-async contexts

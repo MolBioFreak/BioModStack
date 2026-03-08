@@ -83,11 +83,15 @@ export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId,
                                         </p>
                                     </div>
                                     <div className="text-right">
-                                        <span className={`inline-flex px-2 py-0.5 text-xs rounded ${job.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
+                                        <span
+                                            title={job.status === 'completed' && job.error_message ? job.error_message : undefined}
+                                            className={`inline-flex px-2 py-0.5 text-xs rounded ${job.status === 'completed' && job.error_message ? 'bg-amber-500/20 text-amber-400' :
+                                                job.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
                                                 job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
                                                     'bg-slate-600/30 text-slate-400'
-                                            }`}>
-                                            {job.status}
+                                            }`}
+                                        >
+                                            {job.status === 'completed' && job.error_message ? 'completed*' : job.status}
                                         </span>
                                         {job.design_count > 0 && (
                                             <p className="text-xs text-slate-400 mt-1">

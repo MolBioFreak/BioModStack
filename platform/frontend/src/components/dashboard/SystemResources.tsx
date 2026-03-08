@@ -167,6 +167,7 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
     const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
     const memoryPercent = (gpu.memory_used_mb / gpu.memory_total_mb) * 100;
     const powerPercent = currentLimit > 0 ? (gpu.power_draw_w / currentLimit) * 100 : 0;
+    const visibleProcessLimit = gpu.processes.length > 2 ? 5 : 2;
 
     const handleApply = () => {
         const watts = parseInt(inputValue, 10);
@@ -298,13 +299,15 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
             {/* Processes - minimal */}
             {gpu.processes.length > 0 && (
                 <div className="border-t border-slate-700/50 pt-1.5 mt-2 text-xs text-slate-400">
-                    {gpu.processes.slice(0, 2).map((proc) => (
+                    {gpu.processes.slice(0, visibleProcessLimit).map((proc) => (
                         <div key={proc.pid} className="flex justify-between truncate">
                             <span className="truncate max-w-[70%]">{proc.name}</span>
                             <span className="text-slate-500">{proc.memory_mb}MB</span>
                         </div>
                     ))}
-                    {gpu.processes.length > 2 && <span className="text-slate-500">+{gpu.processes.length - 2} more</span>}
+                    {gpu.processes.length > visibleProcessLimit && (
+                        <span className="text-slate-500">+{gpu.processes.length - visibleProcessLimit} more</span>
+                    )}
                 </div>
             )}
         </div>

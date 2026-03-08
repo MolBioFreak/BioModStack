@@ -102,9 +102,18 @@ Workflow / Module Integrations (not registry-backed)
 These are invoked in Nextflow workflows but do not appear as registry models.
 
 - **RFantibody** (`modules/rfantibody.nf`)
-  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`
+  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`, `docs/RFA_Workflow_Fix_Plan_2026-02-10.md`
   - External code: https://github.com/RosettaCommons/RFantibody
   - Paper/Preprint: not referenced in repo
+  - Container: `rfantibody.sif` (build from `apptainer/rfantibody.def`)
+  - Weights: `${weights_root}/rfantibody/rfantibody_repo/weights/RFdiffusion_Ab.pt`
+  - Runtime policy:
+    - Container code is immutable by default (weights-only bind mount).
+    - Runtime preflight runs before inference (`scripts/check_rfantibody_runtime.py`).
+    - Build metadata stored at `/opt/RFantibody/.build_manifest`.
+  - Verification commands:
+    - `apptainer exec --nv <rfantibody.sif> python3 -c "import torch,dgl; print(torch.__version__, torch.version.cuda, dgl.__version__)"`
+    - `apptainer exec <rfantibody.sif> bash -lc 'cat /opt/RFantibody/.build_manifest'`
 
 - **PPIFlow** (`modules/ppiflow.nf`)
   - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`
@@ -149,6 +158,17 @@ These are invoked in Nextflow workflows but do not appear as registry models.
 - **OpenMM (planned/optional)** (`docs/OpenMM_Integration_Plan.md`)
   - External code: https://github.com/openmm/openmm-ml
   - Related tooling: https://github.com/ACEsuit/mace-off, https://github.com/aiqm/torchani, https://github.com/openmm/pdbfixer
+
+- **Protenix** (`modules/protenix.nf`)
+  - Internal: `platform/api/config/models/protenix.yaml`, `docs/Protenix_PXDesign_Integration_Plan.md`
+  - External code: https://github.com/bytedance/Protenix
+  - Paper/Preprint: https://www.biorxiv.org/content/10.1101/2025.01.08.631790
+  - Container: `protenix.sif` (CUTLASS v3.5.1 + cuEquivariance + HMMER)
+  - Weights: `$BMS_PROTENIX_WEIGHTS` or `${weights_root}/protenix`
+  - Modes: `predict` (single-chain), `complex` (multi-modal protein/DNA/RNA/ligand/ion)
+  - Model variants: `protenix_base_v1.0.0`, `protenix_base_v0.2.1`, `protenix_esm_v0.2.1`, `protenix_mini_esm_v0.5.0`
+  - MSA: Built-in `protenix prep` or ColabFold a3m; auto-switches to ESM model when MSA disabled
+  - VRAM: ~4GB base + 55 MB/1K tokens (quadratic scaling)
 
 Utility Dependencies (not models)
 ---------------------------------

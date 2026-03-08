@@ -48,7 +48,8 @@ if ! command_exists tar; then
 fi
 
 # Root directory for model downloads
-MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+DATA_ROOT="${BMS_DATA:-$HOME/.biomodstack}"
+MODEL_ROOT="${BMS_WEIGHTS:-${DATA_ROOT}/weights}"
 
 # Function to download with retry
 download_with_retry() {
