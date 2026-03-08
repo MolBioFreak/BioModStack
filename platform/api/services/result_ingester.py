@@ -702,7 +702,9 @@ async def ingest_loose_files(
                     has_clash_raw = metrics.get('has_clash')
                 disorder = metrics.get('disorder') or metrics.get('full_disorder_prob_mean')
                 num_recycles = metrics.get('num_recycles')
-                
+                rmsd_overall = metrics.get('rmsd_overall') or metrics.get('boltz_overall_rmsd')
+                rmsd_binder = metrics.get('rmsd_binder') or metrics.get('boltz_binder_rmsd')
+
                 # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
                 pae = metrics.get('complex_pae') or metrics.get('pae')
                 if pae is None:
@@ -764,6 +766,8 @@ async def ingest_loose_files(
                     ptm=safe_float(ptm),
                     conf_score=safe_float(conf_score),
                     ligand_iptm=safe_float(ligand_iptm),
+                    rmsd_overall=safe_float(rmsd_overall),
+                    rmsd_binder=safe_float(rmsd_binder),
                     affinity_score=safe_float(affinity_score),
                     binder_probability=safe_float(binder_probability),
                     residue_plddt=residue_plddt,
