@@ -403,20 +403,39 @@ def calculate_epitope_contacts(
             return 0, None
         
         # Get all chain IDs in structure
-        all_chains = set(structure.chain_id)
+        all_chains = [str(chain_id) for chain_id in np.unique(structure.chain_id)]
         logger.info(f"[structure_utils] Structure chains: {all_chains}, epitope resnums: {sorted(epitope_resnums)[:5]}...")
-        
-        # Auto-detect antibody chains (H and L for standard, just H for nanobody)
-        ab_chain_ids = []
-        for potential_ab in ['H', 'L', 'A']:  # Try H, L first, fall back to A
-            if potential_ab in all_chains:
-                ab_chain_ids.append(potential_ab)
-        
-        # Auto-detect target chain (first non-antibody chain, prefer B)
+
+        # Resolve target chain before applying chain-A antibody fallback.
+        provisional_target_chain = target_chain if target_chain in all_chains else None
+        if provisional_target_chain is None:
+            for res_spec in epitope_residues:
+                res_spec = (res_spec or "").strip()
+                if res_spec and res_spec[0].isalpha() and res_spec[0] in all_chains:
+                    provisional_target_chain = res_spec[0]
+                    break
+
+        # Auto-detect antibody chains (prefer H/L; only fall back to A when H/L are absent
+        # and A is not already known to be the antigen chain).
+        ab_chain_ids = [potential_ab for potential_ab in ['H', 'L'] if potential_ab in all_chains]
+        if not ab_chain_ids:
+            if antibody_chain in all_chains and antibody_chain != provisional_target_chain:
+                ab_chain_ids.append(antibody_chain)
+            elif 'A' in all_chains and provisional_target_chain != 'A':
+                ab_chain_ids.append('A')
+
+        # Auto-detect target chain (first non-antibody chain, prefer provisional/B/T)
         if target_chain not in all_chains:
-            non_ab_chains = [c for c in all_chains if c not in ['H', 'L', 'A']]
-            if non_ab_chains:
+            non_ab_chains = [c for c in all_chains if c not in ab_chain_ids]
+            if provisional_target_chain in non_ab_chains:
+                target_chain = provisional_target_chain
+            elif 'B' in non_ab_chains:
+                target_chain = 'B'
+            elif 'T' in non_ab_chains:
+                target_chain = 'T'
+            elif non_ab_chains:
                 target_chain = non_ab_chains[0]
+            if target_chain:
                 logger.info(f"[structure_utils] Auto-detected target chain: {target_chain}")
         
         # Get CA atoms for antibody chains (combine H and L)
@@ -538,4 +557,3 @@ def compute_contact_map(
     except Exception as e:
         logger.error(f"[structure_utils] Error computing contact map from {path}: {e}")
         return None, None, None
-

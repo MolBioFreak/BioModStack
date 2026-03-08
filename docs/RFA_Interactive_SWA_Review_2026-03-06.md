@@ -143,6 +143,27 @@ The current code now includes the following workflow/control-plane changes:
    - API/job normalization now canonicalizes to `run_thermompnn` while still mirroring the legacy `run_stability_scoring` flag for backward compatibility.
    - Stage display logic now keys off the canonical ThermoMPNN flag.
 
+8. RFantibody loop-length priors are now first-class controls
+   - The antibody launcher now distinguishes between:
+     - manual CDR residue spans for downstream FAMPNN constraints
+     - RFantibody-native loop-length priors for initial backbone exploration
+   - This prevents the previous overloading of one parameter for two incompatible meanings.
+
+9. Viewer-launched CDR indel rounds now exist
+   - The Results Viewer can now launch a `cdr_indel_round` from selected antibody designs.
+   - This creates explicit insertion/deletion variant libraries on chosen CDR loops and submits them as new top-level validation jobs while preserving full complex context per variant.
+   - The current implementation is chain-specific by construction: selected loops must all belong to the same chain family (`H*` or `L*`).
+
+10. RFantibody backbone screening and a first review gate now exist
+   - The workflow can now pause at `post_rfantibody` before FAMPNN starts.
+   - An optional coarse RFantibody screen is also available before sequence design:
+     - minimum epitope contact count
+     - maximum minimum epitope distance
+     - minimum loose whole-target contact count
+     - maximum antibody-to-epitope centroid distance
+   - This screen is intentionally conservative and is meant to remove obviously detached or malformed backbones, not to replace manual review or downstream structural validation.
+   - The screen now also corrects an older chain-detection failure mode where chain `A` could be misinterpreted as the antibody fallback even when `A` was actually the antigen chain.
+
 ## Current Integration Risks
 
 Several code-path mismatches matter before introducing user-facing gating:
@@ -153,10 +174,13 @@ Several code-path mismatches matter before introducing user-facing gating:
 
 2. FrustraMPNN aggregator is glob-driven
    - The aggregator ignores its formal input channel and globs local files instead, which is fragile for checkpointed or resumed execution.
+   - The current workflow now at least runs FrustraMPNN per structure instead of collapsing selected designs into one synthetic batch, and the Results Viewer exposes frustration-aware table columns, overview stats, and structure coloring.
 
 3. The first gate is implemented, but the full multi-gate loop is not
    - `post_fampnn` now exists as a first-class pause point.
+   - `post_rfantibody` now also exists as an earlier review point for backbone triage.
    - A separate decision endpoint and explicit `continue` endpoint are still not implemented; continuation currently reuses the resume path.
+   - RFantibody screening is still deliberately coarse; more opinionated automatic filters should only be added after empirical review of false-positive/false-negative behavior on real runs.
 
 ## Relevant BMS API / Scheduler Surfaces
 
