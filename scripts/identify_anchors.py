@@ -151,12 +151,27 @@ def main():
     scorefxn = pyrosetta.get_fa_scorefxn()
     scorefxn(pose)
 
+    detected_chains = get_chain_ids(pose)
+
     if not antibody_chains:
         print("[ANCHORS] No antibody chains provided.", file=sys.stderr)
         sys.exit(1)
 
+    antibody_chains = [c for c in antibody_chains if c in detected_chains]
+    if not antibody_chains:
+        if not detected_chains:
+            print("[ANCHORS] No chains detected in pose.", file=sys.stderr)
+            sys.exit(1)
+        antibody_chains = [detected_chains[0]]
+        print(
+            f"[ANCHORS] Configured antibody chains not found; inferring antibody chain as "
+            f"'{antibody_chains[0]}' from detected chains {detected_chains}",
+            file=sys.stderr,
+        )
+
+    antigen_chains = [c for c in antigen_chains if c in detected_chains and c not in antibody_chains]
     if not antigen_chains:
-        antigen_chains = [c for c in get_chain_ids(pose) if c not in antibody_chains]
+        antigen_chains = [c for c in detected_chains if c not in antibody_chains]
         if not antigen_chains:
             print("[ANCHORS] No antigen chains detected.", file=sys.stderr)
             sys.exit(1)

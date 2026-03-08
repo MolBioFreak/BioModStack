@@ -210,8 +210,10 @@ def _validate_antibody_runtime_paths(model_id: str, params: dict) -> None:
     if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
         return
 
+    # Skip target PDB validation for iteration/refinement jobs that bypass RFA
+    skip_rfa = params.get("skip_rfantibody") or params.get("iteration_action") in ("ui_refinement",)
     target_pdb = str(params.get("target_pdb") or "").strip()
-    if target_pdb and not Path(target_pdb).exists():
+    if target_pdb and not skip_rfa and not Path(target_pdb).exists():
         raise HTTPException(
             status_code=422,
             detail=f"Target PDB not found: {target_pdb}",
@@ -332,6 +334,21 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     source_job = await session.get(Job, source_job_id)
     if source_job is None:
         raise HTTPException(status_code=404, detail=f"Source job '{source_job_id}' not found")
+
+    # Viewer-launched refinement/iteration rounds are top-level jobs, so parent_job_id does not
+    # capture scientific lineage. Prefer the explicit iteration root when it exists.
+    iteration_root_id: Optional[str] = None
+    if isinstance(source_job.params, dict):
+        for key in ("iteration_source_root_job_id", "iteration_source_job_id"):
+            value = source_job.params.get(key)
+            if isinstance(value, str) and value.strip():
+                iteration_root_id = value.strip()
+                break
+
+    if iteration_root_id:
+        explicit_root = await session.get(Job, iteration_root_id)
+        if explicit_root is not None and _looks_like_antibody_job(explicit_root):
+            return source_job, explicit_root
 
     lineage: List[Job] = []
     visited: set[str] = set()
@@ -817,7 +834,15 @@ def _build_cdr_indel_iteration_job(
                 launch_params[key] = base_params[key]
 
     if param_overrides:
-        launch_params.update(param_overrides)
+        cleaned_overrides = dict(param_overrides)
+        if action == "ui_refinement":
+            for key in ("epitope_residues", "target_pdb"):
+                value = cleaned_overrides.get(key)
+                if value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode")):
+                    cleaned_overrides.pop(key, None)
+            if not cleaned_overrides.get("selected_residues"):
+                cleaned_overrides.pop("selected_residues", None)
+        launch_params.update(cleaned_overrides)
 
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "cdr_indel_round"
     model_id = "protenix" if predictor == "protenix" else "boltz2"
@@ -1030,13 +1055,17 @@ def _build_antibody_iteration_job(
                 "interactive_gate_stage": "post_structure_validation",
             },
         },
+        "ui_refinement": {
+            "suffix": "refinement",
+            "params": {},
+        },
     }
     if action not in action_map:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"Unsupported antibody iteration action '{action}'. "
-                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round."
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, ui_refinement."
             ),
         )
 
@@ -1049,6 +1078,13 @@ def _build_antibody_iteration_job(
         "iteration_selection_dir": str(selection_dir),
         "interactive_gate_continue": False,
     })
+    
+    # Preserve epitope residue configurations for contact calculations during refinement
+    if isinstance(root_job.params, dict):
+        for key in ["epitope_residues", "selected_residues"]:
+            if key in root_job.params:
+                launch_params[key] = root_job.params[key]
+                
     launch_params.update(action_map[action]["params"])
 
     for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
@@ -1057,6 +1093,37 @@ def _build_antibody_iteration_job(
 
     if param_overrides:
         launch_params.update(param_overrides)
+
+    if action == "ui_refinement":
+        def _invalid_refinement_value(value: Any) -> bool:
+            return value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode"))
+
+        def _pick_refinement_context(key: str) -> Any:
+            for job in (root_job, source_job):
+                params = job.params if isinstance(job.params, dict) else {}
+                candidate = params.get(key)
+                if not _invalid_refinement_value(candidate):
+                    return candidate
+            return None
+
+        for key in ("target_pdb", "epitope_residues", "selected_residues", "antigen_chains"):
+            if _invalid_refinement_value(launch_params.get(key)):
+                fallback = _pick_refinement_context(key)
+                if fallback is None:
+                    launch_params.pop(key, None)
+                else:
+                    launch_params[key] = fallback
+
+        launch_params["skip_rfantibody"] = True
+        
+        # If the UI mapped sequence design (like FAMPNN), the inputs go to rfantibody_input_pdbs.
+        # If sequence design is fully skipped (starting at validation/maturation), inputs go to fampnn_collected_pdbs.
+        if launch_params.get("seq_design_fampnn") or launch_params.get("seq_design_antifold") or launch_params.get("seq_design_proteinmpnn"):
+            launch_params["rfantibody_input_pdbs"] = str(selection_dir)
+            launch_params["fampnn_collected_pdbs"] = None
+        else:
+            launch_params["fampnn_collected_pdbs"] = str(selection_dir)
+            launch_params["rfantibody_input_pdbs"] = None
 
     launch_params = _normalize_antibody_job_params(launch_params)
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
