@@ -432,21 +432,41 @@ async def ingest_maturation_data(
         design = result.scalar_one_or_none()
         
         if not design:
-            # Try matching by name only across child jobs
             from database import Job
-            child_result = await session.execute(
-                select(Job.id).where(Job.parent_job_id == job_id)
+            import sqlalchemy as sa
+            # 1. Broaden search to include batch family and iteration source lineage
+            job_info = await session.execute(
+                select(Job).where(Job.id == job_id)
             )
-            child_ids = [row[0] for row in child_result.all()]
-            if child_ids:
-                all_ids = [job_id] + child_ids
+            current_job = job_info.scalar_one_or_none()
+            
+            design_job_ids = [job_id]
+            if current_job:
+                if current_job.parent_job_id:
+                    design_job_ids.append(current_job.parent_job_id)
+                if current_job.batch_id:
+                    batch_res = await session.execute(
+                        select(Job.id).where(Job.batch_id == current_job.batch_id)
+                    )
+                    design_job_ids.extend([row[0] for row in batch_res.all()])
+                
+                # Check for iteration Source ID stored in params
+                params_dict = _parse_job_params(current_job.params)
+                if params_dict.get("iteration_source_job_id"):
+                    design_job_ids.append(params_dict["iteration_source_job_id"])
+                if params_dict.get("iteration_source_root_job_id"):
+                    design_job_ids.append(params_dict["iteration_source_root_job_id"])
+
+            if len(design_job_ids) > 1:
+                # Deduplicate and query
+                unique_ids = list(set(design_job_ids))
                 result = await session.execute(
                     select(Design).where(
-                        Design.job_id.in_(all_ids),
+                        Design.job_id.in_(unique_ids),
                         Design.name == design_name
-                    )
+                    ).order_by(sa.desc(Design.created_at))  # Get newest if duplicates
                 )
-                design = result.scalar_one_or_none()
+                design = result.scalars().first()
         
         if not design:
             continue
@@ -495,11 +515,37 @@ async def ingest_frustration_data(
     
     print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
     
-    child_result = await session.execute(
-        select(Job.id).where(Job.parent_job_id == job_id)
+    from database import Job
+    import sqlalchemy as sa
+    
+    job_info = await session.execute(
+        select(Job).where(Job.id == job_id)
     )
-    child_ids = [row[0] for row in child_result.all()]
-    design_job_ids = [job_id] + child_ids
+    current_job = job_info.scalar_one_or_none()
+    
+    design_job_ids = [job_id]
+    if current_job:
+        if current_job.parent_job_id:
+            design_job_ids.append(current_job.parent_job_id)
+        if current_job.batch_id:
+            batch_res = await session.execute(
+                select(Job.id).where(Job.batch_id == current_job.batch_id)
+            )
+            design_job_ids.extend([row[0] for row in batch_res.all()])
+        
+        child_result = await session.execute(
+            select(Job.id).where(Job.parent_job_id == job_id)
+        )
+        design_job_ids.extend([row[0] for row in child_result.all()])
+
+        # Check for iteration Source ID stored in params
+        params_dict = _parse_job_params(current_job.params)
+        if params_dict.get("iteration_source_job_id"):
+            design_job_ids.append(params_dict["iteration_source_job_id"])
+        if params_dict.get("iteration_source_root_job_id"):
+            design_job_ids.append(params_dict["iteration_source_root_job_id"])
+
+    design_job_ids = list(set(design_job_ids))
 
     async def find_matching_design(design_token: str) -> Optional[Design]:
         normalized = _normalize_frustration_target_name(design_token)
