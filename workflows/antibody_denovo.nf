@@ -234,6 +234,7 @@ process ScreenRFantibodyBackbones {
     val epitope_residues
     val antibody_chains
     val target_chain
+    path reference_target_pdb
 
     output:
     path "screened_output", emit: dir
@@ -258,6 +259,7 @@ process ScreenRFantibodyBackbones {
         --summary-json screening_summary.json \\
         --epitope-residues "${epitope_residues ?: ''}" \\
         --antibody-chains "${antibody_chains ?: ''}" \\
+        --reference-target-pdb "\$(readlink -f ${reference_target_pdb})" \\
         ${targetChainArg} \\
         ${minContactsArg} \\
         ${maxDistanceArg} \\
@@ -1375,7 +1377,8 @@ workflow ANTIBODY_DENOVO {
             StageRFantibodyBackbones.out.dir,
             epitope_residues ?: "",
             params.antibody_chains ?: "",
-            params.antigen_chains ?: ""
+            params.antigen_chains ?: "",
+            target_pdb_ch.map { meta, pdb -> pdb }.first()
         )
         rfantibody_ready_dir = ScreenRFantibodyBackbones.out.dir
         rfantibody_candidate_count = ScreenRFantibodyBackbones.out.summary.map { summary_file ->
