@@ -6,6 +6,7 @@ import { JobSubmission } from './components/JobSubmission';
 import { ResultsViewer } from './components/ResultsViewer';
 import { JobDetailPage } from './components/JobDetailPage';
 import { MolBioToolkitV2 } from './components/MolBioToolkit/indexV2';
+import { NGSToolkit } from './components/NGSToolkit';
 
 function App() {
   return (
@@ -20,6 +21,8 @@ function App() {
           <Route path="/jobs/:jobId" element={<JobDetailPage />} />
           {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
           <Route path="/designer" element={<MolBioToolkitV2 />} />
+          {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
+          <Route path="/ngs" element={<NGSToolkit />} />
         </Routes>
       </Layout>
     </HotkeysProvider>

@@ -1,0 +1,324 @@
+# Nanopore sequencing model configuration
+# ONT Dorado basecalling + optional modkit methylation analysis
+
+id: nanopore
+name: Nanopore Sequencing
+version: "1.0.0"
+category: sequence_analysis
+description: >
+  Oxford Nanopore analysis workflow supporting POD5 re-basecalling via Dorado,
+  direct tagged-BAM methylation summarization with modkit, and FASTQ plasmid QC.
+container: dorado.sif
+
+ui_icon: waveform
+ui_color: "#0EA5E9"
+
+inputs:
+  - pod5
+  - bam
+  - fastq
+  - fasta
+outputs:
+  - bam
+  - bed
+  - tsv
+
+modes:
+  - id: methylation_analysis
+    name: Methylation Analysis
+    description: POD5/BAM methylation analysis plus optional FASTQ plasmid QC
+    params:
+      - pod5_dir
+      - bam_path
+      - bam_force_realign
+      - bam_min_mapq
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - modified_bases
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - run_modkit
+      - modkit_filter_threshold
+      - run_fastq_qc
+      - run_multimer_qc
+      - expected_plasmid_size
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
+      - run_assembly
+      - wf_clone_workflow_dir
+      - wf_clone_source
+      - wf_clone_revision
+      - wf_clone_profile
+      - wf_clone_sample
+      - wf_clone_large_construct
+      - wf_clone_approx_size
+      - wf_clone_assm_coverage
+      - wf_clone_trim_length
+      - wf_clone_min_quality
+      - wf_clone_assembly_tool
+
+params:
+  - name: pod5_dir
+    type: directory
+    description: Directory containing POD5 raw signal files
+    required: false
+
+  - name: bam_path
+    type: file
+    description: Existing BAM input (MM/ML supported)
+    required: false
+    file_type: bam
+
+  - name: bam_force_realign
+    type: boolean
+    description: Realign existing BAM to reference via dorado aligner (disabled by default for BAM pass-through)
+    required: false
+    default: false
+
+  - name: bam_min_mapq
+    type: integer
+    description: Minimum MAPQ retained when preparing/analyzing BAM input
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 60
+
+  - name: fastq_path
+    type: file
+    description: FASTQ(.gz) input for alignment-based plasmid QC
+    required: false
+    file_type: fastq
+
+  - name: reference_fasta
+    type: file
+    description: Optional reference FASTA; required for modkit pileup BED output and optional BAM force-realignment
+    required: false
+    file_type: fasta
+
+  - name: dorado_model
+    type: string
+    description: Dorado basecalling model preset
+    required: false
+    default: sup
+    enum:
+      - sup
+      - hac
+      - fast
+
+  - name: dorado_device
+    type: string
+    description: CUDA device selector passed to Dorado (e.g., cuda:0, cuda:all)
+    required: false
+    default: cuda:0
+
+  - name: modified_bases
+    type: string
+    description: Modified-base model selection
+    required: false
+    default: 6mA 4mC_5mC
+    enum:
+      - 6mA 4mC_5mC
+      - 6mA 5mC
+      - 6mA
+      - 5mC
+      - 5mC_5hmC
+      - 4mC_5mC
+      - 5mCG_5hmCG
+      - 5mCG
+      - 5hmCG
+      - none
+
+  - name: min_qscore
+    type: integer
+    description: Minimum read Q-score threshold for Dorado basecalling (POD5 mode)
+    required: false
+    default: 10
+    minimum: 0
+    maximum: 30
+
+  - name: trim_adapters
+    type: boolean
+    description: Trim sequencing adapters during basecalling
+    required: false
+    default: true
+
+  - name: emit_summary
+    type: boolean
+    description: Emit sequencing summary TSV from Dorado
+    required: false
+    default: true
+
+  - name: dorado_batch_size
+    type: integer
+    description: Optional Dorado batch size override for GPU memory tuning
+    required: false
+    minimum: 1
+    maximum: 4096
+
+  - name: run_modkit
+    type: boolean
+    description: Run modkit pileup and summary outputs
+    required: false
+    default: true
+
+  - name: modkit_filter_threshold
+    type: number
+    description: Probability threshold for modkit filtering
+    required: false
+    default: 0.5
+    minimum: 0.0
+    maximum: 1.0
+
+  - name: run_fastq_qc
+    type: boolean
+    description: Run FASTQ plasmid QC (alignment summary, coverage, consensus)
+    required: false
+    default: true
+
+  - name: run_multimer_qc
+    type: boolean
+    description: Legacy alias for FASTQ QC enablement (kept for backward compatibility)
+    required: false
+    default: false
+
+  - name: expected_plasmid_size
+    type: integer
+    description: Expected plasmid size (bp) used for coarse copy-number/read-length context
+    required: false
+    default: 7000
+    minimum: 1
+
+  - name: min_fastq_read_length
+    type: integer
+    description: Ignore FASTQ reads shorter than this length before computing FASTQ QC metrics
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: fastq_minimap2_preset
+    type: string
+    description: minimap2 preset used for FASTQ-to-reference alignment (docs-first default targets modern high-accuracy ONT)
+    required: false
+    default: lr:hq
+    enum:
+      - map-ont
+      - lr:hq
+      - map-hifi
+      - map-pb
+      - sr
+
+  - name: fastq_minimap2_allow_secondary
+    type: boolean
+    description: Keep minimap2 secondary alignments in FASTQ alignment output
+    required: false
+    default: true
+
+  - name: igv_track_window_bp
+    type: integer
+    description: Window size (bp) used to aggregate IGV analysis tracks for FASTQ QC
+    required: false
+    default: 100
+    minimum: 1
+
+  - name: igv_report_max_sites
+    type: integer
+    description: Maximum number of hotspot sites to include in generated IGV report artifacts
+    required: false
+    default: 40
+    minimum: 1
+
+  - name: igv_report_flanking_bp
+    type: integer
+    description: Flanking context (bp) around each IGV report hotspot site
+    required: false
+    default: 200
+    minimum: 0
+
+  - name: run_assembly
+    type: boolean
+    description: Run EPI2ME wf-clone-validation assembly and construct QC
+    required: false
+    default: false
+
+  - name: wf_clone_workflow_dir
+    type: string
+    description: Optional local path to wf-clone-validation workflow assets
+    required: false
+
+  - name: wf_clone_source
+    type: string
+    description: EPI2ME workflow source for auto-pull fallback
+    required: false
+    default: epi2me-labs/wf-clone-validation
+
+  - name: wf_clone_revision
+    type: string
+    description: Workflow revision/tag for auto-pull
+    required: false
+    default: v1.8.3
+
+  - name: wf_clone_profile
+    type: string
+    description: Nested Nextflow profile string for wf-clone-validation
+    required: false
+    default: singularity
+
+  - name: wf_clone_sample
+    type: string
+    description: Optional sample name override for wf-clone-validation
+    required: false
+
+  - name: wf_clone_large_construct
+    type: boolean
+    description: Enable large construct mode in wf-clone-validation
+    required: false
+    default: false
+
+  - name: wf_clone_approx_size
+    type: integer
+    description: Approximate plasmid size (bp) for wf-clone-validation
+    required: false
+    default: 7000
+    minimum: 1
+
+  - name: wf_clone_assm_coverage
+    type: integer
+    description: Assembly downsampling coverage for wf-clone-validation
+    required: false
+    default: 60
+    minimum: 1
+
+  - name: wf_clone_trim_length
+    type: integer
+    description: Number of bases to trim from both read ends before assembly
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: wf_clone_min_quality
+    type: integer
+    description: Minimum read quality threshold for wf-clone-validation
+    required: false
+    default: 9
+    minimum: 0
+    maximum: 60
+
+  - name: wf_clone_assembly_tool
+    type: string
+    description: Assembly backend to use for wf-clone-validation
+    required: false
+    default: flye
+    enum:
+      - flye
+      - canu
+
+enabled: true
+experimental: true

@@ -1,6 +1,8 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
+// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
 
+include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
 // Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
@@ -25,34 +27,72 @@ process GenerateLocalMSA {
     def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
+    def gpuMode = params.msa_gpu_mode ?: "auto"
+    def gpuThreshold = params.msa_gpu_threshold ?: 80
+    def preferredGpus = params.msa_preferred_gpus ? "--preferred-gpus \"${params.msa_preferred_gpus}\"" : ""
+    def excludedGpus = params.msa_excluded_gpus ? "--excluded-gpus \"${params.msa_excluded_gpus}\"" : ""
+    def gpuServerMode = params.msa_gpu_server_mode ?: "persistent"
+    def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
+    def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
+    def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaProvider = params.msa_provider ?: "local"
+    def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
+    def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
+    def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
-    // MSA Quality Parameters
+    def cacheOnly = params.msa_cache_only ? "--cache-only" : ""
+    // MSA Quality Preset (Maximum/Balanced/Fast) - default: fast (quick search)
+    def msaPreset = params.msa_preset ?: "fast"
+    // MSA Quality Parameters (can override preset)
     def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
     def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
+    def maxSeqs = params.msa_max_seqs ? "--max-seqs ${params.msa_max_seqs}" : ""
     def minSeqId = params.msa_min_seq_id ? "--min-seq-id ${params.msa_min_seq_id}" : ""
     def minCoverage = params.msa_min_coverage ? "--min-coverage ${params.msa_min_coverage}" : ""
     def taxonList = params.msa_taxon_list ? "--taxon-list \"${params.msa_taxon_list}\"" : ""
     def minDepthWarning = params.msa_min_depth_warning ?: 100
-    def minDepthFail = params.msa_min_depth_fail ?: 10
+    def minDepthFail = params.msa_min_depth_fail ?: 0  // 0 = warn but don't fail
+    // NEW: expansion, envdb, and iteration overrides
+    def useExpand = params.msa_use_expand != null ? "--use-expand ${params.msa_use_expand ? 1 : 0}" : ""
+    def useEnv = params.msa_use_env != null ? "--use-env ${params.msa_use_env ? 1 : 0}" : ""
+    def numIterations = params.msa_num_iterations ? "--num-iterations ${params.msa_num_iterations}" : ""
     """
-    python3 ${projectDir}/scripts/run_local_msa.py \\
+    python3 ${params.code_root}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
         --name "${sequence_name}" \\
         --out_dir . \\
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
         --threads ${threads} \\
+        --gpu-mode ${gpuMode} \\
+        --gpu-threshold ${gpuThreshold} \\
+        --gpu-server-mode ${gpuServerMode} \\
+        --gpu-server-wait-timeout ${gpuServerWaitTimeout} \\
+        --gpu-server-db-load-mode ${gpuServerDbLoadMode} \\
+        --gpu-server-startup-wait ${gpuServerStartupWait} \\
+        --msa-provider ${msaProvider} \\
+        --colabfold-api-host "${colabfoldApiHost}" \\
+        --colabfold-api-min-interval ${colabfoldApiMinInterval} \\
+        --colabfold-api-poll-interval ${colabfoldApiPollInterval} \\
+        --preset ${msaPreset} \\
         --min-depth-warning ${minDepthWarning} \\
         --min-depth-fail ${minDepthFail} \\
         ${useGpu} \\
+        ${preferredGpus} \\
+        ${excludedGpus} \\
         ${refSeq} \\
         ${forceRefresh} \\
+        ${cacheOnly} \\
         ${evalue} \\
         ${sensitivity} \\
+        ${maxSeqs} \\
         ${minSeqId} \\
         ${minCoverage} \\
         ${taxonList} \\
+        ${useExpand} \\
+        ${useEnv} \\
+        ${numIterations} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }
@@ -79,18 +119,18 @@ process BatchMSAGeneration {
     script:
     def dbPath = params.msa_local_db
     def cacheDir = params.msa_cache_dir
-    def maxParallel = params.msa_max_parallel ?: 4
     def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
+    def maxSeqsArg = params.msa_max_seqs ? "--max-seqs ${params.msa_max_seqs}" : ""
     """
-    python3 ${projectDir}/scripts/batch_msa.py \\
+    python3 ${params.code_root}/scripts/batch_msa.py \\
         --sequences '${sequences_json}' \\
         --output_dir . \\
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
-        --max_parallel ${maxParallel} \\
         ${refSeqArg} \\
         ${forceRefresh} \\
+        ${maxSeqsArg} \\
         2>&1 | tee batch_msa.log
     """
 }
@@ -183,6 +223,10 @@ msa_path = None
 msa_check = f"msa/{sequence_name}.a3m"
 if Path(msa_check).exists():
     msa_path = str(Path(msa_check).resolve())
+    print(f"Using MSA: {msa_path}")
+else:
+    # msa_path stays None - will use "empty" for single-sequence mode
+    print("No MSA available - using single-sequence mode (msa: empty)")
 
 # Split by colon for multi-chain input
 chains = sequence_input.split(':')
@@ -198,9 +242,11 @@ for chain_id, chain_seq in zip(chain_ids, chains):
             "sequence": chain_seq.strip()
         }
     }
-    # Apply MSA to all chains to avoid "Cannot mix custom and auto-generated MSAs" error
+    # Use proper Boltz-2 API: msa path if available, otherwise "empty" for single-sequence mode
     if msa_path:
         entry["protein"]["msa"] = msa_path
+    else:
+        entry["protein"]["msa"] = "empty"  # Boltz-2 API for single-sequence mode
     boltz_yaml["sequences"].append(entry)
 
 # Write YAML
@@ -381,55 +427,69 @@ PYEOF
     """
 }
 
-// Boltz with Complex Definition (Multi-chain + Ligands)
-// Accepts a JSON file defining the complex components
-process BoltzFromComplex {
-    label 'Boltz'
-    label 'gpu'
+// Complex prep stage: generate chain-level MSAs and Boltz YAML on host/runtime CPU label.
+// This decouples MSA scheduling from Boltz folding GPU assignment.
+process PrepareComplexWithMSA {
+    label 'CPU'
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*_msa_quality.json"
 
     input:
     tuple val(complex_name), path(complex_json), path(msa_files)
 
     output:
-    path "predictions/*.pdb", emit: pdbs, optional: true
-    path "predictions/*.cif", emit: cifs, optional: true
-    path "predictions/*.json", emit: jsons, optional: true
+    tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared
     path "msa/*.a3m", emit: msa, optional: true
+    path "msa/*_msa_quality.json", emit: quality_report, optional: true
     path "*.log"
 
     script:
-    def recycling = params.boltz_recycling_steps ?: 3
-    def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
+    def msaUseGpuEnabled = params.msa_use_gpu != false ? "true" : "false"
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
+    def msaCacheOnly = params.msa_cache_only ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
-    // MSA Quality Parameters
+    // MSA Quality Parameters - default: fast (quick search)
+    def msaPreset = params.msa_preset ?: "fast"
     def msaTaxonList = params.msa_taxon_list ?: ""
-    def msaEvalue = params.msa_evalue ?: "0.001"
+    // Keep empty by default so run_local_msa.py preset controls e-value.
+    def msaEvalue = params.msa_evalue ?: ""
+    def msaMaxSeqs = params.msa_max_seqs ?: ""
     def msaMinSeqId = params.msa_min_seq_id ?: ""
     def msaMinCoverage = params.msa_min_coverage ?: ""
     def msaMinDepthWarning = params.msa_min_depth_warning ?: 100
     def msaMinDepthFail = params.msa_min_depth_fail ?: 0  // 0 = warn but don't fail
+    // NEW: expansion, envdb, and iteration overrides
+    def msaUseExpand = params.msa_use_expand != null ? params.msa_use_expand : ""
+    def msaUseEnv = params.msa_use_env != null ? params.msa_use_env : ""
+    def msaNumIterations = params.msa_num_iterations ?: ""
+    // GPU policy for MSA so folding workloads can retain priority
+    def msaGpuMode = params.msa_gpu_mode ?: "auto"
+    def msaGpuThreshold = params.msa_gpu_threshold ?: 80
+    def msaPreferredGpus = params.msa_preferred_gpus ?: ""
+    def msaExcludedGpus = params.msa_excluded_gpus ?: ""
+    def msaGpuServerMode = params.msa_gpu_server_mode ?: "persistent"
+    def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
+    def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
+    def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaProvider = params.msa_provider ?: "local"
+    def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
+    def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
+    def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
+    def msaAllowEmptyFallback = params.msa_allow_empty_fallback != null ? params.msa_allow_empty_fallback.toString() : "false"
+    // Per-chain MSA timeout in seconds for complex prep; set <=0 to disable timeout.
+    def msaChainTimeoutSeconds = params.msa_chain_timeout_seconds ?: 3600
     """
-    set -o pipefail  # Propagate exit codes through pipes (fixes | tee masking failures)
+    set -o pipefail
     
-    mkdir -p tmp yamls predictions msa
-    export NUMBA_CACHE_DIR=tmp
-    export XDG_CONFIG_HOME=tmp
-    export TRITON_CACHE_DIR=tmp
-    export HOME=tmp
+    mkdir -p yamls msa
     
     # Convert JSON complex definition to Boltz-2 YAML format
     # AND generate local MSA for each protein chain
-    python3 << 'PYEOF'
+    python3 << 'PYEOF' 2>&1 | tee prep_complex_${complex_name}.log
 import json
 import yaml
 import subprocess
@@ -445,16 +505,38 @@ binder_chain = None
 msa_db_path = "${msaDbPath}"
 cache_dir = "${msaCacheDir}"
 msa_threads = int("${msaThreads}")
+msa_use_gpu_enabled = "${msaUseGpuEnabled}" == "true"
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
+cache_only = "${msaCacheOnly}" == "true"
 complex_name = "${complex_name}"
 # MSA Quality params
+msa_preset = "${msaPreset}"
 msa_taxon_list = "${msaTaxonList}"
 msa_evalue = "${msaEvalue}"
+msa_max_seqs = "${msaMaxSeqs}"
 msa_min_seq_id = "${msaMinSeqId}"
 msa_min_coverage = "${msaMinCoverage}"
 msa_min_depth_warning = "${msaMinDepthWarning}"
 msa_min_depth_fail = "${msaMinDepthFail}"
+# NEW: expansion, envdb, iteration overrides
+msa_use_expand = "${msaUseExpand}"
+msa_use_env = "${msaUseEnv}"
+msa_num_iterations = "${msaNumIterations}"
+msa_gpu_mode = "${msaGpuMode}"
+msa_gpu_threshold = int("${msaGpuThreshold}")
+msa_preferred_gpus = "${msaPreferredGpus}"
+msa_excluded_gpus = "${msaExcludedGpus}"
+msa_gpu_server_mode = "${msaGpuServerMode}"
+msa_gpu_server_wait_timeout = "${msaGpuServerWaitTimeout}"
+msa_gpu_server_db_load_mode = "${msaGpuServerDbLoadMode}"
+msa_gpu_server_startup_wait = "${msaGpuServerStartupWait}"
+msa_provider = "${msaProvider}"
+colabfold_api_host = "${colabfoldApiHost}"
+colabfold_api_min_interval = "${colabfoldApiMinInterval}"
+colabfold_api_poll_interval = "${colabfoldApiPollInterval}"
+msa_allow_empty_fallback = "${msaAllowEmptyFallback}".strip().lower() == "true"
+msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -464,9 +546,12 @@ try:
 except Exception:
     fallback_msa = None
 
+msa_chain_timeout = None if msa_chain_timeout_seconds <= 0 else msa_chain_timeout_seconds
+
 # Track sequence -> MSA path mappings for homodimer support
 # Boltz-2 requires identical sequences to share the same MSA
 seq_to_msa = {}
+msa_failures = []
 
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
@@ -492,46 +577,67 @@ for comp in complex_def.get("components", []):
                 chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
                 msa_dir = "msa"
                 msa_file = f"msa/{complex_name}_{chain_id}.a3m"
-                # Get reference sequence if set (for mutagenesis - all variants share WT MSA)
+                # Optional shared reference sequence for cache key reuse (mutagenesis support)
                 ref_seq = comp.get("reference_sequence") or os.environ.get("MSA_REFERENCE_SEQUENCE", "")
-                ref_seq_arg = f"--reference-sequence '{ref_seq}'" if ref_seq else ""
                 
                 print(f"Generating local MSA for chain {chain_id} using run_local_msa.py...")
                 try:
-                    # Use run_local_msa.py which has:
-                    # 1. File-based locking to serialize parallel jobs
-                    # 2. Cache checking to avoid redundant MSA generation
-                    # 3. GPU/CPU auto-detection
                     cmd = [
-                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "python3", "${params.code_root}/scripts/run_local_msa.py",
                         "--sequence", sequence,
                         "--name", f"{complex_name}_{chain_id}",
                         "--out_dir", msa_dir,
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
-                        "--threads", str(msa_threads)
+                        "--threads", str(msa_threads),
+                        "--preset", msa_preset,
+                        "--gpu-mode", msa_gpu_mode,
+                        "--gpu-threshold", str(msa_gpu_threshold),
+                        "--gpu-server-mode", msa_gpu_server_mode,
+                        "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
+                        "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
+                        "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
+                        "--msa-provider", msa_provider,
+                        "--colabfold-api-host", colabfold_api_host,
+                        "--colabfold-api-min-interval", colabfold_api_min_interval,
+                        "--colabfold-api-poll-interval", colabfold_api_poll_interval,
                     ]
+                    if msa_preferred_gpus:
+                        cmd.extend(["--preferred-gpus", msa_preferred_gpus])
+                    if msa_excluded_gpus:
+                        cmd.extend(["--excluded-gpus", msa_excluded_gpus])
+                    if not msa_use_gpu_enabled:
+                        cmd.append("--cpu-only")
                     if ref_seq:
                         cmd.extend(["--reference-sequence", ref_seq])
                     if force_refresh:
                         cmd.append("--force_refresh")
-                    # Add MSA quality params
+                    if cache_only:
+                        cmd.append("--cache-only")
+                    # Add MSA quality params (can override preset)
                     if msa_taxon_list:
                         cmd.extend(["--taxon-list", msa_taxon_list])
                     if msa_evalue:
                         cmd.extend(["--evalue", msa_evalue])
+                    if msa_max_seqs:
+                        cmd.extend(["--max-seqs", msa_max_seqs])
                     if msa_min_seq_id:
                         cmd.extend(["--min-seq-id", msa_min_seq_id])
                     if msa_min_coverage:
                         cmd.extend(["--min-coverage", msa_min_coverage])
                     cmd.extend(["--min-depth-warning", msa_min_depth_warning])
                     cmd.extend(["--min-depth-fail", msa_min_depth_fail])
+                    # NEW: expansion, envdb, iteration overrides
+                    if msa_use_expand:
+                        cmd.extend(["--use-expand", "1" if msa_use_expand == "true" else "0"])
+                    if msa_use_env:
+                        cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
+                    if msa_num_iterations:
+                        cmd.extend(["--num-iterations", msa_num_iterations])
                     
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    result = subprocess.run(cmd, text=True, timeout=msa_chain_timeout)
                     if result.returncode != 0:
-                        print(f"MSA generation stderr: {result.stderr}")
                         raise RuntimeError(f"MSA script failed with code {result.returncode}")
-                    print(result.stdout)
                     
                     if Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
@@ -541,6 +647,21 @@ for comp in complex_def.get("components", []):
                         print(f"Generated MSA: {msa_file}")
                 except Exception as e:
                     print(f"MSA generation failed for chain {chain_id}: {e}")
+                    msa_failures.append(f"protein chain {chain_id}: {e}")
+        
+        # Fallback policy: by default fail hard for missing protein-chain MSA when use_msa=true.
+        if "msa" not in entry["protein"]:
+            if use_msa and not msa_allow_empty_fallback:
+                chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
+                reason = (
+                    f"No MSA available for protein chain {chain_id} while use_msa=true "
+                    "(set msa_allow_empty_fallback=true to allow msa: empty)"
+                )
+                print(f"ERROR: {reason}")
+                msa_failures.append(reason)
+            else:
+                entry["protein"]["msa"] = "empty"
+                print(f"No MSA available for chain {comp_id} - using single-sequence mode")
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
@@ -603,15 +724,43 @@ for comp in complex_def.get("components", []):
                 print(f"Generating MSA for peptide chain {chain_id} ({len(peptide_seq)} aa)...")
                 try:
                     cmd = [
-                        "python3", "${projectDir}/scripts/run_local_msa.py",
+                        "python3", "${params.code_root}/scripts/run_local_msa.py",
                         "--sequence", peptide_seq,
                         "--name", f"{complex_name}_{chain_id}",
                         "--out_dir", "msa",
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
-                        "--threads", str(msa_threads)
+                        "--threads", str(msa_threads),
+                        "--preset", msa_preset,
+                        "--gpu-mode", msa_gpu_mode,
+                        "--gpu-threshold", str(msa_gpu_threshold),
+                        "--gpu-server-mode", msa_gpu_server_mode,
+                        "--gpu-server-wait-timeout", msa_gpu_server_wait_timeout,
+                        "--gpu-server-db-load-mode", msa_gpu_server_db_load_mode,
+                        "--gpu-server-startup-wait", msa_gpu_server_startup_wait,
+                        "--msa-provider", msa_provider,
+                        "--colabfold-api-host", colabfold_api_host,
+                        "--colabfold-api-min-interval", colabfold_api_min_interval,
+                        "--colabfold-api-poll-interval", colabfold_api_poll_interval,
                     ]
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                    if msa_preferred_gpus:
+                        cmd.extend(["--preferred-gpus", msa_preferred_gpus])
+                    if msa_excluded_gpus:
+                        cmd.extend(["--excluded-gpus", msa_excluded_gpus])
+                    if not msa_use_gpu_enabled:
+                        cmd.append("--cpu-only")
+                    if cache_only:
+                        cmd.append("--cache-only")
+                    # Add quality overrides if set
+                    if msa_max_seqs:
+                        cmd.extend(["--max-seqs", msa_max_seqs])
+                    if msa_use_expand:
+                        cmd.extend(["--use-expand", "1" if msa_use_expand == "true" else "0"])
+                    if msa_use_env:
+                        cmd.extend(["--use-env", "1" if msa_use_env == "true" else "0"])
+                    if msa_num_iterations:
+                        cmd.extend(["--num-iterations", msa_num_iterations])
+                    result = subprocess.run(cmd, text=True, timeout=msa_chain_timeout)
                     if result.returncode == 0 and Path(msa_file).exists():
                         msa_resolved = str(Path(msa_file).resolve())
                         entry["protein"]["msa"] = msa_resolved
@@ -619,7 +768,7 @@ for comp in complex_def.get("components", []):
                         print(f"Generated peptide MSA: {msa_file}")
                     else:
                         # MSA failed - fall back to empty
-                        print(f"Peptide MSA generation returned no results, using single-sequence mode")
+                        print("Peptide MSA generation returned no results, using single-sequence mode")
                         entry["protein"]["msa"] = "empty"
                 except Exception as e:
                     print(f"Peptide MSA generation failed: {e}, using single-sequence mode")
@@ -634,12 +783,62 @@ for comp in complex_def.get("components", []):
 if binder_chain:
     boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
 
-with open(f"yamls/${complex_name}.yaml", "w") as f:
+if msa_failures:
+    print("ERROR: Aborting complex preparation because required protein-chain MSA generation failed.")
+    for msg in msa_failures:
+        print(f"  - {msg}")
+    raise SystemExit(2)
+
+yaml_path = f"yamls/{complex_name}.yaml"
+with open(yaml_path, "w") as f:
     yaml.dump(boltz_yaml, f, default_flow_style=False)
 print(yaml.dump(boltz_yaml, default_flow_style=False))
+print(f"Prepared complex YAML: {yaml_path}")
 PYEOF
-    
-    # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
+
+    if [ ! -f "yamls/${complex_name}.yaml" ]; then
+        echo "ERROR: Failed to prepare complex YAML for ${complex_name}"
+        exit 1
+    fi
+    """
+}
+
+// Boltz folding stage: consumes prepared YAML + precomputed MSAs.
+process BoltzFromComplex {
+    label 'Boltz'
+    label 'gpu'
+    publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+
+    input:
+    tuple val(complex_name), path(complex_yaml), path(msa_dir)
+
+    output:
+    path "predictions/*.pdb", emit: pdbs, optional: true
+    path "predictions/*.cif", emit: cifs, optional: true
+    path "predictions/*.json", emit: jsons, optional: true
+    path "*.log"
+
+    script:
+    def recycling = params.boltz_recycling_steps ?: 3
+    def sampling = params.boltz_sampling_steps ?: 50
+    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    """
+    set -o pipefail
+
+    mkdir -p tmp yamls predictions msa
+    export NUMBA_CACHE_DIR=tmp
+    export XDG_CONFIG_HOME=tmp
+    export TRITON_CACHE_DIR=tmp
+    export HOME=tmp
+
+    cp -L "${complex_yaml}" "yamls/${complex_name}.yaml"
+    if [ -d "${msa_dir}" ]; then
+        cp -L "${msa_dir}"/*.a3m msa/ 2>/dev/null || true
+    fi
+
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
@@ -654,7 +853,7 @@ PYEOF
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_complex_${complex_name}.log
-    
+
     for dir in boltz_results_yamls/predictions/*/; do
         for model_file in \${dir}/*.pdb \${dir}/*.cif; do
             if [ -f "\${model_file}" ]; then cp "\${model_file}" predictions/; fi
@@ -664,11 +863,7 @@ PYEOF
         done
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
-    
-    # ═══════════════════════════════════════════════════════════════════════════
-    # OUTPUT VALIDATION: Fail if no structure files were produced
-    # Catches silent Boltz failures (e.g., CCD errors, input parsing errors)
-    # ═══════════════════════════════════════════════════════════════════════════
+
     if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then
         echo "ERROR: Boltz produced no output files. Check log for errors."
         echo "Common causes: CCD component not found, malformed YAML, GPU OOM"
@@ -800,13 +995,23 @@ workflow structure_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
-    def boltz_use_msa = params.boltz_use_msa ?: false
-    def rf3_use_msa = params.rf3_use_msa ?: false
+    def toBool = { v, defVal ->
+        if (v == null) return defVal
+        if (v instanceof Boolean) return v
+        return v.toString().equalsIgnoreCase('true')
+    }
+    def boltz_use_msa = toBool(params.boltz_use_msa, false)
+    def rf3_use_msa = toBool(params.rf3_use_msa, false)
+    def protenix_use_msa = toBool(params.protenix_use_msa, true)
 
     structures = channel.empty()
 
-    // Determine if we need MSA for any predictor
-    def need_msa = (pred_method in ['boltz', 'both'] && boltz_use_msa) || (pred_method in ['rf3', 'both'] && rf3_use_msa)
+    // Determine which predictors need MSA
+    def need_boltz_msa  = (pred_method in ['boltz', 'both', 'all'] && boltz_use_msa)
+    def need_rf3_msa    = (pred_method in ['rf3', 'both', 'all'] && rf3_use_msa)
+    // Protenix resolves its own MSA backend in the prediction module.
+    // Do not trigger parent GenerateLocalMSA just because Protenix MSA is enabled.
+    def need_msa = need_boltz_msa || need_rf3_msa
 
     if (need_msa) {
         def provided_msa = params.msa_path ? file(params.msa_path) : null
@@ -816,18 +1021,23 @@ workflow structure_prediction_wf {
             // Use precomputed MSA (e.g., from MSA batch job)
             def inputs_with_msa = input_ch.map { seq, name -> tuple(seq, name, provided_msa) }
 
-            if (pred_method == 'boltz' || pred_method == 'both') {
+            if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
             }
 
-            if (pred_method == 'rf3' || pred_method == 'both') {
+            if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
                 structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
             }
+
+            if (pred_method == 'protenix' || pred_method == 'all') {
+                // Protenix takes [sequence, name] and handles MSA internally via protenix prep
+                ProtenixPredict(input_ch)
+                structures = structures.mix(ProtenixPredict.out.cifs)
+            }
         } else {
             // STEP 1: Generate MSA ONCE per unique sequence
-            // Extract base sequence (first item if all are same sequence with different job IDs)
             def base_seq = input_ch
                 .first()
                 .map { seq, _name -> tuple(seq, "base_msa") }
@@ -835,37 +1045,88 @@ workflow structure_prediction_wf {
             GenerateLocalMSA(base_seq)
 
             // STEP 2: Combine the single MSA with all job inputs
-            // GenerateLocalMSA.out.msa = [sequence, "base_msa", path(msa)]
             def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
-
             def inputs_with_msa = input_ch.combine(msa_ch)
-            // Now: [sequence, job_name, msa_file]
 
-            // STEP 3: Run predictions with cached MSA (no rate limiting!)
-            if (pred_method == 'boltz' || pred_method == 'both') {
+            // STEP 3: Run predictions with cached MSA
+            if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
             }
 
-            if (pred_method == 'rf3' || pred_method == 'both') {
+            if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
                 structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            }
+
+            if (pred_method == 'protenix' || pred_method == 'all') {
+                ProtenixPredict(input_ch)
+                structures = structures.mix(ProtenixPredict.out.cifs)
             }
         }
     }
     else {
         // No MSA needed - run directly
-        if (pred_method == 'boltz' || pred_method == 'both') {
+        if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
             BoltzFromSequence(input_ch)
             structures = structures.mix(BoltzFromSequence.out.pdbs, BoltzFromSequence.out.cifs)
         }
 
-        if (pred_method == 'rf3' || pred_method == 'both') {
-            def dummy_msa = file("${projectDir}/NO_MSA")
+        if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
+            def dummy_msa = file("${params.code_root}/NO_MSA")
             def inputs_no_msa = input_ch.map { seq, name -> tuple(seq, name, dummy_msa) }
             RF3FromSequence(inputs_no_msa)
             structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
         }
+
+        if (pred_method == 'protenix' || pred_method == 'all') {
+            // Protenix handles its own MSA via built-in protenix prep or ESM
+            ProtenixPredict(input_ch)
+            structures = structures.mix(ProtenixPredict.out.cifs)
+        }
+    }
+
+    emit:
+    structures
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLEX PREDICTION WORKFLOW
+// ─────────────────────────────────────────────────────────────────────────────
+// Centralized routing for complex (multi-chain + ligand) structure predictions.
+// Dispatches to the appropriate predictor based on params.pred_method.
+// Input: channel of [name, complex_json, msa_file] tuples
+
+workflow complex_prediction_wf {
+    take:
+    input_ch  // Channel of [name, complex_json, msa_file]
+
+    main:
+    def pred_method = params.pred_method ?: 'boltz'
+
+    structures = channel.empty()
+
+    if (pred_method == 'protenix') {
+        // Convert BMS JSON → Protenix-format JSON, then predict
+        PrepProtenixComplex(input_ch)
+        ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+        structures = ProtenixFromComplex.out.structures
+    }
+    else if (pred_method == 'all') {
+        // Run both Boltz + Protenix in parallel
+        PrepareComplexWithMSA(input_ch)
+        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+
+        PrepProtenixComplex(input_ch)
+        ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
+
+        structures = BoltzFromComplex.out.pdbs.mix(ProtenixFromComplex.out.structures)
+    }
+    else {
+        // Default: Boltz-2 complex prediction
+        PrepareComplexWithMSA(input_ch)
+        BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
+        structures = BoltzFromComplex.out.pdbs
     }
 
     emit:

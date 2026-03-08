@@ -39,6 +39,35 @@ def get_work_dir() -> Path:
     return get_data_root() / "work"
 
 
+def get_container_dir() -> Path:
+    env = os.getenv("BMS_CONTAINER_DIR")
+    if env:
+        return _resolve_path(env)
+    return get_data_root() / "apptainer"
+
+
+def get_container_path(container_name: str) -> Path:
+    return get_container_dir() / container_name
+
+
+def get_rfd_models_dir() -> Path:
+    env = os.getenv("BMS_RFD_MODELS")
+    if env:
+        return _resolve_path(env)
+
+    weights_root = get_weights_root()
+    default_dir = weights_root / "rfd"
+    if default_dir.exists():
+        return default_dir
+
+    # RFantibody bundles an RFdiffusion checkpoint with different naming.
+    rfantibody_dir = weights_root / "rfantibody" / "rfantibody_repo" / "weights"
+    if (rfantibody_dir / "RFdiffusion_Ab.pt").exists():
+        return rfantibody_dir
+
+    return default_dir
+
+
 def _get_default_data_root() -> Path:
     """Return user-space default data root for portability."""
     return Path.home() / ".biomodstack"
@@ -104,13 +133,22 @@ def get_db_url() -> str:
 
 def get_allowed_roots() -> dict[str, Path]:
     code_root = get_code_root()
-    return {
+    roots = {
         "bms_results": get_results_dir(),
         "benchmarkdata": code_root / "benchmarkdata",
         "lib": code_root / "lib",
         "rcsb": code_root / "rcsb",
         "inputs": get_inputs_dir(),
     }
+    # Host filesystem roots for Nanopore/NGS data browsing
+    home = Path.home()
+    downloads = home / "Downloads"
+    if downloads.exists():
+        roots["downloads"] = downloads
+    data_root = get_data_root()
+    if data_root.exists() and data_root != code_root:
+        roots["data"] = data_root
+    return roots
 
 
 def resolve_allowed_path(rel_path: str) -> Path:

@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
-import type { Job } from '../lib/api';
+import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration } from '../lib/api';
+import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -25,6 +25,7 @@ const TABS = [
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
+type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
 
 // Formatting helpers
 const formatMetric = (val: number | null | undefined, decimals = 2): string =>
@@ -32,7 +33,7 @@ const formatMetric = (val: number | null | undefined, decimals = 2): string =>
 
 const getMetricColor = (metric: string, value: number | null): string => {
     if (value == null) return 'text-slate-500';
-    if (metric === 'plddt_overall' || metric === 'plddt_binder') {
+    if (metric === 'plddt_overall' || metric === 'plddt_binder' || metric === 'plddt_target') {
         return value >= 80 ? 'text-emerald-400' : value >= 60 ? 'text-amber-400' : 'text-red-400';
     }
     if (metric === 'pae_overall' || metric === 'pae_interaction') {
@@ -40,6 +41,9 @@ const getMetricColor = (metric: string, value: number | null): string => {
     }
     if (metric === 'ptm' || metric === 'conf_score') {
         return value >= 0.7 ? 'text-emerald-400' : value >= 0.5 ? 'text-amber-400' : 'text-red-400';
+    }
+    if (metric === 'fampnn_psce') {
+        return value <= 0.2 ? 'text-emerald-400' : value <= 0.4 ? 'text-amber-400' : 'text-red-400';
     }
     return 'text-slate-300';
 };
@@ -59,19 +63,122 @@ const getBindingTier = (iptm: number | null | undefined, epitopeContacts: number
     return { tier: 'D', color: 'text-red-300', bgColor: 'bg-red-500/30 border-red-500/50', label: 'Low' };
 };
 
+const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
+    const modelId = (job.model_id || '').toLowerCase();
+    const mode = (job.mode || '').toLowerCase();
+    return (
+        modelId === 'nanopore' ||
+        modelId.includes('nanopore') ||
+        mode === 'methylation_analysis' ||
+        mode === 'nanopore_methylation'
+    );
+};
+
+const inferDesignOutputSource = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): OutputSourceFilter => {
+    const path = design.pdb_path || '';
+    const metrics = design.confidence_metrics || {};
+    if (path.includes('/validated_designs/') || path.includes('/collected/structure_validation/')) return 'validation';
+    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) return 'fampnn';
+    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) return 'rfantibody';
+    if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) return 'validation';
+    return 'all';
+};
+
+const getOutputSourceLabel = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
+    const source = inferDesignOutputSource(design);
+    if (source === 'validation') {
+        const metrics = design.confidence_metrics || {};
+        if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) {
+            return 'Protenix';
+        }
+        return 'Validation';
+    }
+    if (source === 'fampnn') return 'FAMPNN';
+    if (source === 'rfantibody') return 'RFantibody';
+    return 'Other';
+};
+
+const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
+    const source = inferDesignOutputSource(design);
+    const sampleMatch = design.name.match(/_sample_(\d+)$/);
+    if (source === 'validation' && sampleMatch) {
+        return `${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`;
+    }
+    if (source === 'fampnn') return 'FAMPNN Candidate';
+    if (source === 'rfantibody') return 'RFantibody Backbone';
+    return design.name;
+};
+
+const parseCustomCdrLengths = (job: Job | null | undefined): Record<string, number> => {
+    const loopsRaw = job?.params?.antibody_design_loops;
+    const rangesRaw = job?.params?.rfantibody_design_loops_custom;
+    if (!loopsRaw || !rangesRaw) return {};
+
+    const loopNames = Array.isArray(loopsRaw)
+        ? loopsRaw.map(String).map(v => v.trim()).filter(Boolean)
+        : String(loopsRaw).split(',').map(v => v.trim()).filter(Boolean);
+
+    const rangeValues = Array.isArray(rangesRaw)
+        ? rangesRaw.map(String).map(v => v.trim()).filter(Boolean)
+        : String(rangesRaw).replace(/^\[/, '').replace(/\]$/, '').split(',').map(v => v.trim()).filter(Boolean);
+
+    if (loopNames.length !== rangeValues.length) return {};
+
+    const out: Record<string, number> = {};
+    loopNames.forEach((loopName, idx) => {
+        const m = rangeValues[idx]?.match(/^[A-Za-z](\d+)-(\d+)$/);
+        if (!m) return;
+        const start = Number(m[1]);
+        const end = Number(m[2]);
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+            out[loopName] = end - start + 1;
+        }
+    });
+    return out;
+};
+
+const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
+    const selectedLoops = job?.params?.selected_cdr_loops;
+    if (Array.isArray(selectedLoops) && selectedLoops.length > 0) {
+        return selectedLoops.map((loopId) => String(loopId).trim().toUpperCase()).filter(Boolean);
+    }
+    const rawLoops = job?.params?.antibody_design_loops;
+    if (typeof rawLoops === 'string' && rawLoops.trim()) {
+        return rawLoops.split(',').map((loopId) => loopId.trim().toUpperCase()).filter(Boolean);
+    }
+    return ['H1', 'H2', 'H3'];
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
 
     // State
     const [selectedJobId, setSelectedJobId] = useState<string>(jobId || '');
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
+    const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
+    const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+    const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
+    const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
+    const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
+        loop_ids: ['H3'],
+        variants_per_design: 8,
+        allow_insertions: true,
+        allow_deletions: true,
+        indel_sizes: [1],
+        indel_probability: 1,
+        allowed_aas: [],
+        blocked_aas: [],
+        predictor: 'protenix',
+        msa_provider: 'local',
+    });
 
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
-    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr'>('plddt');  // Structure coloring mode
+    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr' | 'frustration'>('plddt');  // Structure coloring mode
     // Compare feature disabled for now:
     // const [showReferencePanel, setShowReferencePanel] = useState(false);
     // const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
@@ -96,20 +203,81 @@ export function ResultsViewer() {
         queryFn: () => fetchJobs({ include_children: true }),
     });
     const jobs = jobsData?.data.jobs ?? [];
+    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
+    const activeJob = useMemo(
+        () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
+        [nonNgsJobs, selectedJobId]
+    );
+    const isAntibodyContext = useMemo(() => {
+        if (!activeJob) return false;
+        const modelId = (activeJob.model_id || '').toLowerCase();
+        const mode = (activeJob.mode || '').toLowerCase();
+        const name = (activeJob.name || '').toLowerCase();
+        const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
+        return (
+            modelId.includes('antibody') ||
+            modelId === 'fampnn_child' ||
+            mode.includes('antibody') ||
+            name.includes('antibody') ||
+            rfdMode === 'antibody_denovo_pipeline'
+        );
+    }, [activeJob]);
+    const availableCdrLoopIds = useMemo(() => getAvailableCdrLoopIds(activeJob), [activeJob]);
+
+    useEffect(() => {
+        const heavyLoops = availableCdrLoopIds.filter((loopId) => loopId.startsWith('H'));
+        const preferredLoop = heavyLoops.includes('H3') ? ['H3'] : heavyLoops.slice(0, 1);
+        const fallbackLoops = preferredLoop.length > 0 ? preferredLoop : availableCdrLoopIds.slice(0, 1);
+        setCdrIndelConfig((current) => ({
+            ...current,
+            loop_ids: (() => {
+                const kept = current.loop_ids.filter((loopId) => availableCdrLoopIds.includes(loopId));
+                return kept.length > 0 ? kept : fallbackLoops;
+            })(),
+        }));
+    }, [availableCdrLoopIds]);
 
     // Sync URL with selection
     useEffect(() => {
-        if (jobId && jobId !== selectedJobId) {
-            setSelectedJobId(jobId);
-        } else if (!jobId && jobs.length > 0 && !selectedJobId) {
-            const completedJobs = jobs.filter((j: Job) => j.status === 'completed');
-            if (completedJobs.length > 0) {
-                const recent = completedJobs[0];
-                setSelectedJobId(recent.id);
-                navigate(`/designs/${recent.id}`, { replace: true });
+        const fallbackJob = nonNgsJobs.find((j: Job) => j.status === 'completed') ?? nonNgsJobs[0];
+
+        if (nonNgsJobs.length === 0) {
+            if (selectedJobId) {
+                setSelectedJobId('');
+                setSelectedDesignId('');
             }
+            if (jobId) {
+                navigate('/designs', { replace: true });
+            }
+            return;
         }
-    }, [jobId, jobs, selectedJobId, navigate]);
+
+        if (jobId) {
+            const requestedJob = nonNgsJobs.find((j: Job) => j.id === jobId);
+            if (requestedJob) {
+                if (selectedJobId !== requestedJob.id) {
+                    setSelectedJobId(requestedJob.id);
+                    setSelectedDesignId('');
+                }
+                return;
+            }
+
+            if (fallbackJob) {
+                if (selectedJobId !== fallbackJob.id) {
+                    setSelectedJobId(fallbackJob.id);
+                    setSelectedDesignId('');
+                }
+                navigate(`/designs/${fallbackJob.id}`, { replace: true });
+            }
+            return;
+        }
+
+        if (!activeJob && fallbackJob) {
+            setSelectedJobId(fallbackJob.id);
+            setSelectedDesignId('');
+            navigate(`/designs/${fallbackJob.id}`, { replace: true });
+        }
+    }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate]);
 
     const handleJobChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newId = e.target.value;
@@ -132,7 +300,7 @@ export function ResultsViewer() {
             include_children: true, // Include designs from child jobs (mutagenesis variants, exploration spawns)
             limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
             offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
-            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | undefined,
+            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high' | undefined,
             sort_desc: sortDir === 'desc',
             backbone_id: selectedBackboneId ?? undefined,
             rog_min: rogMinValue,
@@ -140,7 +308,7 @@ export function ResultsViewer() {
             rfd_rog_min: rfdRogMinValue,
             rfd_rog_max: rfdRogMaxValue,
         }),
-        enabled: !!selectedJobId,
+        enabled: !!activeJob,
     });
     const designs = designsData?.data.designs ?? [];
     const totalDesigns = designsData?.data.total ?? 0;
@@ -150,7 +318,7 @@ export function ResultsViewer() {
     const { data: backboneSummaryData } = useQuery({
         queryKey: ['backboneSummary', selectedJobId],
         queryFn: () => fetchBackboneSummary(selectedJobId),
-        enabled: !!selectedJobId,
+        enabled: !!activeJob,
     });
     const backboneSummary = backboneSummaryData?.data;
 
@@ -262,6 +430,14 @@ export function ResultsViewer() {
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
     }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
+    const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
+    const cdrLengthFallbacks = useMemo(() => parseCustomCdrLengths(activeJob), [activeJob]);
+    const tableDesigns = useMemo(() => {
+        if (outputSourceFilter === 'all') return sortedDesigns;
+        return sortedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
+    }, [sortedDesigns, outputSourceFilter]);
+    const currentPageDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
+    const allCurrentPageSelected = currentPageDesignIds.length > 0 && currentPageDesignIds.every((designId) => selectedDesignSet.has(designId));
 
     // Fetch PDB content when design selected
     // Note: MolstarViewer now fetches structure directly from API URL
@@ -273,7 +449,22 @@ export function ResultsViewer() {
         }
     }, [designs, selectedDesignId]);
 
-    const activeJob = jobs.find((j: Job) => j.id === selectedJobId);
+    useEffect(() => {
+        setSelectedDesignIds([]);
+        setIterationMessage(null);
+    }, [selectedJobId]);
+
+    // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
+    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
+    useEffect(() => {
+        if (isOligoJob) {
+            setColorMode('default');
+        } else if ((activeJob?.name || '').toLowerCase().includes('frustrampnn')) {
+            setColorMode('frustration');
+        } else {
+            setColorMode('plddt');
+        }
+    }, [selectedJobId, isOligoJob, activeJob?.name]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
@@ -288,6 +479,9 @@ export function ResultsViewer() {
         const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
         const epitopeContacts = designs.map(d => d.epitope_contact_count).filter((v): v is number => v != null);
+        const psces = designs.map(d => d.fampnn_psce).filter((v): v is number => v != null);
+        const frustrationHigh = designs.map(d => d.frustration_high_count).filter((v): v is number => v != null);
+        const frustrationPct = designs.map(d => d.frustration_pct_high).filter((v): v is number => v != null);
 
         // Binding tier distribution
         const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
@@ -310,6 +504,10 @@ export function ResultsViewer() {
             avgAffinity: affinities.length ? affinities.reduce((a, b) => a + b, 0) / affinities.length : null,
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             avgEpitopeContacts: epitopeContacts.length ? epitopeContacts.reduce((a, b) => a + b, 0) / epitopeContacts.length : null,
+            avgPsce: psces.length ? psces.reduce((a, b) => a + b, 0) / psces.length : null,
+            avgFrustrationHigh: frustrationHigh.length ? frustrationHigh.reduce((a, b) => a + b, 0) / frustrationHigh.length : null,
+            avgFrustrationPctHigh: frustrationPct.length ? frustrationPct.reduce((a, b) => a + b, 0) / frustrationPct.length : null,
+            annotatedWithFrustration: frustrationHigh.length,
             highConfidence: plddts.filter(v => v >= 80).length,
             lowError: paes.filter(v => v <= 5).length,
             highContacts: epitopeContacts.filter(v => v >= 5).length,
@@ -328,6 +526,79 @@ export function ResultsViewer() {
             setSortDir('asc');
         }
     };
+
+    const toggleDesignSelection = (designId: string, selected: boolean) => {
+        setSelectedDesignIds((current) => {
+            const currentSet = new Set(current);
+            if (selected) currentSet.add(designId);
+            else currentSet.delete(designId);
+            return Array.from(currentSet);
+        });
+    };
+
+    const selectCurrentPage = () => {
+        setSelectedDesignIds((current) => Array.from(new Set([...current, ...currentPageDesignIds])));
+    };
+
+    const clearSelectedDesigns = () => {
+        setSelectedDesignIds([]);
+    };
+
+    const toggleCurrentPageSelection = (selected: boolean) => {
+        if (selected) {
+            selectCurrentPage();
+            return;
+        }
+        setSelectedDesignIds((current) => current.filter((designId) => !currentPageDesignIds.includes(designId)));
+    };
+
+    const getErrorMessage = (error: unknown): string => {
+        const detail = (error as any)?.response?.data?.detail;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail)) return detail.join(', ');
+        if (detail && typeof detail === 'object') return JSON.stringify(detail);
+        if (error instanceof Error) return error.message;
+        return 'Launch failed';
+    };
+
+    const launchIterationMutation = useMutation({
+        mutationFn: async ({
+            action,
+            cdrIndelConfig,
+        }: {
+            action: AntibodyIterationAction;
+            cdrIndelConfig?: AntibodyCdrIndelConfig;
+        }) => {
+            if (!selectedJobId) {
+                throw new Error('Select a job before launching a new round.');
+            }
+            if (selectedDesignIds.length === 0) {
+                throw new Error('Select at least one design before launching a new round.');
+            }
+            return launchAntibodyIteration({
+                source_job_id: selectedJobId,
+                design_ids: selectedDesignIds,
+                action,
+                cdr_indel_config: cdrIndelConfig,
+            });
+        },
+        onSuccess: (response) => {
+            const launchedJob = response.data.launched_job;
+            setIterationMessage({
+                kind: 'success',
+                text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
+            });
+            setShowCdrIndelModal(false);
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            queryClient.invalidateQueries({ queryKey: ['jobs', 'include_children'] });
+        },
+        onError: (error) => {
+            setIterationMessage({
+                kind: 'error',
+                text: getErrorMessage(error),
+            });
+        },
+    });
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -357,7 +628,7 @@ export function ResultsViewer() {
                             >
                                 <option value="">Select a job...</option>
                                 {(() => {
-                                    const sortedJobs = [...jobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                                    const sortedJobs = [...nonNgsJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
                                     // Build batch-based aggregation map for jobs sharing batch_id
                                     // This handles mutagenesis workflows where child jobs have batch_id but no parent_job_id
@@ -460,7 +731,13 @@ export function ResultsViewer() {
                     </div>
                 </div>
 
-                {selectedJobId && (
+                {nonNgsJobs.length === 0 && (
+                    <div className="bg-slate-900/50 rounded-xl border border-slate-800 p-8 text-center text-slate-400">
+                        No protein workflow jobs available for Data Viewer. NGS jobs are available in NGS Data Visualization Toolkit.
+                    </div>
+                )}
+
+                {activeJob && (
                     <>
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
@@ -543,6 +820,337 @@ export function ResultsViewer() {
                             </div>
                         )}
 
+                        {isAntibodyContext && (
+                            <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div className="text-sm font-medium text-cyan-200">Antibody Iteration Set</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Use the Data Table filters and check rows to define a working set, then launch the next round directly from this viewer.
+                                        </p>
+                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                            <span className="rounded-full border border-cyan-500/30 bg-slate-900/70 px-2 py-1 text-cyan-200">
+                                                {selectedDesignIds.length} selected
+                                            </span>
+                                            <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-400">
+                                                {sortedDesigns.length} on current filtered page
+                                            </span>
+                                            {launchIterationMutation.isPending && (
+                                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                    Launching {launchIterationMutation.variables?.action}...
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={selectCurrentPage}
+                                            disabled={currentPageDesignIds.length === 0}
+                                            className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Select Page
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={clearSelectedDesigns}
+                                            disabled={selectedDesignIds.length === 0}
+                                            className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Clear
+                                        </button>
+                                        {([
+                                            ['validate_boltz2', 'Boltz-2'],
+                                            ['validate_protenix', 'Protenix'],
+                                            ['ppiflow_maturation', 'PPIFlow'],
+                                            ['fampnn_redesign', 'FAMPNN'],
+                                            ['frustrampnn', 'FrustraMPNN'],
+                                        ] as Array<[AntibodyIterationAction, string]>).map(([action, label]) => (
+                                            <button
+                                                key={action}
+                                                type="button"
+                                                onClick={() => {
+                                                    setIterationMessage(null);
+                                                    launchIterationMutation.mutate({ action });
+                                                }}
+                                                disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                    action === 'validate_protenix'
+                                                        ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
+                                                        : action === 'validate_boltz2'
+                                                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
+                                                            : action === 'ppiflow_maturation'
+                                                                ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
+                                                                : action === 'fampnn_redesign'
+                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
+                                                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
+                                                }`}
+                                                title={
+                                                    action === 'validate_boltz2'
+                                                        ? 'Re-run Boltz-2 validation on the selected set and pause at structure review.'
+                                                        : action === 'validate_protenix'
+                                                            ? 'Re-run Protenix validation on the selected set and pause at structure review.'
+                                                            : action === 'ppiflow_maturation'
+                                                                ? 'Run post-validation PPIFlow maturation on the selected set.'
+                                                                : action === 'fampnn_redesign'
+                                                                    ? 'Use the selected structures as the next FAMPNN redesign inputs.'
+                                                                    : 'Run FrustraMPNN analysis on the selected set.'
+                                                }
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setIterationMessage(null);
+                                                setShowCdrIndelModal(true);
+                                            }}
+                                            disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                            className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            title="Generate explicit CDR insertion/deletion variants from the selected set, then validate them as a new round."
+                                        >
+                                            CDR Indels
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {iterationMessage && (
+                                    <div
+                                        className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                                            iterationMessage.kind === 'success'
+                                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                                : 'border-red-500/30 bg-red-500/10 text-red-200'
+                                        }`}
+                                    >
+                                        {iterationMessage.text}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {showCdrIndelModal && isAntibodyContext && (
+                            <div className="mb-4 rounded-xl border border-fuchsia-500/30 bg-slate-950/95 p-4 shadow-2xl">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <div className="text-sm font-medium text-fuchsia-200">CDR Indel Round</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Generate explicit insertion/deletion variants on the selected CDR loops, preserve the full complex context, then launch a new validation round.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCdrIndelModal(false)}
+                                        className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div className="space-y-4">
+                                        <div>
+                                            <div className="text-xs text-slate-500 mb-2">Target loops</div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {availableCdrLoopIds.map((loopId) => {
+                                                    const selected = cdrIndelConfig.loop_ids.includes(loopId);
+                                                    return (
+                                                        <button
+                                                            key={loopId}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setCdrIndelConfig((current) => {
+                                                                    const next = new Set(current.loop_ids);
+                                                                    if (next.has(loopId)) next.delete(loopId);
+                                                                    else next.add(loopId);
+                                                                    return { ...current, loop_ids: Array.from(next).sort() };
+                                                                });
+                                                            }}
+                                                            className={`rounded-lg border px-3 py-2 text-xs transition-colors ${selected
+                                                                ? 'border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-200'
+                                                                : 'border-slate-700 bg-slate-800/70 text-slate-300 hover:border-slate-600'
+                                                                }`}
+                                                        >
+                                                            {loopId}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="mt-2 text-[11px] text-slate-500">
+                                                Keep all loops on one chain family per round. Mixed H/L indels are rejected because variant generation is chain-specific.
+                                            </p>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="text-xs text-slate-500">
+                                                Variants / design
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={200}
+                                                    value={cdrIndelConfig.variants_per_design}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        variants_per_design: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                />
+                                            </label>
+                                            <label className="text-xs text-slate-500">
+                                                Indel sizes
+                                                <input
+                                                    type="text"
+                                                    value={cdrIndelConfig.indel_sizes.join(',')}
+                                                    onChange={(e) => {
+                                                        const sizes = e.target.value
+                                                            .split(',')
+                                                            .map((token) => Number(token.trim()))
+                                                            .filter((value) => Number.isFinite(value) && value > 0)
+                                                            .map((value) => Math.floor(value));
+                                                        setCdrIndelConfig((current) => ({
+                                                            ...current,
+                                                            indel_sizes: sizes.length > 0 ? Array.from(new Set(sizes)).sort((a, b) => a - b) : [1],
+                                                        }));
+                                                    }}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                    placeholder="1,2,3"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={cdrIndelConfig.allow_insertions}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_insertions: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                />
+                                                Allow insertions
+                                            </label>
+                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={cdrIndelConfig.allow_deletions}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_deletions: e.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                />
+                                                Allow deletions
+                                            </label>
+                                        </div>
+
+                                        <label className="block text-xs text-slate-500">
+                                            Allowed insertion amino acids
+                                            <input
+                                                type="text"
+                                                value={(cdrIndelConfig.allowed_aas || []).join('')}
+                                                onChange={(e) => {
+                                                    const aas = Array.from(new Set(
+                                                        e.target.value.toUpperCase().replace(/[^A-Z]/g, '').split('')
+                                                    )).filter((aa) => 'ACDEFGHIKLMNPQRSTVWY'.includes(aa));
+                                                    setCdrIndelConfig((current) => ({ ...current, allowed_aas: aas }));
+                                                }}
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                placeholder="Leave blank for full AA set"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="text-xs text-slate-500">
+                                                Validator
+                                                <select
+                                                    value={cdrIndelConfig.predictor}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        predictor: e.target.value === 'boltz2' ? 'boltz2' : 'protenix',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                >
+                                                    <option value="protenix">Protenix</option>
+                                                    <option value="boltz2">Boltz-2</option>
+                                                </select>
+                                            </label>
+                                            <label className="text-xs text-slate-500">
+                                                MSA provider
+                                                <select
+                                                    value={cdrIndelConfig.msa_provider}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                    }))}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                >
+                                                    <option value="local">Local</option>
+                                                    <option value="colabfold_api">ColabFold API</option>
+                                                </select>
+                                            </label>
+                                        </div>
+
+                                        <label className="block text-xs text-slate-500">
+                                            Indel probability
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={cdrIndelConfig.indel_probability}
+                                                onChange={(e) => setCdrIndelConfig((current) => ({
+                                                    ...current,
+                                                    indel_probability: Math.max(0, Math.min(1, Number(e.target.value) || 0)),
+                                                }))}
+                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                            />
+                                        </label>
+
+                                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-400">
+                                            <div className="text-slate-200 font-medium mb-1">Launch summary</div>
+                                            <div>{selectedDesignIds.length} selected design{selectedDesignIds.length === 1 ? '' : 's'}</div>
+                                            <div>{cdrIndelConfig.variants_per_design} variant{cdrIndelConfig.variants_per_design === 1 ? '' : 's'} per design</div>
+                                            <div className="mt-1 text-fuchsia-200">
+                                                {selectedDesignIds.length * cdrIndelConfig.variants_per_design} total variant predictions
+                                            </div>
+                                            {cdrIndelConfig.msa_provider === 'colabfold_api' && selectedDesignIds.length * cdrIndelConfig.variants_per_design > 1 && (
+                                                <div className="mt-2 text-amber-300">
+                                                    Multi-variant indel rounds are automatically downgraded to local MSA.
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="flex justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowCdrIndelModal(false)}
+                                                className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIterationMessage(null);
+                                                    launchIterationMutation.mutate({
+                                                        action: 'cdr_indel_round',
+                                                        cdrIndelConfig,
+                                                    });
+                                                }}
+                                                disabled={
+                                                    launchIterationMutation.isPending ||
+                                                    cdrIndelConfig.loop_ids.length === 0 ||
+                                                    (!cdrIndelConfig.allow_insertions && !cdrIndelConfig.allow_deletions)
+                                                }
+                                                className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Launch CDR Indel Round
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Content */}
                         <div className="bg-slate-900/50 rounded-xl border border-slate-800 min-h-[600px]">
                             {isLoading ? (
@@ -558,11 +1166,18 @@ export function ResultsViewer() {
                                                 <StatCard label="Total Designs" value={stats.total.toLocaleString()} />
                                                 <StatCard label="Favorites" value={stats.favorites} color="text-yellow-400" />
                                                 <StatCard label="Avg pLDDT" value={formatMetric(stats.avgPlddt, 1)} color="text-blue-400" />
+                                                <StatCard label="Avg pSCE" value={formatMetric(stats.avgPsce, 2)} subtitle="FAMPNN" color="text-cyan-400" />
                                                 <StatCard label="Avg Affinity" value={formatMetric(stats.avgAffinity, 2)} color="text-emerald-400" />
                                                 <StatCard label="Avg Binder %" value={stats.avgBinderProb ? (stats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
                                                 <StatCard label="Avg pTM" value={formatMetric(stats.avgPtm, 2)} color="text-violet-400" />
                                                 <StatCard label="Avg Contacts" value={formatMetric(stats.avgEpitopeContacts, 1)} color="text-lime-400" />
                                                 <StatCard label="High Contacts" value={stats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                {stats.annotatedWithFrustration > 0 && (
+                                                    <>
+                                                        <StatCard label="Avg High Frust" value={formatMetric(stats.avgFrustrationHigh, 1)} color="text-red-400" />
+                                                        <StatCard label="Avg % High Frust" value={stats.avgFrustrationPctHigh != null ? `${stats.avgFrustrationPctHigh.toFixed(1)}%` : '—'} color="text-orange-400" />
+                                                    </>
+                                                )}
                                             </div>
 
                                             {/* Binding Tier Distribution */}
@@ -927,7 +1542,7 @@ export function ResultsViewer() {
                                                             />
                                                         </div>
                                                         <span className="text-xs text-slate-500 ml-auto">
-                                                            Page {currentPage} • Showing {sortedDesigns.length} of {totalDesigns.toLocaleString()} designs
+                                                            Page {currentPage} • Showing {tableDesigns.length} of {totalDesigns.toLocaleString()} designs
                                                         </span>
                                                     </div>
                                                 </div>
@@ -941,29 +1556,33 @@ export function ResultsViewer() {
                                                     onChange={e => setFilterText(e.target.value)}
                                                     className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm w-64"
                                                 />
-                                                {/* Show Annotate CDRs only for antibody jobs */}
-                                                {(activeJob?.model_id === 'rfantibody' ||
-                                                    activeJob?.name?.toLowerCase().includes('antibody') ||
-                                                    activeJob?.mode?.toLowerCase().includes('antibody')) && (
-                                                        <button
-                                                            onClick={async () => {
-                                                                const jobIdToUse = activeJob?.id || selectedJobId;
-                                                                if (!jobIdToUse) return;
-                                                                try {
-                                                                    const res = await fetch(`/api/jobs/${jobIdToUse}/annotate-cdr`, { method: 'POST' });
-                                                                    const data = await res.json();
-                                                                    alert(data.message || 'CDR annotation complete');
-                                                                    // Refetch designs to show updated data
-                                                                    window.location.reload();
-                                                                } catch (err) {
-                                                                    alert('CDR annotation failed: ' + err);
-                                                                }
-                                                            }}
-                                                            className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-                                                        >
-                                                            🧬 Annotate CDRs
-                                                        </button>
-                                                    )}
+                                                <span className="text-xs text-slate-500">
+                                                    Check rows to build a launch set. Row clicks still open the structure view.
+                                                </span>
+                                            </div>
+                                            <div className="mb-4 flex flex-wrap items-center gap-2">
+                                                {([
+                                                    ['all', 'All'],
+                                                    ['rfantibody', 'RFantibody'],
+                                                    ['fampnn', 'FAMPNN'],
+                                                    ['validation', 'Validation'],
+                                                ] as Array<[OutputSourceFilter, string]>).map(([value, label]) => (
+                                                    <button
+                                                        key={value}
+                                                        type="button"
+                                                        onClick={() => setOutputSourceFilter(value)}
+                                                        className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                                                            outputSourceFilter === value
+                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
+                                                        }`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                                <span className="text-xs text-slate-500">
+                                                    {tableDesigns.length} rows in current output set
+                                                </span>
                                             </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">
@@ -971,20 +1590,40 @@ export function ResultsViewer() {
                                                     <thead>
                                                         <tr className="border-b border-slate-700">
                                                             {[
-                                                                { key: 'name', label: 'Name' },
+                                                                { key: 'selected', label: (
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={allCurrentPageSelected}
+                                                                        onChange={(e) => toggleCurrentPageSelection(e.target.checked)}
+                                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
+                                                                        title={allCurrentPageSelected ? 'Clear current page selection' : 'Select current page'}
+                                                                    />
+                                                                ) },
+                                                                { key: 'name', label: 'Output' },
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
                                                                 { key: 'epitope_contact_count', label: 'Contacts' },
+                                                                { key: 'epitope_min_distance', label: 'Min Dist' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
+                                                                { key: 'fampnn_psce', label: 'pSCE' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
+                                                                { key: 'plddt_binder', label: 'pLDDT Bd' },
+                                                                { key: 'plddt_target', label: 'pLDDT Tgt' },
                                                                 { key: 'pae_overall', label: 'PAE' },
+                                                                { key: 'pae_interaction', label: 'iPAE' },
                                                                 { key: 'ptm', label: 'pTM' },
                                                                 { key: 'iptm', label: 'iPTM' },
                                                                 { key: 'ligand_iptm', label: 'Lig iPTM' },
                                                                 { key: 'conf_score', label: 'Conf' },
-                                                                { key: 'rmsd_binder', label: 'RMSD' },
+                                                                { key: 'rmsd_binder', label: 'Val RMSD Bd' },
+                                                                { key: 'rmsd_overall', label: 'Val RMSD All' },
+                                                                { key: 'frustration_high_count', label: 'Frust High' },
+                                                                { key: 'frustration_pct_high', label: '% High Frust' },
+                                                                { key: 'has_clash', label: 'Clash' },
+                                                                { key: 'maturation_delta_interface', label: 'ΔIface' },
+                                                                { key: 'maturation_rmsd', label: 'Mat RMSD' },
                                                                 { key: 'rog', label: 'RoG' },
                                                                 { key: 'rfd_rog', label: 'RFD RoG' },
                                                                 { key: 'fr2_contacts', label: 'FR2' },
@@ -992,8 +1631,8 @@ export function ResultsViewer() {
                                                             ].map(col => (
                                                                 <th
                                                                     key={col.key}
-                                                                    onClick={() => handleSort(col.key)}
-                                                                    className="px-3 py-2 text-left font-medium text-slate-400 cursor-pointer hover:text-white"
+                                                                    onClick={col.key === 'selected' ? undefined : () => handleSort(col.key)}
+                                                                    className={`px-3 py-2 text-left font-medium text-slate-400 ${col.key === 'selected' ? '' : 'cursor-pointer hover:text-white'}`}
                                                                 >
                                                                     {col.label}
                                                                     {sortField === col.key && (
@@ -1004,16 +1643,50 @@ export function ResultsViewer() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {sortedDesigns.map(d => (
+                                                        {tableDesigns.map(d => (
                                                             <tr
                                                                 key={d.id}
-                                                                className="border-b border-slate-800 hover:bg-slate-800/30 cursor-pointer"
+                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${
+                                                                    selectedDesignSet.has(d.id) ? 'bg-cyan-500/5' : ''
+                                                                }`}
                                                                 onClick={() => {
                                                                     setSelectedDesignId(d.id);
                                                                     setActiveTab('structure');
                                                                 }}
                                                             >
-                                                                <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
+                                                                <td className="px-3 py-2">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={selectedDesignSet.has(d.id)}
+                                                                        onChange={(e) => toggleDesignSelection(d.id, e.target.checked)}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-2 max-w-[260px]">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
+                                                                            inferDesignOutputSource(d as any) === 'validation'
+                                                                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                                                                                : inferDesignOutputSource(d as any) === 'fampnn'
+                                                                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                                                                    : inferDesignOutputSource(d as any) === 'rfantibody'
+                                                                                        ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                                                                                        : 'border-slate-600 bg-slate-800 text-slate-300'
+                                                                        }`}>
+                                                                            {getOutputSourceLabel(d as any)}
+                                                                        </span>
+                                                                        {d.frustration_high_count != null && (
+                                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded border border-amber-500/40 bg-amber-500/10 text-amber-200">
+                                                                                Frustra
+                                                                            </span>
+                                                                        )}
+                                                                        <span className="font-medium truncate">{getFriendlyDesignName(d as any)}</span>
+                                                                    </div>
+                                                                    <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>
+                                                                        {d.name}
+                                                                    </div>
+                                                                </td>
 
                                                                 {/* Binding Quality Tier */}
                                                                 <td className="px-3 py-2">
@@ -1037,13 +1710,19 @@ export function ResultsViewer() {
 
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h3_length ?? '—'}
+                                                                    {(d as any).cdr_h3_length ?? cdrLengthFallbacks.H3 ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Contact Count */}
                                                                 <td className={`px-3 py-2 font-mono ${(d.epitope_contact_count ?? 0) >= 5 ? 'text-emerald-400' :
                                                                     (d.epitope_contact_count ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
                                                                     {d.epitope_contact_count ?? '—'}
+                                                                </td>
+
+                                                                {/* Epitope Min Distance */}
+                                                                <td className={`px-3 py-2 font-mono ${d.epitope_min_distance != null && d.epitope_min_distance <= 4 ? 'text-emerald-400' :
+                                                                    d.epitope_min_distance != null && d.epitope_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.epitope_min_distance, 1)}
                                                                 </td>
 
                                                                 {/* Affinity */}
@@ -1058,11 +1737,23 @@ export function ResultsViewer() {
                                                                     {d.binder_probability ? (d.binder_probability * 100).toFixed(0) + '%' : '—'}
                                                                 </td>
 
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('fampnn_psce', d.fampnn_psce)}`}>
+                                                                    {formatMetric(d.fampnn_psce, 2)}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
+                                                                    {formatMetric(d.plddt_binder, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_target', d.plddt_target)}`}>
+                                                                    {formatMetric(d.plddt_target, 1)}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
+                                                                    {formatMetric(d.pae_interaction, 1)}
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
@@ -1082,6 +1773,34 @@ export function ResultsViewer() {
                                                                     {formatMetric(d.conf_score, 2)}
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
+                                                                <td className={`px-3 py-2 font-mono ${
+                                                                    d.frustration_high_count != null
+                                                                        ? d.frustration_high_count > 5
+                                                                            ? 'text-red-400'
+                                                                            : 'text-emerald-400'
+                                                                        : 'text-slate-500'
+                                                                }`}>
+                                                                    {d.frustration_high_count ?? '—'}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${
+                                                                    d.frustration_pct_high != null
+                                                                        ? d.frustration_pct_high > 10
+                                                                            ? 'text-orange-400'
+                                                                            : 'text-emerald-400'
+                                                                        : 'text-slate-500'
+                                                                }`}>
+                                                                    {d.frustration_pct_high != null ? `${d.frustration_pct_high.toFixed(1)}%` : '—'}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>
+                                                                    {d.has_clash == null ? '—' : d.has_clash ? '✗' : '✓'}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.maturation_delta_interface != null && d.maturation_delta_interface < 0 ? 'text-emerald-400' :
+                                                                    d.maturation_delta_interface != null && d.maturation_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
+                                                                    title={d.maturation_delta_interface != null ? `ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                    {formatMetric(d.maturation_delta_interface, 1)}
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>

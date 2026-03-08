@@ -93,6 +93,10 @@ class Job(Base):
     stage_work_dir = Column(String(500), nullable=True)  # Current Nextflow work directory for log parsing
     completed_stages = Column(JSON, default=list)  # List of completed stages: ['rfantibody', 'fampnn']
     stage_outputs = Column(JSON, default=dict)  # Stage output paths: {'rfantibody': ['path/to/design_0.pdb', ...]}
+    awaiting_input = Column(Boolean, default=False)
+    awaiting_stage = Column(String(50), nullable=True)
+    awaiting_payload = Column(JSON, default=dict)
+    decision_history = Column(JSON, default=list)
     
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
@@ -141,6 +145,10 @@ class Design(Base):
     complex_ipde = Column(Float, nullable=True)  # Interface PDE
     chains_ptm = Column(JSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
     pair_chains_iptm = Column(JSON, nullable=True)  # NxN chain matrix for heatmap
+    disorder = Column(Float, nullable=True)  # Protenix disorder score/probability
+    num_recycles = Column(Integer, nullable=True)  # Recycling iterations reported by model
+    has_clash = Column(Boolean, nullable=True)  # Steric clash flag from confidence output
+    confidence_metrics = Column(JSON, nullable=True)  # Raw model confidence JSON payload
     
     # Binding Affinity (Boltz-2)
     affinity_score = Column(Float, nullable=True)  # log(IC50)
@@ -208,6 +216,13 @@ class Design(Base):
     frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
     frustration_residues = Column(JSON, nullable=True)         # Per-residue: [{pos, chain, frust, class}]
     frustration_csv_path = Column(String(500), nullable=True)  # Path to full CSV
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PPIFLOW MATURATION METRICS
+    # ═══════════════════════════════════════════════════════════════════════════
+    maturation_delta_interface = Column(Float, nullable=True)   # delta_interface_score (REU, more negative = better)
+    maturation_interface_score = Column(Float, nullable=True)   # interface_score_matured (REU)
+    maturation_rmsd = Column(Float, nullable=True)              # rmsd_backbone (Å, matured vs original)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     

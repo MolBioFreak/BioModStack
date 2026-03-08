@@ -17,58 +17,76 @@ nextflow.enable.dsl = 2
 // Spawned by parent antibody_denovo workflow in exploration mode.
 // =============================================================================
 
-include { BatchBoltzValidation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
+include { BatchBoltzValidation ; BatchProtenixValidation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
+
+if (!params.containsKey('structure_validator') || !params.structure_validator) params.structure_validator = 'boltz2'
+if (!params.containsKey('run_immunogenicity_scoring')) params.run_immunogenicity_scoring = false
+if (!params.containsKey('run_thermompnn')) params.run_thermompnn = false
 
 workflow ANTIBODY_CHILD {
     take:
-    pdb_paths   // List of PDB files (stage them all)
-    msa_path    // Path to shared MSA file (or empty string)
-    
+    pdb_paths // List of PDB files (stage them all)
+    msa_path // Path to shared MSA file (or empty string)
+
     main:
     // Prepare MSA file (use provided or generate if needed)
-    def msa_file = msa_path ? file(msa_path) : file("${projectDir}/lib/NO_MSA")
-    
+    def msa_file = msa_path ? file(msa_path) : file("${params.code_root}/lib/NO_MSA")
+
     // Convert input paths to file objects if they aren't already
-    def pdb_files = pdb_paths.collect { file(it) }
-    
+    def pdb_files = pdb_paths.collect { pathStr -> file(pathStr) }
+
+    def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+    if (!(structure_validator in ['boltz2', 'protenix'])) {
+        log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
+        structure_validator = 'boltz2'
+    }
+
     // =========================================================================
-    // Step 1: Batch Structure Validation with Boltz2
+    // Step 1: Batch Structure Validation
     // =========================================================================
-    // Processes all sequences in one Boltz execution (highly efficient)
-    BatchBoltzValidation(pdb_files, msa_file)
-    
+    def validated_pdbs_ch = Channel.empty()
+    def validation_scores_ch = Channel.empty()
+
+    if (structure_validator == 'protenix') {
+        BatchProtenixValidation(pdb_files, msa_file)
+        validated_pdbs_ch = BatchProtenixValidation.out.pdbs
+        validation_scores_ch = BatchProtenixValidation.out.scores
+    } else {
+        BatchBoltzValidation(pdb_files, msa_file)
+        validated_pdbs_ch = BatchBoltzValidation.out.pdbs
+        validation_scores_ch = BatchBoltzValidation.out.scores
+    }
+
     // =========================================================================
     // Step 2: Batch Scoring (Conditional)
     // =========================================================================
     // Use the *validated* structures from Boltz (folded) for downstream scoring
-    
+
     // ThermoMPNN stability scoring - only if enabled
     def run_thermompnn = params.run_thermompnn ?: false
     if (run_thermompnn) {
-        BatchStability(BatchBoltzValidation.out.pdbs)
+        BatchStability(validated_pdbs_ch)
         thermompnn_scores = BatchStability.out.scores
-    } else {
+    }
+    else {
         // Empty channel placeholder
         thermompnn_scores = Channel.empty()
     }
-    
+
     // AntiBERTy immunogenicity scoring - only if enabled  
     def run_immunogenicity = params.run_immunogenicity_scoring ?: false
     if (run_immunogenicity) {
-        BatchImmunogenicity(BatchBoltzValidation.out.pdbs)
+        BatchImmunogenicity(validated_pdbs_ch)
         antiberty_scores = BatchImmunogenicity.out.scores
-    } else {
+    }
+    else {
         // Empty channel placeholder
         antiberty_scores = Channel.empty()
     }
-    
-    // =========================================================================
-    // Aggregate Results
-    // =========================================================================
-    
+
     emit:
-    boltz_pdbs = BatchBoltzValidation.out.pdbs
-    boltz_scores = BatchBoltzValidation.out.scores
+    validated_pdbs = validated_pdbs_ch
+    validation_scores = validation_scores_ch
     antiberty_scores = antiberty_scores
     thermompnn_scores = thermompnn_scores
 }
@@ -77,20 +95,22 @@ workflow ANTIBODY_CHILD {
 workflow {
     // Read params from job submission
     // Support both single pdb_path (legacy) and pdb_paths (batch list)
-    
+
     def msa_path = params.msa_path ?: ""
     def pdbs_to_process = []
-    
+
     if (params.pdb_paths) {
         // Parse list from string "[path1, path2]" or JSON
-        def clean_paths = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
-        pdbs_to_process = clean_paths.collect { it.trim() }.findAll { it }
-    } else if (params.pdb_path) {
+        def clean_paths = params.pdb_paths.toString().replace('[', '').replace(']', '').split(',')
+        pdbs_to_process = clean_paths.collect { pathStr -> pathStr.trim() }.findAll { pathStr -> pathStr }
+    }
+    else if (params.pdb_path) {
         // Legacy single mode
         pdbs_to_process = [params.pdb_path]
-    } else {
-        error "No input PDBs provided. Use --pdb_paths or --pdb_path"
     }
-    
+    else {
+        error("No input PDBs provided. Use --pdb_paths or --pdb_path")
+    }
+
     ANTIBODY_CHILD(pdbs_to_process, msa_path)
 }

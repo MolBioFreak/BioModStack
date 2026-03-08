@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import argparse
 from pathlib import Path
 
 # Import from platform if available, fallback to inline definitions
@@ -16,7 +17,9 @@ try:
     from platform.api.paths import (
         get_code_root,
         get_data_root,
+        get_container_dir,
         get_weights_root,
+        get_rfd_models_dir,
         get_colabfold_db,
         get_msa_cache_dir,
         get_sabdab_cache_dir,
@@ -39,9 +42,26 @@ except ImportError:
         env = os.getenv("BMS_DATA")
         return _resolve(env) if env else get_code_root()
 
+    def get_container_dir() -> Path:
+        env = os.getenv("BMS_CONTAINER_DIR")
+        return _resolve(env) if env else get_data_root() / "apptainer"
+
     def get_weights_root() -> Path:
         env = os.getenv("BMS_WEIGHTS")
         return _resolve(env) if env else _default_root() / "weights"
+
+    def get_rfd_models_dir() -> Path:
+        env = os.getenv("BMS_RFD_MODELS")
+        if env:
+            return _resolve(env)
+        weights_root = get_weights_root()
+        default_dir = weights_root / "rfd"
+        if default_dir.exists():
+            return default_dir
+        rfantibody_dir = weights_root / "rfantibody" / "rfantibody_repo" / "weights"
+        if (rfantibody_dir / "RFdiffusion_Ab.pt").exists():
+            return rfantibody_dir
+        return default_dir
 
     def get_colabfold_db() -> Path:
         env = os.getenv("BMS_COLABFOLD_DB")
@@ -67,7 +87,6 @@ except ImportError:
 REQUIRED_WEIGHTS = [
     "alphafold/params",
     "boltz",
-    "rfd",
 ]
 
 # Optional weight directories (warn but don't fail)
@@ -75,6 +94,18 @@ OPTIONAL_WEIGHTS = [
     "ppiflow",
     "rfdpoly",
     "frustrampnn",
+]
+
+# Optional container images to verify in container_dir (warn-only)
+OPTIONAL_CONTAINERS = [
+    "af2.sif",
+    "boltz2.sif",
+    "boltzgen.sif",
+    "bindcraft.sif",
+    "antibody_tools.sif",
+    "stability_tools.sif",
+    "iggm.sif",
+    "frustrampnn.sif",
 ]
 
 
@@ -99,7 +130,36 @@ def check_directory(path: Path, create: bool = False) -> tuple[bool, str]:
     return (False, "✗ missing")
 
 
-def main(create_dirs: bool = False) -> int:
+def has_rfd_weights(path: Path) -> bool:
+    """
+    Check whether an RFdiffusion-compatible checkpoint set is present.
+    Supports either classic RFdiffusion ckpts or RFantibody checkpoint naming.
+    """
+    if not path.exists() or not path.is_dir():
+        return False
+
+    classic_ckpts = (
+        "Base_ckpt.pt",
+        "Complex_base_ckpt.pt",
+        "Complex_Fold_base_ckpt.pt",
+        "InpaintSeq_ckpt.pt",
+    )
+    if any((path / name).exists() for name in classic_ckpts):
+        return True
+
+    if (path / "RFdiffusion_Ab.pt").exists():
+        return True
+
+    return any(path.glob("*.pt"))
+
+
+def requires_rfantibody_assets(workflow: str) -> bool:
+    workflow_key = (workflow or "all").strip().lower()
+    antibody_workflows = {"antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"}
+    return workflow_key in antibody_workflows
+
+
+def main(create_dirs: bool = False, workflow: str = "all") -> int:
     """Run validation checks and report results."""
     print("=" * 60)
     print("BioModStack Environment Validation")
@@ -114,7 +174,9 @@ def main(create_dirs: bool = False) -> int:
     env_vars = [
         ("BMS_HOME", get_code_root()),
         ("BMS_DATA", get_data_root()),
+        ("BMS_CONTAINER_DIR", get_container_dir()),
         ("BMS_WEIGHTS", get_weights_root()),
+        ("BMS_RFD_MODELS", get_rfd_models_dir()),
         ("BMS_COLABFOLD_DB", get_colabfold_db()),
         ("BMS_MSA_CACHE", get_msa_cache_dir()),
         ("BMS_SABDAB_CACHE", get_sabdab_cache_dir()),
@@ -134,6 +196,7 @@ def main(create_dirs: bool = False) -> int:
         ("Code Root", get_code_root()),
         ("Data Root", get_data_root()),
         ("Results Dir", get_results_dir()),
+        ("Container Dir", get_container_dir()),
         ("Weights Root", get_weights_root()),
         ("ColabFold DB", get_colabfold_db()),
         ("MSA Cache", get_msa_cache_dir()),
@@ -158,6 +221,13 @@ def main(create_dirs: bool = False) -> int:
             status = "✗ MISSING (required)"
         print(f"  {subdir}: {status}")
 
+    # RFdiffusion checkpoints (supports classic or RFantibody layouts)
+    rfd_models_dir = get_rfd_models_dir()
+    rfd_status = "✓ exists" if has_rfd_weights(rfd_models_dir) else "✗ MISSING (required for RFdiffusion workflows)"
+    if rfd_status.startswith("✗"):
+        errors += 1
+    print(f"  rfd_models: {rfd_status} ({rfd_models_dir})")
+
     print("\n[4] Optional Weights")
     print("-" * 40)
     for subdir in OPTIONAL_WEIGHTS:
@@ -168,8 +238,44 @@ def main(create_dirs: bool = False) -> int:
             status = "⚠ missing (optional)"
         print(f"  {subdir}: {status}")
 
-    # 4. Database
-    print("\n[5] Database")
+    # RFantibody checkpoint (required for antibody workflows)
+    if requires_rfantibody_assets(workflow):
+        expected_ckpt = weights_root / "rfantibody" / "rfantibody_repo" / "weights" / "RFdiffusion_Ab.pt"
+        print("  rfantibody/RFdiffusion_Ab.pt: ", end="")
+        if expected_ckpt.exists():
+            print(f"✓ exists ({expected_ckpt})")
+        else:
+            errors += 1
+            print(f"✗ MISSING (required for workflow={workflow}; expected at {expected_ckpt})")
+
+    # 5. Container images
+    print("\n[5] Containers")
+    print("-" * 40)
+    container_dir = get_container_dir()
+
+    required_containers = []
+    if requires_rfantibody_assets(workflow):
+        required_containers.append("rfantibody.sif")
+
+    for image in required_containers:
+        image_path = container_dir / image
+        if image_path.exists():
+            print(f"  {image}: ✓ exists (required for workflow={workflow})")
+        else:
+            errors += 1
+            print(f"  {image}: ✗ MISSING (required for workflow={workflow})")
+
+    print("  -- optional --")
+    for image in OPTIONAL_CONTAINERS:
+        image_path = container_dir / image
+        if image_path.exists():
+            print(f"  {image}: ✓ exists")
+        else:
+            warnings += 1
+            print(f"  {image}: ⚠ missing (optional)")
+
+    # 6. Database
+    print("\n[6] Database")
     print("-" * 40)
     db_path = get_db_path()
     if db_path.exists():
@@ -196,9 +302,18 @@ def main(create_dirs: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    create = "--create" in sys.argv or "-c" in sys.argv
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print("Usage: python validate_environment.py [--create]")
-        print("  --create, -c  Create missing directories")
-        sys.exit(0)
-    sys.exit(main(create_dirs=create))
+    parser = argparse.ArgumentParser(description="Validate BioModStack environment and assets")
+    parser.add_argument(
+        "--create",
+        "-c",
+        action="store_true",
+        help="Create missing core directories when possible",
+    )
+    parser.add_argument(
+        "--workflow",
+        default="all",
+        choices=["all", "antibody", "antibody_denovo", "antibody_design", "rfantibody_backbone"],
+        help="Enable workflow-specific required checks",
+    )
+    args = parser.parse_args()
+    sys.exit(main(create_dirs=args.create, workflow=args.workflow))

@@ -1,7 +1,7 @@
 process IMMUNEBUILDER {
     tag "${meta.id}"
     label 'process_medium'
-    container 'apptainer/antibody_tools.sif'
+    container "${params.container_dir}/antibody_tools.sif"
 
     input:
     tuple val(meta), path(fasta)
