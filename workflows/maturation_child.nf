@@ -13,14 +13,15 @@
 
 nextflow.enable.dsl = 2
 
-include { IdentifyAnchorResidues ; RunPartialFlow ; PrepMaturationRedesign ; RunMaturationFAMPNN ; ScoreMaturationImprovement ; ScorePartialFlowImprovement ; FilterByMaturation } from '../modules/ppiflow.nf'
-include { ANARCII } from '../modules/utils/anarci'
-
 // Workflow-specific param defaults
 params.pdb_paths = null
+params.framework_type = 'standard-fv'
 params.maturation_redesign_enabled = true
 params.maturation_redesign_top_n = 0
 // 0 = use all
+
+include { IdentifyAnchorResidues ; RunPartialFlow ; PrepMaturationRedesign ; RunMaturationFAMPNN ; ScoreMaturationImprovement ; ScorePartialFlowImprovement ; FilterByMaturation } from '../modules/ppiflow.nf'
+include { ANARCII } from '../modules/utils/anarci'
 
 workflow MATURATION_CHILD {
     take:
@@ -69,7 +70,7 @@ workflow MATURATION_CHILD {
             try {
                 score = new groovy.json.JsonSlurper().parse(score_json).delta_interface_score ?: 0.0
             }
-            catch (e: Exception) {
+            catch (Exception e) {
                 score = 0.0
             }
             tuple(meta, backbone_pdb, score_json, score)
@@ -137,7 +138,7 @@ workflow MATURATION_CHILD {
 
     emit:
     matured_pdbs = FilterByMaturation.out.pdbs
-    scores = FilterByMaturation.out.scores
+    scores = FilterByMaturation.out.filter_reports
 }
 
 // Entry point for direct invocation

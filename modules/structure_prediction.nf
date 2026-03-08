@@ -1009,8 +1009,9 @@ workflow structure_prediction_wf {
     // Determine which predictors need MSA
     def need_boltz_msa  = (pred_method in ['boltz', 'both', 'all'] && boltz_use_msa)
     def need_rf3_msa    = (pred_method in ['rf3', 'both', 'all'] && rf3_use_msa)
-    def need_protenix_msa = (pred_method in ['protenix', 'all'] && protenix_use_msa)
-    def need_msa = need_boltz_msa || need_rf3_msa || need_protenix_msa
+    // Protenix resolves its own MSA backend in the prediction module.
+    // Do not trigger parent GenerateLocalMSA just because Protenix MSA is enabled.
+    def need_msa = need_boltz_msa || need_rf3_msa
 
     if (need_msa) {
         def provided_msa = params.msa_path ? file(params.msa_path) : null

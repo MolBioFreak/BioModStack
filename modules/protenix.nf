@@ -41,6 +41,21 @@ process ProtenixPredict {
     def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
+    def msa_backend = params.protenix_msa_backend ?: 'auto'
+    def normalizeGpuCsv = { raw ->
+        if (raw == null) return ''
+        if (raw instanceof Collection) {
+            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
+        }
+        def text = raw.toString().trim()
+        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+            text = text.substring(1, text.length() - 1)
+        }
+        return text
+    }
+    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
 
     // Auto-switch to ESM model if MSA is disabled
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
@@ -138,12 +153,37 @@ PY
 }]
 ENDJSON
 
+    PROTENIX_INPUT_JSON="input.json"
+    if [ "${use_msa}" = "true" ]; then
+        python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            --input_json input.json \\
+            --output_json prepared_input.json \\
+            --out_dir msa_prepared \\
+            --backend "${msa_backend}" \\
+            --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
+            --db-path "${params.msa_local_db}" \\
+            --cache-dir "${params.msa_cache_dir}" \\
+            --threads ${params.msa_threads ?: task.cpus} \\
+            --preset "${params.msa_preset ?: 'fast'}" \\
+            ${msa_cpu_only_flag} \\
+            --gpu-mode "${params.msa_gpu_mode ?: 'auto'}" \\
+            --gpu-threshold ${params.msa_gpu_threshold ?: 80} \\
+            ${msa_preferred_gpu_csv ? '--preferred-gpus "' + msa_preferred_gpu_csv + '"' : ''} \\
+            ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
+            --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
+            --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
+            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
+            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            2>&1 | tee protenix_msa_prep.log
+        PROTENIX_INPUT_JSON="prepared_input.json"
+    fi
+
     # ═══════════════════════════════════════════════════════════════════════
     # Run structure prediction
     # ═══════════════════════════════════════════════════════════════════════
     echo "[PROTENIX] Running structure prediction..."
     protenix pred \\
-        --input input.json \\
+        --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir predictions/ \\
         --model_name ${effective_model} \\
         --seeds "${seeds}" \\
@@ -286,6 +326,17 @@ process ProtenixFromComplex {
     def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
+    def msa_backend = params.protenix_msa_backend ?: 'auto'
+    def normalizeGpuCsv = { raw ->
+        if (raw == null) return ''
+        if (raw instanceof Collection) {
+            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
+        }
+        return raw.toString().trim().replaceAll(/^\\[/, '').replaceAll(/\\]$/, '')
+    }
+    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def model_aliases = [
@@ -367,10 +418,35 @@ PY
     echo "[PROTENIX-COMPLEX] Input JSON: ${complex_json}"
     cat ${complex_json}
 
+    PROTENIX_INPUT_JSON="${complex_json}"
+    if [ "${use_msa}" = "true" ]; then
+        python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            --input_json ${complex_json} \\
+            --output_json prepared_input.json \\
+            --out_dir msa_prepared \\
+            --backend "${msa_backend}" \\
+            --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
+            --db-path "${params.msa_local_db}" \\
+            --cache-dir "${params.msa_cache_dir}" \\
+            --threads ${params.msa_threads ?: task.cpus} \\
+            --preset "${params.msa_preset ?: 'fast'}" \\
+            ${msa_cpu_only_flag} \\
+            --gpu-mode "${params.msa_gpu_mode ?: 'auto'}" \\
+            --gpu-threshold ${params.msa_gpu_threshold ?: 80} \\
+            ${msa_preferred_gpu_csv ? '--preferred-gpus "' + msa_preferred_gpu_csv + '"' : ''} \\
+            ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
+            --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
+            --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
+            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
+            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            2>&1 | tee protenix_msa_prep.log
+        PROTENIX_INPUT_JSON="prepared_input.json"
+    fi
+
     # Run structure prediction
     echo "[PROTENIX-COMPLEX] Running structure prediction..."
     protenix pred \\
-        --input ${complex_json} \\
+        --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir predictions/ \\
         --model_name ${effective_model} \\
         --seeds "${seeds}" \\

@@ -9,12 +9,17 @@ process IdentifyAnchorResidues {
     tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores
 
     script:
-    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def frameworkType = params.get('framework_type')
+    def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
+    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def energyThreshold = params.maturation_anchor_threshold ?: -5.0
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
     """
-    python /scripts/identify_anchors.py \\
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/identify_anchors.py" \\
         --pdb "${complex_pdb}" \\
         --antibody_chains "${antibodyChains}" \\
         --antigen_chains "${antigenChains}" \\
@@ -37,7 +42,9 @@ process RunPartialFlow {
     tuple val(meta), path("ppiflow_backbones/*.pdb"), emit: backbones
 
     script:
-    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def frameworkType = params.get('framework_type')
+    def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
+    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antibodyList = antibodyChains.toString().split(',')*.trim().findAll { it }
     def heavyChain = params.ppiflow_heavy_chain ?: (antibodyList ? antibodyList[0] : 'H')
     def lightChain = params.ppiflow_light_chain ?: (antibodyList.size() > 1 ? antibodyList[1] : '')
@@ -49,19 +56,47 @@ process RunPartialFlow {
     def checkpointPath = params.ppiflow_checkpoint_path ?: (params.ppiflow_weights_dir ? "/opt/ppiflow/ckpt/${params.ppiflow_checkpoint ?: 'antibody'}.ckpt" : "")
     def hotspots = params.epitope_residues ?: ''
     def hotspotArg = hotspots ? "--specified_hotspots \"${hotspots}\"" : ""
-    def lightChainArg = lightChain ? "--light_chain ${lightChain}" : ""
     """
-    python /scripts/anchors_to_ppiflow_positions.py \\
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/anchors_to_ppiflow_positions.py" \\
         --anchors_json "${anchors_json}" \\
         --output fixed_positions.txt
 
     fixed_positions=\$(cat fixed_positions.txt | tr -d '\\n')
     cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
 
+    heavyChain="${heavyChain}"
+    lightChain="${lightChain}"
     antigenChainBash="${antigenChain}"
 
+    detectedChains=\$("\${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+
+chains = []
+with open(Path("${complex_pdb}")) as handle:
+    for line in handle:
+        if line.startswith("ATOM"):
+            chain = line[21].strip()
+            if chain and chain not in chains:
+                chains.append(chain)
+print("".join(chains))
+PY
+    )
+
+    if ! printf '%s' "\${detectedChains}" | grep -q "${heavyChain}"; then
+        echo "[PPIFlow] ERROR: heavy chain '${heavyChain}' not found in ${complex_pdb}; detected chains: \${detectedChains}" >&2
+        exit 1
+    fi
+
+    if [ -n "\${lightChain}" ] && ! printf '%s' "\${detectedChains}" | grep -q "\${lightChain}"; then
+        echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; continuing in single-chain mode" >&2
+        lightChain=""
+    fi
+
     if [ -z "\${antigenChainBash}" ]; then
-        antigenChainBash=\$(python - <<'PY'
+        antigenChainBash=\$("\${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 
 pdb_path = Path("${complex_pdb}")
@@ -73,7 +108,9 @@ with open(pdb_path) as f:
             if chain and chain not in chains:
                 chains.append(chain)
 
-ab = "${heavyChain}${lightChain}"
+heavy = "${heavyChain}"
+light = "${lightChain}"
+ab = f"{heavy}{light}"
 chains = [c for c in chains if c not in list(ab)]
 print("".join(chains))
 PY
@@ -90,7 +127,12 @@ PY
         ppiflow_script="/app/ppiflow/sample_antibody_nanobody_partial.py"
     fi
 
-    python "\${ppiflow_script}" \\
+    lightChainArg=""
+    if [ -n "\${lightChain}" ]; then
+        lightChainArg="--light_chain \${lightChain}"
+    fi
+
+    "\${PYTHON_BIN}" "\${ppiflow_script}" \\
         --complex_pdb "${complex_pdb}" \\
         --fixed_positions "\${fixed_positions}" \\
         --cdr_position "\${cdr_positions}" \\
@@ -102,11 +144,11 @@ PY
         --model_weights "${checkpointPath}" \\
         --antigen_chain "\${antigenChainBash}" \\
         --heavy_chain "${heavyChain}" \\
-        ${lightChainArg} \\
+        \${lightChainArg} \\
         ${hotspotArg} \\
         --name "${meta.id}"
 
-python - <<'PY'
+"\${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 import shutil
 
@@ -130,27 +172,32 @@ process PrepMaturationRedesign {
     tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), emit: prep
 
     script:
-    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def frameworkType = params.get('framework_type')
+    def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
+    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
     """
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
     mkdir -p input_pdbs
     cp ${backbone_pdbs} ./input_pdbs/
 
-    python /scripts/anchors_to_ppiflow_positions.py \\
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/anchors_to_ppiflow_positions.py" \\
         --anchors_json "${anchors_json}" \\
         --output fixed_positions.txt
 
     anchors_spec=\$(cat fixed_positions.txt | tr -d '\\n')
 
-    python /scripts/prep_fampnn_designs.py \\
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/prep_fampnn_designs.py" \\
         --input_dir "./input_pdbs" \\
         --out_dir "fampnn_input"
 
     cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
 
-    python /scripts/prep_antibody_constraints.py \\
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/prep_antibody_constraints.py" \\
         --input_dir "./" \\
         --out_fampnn "fampnn.csv" \\
         --out_mpnn "mpnn_fixed_chains.json" \\
@@ -180,11 +227,25 @@ process RunMaturationFAMPNN {
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
     def temperature = params.maturation_redesign_temp ?: (params.fampnn_temperature ?: 0.1)
     def numSteps = params.maturation_redesign_steps ?: (params.fampnn_num_steps ?: 100)
+    def checkpointPreset = (params.fampnn_checkpoint ?: '').toString().trim()
+    def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
+    def checkpointMap = [
+        'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',
+        'fampnn_0_3.pt': '/app/fampnn/weights/fampnn_0_3.pt',
+        'fampnn_0_3_cath.pt': '/app/fampnn/weights/fampnn_0_3_cath.pt',
+    ]
+    def checkpointPath = checkpointOverride ?: checkpointMap.get(checkpointPreset, checkpointPreset)
+    if (!checkpointPath) {
+        throw new IllegalArgumentException("FAMPNN checkpoint not configured for PPIFlow redesign. Set params.fampnn_checkpoint or params.fampnn_checkpoint_path.")
+    }
     """
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
     mkdir -p results
-    python /app/fampnn/fampnn/inference/seq_design.py \\
+    "\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py \\
         batch_size=1 \\
-        checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \\
+        checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
         fixed_pos_csv=${csv} \\
         num_seqs_per_pdb=1 \\
@@ -205,7 +266,7 @@ process RunMaturationFAMPNN {
         cp "\$file" "results/\$new_name"
     done
 
-    python /scripts/analyse_fampnn.py \\
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/analyse_fampnn.py" \\
         --input_dir results \\
         --chain_id ${analysisChain} \\
         --ignore_cbeta \\
@@ -234,14 +295,19 @@ process ScoreMaturationImprovement {
     tuple val(meta), path("scores/*_maturation_score.json"), emit: scores
 
     script:
-    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def frameworkType = params.get('framework_type')
+    def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
+    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
     """
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
     mkdir -p scores
     for matured_pdb in ${matured_pdbs}; do
         base_name=\$(basename "\$matured_pdb" .pdb)
-        python /scripts/score_maturation.py \\
+        "\${PYTHON_BIN}" "${params.code_root}/scripts/score_maturation.py" \\
             --original_pdb "${original_pdb}" \\
             --matured_pdb "\$matured_pdb" \\
             --antibody_chains "${antibodyChains}" \\
@@ -263,14 +329,19 @@ process ScorePartialFlowImprovement {
     tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores
 
     script:
-    def antibodyChains = params.antibody_chains ?: 'H,L'
+    def frameworkType = params.get('framework_type')
+    def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
+    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
     """
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
     mkdir -p scores
     for matured_pdb in ${matured_pdbs}; do
         base_name=\$(basename "\$matured_pdb" .pdb)
-        python /scripts/score_maturation.py \\
+        "\${PYTHON_BIN}" "${params.code_root}/scripts/score_maturation.py" \\
             --original_pdb "${original_pdb}" \\
             --matured_pdb "\$matured_pdb" \\
             --antibody_chains "${antibodyChains}" \\
@@ -298,9 +369,12 @@ process FilterByMaturation {
     def percentile = params.maturation_filter_percentile
     def percentileArg = percentile != null && percentile > 0 ? "--percentile ${percentile}" : ""
     """
+    PYTHON_BIN=\$(command -v python3 || command -v python)
+    [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
     mkdir -p filtered_output filter_reports
 
-    python -c '
+    "\${PYTHON_BIN}" -c '
 import json
 from pathlib import Path
 scores = []
@@ -316,10 +390,24 @@ with open("scores_manifest.json", "w") as f:
     for matured_pdb in ${matured_pdbs}; do
         base_name=\$(basename "\$matured_pdb" .pdb)
         
-        # Determine the correct score JSON mapping
-        score_json="\${base_name}_maturation_score.json"
-        
-        python /scripts/filter_maturation.py \\
+        score_json=""
+        for candidate in "\${base_name}_maturation_score.json" "\${base_name}_partial_flow_score.json"; do
+            if [ -f "\${candidate}" ]; then
+                score_json="\${candidate}"
+                break
+            fi
+        done
+
+        if [ -z "\${score_json}" ]; then
+            score_json=\$(find . -maxdepth 1 -type f -name "\${base_name}_*_score.json" | head -1)
+        fi
+
+        if [ -z "\${score_json}" ]; then
+            echo "[PPIFlow] ERROR: No score JSON found for \${base_name}" >&2
+            exit 1
+        fi
+
+        "\${PYTHON_BIN}" "${params.code_root}/scripts/filter_maturation.py" \\
             --score_json "\${score_json}" \\
             --pdb_path "\$matured_pdb" \\
             --output_dir "filtered_output" \\
