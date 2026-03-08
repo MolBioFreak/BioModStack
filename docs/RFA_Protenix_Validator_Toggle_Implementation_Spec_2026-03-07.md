@@ -12,6 +12,8 @@ This spec covers the next implementation step for the antibody workflow:
 - make structure validation selectable between `Boltz2` and `Protenix`
 - generalize the current Boltz-only validation stage into a validator-aware stage
 - add a real post-validation pause point for interactive review
+- add an earlier RFantibody-review pause point for backbone triage
+- add a conservative optional RFantibody coarse screen before FAMPNN
 - preserve compatibility with the current static antibody workflow
 
 This spec does not cover:
@@ -133,12 +135,46 @@ The antibody workflow should continue to support a fully automatic run:
 
 The antibody workflow should support:
 
+- `post_rfantibody`
 - `post_fampnn`
 - `post_structure_validation`
+
+At `post_rfantibody`, the workflow pauses after backbone generation and optional coarse screening.
 
 At `post_structure_validation`, the workflow pauses after validator output ingestion and metric availability.
 
 The user reviews results in the existing data viewer / results surfaces and decides what to do next.
+
+### 4.4 Initial loop-length exploration
+
+The antibody launcher should expose RFantibody loop-length priors independently from manual CDR residue spans used later by FAMPNN.
+
+Behavior:
+
+- `rfantibody_design_loops_custom`
+  - remains the absolute residue-span contract for downstream constraint prep
+- `rfantibody_loop_length_ranges`
+  - becomes the RFantibody-native loop-length-range contract
+  - example: `[H1:7-10,H2:6-8,H3:10-20]`
+
+This separation is required so initial backbone exploration can vary loop length without breaking the fixed-position constraint logic used by FAMPNN.
+
+### 4.5 Post-validation CDR indel rounds
+
+The Results Viewer should support launching a dedicated `cdr_indel_round` from selected validated designs.
+
+Behavior:
+
+- choose one or more validated designs
+- choose one or more CDR loops on a single chain family (`H*` or `L*`)
+- generate explicit insertion/deletion variants on the selected loops
+- preserve the full complex context for the selected design
+- launch a new top-level validation job (`Boltz2` or `Protenix`)
+
+Implementation note:
+
+- these are not routed back through RFantibody or FAMPNN
+- they are explicit sequence-variant rounds driven from the existing mutagenesis-style library logic
 
 ### 4.3 Validation output behavior
 
@@ -157,7 +193,27 @@ Add antibody-specific validator defaults:
 
 - `structure_validator`
 - `run_post_validation_maturation`
+- `enable_rfantibody_filter`
+- `rfantibody_min_epitope_contacts`
+- `rfantibody_max_epitope_distance`
+- `interactive_gate_stage` support for `post_rfantibody`
 - `interactive_gate_stage` support for `post_structure_validation`
+
+Add RFantibody staging/screening before sequence design:
+
+- stage raw RFantibody backbones into a predictable collected directory
+- optionally run a conservative coarse screen using:
+  - minimum epitope contact count
+  - maximum minimum epitope distance
+  - minimum loose whole-target contact count
+  - maximum antibody-to-epitope centroid distance
+- allow the workflow to pause after this stage before FAMPNN starts
+
+The stronger automatic screen is intentionally still cheap:
+
+- it operates on CA geometry only
+- it is designed to reject detached or obviously misplaced backbones
+- it is not a ranking model and should not be treated as a surrogate for downstream validator confidence or affinity
 
 Refactor step 3 from Boltz-only logic into validator dispatch:
 
