@@ -1030,13 +1030,17 @@ def _build_antibody_iteration_job(
                 "interactive_gate_stage": "post_structure_validation",
             },
         },
+        "ui_refinement": {
+            "suffix": "refinement",
+            "params": {},
+        },
     }
     if action not in action_map:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"Unsupported antibody iteration action '{action}'. "
-                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round."
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round, ui_refinement."
             ),
         )
 
@@ -1057,6 +1061,18 @@ def _build_antibody_iteration_job(
 
     if param_overrides:
         launch_params.update(param_overrides)
+
+    if action == "ui_refinement":
+        launch_params["skip_rfantibody"] = True
+        
+        # If the UI mapped sequence design (like FAMPNN), the inputs go to rfantibody_input_pdbs.
+        # If sequence design is fully skipped (starting at validation/maturation), inputs go to fampnn_collected_pdbs.
+        if launch_params.get("seq_design_fampnn") or launch_params.get("seq_design_antifold") or launch_params.get("seq_design_proteinmpnn"):
+            launch_params["rfantibody_input_pdbs"] = str(selection_dir)
+            launch_params["fampnn_collected_pdbs"] = None
+        else:
+            launch_params["fampnn_collected_pdbs"] = str(selection_dir)
+            launch_params["rfantibody_input_pdbs"] = None
 
     launch_params = _normalize_antibody_job_params(launch_params)
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
