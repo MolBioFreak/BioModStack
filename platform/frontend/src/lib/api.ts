@@ -217,7 +217,8 @@ export type AntibodyIterationAction =
     | 'ppiflow_maturation'
     | 'fampnn_redesign'
     | 'frustrampnn'
-    | 'cdr_indel_round';
+    | 'cdr_indel_round'
+    | 'ui_refinement';
 
 export interface AntibodyCdrIndelConfig {
     loop_ids: string[];
