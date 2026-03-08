@@ -32,6 +32,7 @@ DEFAULT_SERVER_SETTINGS: Dict[str, Any] = {
     "include_envdb_on_start": False,
     "auto_stop_idle_enabled": False,
     "auto_stop_idle_minutes": 10,
+    "pinned_gpu_id": None,
 }
 
 
@@ -115,6 +116,11 @@ def read_server_settings() -> Dict[str, Any]:
         settings["auto_stop_idle_minutes"] = max(1, int(settings.get("auto_stop_idle_minutes", 10)))
     except (TypeError, ValueError):
         settings["auto_stop_idle_minutes"] = 10
+    try:
+        pinned_gpu_id = settings.get("pinned_gpu_id")
+        settings["pinned_gpu_id"] = None if pinned_gpu_id in (None, "") else int(pinned_gpu_id)
+    except (TypeError, ValueError):
+        settings["pinned_gpu_id"] = None
     return settings
 
 
@@ -128,6 +134,11 @@ def write_server_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         merged["auto_stop_idle_minutes"] = max(1, int(merged.get("auto_stop_idle_minutes", 10)))
     except (TypeError, ValueError):
         merged["auto_stop_idle_minutes"] = 10
+    try:
+        pinned_gpu_id = merged.get("pinned_gpu_id")
+        merged["pinned_gpu_id"] = None if pinned_gpu_id in (None, "") else int(pinned_gpu_id)
+    except (TypeError, ValueError):
+        merged["pinned_gpu_id"] = None
     _atomic_write_json(_settings_path(), merged)
     return merged
 

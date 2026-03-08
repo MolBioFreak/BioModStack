@@ -150,7 +150,7 @@ export function JobQueueTable({
 
                         // Dynamic sorting based on selected column and direction
                         const statusOrder: Record<string, number> = {
-                            running: 0, queued: 1, failed: 2, completed: 3, cancelled: 4
+                            running: 0, awaiting_input: 1, queued: 2, failed: 3, completed: 4, cancelled: 5
                         };
 
                         const getValue = (item: DisplayItem, col: SortColumn): string | number => {
@@ -205,6 +205,7 @@ export function JobQueueTable({
                                 const totalDesigns = batchJobs.reduce((sum, j) => sum + j.design_count, 0);
                                 const allCompleted = batchJobs.every(j => j.status === 'completed');
                                 const anyRunning = batchJobs.some(j => j.status === 'running');
+                                const anyAwaiting = batchJobs.some(j => j.status === 'awaiting_input');
                                 const anyFailed = batchJobs.some(j => j.status === 'failed');
 
                                 // Batch header row - clickable to expand/collapse
@@ -225,7 +226,7 @@ export function JobQueueTable({
                                                 <div className="flex items-center gap-4 text-sm">
                                                     <span className="text-slate-400">{totalDesigns} designs</span>
                                                     <span className="text-slate-400">{new Date(item.firstDate).toLocaleString()}</span>
-                                                    <StatusBadge status={anyFailed ? 'failed' : anyRunning ? 'running' : allCompleted ? 'completed' : 'queued'} />
+                                                    <StatusBadge status={anyFailed ? 'failed' : anyRunning ? 'running' : anyAwaiting ? 'awaiting_input' : allCompleted ? 'completed' : 'queued'} />
                                                     {allCompleted && (
                                                         <Link
                                                             to={`/results?batch_id=${batchId}`}
@@ -381,6 +382,40 @@ export function JobQueueTable({
                                                             ⚡ Force
                                                         </button>
                                                     )}
+                                                    {job.status === 'awaiting_input' && (
+                                                        <>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    onViewLogs(job.id);
+                                                                }}
+                                                                className="px-2 py-1 text-xs bg-slate-500/20 text-slate-400 hover:bg-slate-500/30 hover:text-slate-300 rounded transition-colors"
+                                                            >
+                                                                Logs
+                                                            </button>
+                                                            {onResumeWithSettings ? (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        onResumeWithSettings(job);
+                                                                    }}
+                                                                    className="px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 rounded transition-colors"
+                                                                >
+                                                                    Continue
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        onResume(job);
+                                                                    }}
+                                                                    className="px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 rounded transition-colors"
+                                                                >
+                                                                    Continue
+                                                                </button>
+                                                            )}
+                                                        </>
+                                                    )}
                                                     {(job.status === 'failed' || job.status === 'cancelled') && (
                                                         <>
                                                             <button
@@ -464,6 +499,7 @@ function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: 
     const styles: Record<string, string> = {
         queued: 'bg-slate-500/20 text-slate-400',
         running: 'bg-blue-500/20 text-blue-400 animate-pulse',
+        awaiting_input: 'bg-amber-500/20 text-amber-400',
         completed: 'bg-green-500/20 text-green-400',
         completed_error: 'bg-amber-500/20 text-amber-400',
         failed: 'bg-red-500/20 text-red-400',
@@ -475,7 +511,7 @@ function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: 
         ? errorMessage.split('\n')[0].substring(0, 100) + (errorMessage.length > 100 ? '...' : '')
         : null;
     const badgeStyle = completedWithError ? styles.completed_error : (styles[status] ?? styles.queued);
-    const badgeLabel = completedWithError ? 'completed*' : status;
+    const badgeLabel = completedWithError ? 'completed*' : status.replace('_', ' ');
 
     return (
         <div className="relative group inline-block">
@@ -498,16 +534,28 @@ function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: 
 
 function StageProgress({ job }: { job: Job }) {
     const getStages = (mode: string) => {
-        if (mode.includes('antibody')) return ['rfantibody', 'fampnn', 'boltz2'];
+        if (mode.includes('antibody')) return ['rfantibody', 'fampnn', 'structure_validation'];
         if (mode.includes('binder')) return ['rfdiffusion', 'proteinmpnn', 'boltz2'];
         if (mode.includes('monomer')) return ['rfdiffusion', 'proteinmpnn', 'af2'];
         if (mode.includes('oligo')) return ['rfdpoly', 'nampnn', 'pyrosetta_rebuild'];
         return [];
     };
 
-    const stages = job.all_stages && job.all_stages.length > 0
-        ? job.all_stages
-        : getStages(job.mode);
+    const stages = (() => {
+        const baseStages = job.all_stages && job.all_stages.length > 0
+            ? [...job.all_stages]
+            : getStages(job.mode);
+        if (job.params?.run_maturation && !baseStages.includes('maturation')) {
+            baseStages.splice(Math.min(2, baseStages.length), 0, 'maturation');
+        }
+        if ((job.params?.run_post_validation_maturation || job.params?.run_post_boltz_maturation) && !baseStages.includes('maturation_post_validation')) {
+            baseStages.push('maturation_post_validation');
+        }
+        if (job.awaiting_stage && !baseStages.includes(job.awaiting_stage)) {
+            baseStages.push(job.awaiting_stage);
+        }
+        return baseStages;
+    })();
 
     if (stages.length === 0) return null;
 
@@ -515,8 +563,15 @@ function StageProgress({ job }: { job: Job }) {
     const jobIsCompleted = job.status === 'completed';
     const jobIsFailed = job.status === 'failed';
     const jobIsCancelled = job.status === 'cancelled';
+    const jobIsAwaiting = job.status === 'awaiting_input';
     const completed = job.completed_stages || [];
-    const current = job.current_stage;
+    const rawCurrent = job.awaiting_stage || job.current_stage;
+    const current =
+        (rawCurrent === 'boltz2' || rawCurrent === 'protenix') && stages.includes('structure_validation')
+            ? 'structure_validation'
+            : rawCurrent === 'maturation_post_boltz' && stages.includes('maturation_post_validation')
+                ? 'maturation_post_validation'
+                : rawCurrent;
 
     return (
         <div className="flex items-center space-x-1 mt-1">
@@ -544,6 +599,8 @@ function StageProgress({ job }: { job: Job }) {
                 } else if (isCurrent && jobIsFailed) {
                     // This is where the job failed - show red
                     stageClass = 'bg-red-500/20 border-red-500/30 text-red-400';
+                } else if (isCurrent && jobIsAwaiting) {
+                    stageClass = 'bg-amber-500/20 border-amber-500/30 text-amber-400';
                 } else if (isCurrent && jobIsCancelled) {
                     // This is where the job was cancelled - show orange
                     stageClass = 'bg-orange-500/20 border-orange-500/30 text-orange-400';

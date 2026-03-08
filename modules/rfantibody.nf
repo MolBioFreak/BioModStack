@@ -77,7 +77,7 @@ process RFANTIBODY {
 
     // Start with RFantibody-specific loop spec if provided, then UI loop selection,
     // then framework defaults.
-    def rawLoops = params.rfantibody_design_loops_custom ?: params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
+    def rawLoops = params.get('rfantibody_design_loops_custom') ?: params.rfantibody_design_loops ?: params.antibody_design_loops ?: ''
 
     def design_loops
     if (rawLoops && rawLoops.startsWith('[') && rawLoops.endsWith(']')) {
@@ -154,6 +154,9 @@ process RFANTIBODY {
     def framework = framework_pdb.name != 'NO_FRAMEWORK'
         ? framework_pdb
         : presetFrameworks[frameworkType] ?: presetFrameworks['standard-fv']
+    def frameworkArgPath = framework_pdb.name != 'NO_FRAMEWORK'
+        ? "\${WORK_DIR}/${framework_pdb.name}"
+        : framework
 
     // Resolve RFantibody checkpoint candidates in order of preference.
     // 1) Explicit override if provided
@@ -188,6 +191,31 @@ process RFANTIBODY {
     echo "Quality params: T=${diffusion_steps}, noise_ca=${noise_scale_ca}, noise_frame=${noise_scale_frame}, guide=${guide_scale}" | tee -a "\${LOG_FILE}"
     
     mkdir -p output
+
+    if [ "${framework_pdb.name}" != "NO_FRAMEWORK" ]; then
+        python3 - <<'PY' "${frameworkArgPath}" 2>&1 | tee -a "\${LOG_FILE}"
+import sys
+from pathlib import Path
+
+framework_path = Path(sys.argv[1])
+chains = set()
+for line in framework_path.read_text().splitlines():
+    if line.startswith(("ATOM", "HETATM")):
+        chain = line[21:22].strip()
+        if chain:
+            chains.add(chain)
+
+if not ({'H', 'L'} & chains):
+    raise SystemExit(
+        f"[RFA-ERROR] Framework file {framework_path} does not contain antibody chains labeled H or L. "
+        f"Found chains: {sorted(chains)}. RFantibody expects an HLT-style framework."
+    )
+PY
+        if [ \${PIPESTATUS[0]} -ne 0 ]; then
+            echo "Framework preflight failed. Aborting." >> "\${LOG_FILE}"
+            exit 1
+        fi
+    fi
 
     # Run preflight guard to ensure runtime is healthy
     python3 ${params.code_root}/scripts/check_rfantibody_runtime.py \\
@@ -255,7 +283,7 @@ process RFANTIBODY {
         --config-path \$RFA_CONFIG_PATH \\
         --config-name antibody \\
         antibody.target_pdb=\${WORK_DIR}/${target_pdb} \\
-        antibody.framework_pdb=${framework} \\
+        antibody.framework_pdb=${frameworkArgPath} \\
         inference.ckpt_override_path=\${CKPT_PATH} \\
         'ppi.hotspot_res=${hotspots}' \\
         'antibody.design_loops=${design_loops}' \\

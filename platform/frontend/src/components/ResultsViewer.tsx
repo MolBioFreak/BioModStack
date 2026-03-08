@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary } from '../lib/api';
-import type { Job } from '../lib/api';
+import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration } from '../lib/api';
+import type { AntibodyIterationAction, Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -76,11 +76,14 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
 
     // State
     const [selectedJobId, setSelectedJobId] = useState<string>(jobId || '');
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
+    const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
+    const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -115,6 +118,20 @@ export function ResultsViewer() {
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
     );
+    const isAntibodyContext = useMemo(() => {
+        if (!activeJob) return false;
+        const modelId = (activeJob.model_id || '').toLowerCase();
+        const mode = (activeJob.mode || '').toLowerCase();
+        const name = (activeJob.name || '').toLowerCase();
+        const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
+        return (
+            modelId.includes('antibody') ||
+            modelId === 'fampnn_child' ||
+            mode.includes('antibody') ||
+            name.includes('antibody') ||
+            rfdMode === 'antibody_denovo_pipeline'
+        );
+    }, [activeJob]);
 
     // Sync URL with selection
     useEffect(() => {
@@ -309,6 +326,9 @@ export function ResultsViewer() {
             return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
         });
     }, [designs, sortField, sortDir, filterText, selectedBackboneId, plddtMin, iptmMin, contactsMin, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue]);
+    const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
+    const currentPageDesignIds = useMemo(() => sortedDesigns.map((design) => design.id), [sortedDesigns]);
+    const allCurrentPageSelected = currentPageDesignIds.length > 0 && currentPageDesignIds.every((designId) => selectedDesignSet.has(designId));
 
     // Fetch PDB content when design selected
     // Note: MolstarViewer now fetches structure directly from API URL
@@ -319,6 +339,11 @@ export function ResultsViewer() {
             setSelectedDesignId(designs[0].id);
         }
     }, [designs, selectedDesignId]);
+
+    useEffect(() => {
+        setSelectedDesignIds([]);
+        setIterationMessage(null);
+    }, [selectedJobId]);
 
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
@@ -385,6 +410,71 @@ export function ResultsViewer() {
             setSortDir('asc');
         }
     };
+
+    const toggleDesignSelection = (designId: string, selected: boolean) => {
+        setSelectedDesignIds((current) => {
+            const currentSet = new Set(current);
+            if (selected) currentSet.add(designId);
+            else currentSet.delete(designId);
+            return Array.from(currentSet);
+        });
+    };
+
+    const selectCurrentPage = () => {
+        setSelectedDesignIds((current) => Array.from(new Set([...current, ...currentPageDesignIds])));
+    };
+
+    const clearSelectedDesigns = () => {
+        setSelectedDesignIds([]);
+    };
+
+    const toggleCurrentPageSelection = (selected: boolean) => {
+        if (selected) {
+            selectCurrentPage();
+            return;
+        }
+        setSelectedDesignIds((current) => current.filter((designId) => !currentPageDesignIds.includes(designId)));
+    };
+
+    const getErrorMessage = (error: unknown): string => {
+        const detail = (error as any)?.response?.data?.detail;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail)) return detail.join(', ');
+        if (detail && typeof detail === 'object') return JSON.stringify(detail);
+        if (error instanceof Error) return error.message;
+        return 'Launch failed';
+    };
+
+    const launchIterationMutation = useMutation({
+        mutationFn: async (action: AntibodyIterationAction) => {
+            if (!selectedJobId) {
+                throw new Error('Select a job before launching a new round.');
+            }
+            if (selectedDesignIds.length === 0) {
+                throw new Error('Select at least one design before launching a new round.');
+            }
+            return launchAntibodyIteration({
+                source_job_id: selectedJobId,
+                design_ids: selectedDesignIds,
+                action,
+            });
+        },
+        onSuccess: (response) => {
+            const launchedJob = response.data.launched_job;
+            setIterationMessage({
+                kind: 'success',
+                text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            queryClient.invalidateQueries({ queryKey: ['jobs', 'include_children'] });
+        },
+        onError: (error) => {
+            setIterationMessage({
+                kind: 'error',
+                text: getErrorMessage(error),
+            });
+        },
+    });
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -601,6 +691,104 @@ export function ResultsViewer() {
                                         >
                                             ⏭
                                         </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {isAntibodyContext && (
+                            <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div className="text-sm font-medium text-cyan-200">Antibody Iteration Set</div>
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Use the Data Table filters and check rows to define a working set, then launch the next round directly from this viewer.
+                                        </p>
+                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                            <span className="rounded-full border border-cyan-500/30 bg-slate-900/70 px-2 py-1 text-cyan-200">
+                                                {selectedDesignIds.length} selected
+                                            </span>
+                                            <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-400">
+                                                {sortedDesigns.length} on current filtered page
+                                            </span>
+                                            {launchIterationMutation.isPending && (
+                                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                    Launching {launchIterationMutation.variables}...
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={selectCurrentPage}
+                                            disabled={currentPageDesignIds.length === 0}
+                                            className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Select Page
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={clearSelectedDesigns}
+                                            disabled={selectedDesignIds.length === 0}
+                                            className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Clear
+                                        </button>
+                                        {([
+                                            ['validate_boltz2', 'Boltz-2'],
+                                            ['validate_protenix', 'Protenix'],
+                                            ['ppiflow_maturation', 'PPIFlow'],
+                                            ['fampnn_redesign', 'FAMPNN'],
+                                            ['frustrampnn', 'FrustraMPNN'],
+                                        ] as Array<[AntibodyIterationAction, string]>).map(([action, label]) => (
+                                            <button
+                                                key={action}
+                                                type="button"
+                                                onClick={() => {
+                                                    setIterationMessage(null);
+                                                    launchIterationMutation.mutate(action);
+                                                }}
+                                                disabled={selectedDesignIds.length === 0 || launchIterationMutation.isPending}
+                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                    action === 'validate_protenix'
+                                                        ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
+                                                        : action === 'validate_boltz2'
+                                                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
+                                                            : action === 'ppiflow_maturation'
+                                                                ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
+                                                                : action === 'fampnn_redesign'
+                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
+                                                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
+                                                }`}
+                                                title={
+                                                    action === 'validate_boltz2'
+                                                        ? 'Re-run Boltz-2 validation on the selected set and pause at structure review.'
+                                                        : action === 'validate_protenix'
+                                                            ? 'Re-run Protenix validation on the selected set and pause at structure review.'
+                                                            : action === 'ppiflow_maturation'
+                                                                ? 'Run post-validation PPIFlow maturation on the selected set.'
+                                                                : action === 'fampnn_redesign'
+                                                                    ? 'Use the selected structures as the next FAMPNN redesign inputs.'
+                                                                    : 'Run FrustraMPNN analysis on the selected set.'
+                                                }
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {iterationMessage && (
+                                    <div
+                                        className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                                            iterationMessage.kind === 'success'
+                                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                                : 'border-red-500/30 bg-red-500/10 text-red-200'
+                                        }`}
+                                    >
+                                        {iterationMessage.text}
                                     </div>
                                 )}
                             </div>
@@ -1005,6 +1193,9 @@ export function ResultsViewer() {
                                                     onChange={e => setFilterText(e.target.value)}
                                                     className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm w-64"
                                                 />
+                                                <span className="text-xs text-slate-500">
+                                                    Check rows to build a launch set. Row clicks still open the structure view.
+                                                </span>
                                             </div>
                                             {/* Table */}
                                             <div className="overflow-x-auto">
@@ -1012,6 +1203,15 @@ export function ResultsViewer() {
                                                     <thead>
                                                         <tr className="border-b border-slate-700">
                                                             {[
+                                                                { key: 'selected', label: (
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={allCurrentPageSelected}
+                                                                        onChange={(e) => toggleCurrentPageSelection(e.target.checked)}
+                                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
+                                                                        title={allCurrentPageSelected ? 'Clear current page selection' : 'Select current page'}
+                                                                    />
+                                                                ) },
                                                                 { key: 'name', label: 'Name' },
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
@@ -1042,8 +1242,8 @@ export function ResultsViewer() {
                                                             ].map(col => (
                                                                 <th
                                                                     key={col.key}
-                                                                    onClick={() => handleSort(col.key)}
-                                                                    className="px-3 py-2 text-left font-medium text-slate-400 cursor-pointer hover:text-white"
+                                                                    onClick={col.key === 'selected' ? undefined : () => handleSort(col.key)}
+                                                                    className={`px-3 py-2 text-left font-medium text-slate-400 ${col.key === 'selected' ? '' : 'cursor-pointer hover:text-white'}`}
                                                                 >
                                                                     {col.label}
                                                                     {sortField === col.key && (
@@ -1057,12 +1257,23 @@ export function ResultsViewer() {
                                                         {sortedDesigns.map(d => (
                                                             <tr
                                                                 key={d.id}
-                                                                className="border-b border-slate-800 hover:bg-slate-800/30 cursor-pointer"
+                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${
+                                                                    selectedDesignSet.has(d.id) ? 'bg-cyan-500/5' : ''
+                                                                }`}
                                                                 onClick={() => {
                                                                     setSelectedDesignId(d.id);
                                                                     setActiveTab('structure');
                                                                 }}
                                                             >
+                                                                <td className="px-3 py-2">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={selectedDesignSet.has(d.id)}
+                                                                        onChange={(e) => toggleDesignSelection(d.id, e.target.checked)}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500"
+                                                                    />
+                                                                </td>
                                                                 <td className="px-3 py-2 font-medium truncate max-w-[200px]">{d.name}</td>
 
                                                                 {/* Binding Quality Tier */}

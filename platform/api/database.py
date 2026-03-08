@@ -93,6 +93,10 @@ class Job(Base):
     stage_work_dir = Column(String(500), nullable=True)  # Current Nextflow work directory for log parsing
     completed_stages = Column(JSON, default=list)  # List of completed stages: ['rfantibody', 'fampnn']
     stage_outputs = Column(JSON, default=dict)  # Stage output paths: {'rfantibody': ['path/to/design_0.pdb', ...]}
+    awaiting_input = Column(Boolean, default=False)
+    awaiting_stage = Column(String(50), nullable=True)
+    awaiting_payload = Column(JSON, default=dict)
+    decision_history = Column(JSON, default=list)
     
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")

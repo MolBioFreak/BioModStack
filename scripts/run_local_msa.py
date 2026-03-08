@@ -551,6 +551,28 @@ def load_scheduler_gpu_policy(config_path: Optional[Path] = None) -> Dict[str, O
     }
 
 
+def read_persisted_msa_pinned_gpu_id(cache_dir: Optional[str]) -> Optional[int]:
+    """
+    Read the global MSA GPU pin from shared gpuserver settings.
+
+    This is the default GPU chosen in the UI's MSA Server Settings menu.
+    Explicit CLI GPU overrides still take precedence over this persisted value.
+    """
+    try:
+        settings_path = _gpuserver_runtime_root(cache_dir) / "settings.json"
+        if not settings_path.exists():
+            return None
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        raw_value = data.get("pinned_gpu_id")
+        if raw_value in (None, ""):
+            return None
+        return int(raw_value)
+    except Exception:
+        return None
+
+
 def _preferred_gpu_has_running_gpuserver(
     gpu_id: int,
     cache_dir: Optional[str],
@@ -2258,10 +2280,19 @@ def run_colabfold_msa_workflow(
             normalized_gpu_mode = "required"
 
         scheduler_policy = load_scheduler_gpu_policy()
+        persisted_pinned_gpu_id = None
+        if gpu_id is None and preferred_gpus is None and not cpu_only:
+            persisted_pinned_gpu_id = read_persisted_msa_pinned_gpu_id(cache_dir)
         effective_preferred_gpus = preferred_gpus
         effective_excluded_gpus = excluded_gpus
 
-        if effective_preferred_gpus is None:
+        if persisted_pinned_gpu_id is not None:
+            effective_preferred_gpus = [persisted_pinned_gpu_id]
+            print(
+                f"MSA GPU pin from persisted server settings: {persisted_pinned_gpu_id}",
+                flush=True,
+            )
+        elif effective_preferred_gpus is None:
             effective_preferred_gpus = scheduler_policy.get("preferred")
         if effective_excluded_gpus is None:
             effective_excluded_gpus = scheduler_policy.get("disabled")
@@ -2296,6 +2327,12 @@ def run_colabfold_msa_workflow(
         elif mmseqs_gpu.exists():
             if gpu_id is not None:
                 selected_gpu_id = gpu_id
+            elif persisted_pinned_gpu_id is not None:
+                selected_gpu_id = persisted_pinned_gpu_id
+                print(
+                    f"Using pinned MSA GPU {selected_gpu_id} from persisted server settings",
+                    flush=True,
+                )
             else:
                 selected_gpu_id = check_gpu_availability(
                     threshold=gpu_threshold,

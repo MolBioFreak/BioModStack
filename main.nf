@@ -38,6 +38,7 @@ include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
+include { RFANTIBODY_BACKBONE } from './workflows/rfantibody_backbone.nf'
 
 include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
 
@@ -455,24 +456,20 @@ workflow {
             error("Target PDB required for rfantibody_backbone mode")
         }
 
-        def jobName = params.sequence_name ?: 'rfantibody_child'
-        def meta = [id: jobName]
-
-        // Prepare input tuple: [meta, target_pdb, hotspots, gpu_id, num_designs]
         def hotspots = params.epitope_residues ?: ""
-        def gpu_id = params.gpu_id ?: 0
         def rfantibody_num_designs = params.rfantibody_num_designs ?: 10
-
-        def rfantibody_input = channel.of(
-            tuple(meta, file(params.target_pdb), hotspots, gpu_id, rfantibody_num_designs)
-        )
 
         // Use framework from params or dummy file for default
         def framework_for_rfantibody = params.framework_pdb
             ? file(params.framework_pdb)
             : file("${params.code_root}/lib/NO_FRAMEWORK")
 
-        RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+        RFANTIBODY_BACKBONE(
+            file(params.target_pdb),
+            hotspots,
+            rfantibody_num_designs,
+            framework_for_rfantibody
+        )
 
         return null
     }
