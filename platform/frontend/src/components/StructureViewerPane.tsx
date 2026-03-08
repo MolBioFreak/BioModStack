@@ -28,6 +28,32 @@ interface Props {
 
 type OverlayView = 'metrics' | 'plddt' | 'pae';
 
+function getDesignOriginLabel(design: Design | null | undefined): string | null {
+    const path = design?.pdb_path || '';
+    const metrics = design?.confidence_metrics || {};
+
+    if (path.includes('/validated_designs/')) {
+        if (typeof metrics === 'object' && metrics && ('gpde' in metrics || 'ranking_score' in metrics || 'chain_pair_iptm' in metrics)) {
+            return 'Protenix Validation';
+        }
+        return 'Validated Structure';
+    }
+    if (path.includes('/fampnn_filtered/')) {
+        return 'FAMPNN Candidate';
+    }
+    if (path.includes('/rfantibody/')) {
+        return 'RFantibody Backbone';
+    }
+    return null;
+}
+
+function plddtColor(value: number): { r: number; g: number; b: number } {
+    if (value >= 90) return { r: 59, g: 130, b: 246 };
+    if (value >= 70) return { r: 34, g: 211, b: 238 };
+    if (value >= 50) return { r: 250, g: 204, b: 21 };
+    return { r: 249, g: 115, b: 22 };
+}
+
 export default function StructureViewerPane({
     selectedDesignId,
     setSelectedDesignId,
@@ -49,7 +75,7 @@ export default function StructureViewerPane({
     const bfactorLabel = isOligoJob ? 'Design Conf.' : 'pLDDT';
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
     const [paeMatrix, setPaeMatrix] = useState<number[][] | null>(null);
-    const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number }>>({});
+    const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number; residue_numbers?: number[] }>>({});
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const [chainBoundaries, setChainBoundaries] = useState<{ id: string; start: number; end: number }[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -57,6 +83,7 @@ export default function StructureViewerPane({
 
     // Theme-aware colors for Molstar viewer
     const themeColors = useThemeColors();
+    const designOrigin = getDesignOriginLabel(selectedDesign);
 
     // Fetch all structure metrics in parallel when design changes
     // (Consolidated from 3 separate useEffects to reduce network round-trips)
@@ -114,6 +141,21 @@ export default function StructureViewerPane({
 
         fetchAllMetrics();
     }, [selectedDesignId]);
+
+    const plddtResidueColors = (() => {
+        if (colorMode !== 'plddt') return undefined;
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        for (const [chainId, metric] of Object.entries(chainMetrics)) {
+            const plddt = metric?.plddt || [];
+            const residueNumbers = metric?.residue_numbers || plddt.map((_, idx) => idx + 1);
+            for (let idx = 0; idx < plddt.length; idx++) {
+                const residueNumber = residueNumbers[idx];
+                if (residueNumber == null) continue;
+                colorMap.set(`${chainId}${residueNumber}`, plddtColor(plddt[idx]));
+            }
+        }
+        return colorMap.size > 0 ? colorMap : undefined;
+    })();
 
     // Draw PAE heatmap on canvas
     useEffect(() => {
@@ -201,8 +243,13 @@ export default function StructureViewerPane({
                         {selectedDesign && (
                             <div>
                                 <h3 className="font-medium text-white/90 truncate text-sm">{selectedDesign.name}</h3>
-                                <div className="text-xs text-slate-400/80">
+                                <div className="text-xs text-slate-400/80 flex items-center gap-2 flex-wrap">
                                     {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
+                                    {designOrigin && (
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-700/70 border border-slate-600/60 text-[10px] uppercase tracking-wider text-slate-300">
+                                            {designOrigin}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -481,8 +528,13 @@ export default function StructureViewerPane({
             {selectedDesign && (
                 <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
                     <h3 className="font-medium text-white truncate mb-2">{selectedDesign.name}</h3>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                         {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
+                        {designOrigin && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-700/70 border border-slate-600/60 text-[10px] uppercase tracking-wider text-slate-300">
+                                {designOrigin}
+                            </span>
+                        )}
                     </div>
                 </div>
             )}
@@ -645,7 +697,7 @@ export default function StructureViewerPane({
                 >
                     {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
                         <option key={d.id} value={d.id}>
-                            {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
                     ))}
                 </select>
@@ -713,8 +765,9 @@ export default function StructureViewerPane({
                             key={selectedDesignId + '_' + colorMode}
                             structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
                             format={structureFormat}
-                            alphafoldView={colorMode === 'plddt'}
+                            alphafoldView={colorMode === 'plddt' && !plddtResidueColors}
                             selections={colorMode === 'cdr' ? antibodySelections : undefined}
+                            residueColors={colorMode === 'plddt' ? plddtResidueColors : undefined}
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />
