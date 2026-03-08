@@ -57,6 +57,87 @@ class UserTemplateResponse(BaseModel):
         from_attributes = True
 
 
+def _is_antibody_template(template: UserTemplate) -> bool:
+    model_id = (template.model_id or "").strip().lower()
+    base_template_id = (template.base_template_id or "").strip().lower()
+    mode = (template.mode or "").strip().lower()
+    return (
+        model_id == "template_antibody_denovo"
+        or base_template_id == "antibody_denovo"
+        or mode == "antibody_denovo_pipeline"
+    )
+
+
+def _normalize_antibody_template_params(params: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    if not isinstance(params, dict):
+        return params, False
+
+    normalized = dict(params)
+    changed = False
+
+    framework_type = str(normalized.get("framework_type") or "").strip().lower()
+    sabdab_framework = normalized.get("sabdab_framework")
+    if framework_type == "sabdab" and isinstance(sabdab_framework, dict):
+        sabdab_framework = dict(sabdab_framework)
+        sabdab_path = str(sabdab_framework.get("filePath") or "").strip()
+        custom_framework_path = str(normalized.get("custom_framework_path") or "").strip()
+        framework_pdb = str(normalized.get("framework_pdb") or "").strip()
+
+        if sabdab_path:
+            if custom_framework_path != sabdab_path:
+                normalized["custom_framework_path"] = sabdab_path
+                changed = True
+            if framework_pdb != sabdab_path:
+                normalized["framework_pdb"] = sabdab_path
+                changed = True
+        elif framework_pdb.endswith("_hlt.pdb"):
+            sabdab_framework["filePath"] = framework_pdb
+            normalized["sabdab_framework"] = sabdab_framework
+            changed = True
+        elif custom_framework_path.endswith("_hlt.pdb"):
+            sabdab_framework["filePath"] = custom_framework_path
+            normalized["sabdab_framework"] = sabdab_framework
+            changed = True
+
+    selected_residues = normalized.get("selected_residues")
+    if not isinstance(selected_residues, list):
+        epitope_residues = str(normalized.get("epitope_residues") or "").strip()
+        if epitope_residues:
+            normalized["selected_residues"] = [
+                residue.strip() for residue in epitope_residues.split(",") if residue.strip()
+            ]
+            changed = True
+
+    selected_chain = str(normalized.get("selected_chain") or "").strip()
+    antigen_chains = str(normalized.get("antigen_chains") or "").strip()
+    if not selected_chain and antigen_chains:
+        normalized["selected_chain"] = antigen_chains.split(",")[0].strip()
+        changed = True
+
+    return normalized, changed
+
+
+async def _normalize_template_records(
+    templates: List[UserTemplate],
+    session: AsyncSession,
+) -> List[UserTemplate]:
+    changed_any = False
+    for template in templates:
+        if not _is_antibody_template(template):
+            continue
+        normalized_params, changed = _normalize_antibody_template_params(template.params or {})
+        if changed:
+            template.params = normalized_params
+            changed_any = True
+
+    if changed_any:
+        await session.commit()
+        for template in templates:
+            await session.refresh(template)
+
+    return templates
+
+
 # --- Endpoints ---
 
 @router.get("", response_model=List[UserTemplateResponse])
@@ -83,7 +164,8 @@ async def list_user_templates(
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     templates = result.scalars().all()
-    
+
+    templates = await _normalize_template_records(templates, session)
     return templates
 
 
@@ -100,6 +182,10 @@ async def create_user_template(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"Template with name '{data.name}' already exists")
     
+    params = data.params
+    if data.model_id == "template_antibody_denovo" or data.base_template_id == "antibody_denovo" or data.mode == "antibody_denovo_pipeline":
+        params, _ = _normalize_antibody_template_params(params)
+
     template = UserTemplate(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -109,7 +195,7 @@ async def create_user_template(
         base_template_id=data.base_template_id,
         model_id=data.model_id,
         mode=data.mode,
-        params=data.params,
+        params=params,
     )
     
     session.add(template)
@@ -132,7 +218,9 @@ async def get_user_template(
     
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
+    templates = await _normalize_template_records([template], session)
+    template = templates[0]
     return template
 
 
@@ -171,7 +259,10 @@ async def update_user_template(
     if data.color is not None:
         template.color = data.color
     if data.params is not None:
-        template.params = data.params
+        params = data.params
+        if _is_antibody_template(template):
+            params, _ = _normalize_antibody_template_params(params)
+        template.params = params
     
     await session.commit()
     await session.refresh(template)

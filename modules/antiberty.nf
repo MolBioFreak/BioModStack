@@ -170,3 +170,95 @@ print(f"Filtered: {len(filtered_records)}/{len(scores)} passed (threshold: {thre
 FILTER_SCRIPT
     """
 }
+
+// Filter structure records while preserving PDB-based downstream flow.
+process ANTIBERTY_FILTER_STRUCTURES {
+    tag "${meta.id}"
+    label 'process_low'
+    container "${params.container_dir}/antibody_tools.sif"
+
+    input:
+    tuple val(meta), path(scores_csv), path(structure_pdb)
+
+    output:
+    tuple val(meta), path("${meta.id}_filtered.pdb"), emit: filtered_pdb, optional: true
+    tuple val(meta), path("${meta.id}_filter_report.json"), emit: report
+
+    script:
+    def threshold = params.antiberty_pll_threshold ?: -10
+    """
+    python3 << 'FILTER_STRUCTURES_SCRIPT'
+import csv
+import json
+import shutil
+from pathlib import Path
+
+threshold = ${threshold}
+scores = []
+
+with open("${scores_csv}") as handle:
+    reader = csv.DictReader(handle)
+    for row in reader:
+        try:
+            pll = float(row["pll_score"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        row["pll_score"] = pll
+        scores.append(row)
+
+antibody_like = {
+    "heavy",
+    "light",
+    "kappa",
+    "lambda",
+    "vh",
+    "vl",
+    "vhh",
+    "nanobody",
+    "single_domain",
+}
+
+selected_rows = []
+for row in scores:
+    chain_type = str(row.get("chain_type", "")).strip().lower()
+    if chain_type in antibody_like or chain_type.startswith("heavy") or chain_type.startswith("light"):
+        selected_rows.append(row)
+
+if not selected_rows:
+    selected_rows = scores
+
+aggregate_pll = min((row["pll_score"] for row in selected_rows), default=float("-inf"))
+passed = bool(selected_rows) and aggregate_pll >= threshold
+
+report = {
+    "structure_id": "${meta.id}",
+    "structure_path": "${structure_pdb}",
+    "threshold": threshold,
+    "passed": passed,
+    "aggregate_pll": aggregate_pll if selected_rows else None,
+    "aggregation_mode": "min_selected_chain_pll",
+    "selected_row_count": len(selected_rows),
+    "total_row_count": len(scores),
+    "selected_rows": [
+        {
+            "sequence_id": row.get("sequence_id"),
+            "chain_type": row.get("chain_type"),
+            "pll_score": row.get("pll_score"),
+        }
+        for row in selected_rows[:10]
+    ],
+}
+
+if passed:
+    shutil.copy2("${structure_pdb}", "${meta.id}_filtered.pdb")
+
+with open("${meta.id}_filter_report.json", "w") as handle:
+    json.dump(report, handle, indent=2)
+
+print(
+    f"Structure ${meta.id}: {'passed' if passed else 'rejected'} "
+    f"(aggregate_pll={aggregate_pll if selected_rows else 'N/A'}, threshold={threshold})"
+)
+FILTER_STRUCTURES_SCRIPT
+    """
+}

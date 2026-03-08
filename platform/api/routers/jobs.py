@@ -13,6 +13,8 @@ import uuid
 import os
 import hashlib
 import logging
+import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -23,6 +25,7 @@ from database import get_session, Job, Design
 from paths import (
     get_code_root,
     get_data_root,
+    get_inputs_dir,
     get_results_dir,
     get_work_dir,
     resolve_allowed_path,
@@ -44,6 +47,32 @@ class ResumeJobRequest(BaseModel):
     from_stage: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     name_suffix: Optional[str] = None
+
+
+class OpenStageGateRequest(BaseModel):
+    """Internal workflow request to mark a job as awaiting user input."""
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AntibodyIterationLaunchRequest(BaseModel):
+    """Launch a new antibody round from selected design structures."""
+    source_job_id: str = Field(..., min_length=1)
+    design_ids: List[str] = Field(default_factory=list)
+    action: str = Field(..., min_length=1)
+    name_suffix: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AntibodyIterationLaunchResponse(BaseModel):
+    """Response for viewer-driven antibody iteration actions."""
+    message: str
+    action: str
+    source_job_id: str
+    root_job_id: str
+    selection_dir: str
+    selected_design_count: int
+    launched_job: JobResponse
+
 
 NANOPORE_PATH_PARAM_KEYS = {
     "pod5_dir",
@@ -87,6 +116,163 @@ def _to_bool(value: object) -> bool:
     return False
 
 
+def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {}
+
+    normalized = dict(params)
+    structure_validator = str(
+        normalized.get("structure_validator")
+        or normalized.get("validation_predictor")
+        or normalized.get("pred_method")
+        or "boltz2"
+    ).strip().lower()
+    if structure_validator == "boltz":
+        structure_validator = "boltz2"
+    if structure_validator not in {"boltz2", "protenix"}:
+        structure_validator = "boltz2"
+    normalized["structure_validator"] = structure_validator
+
+    canonical_post_validation = normalized.get("run_post_validation_maturation")
+    legacy_post_boltz = normalized.get("run_post_boltz_maturation")
+    if canonical_post_validation is None and legacy_post_boltz is not None:
+        canonical_post_validation = _to_bool(legacy_post_boltz)
+    if canonical_post_validation is not None:
+        normalized["run_post_validation_maturation"] = _to_bool(canonical_post_validation)
+        normalized["run_post_boltz_maturation"] = normalized["run_post_validation_maturation"]
+
+    canonical_thermompnn = normalized.get("run_thermompnn")
+    legacy_stability = normalized.get("run_stability_scoring")
+
+    if canonical_thermompnn is None and legacy_stability is not None:
+        canonical_thermompnn = _to_bool(legacy_stability)
+    if canonical_thermompnn is not None:
+        normalized["run_thermompnn"] = _to_bool(canonical_thermompnn)
+        normalized["run_stability_scoring"] = normalized["run_thermompnn"]
+
+    gate_stage = normalized.get("interactive_gate_stage")
+    if isinstance(gate_stage, str):
+        normalized_gate_stage = gate_stage.strip().lower()
+        if normalized_gate_stage == "post_boltz_validation":
+            normalized_gate_stage = "post_structure_validation"
+        if normalized_gate_stage not in {"post_fampnn", "post_structure_validation"}:
+            normalized_gate_stage = "post_fampnn"
+        normalized["interactive_gate_stage"] = normalized_gate_stage
+
+    return normalized
+
+
+def _is_antibody_launch(model_id: str, params: Optional[Dict[str, Any]]) -> bool:
+    model_id_normalized = (model_id or "").strip().lower()
+    params = params if isinstance(params, dict) else {}
+    mode_normalized = str(params.get("rfd_mode") or "").strip().lower()
+    return (
+        model_id_normalized in {
+            "template_antibody_denovo",
+            "antibody_denovo",
+            "antibody_child",
+            "rfantibody_child",
+        }
+        or mode_normalized in {"antibody_denovo_pipeline", "rfantibody_backbone"}
+    )
+
+
+def _normalize_antibody_runtime_paths(model_id: str, params: dict) -> dict:
+    if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
+        return params
+
+    normalized = dict(params)
+    for key in ("target_pdb", "framework_pdb"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+def _validate_antibody_runtime_paths(model_id: str, params: dict) -> None:
+    if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
+        return
+
+    target_pdb = str(params.get("target_pdb") or "").strip()
+    if target_pdb and not Path(target_pdb).exists():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Target PDB not found: {target_pdb}",
+        )
+
+    framework_type = str(params.get("framework_type") or "").strip().lower()
+    framework_pdb = str(params.get("framework_pdb") or "").strip()
+    if framework_type == "custom":
+        if not framework_pdb:
+            raise HTTPException(
+                status_code=422,
+                detail="Custom framework selected, but no framework_pdb was provided.",
+            )
+        if not Path(framework_pdb).exists():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Custom framework PDB not found: {framework_pdb}",
+            )
+        try:
+            chains = set()
+            with Path(framework_pdb).open("r") as handle:
+                for line in handle:
+                    if line.startswith(("ATOM", "HETATM")):
+                        chain = line[21:22].strip()
+                        if chain:
+                            chains.add(chain)
+            if not ({"H", "L"} & chains):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Custom framework must be HLT-style with antibody chains labeled H or L. "
+                        f"Found chains: {sorted(chains)} in {framework_pdb}"
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to validate framework PDB {framework_pdb}: {exc}",
+            ) from exc
+
+
+def _validate_fampnn_checkpoint_requirements(model_id: str, params: dict) -> None:
+    if not isinstance(params, dict):
+        return
+
+    model_id_normalized = (model_id or "").strip().lower()
+    runs_fampnn = _to_bool(params.get("seq_design_fampnn")) or model_id_normalized in {
+        "template_antibody_denovo",
+        "fampnn_child",
+    }
+    runs_maturation = (
+        _to_bool(params.get("run_maturation"))
+        or _to_bool(params.get("run_post_validation_maturation"))
+        or _to_bool(params.get("run_post_boltz_maturation"))
+    )
+    needs_fampnn_checkpoint = (
+        runs_fampnn
+        or runs_maturation
+    )
+    if not needs_fampnn_checkpoint:
+        return
+
+    checkpoint = str(params.get("fampnn_checkpoint") or "").strip()
+    checkpoint_path = str(params.get("fampnn_checkpoint_path") or "").strip()
+    if checkpoint or checkpoint_path:
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "FAMPNN weights are required for this job. Set 'fampnn_checkpoint' or "
+            "'fampnn_checkpoint_path' explicitly; no default checkpoint is applied."
+        ),
+    )
+
+
 def _is_meaningful_param_value(value: object) -> bool:
     """Treat empty/sentinel strings as unset."""
     if value is None:
@@ -106,6 +292,337 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def _looks_like_antibody_job(job: Optional[Job]) -> bool:
+    if job is None:
+        return False
+    model_id = (job.model_id or "").strip().lower()
+    mode = (job.mode or "").strip().lower()
+    params = job.params if isinstance(job.params, dict) else {}
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    has_antibody_params = any(_is_meaningful_param_value(params.get(key)) for key in ("framework_type", "antibody_chains", "epitope_residues"))
+    return (
+        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
+        or "antibody" in model_id
+        or "antibody" in mode
+        or rfd_mode == "antibody_denovo_pipeline"
+        or has_antibody_params
+    )
+
+
+async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) -> tuple[Job, Job]:
+    source_job = await session.get(Job, source_job_id)
+    if source_job is None:
+        raise HTTPException(status_code=404, detail=f"Source job '{source_job_id}' not found")
+
+    lineage: List[Job] = []
+    visited: set[str] = set()
+    current: Optional[Job] = source_job
+    while current is not None and current.id not in visited:
+        lineage.append(current)
+        visited.add(current.id)
+        if not current.parent_job_id:
+            break
+        current = await session.get(Job, current.parent_job_id)
+
+    antibody_jobs = [job for job in lineage if _looks_like_antibody_job(job)]
+    root_job = antibody_jobs[-1] if antibody_jobs else lineage[-1]
+    if not _looks_like_antibody_job(root_job):
+        raise HTTPException(
+            status_code=422,
+            detail="Selected job is not part of an antibody workflow lineage.",
+        )
+    return source_job, root_job
+
+
+def _resolve_design_structure_path(raw_path: str) -> Path:
+    if not raw_path:
+        raise HTTPException(status_code=422, detail="Selected design is missing a structure path.")
+
+    raw = Path(raw_path)
+    candidates: List[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend([
+            (get_data_root() / raw),
+            (CODE_ROOT / raw),
+            raw.resolve(),
+        ])
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except FileNotFoundError:
+            continue
+        if resolved.exists():
+            return resolved
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Selected design structure path does not exist: {raw_path}",
+    )
+
+
+def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
+    pruned = deepcopy(base_params) if isinstance(base_params, dict) else {}
+    for key in {
+        "job_id",
+        "run_id",
+        "api_url",
+        "out_dir",
+        "output_dir",
+        "interactive_gate_continue",
+        "fampnn_collected_pdbs",
+        "rfantibody_input_pdbs",
+        "skip_rfantibody",
+        "skip_fampnn",
+        "iteration_source_job_id",
+        "iteration_source_root_job_id",
+        "iteration_source_design_ids",
+        "iteration_action",
+        "iteration_selection_dir",
+    }:
+        pruned.pop(key, None)
+    return _normalize_antibody_job_params(pruned)
+
+
+def _materialize_antibody_selection(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    action: str,
+) -> Path:
+    selection_root = get_inputs_dir() / "design_selections" / "antibody"
+    selection_root.mkdir(parents=True, exist_ok=True)
+
+    selection_dir = selection_root / (
+        f"{datetime.utcnow():%Y%m%d_%H%M%S}_{action}_{uuid.uuid4().hex[:8]}"
+    )
+    selection_dir.mkdir(parents=True, exist_ok=False)
+
+    manifest_items: List[Dict[str, Any]] = []
+    for idx, design in enumerate(designs, start=1):
+        if not design.pdb_path:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Design '{design.name}' is missing a structure path.",
+            )
+
+        source_path = _resolve_design_structure_path(design.pdb_path)
+        if source_path.suffix.lower() != ".pdb":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Design '{design.name}' is backed by '{source_path.name}', not a PDB file. "
+                    "Antibody iteration actions currently require PDB-backed selections."
+                ),
+            )
+
+        dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
+        try:
+            os.symlink(source_path, dest_path)
+        except OSError:
+            shutil.copy2(source_path, dest_path)
+
+        manifest_items.append({
+            "design_id": design.id,
+            "design_name": design.name,
+            "design_job_id": design.job_id,
+            "source_pdb_path": str(source_path),
+            "selection_pdb_path": str(dest_path),
+        })
+
+    manifest = {
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "action": action,
+        "root_job_id": root_job.id,
+        "source_job_id": source_job.id,
+        "design_count": len(manifest_items),
+        "designs": manifest_items,
+    }
+    (selection_dir / "selection_manifest.json").write_text(json.dumps(manifest, indent=2))
+    return selection_dir
+
+
+def _build_antibody_iteration_job(
+    root_job: Job,
+    source_job: Job,
+    action: str,
+    selection_dir: Path,
+    design_ids: List[str],
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> JobCreate:
+    action = action.strip().lower()
+    action_map = {
+        "validate_boltz2": {
+            "suffix": "validate_boltz2",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": True,
+                "structure_validator": "boltz2",
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "validate_protenix": {
+            "suffix": "validate_protenix",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": True,
+                "structure_validator": "protenix",
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "ppiflow_maturation": {
+            "suffix": "ppiflow_maturation",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": True,
+                "run_post_boltz_maturation": True,
+                "run_maturation": True,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": False,
+                "interactive_gating": False,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "fampnn_redesign": {
+            "suffix": "fampnn_redesign",
+            "params": {
+                "skip_rfantibody": True,
+                "rfantibody_input_pdbs": str(selection_dir),
+                "fampnn_collected_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_fampnn",
+            },
+        },
+        "frustrampnn": {
+            "suffix": "frustrampnn",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": True,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": False,
+                "interactive_gating": False,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+    }
+    if action not in action_map:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unsupported antibody iteration action '{action}'. "
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn."
+            ),
+        )
+
+    launch_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
+    launch_params.update({
+        "iteration_source_job_id": source_job.id,
+        "iteration_source_root_job_id": root_job.id,
+        "iteration_source_design_ids": design_ids,
+        "iteration_action": action,
+        "iteration_selection_dir": str(selection_dir),
+        "interactive_gate_continue": False,
+    })
+    launch_params.update(action_map[action]["params"])
+
+    for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
+        if launch_params.get(key) is None:
+            launch_params.pop(key, None)
+
+    if param_overrides:
+        launch_params.update(param_overrides)
+
+    launch_params = _normalize_antibody_job_params(launch_params)
+    suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
+    job_name = f"{root_job.name}_{suffix}"
+
+    return JobCreate(
+        name=job_name,
+        model_id="template_antibody_denovo",
+        mode="antibody_denovo_pipeline",
+        params=launch_params,
+        pinned_gpu=root_job.pinned_gpu,
+    )
 
 
 def _to_stage_output_path(path: Path) -> str:
@@ -513,7 +1030,7 @@ async def list_jobs(
     for job, design_count in rows:
         completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
         # Fallback for structure/PDB jobs that don't have Design entries
-        if design_count == 0 and job.status == JobStatus.COMPLETED.value and job.output_dir:
+        if design_count == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
             # Note: This file system check is still "slow" per job, but only runs for 
             # jobs with 0 designs in DB. For pure design jobs, it's skipped.
             design_count = count_structure_files(job.output_dir)
@@ -536,6 +1053,10 @@ async def list_jobs(
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs=stage_outputs,
+            awaiting_input=job.awaiting_input,
+            awaiting_stage=job.awaiting_stage,
+            awaiting_payload=job.awaiting_payload,
+            decision_history=job.decision_history,
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -564,6 +1085,8 @@ async def create_job(
         )
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
         job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_antibody_job_params(job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
@@ -575,6 +1098,8 @@ async def create_job(
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
+    _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
+    _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
     
     # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
@@ -589,6 +1114,7 @@ async def create_job(
         job_data.params['seq_design_proteinmpnn'] = False
         job_data.params['run_structure_validation'] = False
         job_data.params['run_immunogenicity_scoring'] = False
+        job_data.params['run_thermompnn'] = False
         job_data.params['run_stability_scoring'] = False
         job_data.params['run_maturation'] = False
         logger.info("[QUEUE] rfantibody_backbone mode detected. Silencing downstream validation flags.")
@@ -931,7 +1457,58 @@ async def create_job(
         completed_at=first_job.completed_at,
         output_dir=first_job.output_dir,
         error_message=first_job.error_message,
-        design_count=0
+        design_count=0,
+        awaiting_input=first_job.awaiting_input,
+        awaiting_stage=first_job.awaiting_stage,
+        awaiting_payload=first_job.awaiting_payload,
+        decision_history=first_job.decision_history,
+    )
+
+
+@router.post("/antibody-iteration/from-designs", response_model=AntibodyIterationLaunchResponse, status_code=201)
+async def launch_antibody_iteration_from_designs(
+    request: AntibodyIterationLaunchRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Launch a focused antibody iteration round from selected design structures."""
+    design_ids = [design_id.strip() for design_id in request.design_ids if isinstance(design_id, str) and design_id.strip()]
+    if not design_ids:
+        raise HTTPException(status_code=422, detail="At least one design must be selected.")
+
+    source_job, root_job = await _resolve_antibody_root_job(session, request.source_job_id)
+
+    result = await session.execute(select(Design).where(Design.id.in_(design_ids)))
+    found_designs = result.scalars().all()
+    design_by_id = {design.id: design for design in found_designs}
+    missing_designs = [design_id for design_id in design_ids if design_id not in design_by_id]
+    if missing_designs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Some selected designs were not found: {', '.join(missing_designs[:10])}",
+        )
+
+    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
+    launch_request = _build_antibody_iteration_job(
+        root_job=root_job,
+        source_job=source_job,
+        action=request.action,
+        selection_dir=selection_dir,
+        design_ids=design_ids,
+        name_suffix=request.name_suffix,
+        param_overrides=request.param_overrides,
+    )
+    launched_job = await create_job(launch_request, background_tasks, session)
+
+    return AntibodyIterationLaunchResponse(
+        message=f"Launched antibody iteration action '{request.action}' from {len(ordered_designs)} selected designs.",
+        action=request.action,
+        source_job_id=source_job.id,
+        root_job_id=root_job.id,
+        selection_dir=str(selection_dir),
+        selected_design_count=len(ordered_designs),
+        launched_job=launched_job,
     )
 
 
@@ -950,6 +1527,8 @@ async def get_job(
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
+    if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
+        design_count = count_structure_files(job.output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
     
     return JobResponse(
@@ -968,6 +1547,10 @@ async def get_job(
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
+        awaiting_input=job.awaiting_input,
+        awaiting_stage=job.awaiting_stage,
+        awaiting_payload=job.awaiting_payload,
+        decision_history=job.decision_history,
     )
 
 
@@ -1134,6 +1717,8 @@ async def resubmit_job(
     
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_antibody_job_params(resubmit_params)
     if resubmit_params.get("msa_force_refresh") is True:
         # Resubmits should reuse cache by default unless user explicitly
         # starts a fresh job with force-refresh enabled.
@@ -1141,6 +1726,8 @@ async def resubmit_job(
         logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
 
     _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
+    _validate_fampnn_checkpoint_requirements(original_job.model_id, resubmit_params)
+    _validate_antibody_runtime_paths(original_job.model_id, resubmit_params)
 
     from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
     resubmit_sequence_length = original_job.sequence_length or 300
@@ -1395,6 +1982,60 @@ async def report_stage_complete(
     }
 
 
+@router.post("/{job_id}/stage-gates/{stage}/open")
+async def open_stage_gate(
+    job_id: str,
+    stage: str,
+    request: Optional[OpenStageGateRequest] = Body(default=None),
+    session: AsyncSession = Depends(get_session)
+):
+    """Mark a job as awaiting user input at a named workflow gate."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    payload = dict(request.payload or {}) if request else {}
+    payload["stage"] = stage
+
+    job.awaiting_input = True
+    job.awaiting_stage = stage
+    job.awaiting_payload = payload
+    job.current_stage = stage
+    await session.commit()
+
+    logger.info("Job %s opened interactive gate '%s'", job_id, stage)
+
+    return {
+        "message": f"Stage gate '{stage}' opened",
+        "job_id": job_id,
+        "awaiting_stage": stage,
+        "awaiting_payload": payload,
+    }
+
+
+@router.get("/{job_id}/stage-gates")
+async def get_stage_gates(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Return the current interactive gate state for a job."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "job_id": job_id,
+        "awaiting_input": bool(job.awaiting_input),
+        "awaiting_stage": job.awaiting_stage,
+        "awaiting_payload": job.awaiting_payload or {},
+        "decision_history": job.decision_history or [],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHILD JOB TRACKING (Spawn-Wait-Aggregate Pattern)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1626,7 +2267,7 @@ async def get_job_stages(
         display_stages.append("rfantibody")
         
         # Check params for sequence design steps (default to true if not present, matching nextflow logic)
-        params = job.params or {}
+        params = _normalize_antibody_job_params(job.params or {})
         
         # Note: In nextflow 'null' means true for these flags due to how they are processed
         run_fampnn = params.get("seq_design_fampnn")
@@ -1640,15 +2281,21 @@ async def get_job_stages(
         run_proteinmpnn = params.get("seq_design_proteinmpnn")
         if run_proteinmpnn is None or run_proteinmpnn is True:
             display_stages.append("proteinmpnn")
+
+        if params.get("run_maturation") is True:
+            display_stages.append("maturation")
             
         # Validation stages
         if params.get("run_structure_validation") is not False:
-            display_stages.append("boltz2")
+            display_stages.append("structure_validation")
+
+        if params.get("run_post_validation_maturation") is True:
+            display_stages.append("maturation_post_validation")
             
         if params.get("run_immunogenicity_scoring") is not False:
              display_stages.append("antiberty")
              
-        if params.get("run_stability_scoring") is not False:
+        if params.get("run_thermompnn") is not False:
              display_stages.append("thermompnn")
              
     else:
@@ -1707,6 +2354,8 @@ async def get_job_stages(
     all_stages = _dedupe_preserve_order(display_stages)
     completed = _dedupe_preserve_order(list(job.completed_stages or []))
     stage_outputs = dict(job.stage_outputs or {})
+    if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
+        all_stages.append(job.awaiting_stage)
 
     if job.mode in ["methylation_analysis", "nanopore_methylation"]:
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
@@ -1730,11 +2379,11 @@ async def get_job_stages(
         "job_id": job_id,
         "mode": job.mode,
         "all_stages": all_stages,
-        "current_stage": job.current_stage,
+        "current_stage": job.awaiting_stage if job.awaiting_input and job.awaiting_stage else job.current_stage,
         "completed_stages": completed,
         "stage_outputs": stage_outputs,
         # Allow resume if failed/cancelled, even if no stages fully completed (rely on cache)
-        "can_resume": job.status in ["failed", "cancelled"]
+        "can_resume": job.status in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] or bool(job.awaiting_input)
     }
 
 
@@ -1757,7 +2406,7 @@ async def resume_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if job.status not in ["failed", "cancelled"]:
+    if job.status not in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] and not job.awaiting_input:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot resume job with status: {job.status}"
@@ -1780,6 +2429,19 @@ async def resume_job(
         for key, value in requested_overrides.items()
         if key not in reserved_resume_keys
     }
+
+    if job.awaiting_input:
+        awaiting_payload = dict(job.awaiting_payload or {})
+        candidate_dir = awaiting_payload.get("candidate_dir")
+        if candidate_dir and job.awaiting_stage == "post_fampnn":
+            param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
+        param_overrides.setdefault("interactive_gate_continue", True)
+        param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
+        param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
+        if not effective_from_stage and job.awaiting_stage == "post_fampnn":
+            effective_from_stage = "fampnn"
+        elif not effective_from_stage and job.awaiting_stage == "post_structure_validation":
+            effective_from_stage = "structure_validation"
     
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
@@ -1801,9 +2463,12 @@ async def resume_job(
     os.makedirs(output_dir, exist_ok=True)
     
     merged_params = {
-        **(job.params or {}),
+        **_normalize_antibody_job_params(job.params or {}),
         **param_overrides,
     }
+    merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_antibody_job_params(merged_params)
+    _validate_antibody_runtime_paths(job.model_id, merged_params)
 
     new_job = Job(
         id=new_job_id,
@@ -1833,6 +2498,17 @@ async def resume_job(
         sequence_length=job.sequence_length,
         priority=job.priority,
     )
+
+    history = list(job.decision_history or [])
+    if job.awaiting_input:
+        history.append({
+            "stage": job.awaiting_stage,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "new_job_id": new_job_id,
+            "from_stage": effective_from_stage,
+            "applied_overrides": sorted(param_overrides.keys()),
+        })
+        job.decision_history = history
     
     session.add(new_job)
     await session.commit()

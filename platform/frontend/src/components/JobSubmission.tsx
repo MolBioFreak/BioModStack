@@ -355,6 +355,36 @@ export function JobSubmission() {
 
     // Hardcoded templates that use dedicated components instead of API-driven config
     const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const dedicatedTemplateByModelId: Record<string, string> = {
+        template_antibody_denovo: 'antibody_denovo',
+        boltzgen: 'boltzgen_design',
+        bindcraft: 'bindcraft',
+    };
+
+    const routeUserTemplate = (template: any) => {
+        const dedicatedTemplateId =
+            (template.base_template_id && hardcodedTemplates.includes(template.base_template_id) && template.base_template_id) ||
+            (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
+
+        if (dedicatedTemplateId) {
+            setWizardMode('templates');
+            setSelectedTemplateId(dedicatedTemplateId);
+            setClonedValues({ ...template.params, name: template.name });
+            setJobName(template.params?.job_name || template.name || '');
+            setSelectedModelId(null);
+            setSelectedModeId(null);
+            setParams({});
+            return;
+        }
+
+        setWizardMode('manual');
+        setSelectedTemplateId(null);
+        setClonedValues(undefined);
+        setParams(template.params || {});
+        if (template.model_id) setSelectedModelId(template.model_id);
+        if (template.mode) setSelectedModeId(template.mode);
+        setJobName(template.params?.job_name || template.name || '');
+    };
 
     const { data: selectedTemplateData } = useQuery({
         queryKey: ['template', selectedTemplateId],
@@ -1205,12 +1235,7 @@ export function JobSubmission() {
             <TemplateManagerModal
                 isOpen={showTemplateManager}
                 onClose={() => setShowTemplateManager(false)}
-                onSelect={(template) => {
-                    // Load template params
-                    setParams(template.params);
-                    if (template.model_id) setSelectedModelId(template.model_id);
-                    if (template.mode) setSelectedModeId(template.mode);
-                }}
+                onSelect={routeUserTemplate}
                 currentParams={params}
                 currentModelId={selectedModelId || undefined}
                 currentMode={selectedModeId || undefined}

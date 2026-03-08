@@ -11,7 +11,7 @@ export const api = axios.create({
 export interface Job {
     id: string;
     name: string;
-    status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+    status: 'queued' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled';
     model_id: string;
     mode: string;
     params: Record<string, any>;
@@ -35,6 +35,10 @@ export interface Job {
     completed_stages?: string[] | null;
     all_stages?: string[] | null;
     stage_outputs?: Record<string, string[]> | null;
+    awaiting_input?: boolean | null;
+    awaiting_stage?: string | null;
+    awaiting_payload?: Record<string, any> | null;
+    decision_history?: Array<Record<string, any>> | null;
 }
 
 // Log data for View Logs modal
@@ -206,6 +210,34 @@ export const extractChain = async (
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
+
+export type AntibodyIterationAction =
+    | 'validate_boltz2'
+    | 'validate_protenix'
+    | 'ppiflow_maturation'
+    | 'fampnn_redesign'
+    | 'frustrampnn';
+
+export interface LaunchAntibodyIterationRequest {
+    source_job_id: string;
+    design_ids: string[];
+    action: AntibodyIterationAction;
+    name_suffix?: string;
+    param_overrides?: Record<string, unknown>;
+}
+
+export interface LaunchAntibodyIterationResponse {
+    message: string;
+    action: AntibodyIterationAction;
+    source_job_id: string;
+    root_job_id: string;
+    selection_dir: string;
+    selected_design_count: number;
+    launched_job: Job;
+}
+
+export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
+    api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request);
 
 export interface MsaCacheEntry {
     name: string;

@@ -41,7 +41,7 @@ def check_existing_children(parent_job_id, stage, api_url, batch_name=None):
         return False, [], {}
 
 
-def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, params_json, api_url):
+def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, stage, params_json, api_url):
     pdb_dir = Path(pdb_dir)
     pdb_files = sorted(pdb_dir.glob("*.pdb"))
     if not pdb_files:
@@ -52,7 +52,7 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, params_json,
     num_jobs = (total_designs + designs_per_job - 1) // designs_per_job
 
     all_done, existing_children, child_status = check_existing_children(
-        parent_job_id, "maturation", api_url, batch_name=batch_name
+        parent_job_id, stage, api_url, batch_name=batch_name
     )
     existing_count = len(existing_children)
     if existing_count > 0:
@@ -98,19 +98,20 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, params_json,
         pdb_paths = ",".join(str(p.resolve()) for p in batch_slice)
 
         job_data = {
-            "name": f"{batch_name}_maturation_{i}",
+            "name": f"{batch_name}_{stage}_{i}",
             "model_id": "template_antibody_denovo",
             "mode": "maturation_child",
             "params": {
                 "pdb_paths": pdb_paths,
                 "job_index": i,
                 "total_jobs": num_jobs,
+                "maturation_stage_name": stage,
                 **extra_params
             },
             "parent_job_id": parent_job_id,
             "batch_id": parent_job_id,
             "batch_name": batch_name,
-            "child_stage": "maturation",
+            "child_stage": stage,
             "sequence_length": 300,
         }
 
@@ -148,6 +149,7 @@ def main():
     parser.add_argument("--designs_per_job", type=int, default=4,
                         help="PDBs per child job")
     parser.add_argument("--batch_name", required=True, help="Batch name")
+    parser.add_argument("--stage", default="maturation", help="Stage name to record on child jobs")
     parser.add_argument("--params_json", default="", help="Additional params as JSON")
     parser.add_argument("--api_url", default=DEFAULT_API_URL,
                         help="API base URL")
@@ -160,6 +162,7 @@ def main():
         pdb_dir=args.pdb_dir,
         designs_per_job=args.designs_per_job,
         batch_name=args.batch_name,
+        stage=args.stage,
         params_json=args.params_json,
         api_url=args.api_url
     )
