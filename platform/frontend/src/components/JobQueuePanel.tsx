@@ -29,6 +29,7 @@ const GPU_NAMES: Record<number, string> = {
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
     if (key === 'msa_batch') return 'MSA';
+    if (key.includes('nanopore')) return 'NGS';
     if (key.includes('boltzgen')) return 'BG';
     if (key.includes('boltz')) return 'B2';
     if (key.includes('rf3')) return 'RF';
@@ -40,6 +41,17 @@ function getModelBadge(modelId: string): string {
 
 function isMsaJob(modelId: string): boolean {
     return modelId.toLowerCase() === 'msa_batch';
+}
+
+function isNgsJob(modelId: string, mode?: string): boolean {
+    const modelKey = modelId.toLowerCase();
+    const modeKey = (mode || '').toLowerCase();
+    return (
+        modelKey === 'nanopore' ||
+        modelKey.includes('nanopore') ||
+        modeKey === 'methylation_analysis' ||
+        modeKey === 'nanopore_methylation'
+    );
 }
 
 function StatusBadge({ status, paused }: { status: string; paused: boolean }) {
@@ -140,12 +152,36 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
 
     // Map stage names to display-friendly versions
     const stageDisplayNames: Record<string, string> = {
+        'doradobasecall': 'Dorado Basecall',
+        'doradoalign': 'Dorado Align',
+        'preparebamforanalysis': 'BAM Prepare',
+        'modkitpileup': 'modkit Pileup',
+        'modkitsummary': 'modkit Summary',
+        'fastqalign': 'FASTQ Align',
+        'fastq_align': 'FASTQ Align',
+        'fastqplasmidqc': 'FASTQ Plasmid QC',
+        'fastq_qc': 'FASTQ Plasmid QC',
+        'fastqmultimerqc': 'Multimer QC',
+        'dorado_basecall': 'Dorado Basecall',
+        'dorado_align': 'Dorado Align',
+        'bam_prepare': 'BAM Prepare',
+        'modkit': 'modkit',
+        'multimer_qc': 'Multimer QC',
+        'runclonevalidation': 'wf-clone-validation',
+        'wf_clone_validation': 'wf-clone-validation',
+        'wf-clone-validation': 'wf-clone-validation',
         'rfantibody': 'RFAntibody',
         'rfdiffusion': 'RFdiffusion',
+        'rfdpoly': 'RFDpoly',
+        'nampnn': 'NA-MPNN',
+        'pyrosetta_rebuild': 'PyRosetta',
         'fampnn': 'FA-MPNN',
         'proteinmpnn': 'ProteinMPNN',
         'thermompnn': 'ThermoMPNN',
+        'structure_validation': 'Structure Validation',
         'boltz2': 'Boltz-2',
+        'protenix': 'Protenix',
+        'maturation_post_validation': 'PPIFlow Repair',
         'af2': 'AlphaFold2',
         'unidock': 'UniDock',
         'msa': 'MSA Gen',
@@ -167,6 +203,7 @@ export function JobQueuePanel() {
     const queryClient = useQueryClient();
     const [expanded, setExpanded] = useState(true);
     const [showCancelled, setShowCancelled] = useState(false);
+    const [showNgsJobs, setShowNgsJobs] = useState(true);
     // Single timer for all elapsed time badges (fixes N-interval proliferation)
     const [elapsedTick, setElapsedTick] = useState(0);
 
@@ -265,18 +302,30 @@ export function JobQueuePanel() {
 
     const queue = queueData?.data || [];
     const stats = statsData?.data;
-    const cancelledJobs = cancelledData?.data || [];
+    const cancelledJobsRaw = cancelledData?.data || [];
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
+    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
+    const cancelledJobs = showNgsJobs ? cancelledJobsRaw : cancelledJobsRaw.filter(j => !isNgsJob(j.model_id, j.mode));
+
     // Separate running, queued, and pending_msa jobs
-    const runningJobs = queue.filter(j => j.queue_status === 'running');
-    const queuedJobs = queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
-    const pendingMsaJobs = queue.filter(j => j.queue_status === 'pending_msa');
+    const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
+    const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
+    const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
+    const hiddenQueuedCount = showNgsJobs
+        ? 0
+        : Math.max(
+            0,
+            queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused').length - queuedJobs.length
+        );
 
     const handleCancelAll = () => {
         if (queuedJobs.length === 0) return;
-        if (confirm(`Clear ${queuedJobs.length} queued jobs from database?`)) {
+        const hiddenNgsNote = hiddenQueuedCount > 0
+            ? ` This will also clear ${hiddenQueuedCount} hidden NGS job(s).`
+            : '';
+        if (confirm(`Clear ${queuedJobs.length} queued jobs from database?${hiddenNgsNote}`)) {
             cancelAllMutation.mutate();
         }
     };
@@ -335,6 +384,13 @@ export function JobQueuePanel() {
                     )}
                     {/* Tab toggle */}
                     <button
+                        onClick={() => setShowNgsJobs(!showNgsJobs)}
+                        className={`px-2 py-1 rounded text-xs ${showNgsJobs ? 'bg-cyan-600/30 text-cyan-300' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
+                        title={showNgsJobs ? 'Hide NGS jobs' : 'Show NGS jobs'}
+                    >
+                        {showNgsJobs ? 'Hide NGS' : 'Show NGS'}
+                    </button>
+                    <button
                         onClick={() => setShowCancelled(!showCancelled)}
                         className={`px-2 py-1 rounded text-xs ${showCancelled ? 'bg-slate-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
                     >
@@ -384,7 +440,7 @@ export function JobQueuePanel() {
                         <div className="flex justify-center py-4">
                             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                         </div>
-                    ) : queue.length === 0 ? (
+                    ) : visibleQueue.length === 0 ? (
                         <div className="text-center py-4 text-slate-500 text-sm">
                             No jobs in queue
                         </div>

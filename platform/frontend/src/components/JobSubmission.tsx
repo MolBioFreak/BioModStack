@@ -292,6 +292,17 @@ export function JobSubmission() {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, any> | undefined>(undefined);
 
+    // Dedicated templates should not retain stale clone params once user navigates away.
+    const handleDedicatedTemplateBack = () => {
+        setSelectedTemplateId(null);
+        setClonedValues(undefined);
+    };
+
+    const handleTemplateCardSelect = (templateId: string) => {
+        setClonedValues(undefined);
+        setSelectedTemplateId(templateId);
+    };
+
     // Check for cloned job data on mount
     useEffect(() => {
         const stored = localStorage.getItem('clonedJobData');
@@ -344,6 +355,36 @@ export function JobSubmission() {
 
     // Hardcoded templates that use dedicated components instead of API-driven config
     const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const dedicatedTemplateByModelId: Record<string, string> = {
+        template_antibody_denovo: 'antibody_denovo',
+        boltzgen: 'boltzgen_design',
+        bindcraft: 'bindcraft',
+    };
+
+    const routeUserTemplate = (template: any) => {
+        const dedicatedTemplateId =
+            (template.base_template_id && hardcodedTemplates.includes(template.base_template_id) && template.base_template_id) ||
+            (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
+
+        if (dedicatedTemplateId) {
+            setWizardMode('templates');
+            setSelectedTemplateId(dedicatedTemplateId);
+            setClonedValues({ ...template.params, name: template.name });
+            setJobName(template.params?.job_name || template.name || '');
+            setSelectedModelId(null);
+            setSelectedModeId(null);
+            setParams({});
+            return;
+        }
+
+        setWizardMode('manual');
+        setSelectedTemplateId(null);
+        setClonedValues(undefined);
+        setParams(template.params || {});
+        if (template.model_id) setSelectedModelId(template.model_id);
+        if (template.mode) setSelectedModeId(template.mode);
+        setJobName(template.params?.job_name || template.name || '');
+    };
 
     const { data: selectedTemplateData } = useQuery({
         queryKey: ['template', selectedTemplateId],
@@ -472,7 +513,9 @@ export function JobSubmission() {
                 const predMethodMap: Record<string, { model_id: string; mode: string }> = {
                     'boltz': { model_id: 'boltz2', mode: 'predict' },
                     'rf3': { model_id: 'rf3', mode: 'predict' },
+                    'protenix': { model_id: 'protenix', mode: 'predict' },
                     'both': { model_id: 'boltz2', mode: 'predict' }, // Primary model for "both" mode
+                    'all': { model_id: 'boltz2', mode: 'predict' },  // Primary model for "all" mode
                 };
                 const mapping = predMethodMap[mergedParams.pred_method];
                 if (mapping) {
@@ -593,7 +636,11 @@ export function JobSubmission() {
                             Workflows
                         </button>
                         <button
-                            onClick={() => { setWizardMode('manual'); setSelectedTemplateId(null); }}
+                            onClick={() => {
+                                setWizardMode('manual');
+                                setSelectedTemplateId(null);
+                                setClonedValues(undefined);
+                            }}
                             className={`px-4 py-2 rounded-lg font-medium transition-all ${wizardMode === 'manual'
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
@@ -608,7 +655,7 @@ export function JobSubmission() {
                         <div className="space-y-4">
                             {selectedTemplateId === 'mutagenesis' ? (
                                 <MutagenesisTemplate
-                                    onBack={() => setSelectedTemplateId(null)}
+                                    onBack={handleDedicatedTemplateBack}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
                                         // MUTAGENESIS BATCH: Single API call with all variants
                                         // Each variant regenerates its own MSA (no shared reference MSA)
@@ -658,39 +705,27 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'antibody_denovo' ? (
                                 <AntibodyDenovoTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'structure_prediction' ? (
                                 <StructurePredictionTemplate
-                                    onBack={() => setSelectedTemplateId(null)}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'boltzgen_design' ? (
                                 <BoltzGenTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'bindcraft' ? (
                                 <BindCraftTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'oligo_design' ? (
                                 <OligoDesignerTemplate
-                                    onBack={() => {
-                                        setSelectedTemplateId(null);
-                                        setClonedValues(undefined);
-                                    }}
+                                    onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
                             ) : (
@@ -721,11 +756,11 @@ export function JobSubmission() {
                                             {
                                                 id: 'structure_prediction',
                                                 name: 'Structure Prediction',
-                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2 or RoseTTAFold3.',
+                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
                                                 icon: 'microscope',
                                                 color: '#F59E0B', // Amber
                                                 stages: [
-                                                    { tool: 'Boltz-2 / RF3' }
+                                                    { tool: 'Boltz-2 / RF3 / Protenix' }
                                                 ]
                                             },
                                             // RFantibody+ (De Novo Antibody Design)
@@ -786,7 +821,7 @@ export function JobSubmission() {
                                             return (
                                                 <div
                                                     key={template.id}
-                                                    onClick={() => setSelectedTemplateId(template.id)}
+                                                    onClick={() => handleTemplateCardSelect(template.id)}
                                                     className={`cursor-pointer p-4 border-2 transition-all rounded-lg
                                                         ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
                                                         bg-[var(--card-bg)] text-[var(--text-primary)]`}
@@ -1200,12 +1235,7 @@ export function JobSubmission() {
             <TemplateManagerModal
                 isOpen={showTemplateManager}
                 onClose={() => setShowTemplateManager(false)}
-                onSelect={(template) => {
-                    // Load template params
-                    setParams(template.params);
-                    if (template.model_id) setSelectedModelId(template.model_id);
-                    if (template.mode) setSelectedModeId(template.mode);
-                }}
+                onSelect={routeUserTemplate}
                 currentParams={params}
                 currentModelId={selectedModelId || undefined}
                 currentMode={selectedModeId || undefined}

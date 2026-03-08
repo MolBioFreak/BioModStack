@@ -1,0 +1,108 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Version 1.0.0
+    Description BindCraft container for de novo minibinder design using AF2 backpropagation
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Chicago
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    
+    # System packages
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        curl \
+        build-essential \
+        ffmpeg \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Install Micromamba (lighter than full conda, faster)
+    curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+    mv bin/micromamba /usr/local/bin/
+    mkdir -p /opt/conda
+    
+    # Initialize micromamba (no eval - use direct commands)
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    
+    # Create BindCraft environment
+    # Following exact dependency versions from BindCraft install script
+    micromamba create -n bindcraft python=3.11 -c conda-forge -y
+    
+    # Core scientific packages (numpy<2.0 is critical for JAX compatibility)
+    # NOTE: chex, dm-haiku, flax, optax removed from conda - install via pip to avoid jaxlib conflicts
+    micromamba install -n bindcraft \
+        pip pandas matplotlib 'numpy<2.0.0' biopython scipy pdbfixer seaborn \
+        libgfortran5 tqdm jupyter ffmpeg fsspec py3dmol \
+        dm-tree joblib ml-collections immutabledict \
+        -c conda-forge -y
+    
+    # JAX with CUDA support (versions from BindCraft: >=0.4,<=0.6.0)
+    # Install all JAX ecosystem via pip to avoid conda/pip conflicts
+    micromamba run -n bindcraft pip install --upgrade pip
+    micromamba run -n bindcraft pip install --compile \
+        'jax[cuda12]>=0.4.20,<0.5.0' \
+        'jaxlib>=0.4.20,<0.5.0' \
+        chex dm-haiku 'flax<0.10.0' optax
+    
+    # PyRosetta (academic license - from JHU conda channel)
+    # This is a large package (~2GB)
+    micromamba install -n bindcraft \
+        pyrosetta \
+        -c https://conda.graylab.jhu.edu -c conda-forge -y
+    
+    # ColabDesign (AF2 backpropagation library)
+    micromamba run -n bindcraft pip install --compile \
+        git+https://github.com/sokrypton/ColabDesign.git --no-deps
+    
+    # Clone BindCraft repository
+    git clone https://github.com/martinpacesa/BindCraft.git /app/bindcraft
+    
+    # Make executables available
+    chmod +x /app/bindcraft/functions/dssp 2>/dev/null || true
+    chmod +x /app/bindcraft/functions/DAlphaBall.gcc 2>/dev/null || true
+    
+    # Cleanup
+    micromamba clean -a -y
+    apt-get clean
+
+%environment
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    export PATH=/opt/conda/envs/bindcraft/bin:$PATH
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONPATH=/app/bindcraft:/app/bindcraft/functions:$PYTHONPATH
+    # AF2 weights will be mounted at runtime to /app/params
+    export ALPHAFOLD_PARAMS_DIR=/app/params
+
+%runscript
+    export PATH=/opt/conda/envs/bindcraft/bin:$PATH
+    exec python3 "$@"
+
+%test
+    export PATH=/opt/conda/envs/bindcraft/bin:$PATH
+    python3 -c "import jax; print(f'JAX: {jax.__version__}')"
+    python3 -c "import jax; print(f'JAX devices: {jax.devices()}')"
+    python3 -c "import colabdesign; print('ColabDesign: OK')"
+    python3 -c "import pyrosetta; print('PyRosetta: OK')"
+
+%help
+    BindCraft Container - De Novo Minibinder Design
+    
+    Uses AlphaFold2 backpropagation (ColabDesign), ProteinMPNN, and PyRosetta
+    for automated binder design with ~50% experimental success rate.
+    
+    Repository: https://github.com/martinpacesa/BindCraft
+    
+    Usage:
+      apptainer exec --nv \
+        --bind /mnt/BioModStack/weights/alphafold:/app/params \
+        bindcraft.sif python3 /app/bindcraft/bindcraft.py \
+        --settings settings.json --filters filters.json --advanced advanced.json
+    
+    Requirements:
+      - NVIDIA GPU with CUDA support
+      - AlphaFold2 weights mounted at /app/params
+      - ~40GB RAM recommended for large targets

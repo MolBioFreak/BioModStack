@@ -23,33 +23,28 @@ include { Compress as CompressAF2 } from './modules/compress'
 include { Compress as CompressBoltz } from './modules/compress'
 include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from './modules/structure_prediction.nf'
-include { BoltzFromComplex } from './modules/structure_prediction.nf'
+include { PrepareComplexWithMSA ; BoltzFromComplex } from './modules/structure_prediction.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
-include { structure_prediction_wf } from './modules/structure_prediction.nf'
+include { structure_prediction_wf ; complex_prediction_wf } from './modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { ANARCII } from './modules/utils/anarci'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
+include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqPlasmidQC ; RunCloneValidation } from './modules/dorado.nf'
 
-// Oligo Designer (RFDpoly multi-polymer design)
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 
-// Antibody Design Subworkflow
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
-// De Novo Antibody Pipeline (RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> ThermoMPNN -> IgGM)
 include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
-// Antibody Child Workflow (single design validation - spawned by parent in exploration mode)
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
+include { RFANTIBODY_BACKBONE } from './workflows/rfantibody_backbone.nf'
 
-// BindCraft Workflow (de novo minibinder design via AF2 backpropagation)
 include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
 
-// RFantibody module for standalone backbone generation
 include { RFANTIBODY } from './modules/rfantibody'
 
 workflow {
-    // Permit use of topic channels in Nextflow v24 by enabling preview features
     try {
         nextflow.preview.topic = true
     }
@@ -65,7 +60,6 @@ workflow {
         error("Cannot use --run_rfd_only with --skip_rfd. These options are contradictory.")
     }
 
-    // Calculate batch size based on maximum GPUs
     def num_batches = Math.min(params.gpus, params.rfd_num_designs).intValue()
     def batch_size = Math.ceil(params.rfd_num_designs / num_batches).intValue()
     def num_designs = num_batches * batch_size
@@ -76,16 +70,271 @@ workflow {
     println("Output Directory: ${outputDirectory}")
 
 
-    // Create output directory for copy of config files used in run
     def configDir = file("${outputDirectory}/configs")
     configDir.mkdirs()
     workflow.configFiles.each { configFile ->
         configFile.copyTo("${configDir}/${configFile.getName()}")
     }
 
-    // Create output directory for copy of input files used in run
     def inputsDir = file("${outputDirectory}/inputs")
     inputsDir.mkdirs()
+
+    if (params.nanopore_enabled || params.rfd_mode == 'nanopore_methylation') {
+        def runFastqQc = params.run_fastq_qc != null
+            ? (params.run_fastq_qc != false)
+            : (params.run_multimer_qc != false)
+        def forceBamRealign = params.bam_force_realign == true
+
+        println("Running Nanopore Methylation Workflow")
+        println("* POD5 dir: ${params.pod5_dir}")
+        println("* BAM path: ${params.bam_path}")
+        println("* BAM force realign: ${forceBamRealign}")
+        println("* BAM min MAPQ: ${(params.bam_min_mapq ?: 0)}")
+        println("* FASTQ path: ${params.fastq_path}")
+        if (params.fastq_path && params.fastq_path.toString().trim()) {
+            println("* FASTQ minimap2 preset: ${(params.fastq_minimap2_preset ?: 'lr:hq')}")
+            println("* FASTQ keep secondary alignments: ${(params.fastq_minimap2_allow_secondary == true)}")
+        }
+        println("* Dorado model: ${params.dorado_model ?: 'sup'}")
+        println("* Modified bases: ${params.modified_bases ?: 'none'}")
+        println("* Run modkit: ${params.run_modkit != false}")
+        println("* Run FASTQ plasmid QC: ${runFastqQc}")
+        println("* Run assembly: ${params.run_assembly ?: false}")
+
+        def reportNanoporeStage = { String stageName, List outputs ->
+            if (!params.job_id) {
+                return
+            }
+            try {
+                def reportFiles = outputs
+                    .findAll { it != null }
+                    .collect { it.toString() }
+                if (reportFiles.isEmpty()) {
+                    return
+                }
+                def args = [params.job_id.toString(), stageName, "complete"] + reportFiles
+                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage ${stageName}: ${e.message}"
+            }
+        }
+
+        def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
+        def has_bam = params.bam_path && params.bam_path.toString().trim()
+        def has_fastq = params.fastq_path && params.fastq_path.toString().trim()
+        def selected_input_count = [has_pod5, has_bam, has_fastq].count { it }
+        if (selected_input_count == 0) {
+            error("One primary input is required for nanopore_methylation mode (--pod5_dir or --bam_path or --fastq_path)")
+        }
+        if (selected_input_count > 1) {
+            error("Specify exactly one primary input: --pod5_dir OR --bam_path OR --fastq_path")
+        }
+
+        def has_reference = params.reference_fasta && params.reference_fasta.toString().trim()
+        def reference_file = null
+        if (has_reference) {
+            reference_file = file(params.reference_fasta)
+            if (!reference_file.exists()) {
+                error("Reference FASTA not found: ${params.reference_fasta}")
+            }
+        }
+
+        if (has_fastq && !has_reference) {
+            error("FASTQ analysis requires --reference_fasta for alignment, consensus, and plasmid QC outputs")
+        }
+
+        def analysis_bam = null
+
+        if (has_pod5) {
+            def pod5_input = file(params.pod5_dir)
+            if (!pod5_input.exists()) {
+                error("POD5 directory not found: ${params.pod5_dir}")
+            }
+
+            DoradoBasecall(Channel.of(pod5_input))
+            DoradoBasecall.out.bam.subscribe { _ ->
+                reportNanoporeStage("dorado_basecall", [
+                    "${params.out_dir}/basecall/calls.bam",
+                    "${params.out_dir}/basecall/basecall.log",
+                    "${params.out_dir}/basecall/sequencing_summary.tsv",
+                ])
+            }
+
+            if (has_reference) {
+                DoradoAlign(
+                    DoradoBasecall.out.bam,
+                    Channel.of(reference_file)
+                )
+                DoradoAlign.out.aligned.subscribe { _bam, _bai ->
+                    reportNanoporeStage("dorado_align", [
+                        "${params.out_dir}/align/aligned.bam",
+                        "${params.out_dir}/align/aligned.bam.bai",
+                        "${params.out_dir}/align/reference.fasta",
+                        "${params.out_dir}/align/reference.fasta.fai",
+                        "${params.out_dir}/align/align.log",
+                    ])
+                }
+                analysis_bam = DoradoAlign.out.aligned
+            } else {
+                PrepareBamForAnalysis(DoradoBasecall.out.bam)
+                PrepareBamForAnalysis.out.aligned.subscribe { _bam, _bai ->
+                    reportNanoporeStage("bam_prepare", [
+                        "${params.out_dir}/align/aligned.bam",
+                        "${params.out_dir}/align/aligned.bam.bai",
+                        "${params.out_dir}/align/bam_prepare.log",
+                    ])
+                }
+                analysis_bam = PrepareBamForAnalysis.out.aligned
+            }
+        }
+
+        if (has_bam) {
+            def bam_input = file(params.bam_path)
+            if (!bam_input.exists()) {
+                error("BAM file not found: ${params.bam_path}")
+            }
+
+            if (has_reference && forceBamRealign) {
+                DoradoAlign(
+                    Channel.of(bam_input),
+                    Channel.of(reference_file)
+                )
+                DoradoAlign.out.aligned.subscribe { _bam, _bai ->
+                    reportNanoporeStage("dorado_align", [
+                        "${params.out_dir}/align/aligned.bam",
+                        "${params.out_dir}/align/aligned.bam.bai",
+                        "${params.out_dir}/align/reference.fasta",
+                        "${params.out_dir}/align/reference.fasta.fai",
+                        "${params.out_dir}/align/align.log",
+                    ])
+                }
+                analysis_bam = DoradoAlign.out.aligned
+            } else {
+                PrepareBamForAnalysis(Channel.of(bam_input))
+                PrepareBamForAnalysis.out.aligned.subscribe { _bam, _bai ->
+                    reportNanoporeStage("bam_prepare", [
+                        "${params.out_dir}/align/aligned.bam",
+                        "${params.out_dir}/align/aligned.bam.bai",
+                        "${params.out_dir}/align/bam_prepare.log",
+                        has_reference ? "${params.out_dir}/align/reference.fasta" : null,
+                        has_reference ? "${params.out_dir}/align/reference.fasta.fai" : null,
+                        has_reference ? "${params.out_dir}/align/reference_prepare.log" : null,
+                    ])
+                }
+
+                analysis_bam = PrepareBamForAnalysis.out.aligned
+
+                if (has_reference) {
+                    PrepareReferenceForIGV(Channel.of(reference_file))
+                    PrepareReferenceForIGV.out.log.subscribe { _ -> }
+                }
+
+                if (params.run_modkit != false || params.run_assembly) {
+                    ValidateMappedBam(analysis_bam)
+                    analysis_bam = ValidateMappedBam.out.aligned
+                }
+            }
+        }
+
+        if (has_fastq) {
+            def fastq_input = file(params.fastq_path)
+            if (!fastq_input.exists()) {
+                error("FASTQ file not found: ${params.fastq_path}")
+            }
+
+            FastqAlign(
+                Channel.of(fastq_input),
+                Channel.of(reference_file)
+            )
+            FastqAlign.out.aligned.subscribe { _bam, _bai ->
+                reportNanoporeStage("fastq_align", [
+                    "${params.out_dir}/align/aligned.bam",
+                    "${params.out_dir}/align/aligned.bam.bai",
+                    "${params.out_dir}/align/reference.fasta",
+                    "${params.out_dir}/align/reference.fasta.fai",
+                    "${params.out_dir}/align/fastq_align.log",
+                ])
+            }
+            analysis_bam = FastqAlign.out.aligned
+
+            if (runFastqQc) {
+                FastqPlasmidQC(
+                    FastqAlign.out.aligned,
+                    Channel.of(reference_file),
+                    Channel.of(fastq_input)
+                )
+                FastqPlasmidQC.out.summary.subscribe { _ ->
+                    reportNanoporeStage("fastq_qc", [
+                        "${params.out_dir}/fastq_qc/read_lengths.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
+                        "${params.out_dir}/fastq_qc/igv_coverage_depth.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_position_gradient.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_gc_content.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_gc_zscore.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_split_read_density.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_softclip_density.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_junction_hotspots.bed",
+                        "${params.out_dir}/fastq_qc/igv_report_sites.bed",
+                        "${params.out_dir}/fastq_qc/igv_report_sites.tsv",
+                        "${params.out_dir}/fastq_qc/igv_track_config.json",
+                        "${params.out_dir}/fastq_qc/igv_report.html",
+                        "${params.out_dir}/fastq_qc/igv_report.log",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta.fai",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.log",
+                        "${params.out_dir}/fastq_qc/fastq_qc.log",
+                    ])
+                }
+            } else {
+                println("Skipping FASTQ plasmid QC (run_fastq_qc=false)")
+            }
+        }
+
+        if (params.run_modkit != false && analysis_bam != null && (has_pod5 || has_bam)) {
+            if (has_reference) {
+                ModkitPileup(
+                    analysis_bam,
+                    Channel.of(reference_file)
+                )
+            } else {
+                println("No reference_fasta provided: running modkit summary only (pileup skipped)")
+            }
+
+            ModkitSummary(analysis_bam)
+            ModkitSummary.out.summary.subscribe { _ ->
+                reportNanoporeStage("modkit", [
+                    has_reference ? "${params.out_dir}/methylation/methylation.bed" : null,
+                    has_reference ? "${params.out_dir}/methylation/pileup.log" : null,
+                    "${params.out_dir}/methylation/modkit_summary.tsv",
+                    "${params.out_dir}/methylation/summary.log",
+                ])
+            }
+        } else if (params.run_modkit == false) {
+            println("Skipping modkit analysis (run_modkit=false)")
+        }
+
+        if (params.run_assembly) {
+            if (analysis_bam == null) {
+                error("run_assembly requires BAM-capable input (--pod5_dir or --bam_path)")
+            }
+            println("Running wf-clone-validation assembly stage")
+            def clone_input = analysis_bam.map { bam, _bai -> [bam, (params.reference_fasta ?: "").toString()] }
+            RunCloneValidation(clone_input)
+            RunCloneValidation.out.out.subscribe { _ ->
+                reportNanoporeStage("wf_clone_validation", [
+                    "${params.out_dir}/assembly/wf_clone_out",
+                    "${params.out_dir}/assembly/wf_clone.log",
+                    "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
+                    "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
+                ])
+            }
+        }
+
+        return null
+    }
 
     /////////////////////////////
     // ANTIBODY CHILD JOB      //
@@ -174,12 +423,12 @@ workflow {
             ? channel.fromPath(params.scaffold_pdb)
             : (params.rfdpoly_input_pdb
                 ? channel.fromPath(params.rfdpoly_input_pdb)
-                : channel.of(file("${projectDir}/NO_FILE")))
+                : channel.of(file("${params.code_root}/NO_FILE")))
 
         // Prepare target PDB channel (optional, for protein-binding aptamer mode)
         def target_pdb = params.target_pdb 
             ? channel.fromPath(params.target_pdb)
-            : channel.of(file("${projectDir}/NO_FILE"))
+            : channel.of(file("${params.code_root}/NO_FILE"))
 
         OLIGO_DESIGNER(
             channel.of(params.design_id ?: 'oligo_design'),
@@ -207,24 +456,20 @@ workflow {
             error("Target PDB required for rfantibody_backbone mode")
         }
 
-        def jobName = params.sequence_name ?: 'rfantibody_child'
-        def meta = [id: jobName]
-
-        // Prepare input tuple: [meta, target_pdb, hotspots, gpu_id, num_designs]
         def hotspots = params.epitope_residues ?: ""
-        def gpu_id = params.gpu_id ?: 0
         def rfantibody_num_designs = params.rfantibody_num_designs ?: 10
-
-        def rfantibody_input = channel.of(
-            tuple(meta, file(params.target_pdb), hotspots, gpu_id, rfantibody_num_designs)
-        )
 
         // Use framework from params or dummy file for default
         def framework_for_rfantibody = params.framework_pdb
             ? file(params.framework_pdb)
-            : file("${projectDir}/lib/NO_FRAMEWORK")
+            : file("${params.code_root}/lib/NO_FRAMEWORK")
 
-        RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+        RFANTIBODY_BACKBONE(
+            file(params.target_pdb),
+            hotspots,
+            rfantibody_num_designs,
+            framework_for_rfantibody
+        )
 
         return null
     }
@@ -254,7 +499,7 @@ workflow {
         println("* Processing ${pdb_list.size()} PDBs")
 
         // Prepare FAMPNN input - PrepFAMPNN expects tuple [pdbs, jsons]
-        fampnn_prep_input = Channel.of(tuple(pdb_list, file("${projectDir}/lib/NO_JSON")))
+        fampnn_prep_input = Channel.of(tuple(pdb_list, file("${params.code_root}/lib/NO_JSON")))
 
         PrepFAMPNN(fampnn_prep_input)
 
@@ -489,26 +734,27 @@ workflow {
         def numParallelJobs = params.num_parallel_jobs ?: 1
         println("Running complex-based structure prediction (multi-chain + ligands)")
         println("* Complex definition: ${params.complex_json_path}")
-        println("* Predictor: boltz")
+        println("* Predictor: ${params.pred_method ?: 'boltz'}")
         println("* Number of simulations: ${numParallelJobs}")
-        // Complex mode only supports Boltz for now
 
         def complex_name = params.sequence_name ?: 'complex_pred'
         def complex_json = file(params.complex_json_path)
 
-        // Create parallel job channels (like structure_prediction workflow)
+        // Create parallel job channels
         def job_indices = Channel.from(0..<numParallelJobs)
-        def msa_file = params.msa_path ? file(params.msa_path) : file("${projectDir}/NO_MSA")
+        def msa_file = params.msa_path ? file(params.msa_path) : file("${params.code_root}/NO_MSA")
         def complex_ch = job_indices.map { idx ->
             def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
             tuple(jobName, complex_json, msa_file)
         }
-        BoltzFromComplex(complex_ch)
 
-        BoltzFromComplex.out.pdbs
+        // Centralized routing — dispatches based on params.pred_method
+        complex_prediction_wf(complex_ch)
+
+        complex_prediction_wf.out.structures
             .flatten()
             .collect()
-            .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
             .set { final_pdbs }
 
         // Optional post-run FrustraMPNN QC for complex prediction
@@ -518,7 +764,6 @@ workflow {
                 .flatten()
                 .map { pdb -> tuple([id: pdb.baseName], pdb) }
             FrustrampnnQC(frustra_input)
-            // Extract just the path from (meta, path) tuples before collecting
             AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
         }
 
@@ -607,8 +852,8 @@ workflow {
             tuple(params.sequence_input, jobName)
         }
 
-        if (params.pred_method == 'rf3' || params.pred_method == 'both' || params.pred_method == 'boltz') {
-            // Use the unified workflow which handles 'both', MSA generation, and tuple inputs
+        if (params.pred_method in ['boltz', 'rf3', 'both', 'protenix', 'all']) {
+            // Use the unified workflow which handles all predictors, MSA generation, and tuple inputs
             structure_prediction_wf(parallel_jobs_ch)
 
             structure_prediction_wf.out.structures
@@ -617,7 +862,7 @@ workflow {
                 .set { final_pdbs }
         }
         else {
-            // Fallback for unknown method, default to Boltz inside workflow anyway
+            // Unknown pred_method — route through workflow anyway (will use defaults)
             structure_prediction_wf(parallel_jobs_ch)
             structure_prediction_wf.out.structures.flatten().collect().set { final_pdbs }
         }
@@ -663,7 +908,7 @@ workflow {
                 [
                     params.rfd_mode,
                     params.rfd_contigs ?: '[100-100]',
-                    params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${projectDir}/lib/NO_FILE"),
+                    params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${params.code_root}/lib/NO_FILE"),
                     params.rfd_hotspots ?: '',
                     params.rfd_num_designs,
                     0,
@@ -691,7 +936,7 @@ workflow {
                 FilterRFD3.out.structures_metadata
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
             }
             else {
@@ -730,7 +975,7 @@ workflow {
                 FilterRFD.out.pdbs_jsons
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
             }
             else {
@@ -762,10 +1007,10 @@ workflow {
             params.boltzgen_cdr_h1_length ?: '5-8',
             params.boltzgen_cdr_h2_length ?: '6-10',
             params.boltzgen_cdr_h3_length ?: '12-18',
-            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_INPUT_PDB"),
-            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_LIGAND_PDB"),
-            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${projectDir}/lib/NO_DNA_STRUCT"),
-            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB"),
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${params.code_root}/lib/NO_INPUT_PDB"),
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${params.code_root}/lib/NO_LIGAND_PDB"),
+            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${params.code_root}/lib/NO_DNA_STRUCT"),
+            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB"),
         )
 
         // =========================================================================
@@ -778,7 +1023,7 @@ workflow {
         if (use_orchestrator) {
             println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(params.boltzgen_num_designs / params.boltzgen_designs_per_job)} child jobs")
 
-            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB")
+            def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB")
 
             // Spawn child jobs via API
             SpawnBoltzGenJobs(
@@ -812,7 +1057,7 @@ workflow {
             CollectBoltzGenOutputs.out.pdbs
                 .flatten()
                 .collect()
-                .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                 .set { final_pdbs }
 
             // Set empty channels for downstream
@@ -835,7 +1080,7 @@ workflow {
                 FilterBoltzGen.out.pdbs
                     .flatten()
                     .collect()
-                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
                     .set { final_pdbs }
 
                 // Set other channels to empty/defaults to avoid errors
@@ -913,7 +1158,11 @@ workflow {
     // SEQUENCE DESIGN STAGE //
     ///////////////////////////
     // Run Sequence Design if not skipped
-    if (!params.skip_rfd_seq & !params.skip_rfd_seq_pred & !params.run_rfd_only) {
+    // BoltzGen already performs sequence generation internally.
+    if (params.diffusion_method == 'boltzgen') {
+        println("Skipping Sequence Design stage for BoltzGen diffusion output.")
+    }
+    else if (!params.skip_rfd_seq & !params.skip_rfd_seq_pred & !params.run_rfd_only) {
         // Sequence design (either MPNN or FAMPNN)
         if (params.seq_method == "mpnn") {
             // Add FIXED labels to PDBs for target residues so the sequence does not change
@@ -1063,7 +1312,8 @@ workflow {
     // STRUCTURE PREDICTION STAGE //
     ////////////////////////////////
     // Run Structure Prediction if not skipped
-    if (!params.skip_rfd_seq_pred && !params.run_rfd_only && !params.skip_pred) {
+    // BoltzGen includes internal structure prediction; keep its outputs as analysis inputs.
+    if (!params.skip_rfd_seq_pred && !params.run_rfd_only && !params.skip_pred && params.diffusion_method != 'boltzgen') {
         // Optional uncropped target PDB merge for binder design
         if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {
             // if uncropped target PDB file is provided, merge with designs
@@ -1177,7 +1427,7 @@ workflow {
                 .set { analysis_input_pdbs }
         }
         else {
-            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3")
+            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3, protenix")
         }
     }
     else if (!params.run_rfd_only) {
@@ -1218,6 +1468,9 @@ workflow {
         Channel
             .of(pdbs_for_analysis)
             .set { analysis_input_pdbs }
+    }
+    else if (params.diffusion_method == 'boltzgen') {
+        println("Skipping Structure Prediction stage for BoltzGen diffusion output.")
     }
     else {
         println("Skipping Structure Prediction stage as run_rfd_only=true or run_boltzgen_only=true.")
@@ -1270,7 +1523,7 @@ workflow {
         analysis_input_pdbs
             .flatten()
             .collect()
-            .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
             .set { final_pdbs }
     }
     else {
@@ -1282,13 +1535,13 @@ workflow {
     channel.topic('metadata_ch_fold')
         .flatten()
         .collectFile(name: "metadata_fold.jsonl", newLine: true)
-        .ifEmpty { file("${projectDir}/lib/empty-meta-fold.jsonl") }
+        .ifEmpty { file("${params.code_root}/lib/empty-meta-fold.jsonl") }
         .set { metadata_fold }
     // Channel for metadata with both fold_id and seq_id
     channel.topic('metadata_ch_fold_seq')
         .flatten()
         .collectFile(name: "metadata_fold_seq.jsonl", newLine: true)
-        .ifEmpty { file("${projectDir}/lib/empty-meta-seq.jsonl") }
+        .ifEmpty { file("${params.code_root}/lib/empty-meta-seq.jsonl") }
         .set { metadata_fold_seq }
 
     // Combine Metadata into CSV
@@ -1371,7 +1624,7 @@ def collectInputFiles(params) {
     }
     if (params.rfd_mode in ['monomer_denovo', 'monomer_foldcond']) {
         // Add 'placeholder' PDB file, since RFdiffusion requires xyz coordinates
-        inputs << file("${projectDir}/lib/placeholder.pdb")
+        inputs << file("${params.code_root}/lib/placeholder.pdb")
     }
     if (params.rfd_mode in ['binder_foldcond', 'monomer_foldcond']) {
         if (params.rfd_scaffold_dir) {

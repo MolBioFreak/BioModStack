@@ -11,7 +11,7 @@ export const api = axios.create({
 export interface Job {
     id: string;
     name: string;
-    status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+    status: 'queued' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled';
     model_id: string;
     mode: string;
     params: Record<string, any>;
@@ -35,6 +35,10 @@ export interface Job {
     completed_stages?: string[] | null;
     all_stages?: string[] | null;
     stage_outputs?: Record<string, string[]> | null;
+    awaiting_input?: boolean | null;
+    awaiting_stage?: string | null;
+    awaiting_payload?: Record<string, any> | null;
+    decision_history?: Array<Record<string, any>> | null;
 }
 
 // Log data for View Logs modal
@@ -207,6 +211,72 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export type AntibodyIterationAction =
+    | 'validate_boltz2'
+    | 'validate_protenix'
+    | 'ppiflow_maturation'
+    | 'fampnn_redesign'
+    | 'frustrampnn'
+    | 'cdr_indel_round';
+
+export interface AntibodyCdrIndelConfig {
+    loop_ids: string[];
+    variants_per_design: number;
+    allow_insertions: boolean;
+    allow_deletions: boolean;
+    indel_sizes: number[];
+    indel_probability: number;
+    allowed_aas?: string[];
+    blocked_aas?: string[];
+    predictor: 'boltz2' | 'protenix';
+    msa_provider: 'local' | 'colabfold_api';
+}
+
+export interface LaunchAntibodyIterationRequest {
+    source_job_id: string;
+    design_ids: string[];
+    action: AntibodyIterationAction;
+    name_suffix?: string;
+    param_overrides?: Record<string, unknown>;
+    cdr_indel_config?: AntibodyCdrIndelConfig;
+}
+
+export interface LaunchAntibodyIterationResponse {
+    message: string;
+    action: AntibodyIterationAction;
+    source_job_id: string;
+    root_job_id: string;
+    selection_dir: string;
+    selected_design_count: number;
+    launched_job: Job;
+}
+
+export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
+    api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request);
+
+export interface MsaCacheEntry {
+    name: string;
+    profile: string;
+    path: string;
+    size_bytes: number;
+    modified_at: string;
+    depth: number | null;
+    canonical: boolean;
+}
+
+export interface MsaCacheInfo {
+    sequence_hash: string;
+    cache_dir: string;
+    canonical_exists: boolean;
+    canonical_path: string | null;
+    cache_entries: number;
+    best_depth: number | null;
+    entries: MsaCacheEntry[];
+}
+
+export const fetchMsaCacheInfo = (sequence: string) =>
+    api.get<MsaCacheInfo>('/api/msa/cache-info', { params: { sequence } });
+
 // Get job logs with parsed errors
 export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
     return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
@@ -226,15 +296,32 @@ export const fetchJobStages = (jobId: string) => {
 };
 
 // Resume a failed job from checkpoint
-export const resumeJob = (jobId: string, fromStage?: string) => {
+export const resumeJob = (
+    jobId: string,
+    fromStage?: string,
+    paramOverrides?: Record<string, unknown>,
+    nameSuffix?: string
+) => {
+    const hasOverrides = !!paramOverrides && Object.keys(paramOverrides).length > 0;
+    const hasNameSuffix = !!nameSuffix && nameSuffix.trim().length > 0;
+    const requestBody = (hasOverrides || hasNameSuffix)
+        ? {
+            ...(hasOverrides ? { param_overrides: paramOverrides } : {}),
+            ...(hasNameSuffix ? { name_suffix: nameSuffix } : {}),
+        }
+        : null;
+
     return api.post<{
         message: string;
         original_job_id: string;
         new_job_id: string;
         new_job_name: string;
         resume_from_stage: string;
+        resume_stage_mode?: string;
+        resume_stage_note?: string;
         preserved_stages: string[];
-    }>(`/api/jobs/${jobId}/resume`, null, { params: { from_stage: fromStage } });
+        applied_overrides?: string[];
+    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
 };
 
 // Models API
@@ -277,12 +364,15 @@ export interface Design {
     rog: number | null;
     rfd_rog: number | null;
     mpnn_score: number | null;
+    fampnn_psce: number | null;
     plddt_overall: number | null;
     plddt_binder: number | null;
+    plddt_target: number | null;
     pae_overall: number | null;
     pae_interaction: number | null;
     ptm: number | null;
     conf_score: number | null;
+    rmsd_overall: number | null;
     rmsd_binder: number | null;
     ligand_iptm: number | null;
     affinity_score: number | null;
@@ -292,8 +382,12 @@ export interface Design {
     protein_iptm: number | null;
     complex_iplddt: number | null;
     complex_ipde: number | null;
-    chains_ptm: Record<string, number> | null;
-    pair_chains_iptm: Record<string, Record<string, number>> | null;
+    disorder: number | null;
+    num_recycles: number | null;
+    has_clash: boolean | null;
+    chains_ptm: Record<string, number> | number[] | null;
+    pair_chains_iptm: Record<string, Record<string, number>> | number[][] | null;
+    confidence_metrics: Record<string, unknown> | null;
     // Backbone grouping & epitope analysis
     backbone_id: number | null;
     epitope_contact_count: number | null;
@@ -309,6 +403,10 @@ export interface Design {
     frustration_pct_high: number | null;
     frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
     frustration_csv_path: string | null;
+    // PPIFlow maturation metrics
+    maturation_delta_interface: number | null;
+    maturation_interface_score: number | null;
+    maturation_rmsd: number | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -331,7 +429,7 @@ export interface DesignFilters {
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone';
+    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
@@ -862,11 +960,30 @@ export interface ChainPairIptmData {
     size: number;
 }
 
+export interface PlotlyMetricPoint {
+    id: string;
+    name: string;
+    metrics: Record<string, number>;
+}
+
+export interface PlotlyMetricsResponse {
+    job_id: string;
+    metric_keys: string[];
+    points: PlotlyMetricPoint[];
+    total: number;
+}
+
 export const fetchContactMap = (designId: string, maxSize: number = 400) =>
     api.get<ContactMapData>(`/api/designs/${designId}/contact-map`, { params: { max_size: maxSize } });
 
 export const fetchChainPairIptm = (designId: string) =>
     api.get<ChainPairIptmData>(`/api/designs/${designId}/chain-iptm`);
+
+export const fetchDesignPlotlyMetrics = (
+    jobId: string,
+    params?: { include_children?: boolean; limit?: number; offset?: number }
+) =>
+    api.get<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, { params });
 
 // PAE (Predicted Aligned Error) data
 export interface PAEData {
@@ -1049,6 +1166,13 @@ export interface CDRAnnotationResponse {
     cdr_l1_range?: [number, number] | null;
     cdr_l2_range?: [number, number] | null;
     cdr_l3_range?: [number, number] | null;
+    // Sequential 0-indexed string ranges mapped to PDB arrays
+    cdr_h1_seq_range?: [number, number] | null;
+    cdr_h2_seq_range?: [number, number] | null;
+    cdr_h3_seq_range?: [number, number] | null;
+    cdr_l1_seq_range?: [number, number] | null;
+    cdr_l2_seq_range?: [number, number] | null;
+    cdr_l3_seq_range?: [number, number] | null;
 }
 
 export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') =>
