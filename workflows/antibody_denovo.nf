@@ -1396,7 +1396,7 @@ workflow ANTIBODY_DENOVO {
     }
 
     reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
-        def pdbs = dir.toFile().listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name } ?: []
+        def pdbs = dir.toFile().listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name }?.collect { file(it.toString()) } ?: []
         def meta = [id: params.name ?: "antibody"]
         [meta, pdbs]
     }
