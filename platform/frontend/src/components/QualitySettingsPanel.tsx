@@ -112,6 +112,9 @@ const FAMPNN_CHECKPOINT_OPTIONS = [
     },
 ] as const;
 
+const DEFAULT_FAMPNN_CHECKPOINT = 'fampnn_0_0.pt';
+const DEFAULT_PPIFLOW_CHECKPOINT = 'nanobody';
+
 const PRESETS: Record<QualityPreset, QualitySettings> = {
     speed: {
         // RFantibody: Fast screening
@@ -139,7 +142,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.2,
         fampnn_num_steps: 50,
@@ -162,7 +165,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
@@ -214,7 +217,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.1,
         fampnn_num_steps: 100,
@@ -237,7 +240,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 0,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
@@ -289,7 +292,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.01,
         fampnn_num_steps: 200,
@@ -312,7 +315,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 20,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
@@ -364,7 +367,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         protenix_enable_cache: true,
         protenix_enable_fusion: true,
         // FAMPNN
-        fampnn_checkpoint: '',
+        fampnn_checkpoint: DEFAULT_FAMPNN_CHECKPOINT,
         fampnn_checkpoint_path: '',
         fampnn_temperature: 0.0001,
         fampnn_num_steps: 500,
@@ -387,7 +390,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         maturation_filter_percentile: 10,
         maturation_redesign_enabled: true,
         maturation_redesign_top_n: 0,
-        ppiflow_checkpoint: 'antibody',
+        ppiflow_checkpoint: DEFAULT_PPIFLOW_CHECKPOINT,
         ppiflow_antigen_chain: '',
         ppiflow_heavy_chain: '',
         ppiflow_light_chain: '',
@@ -806,8 +809,8 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         onChange={(e) => updateSetting('ppiflow_checkpoint', e.target.value)}
                         className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                     >
-                        <option value="antibody">Antibody</option>
                         <option value="nanobody">Nanobody</option>
+                        <option value="antibody">Antibody</option>
                         <option value="binder">Binder</option>
                     </select>
                     <p className="text-[10px] text-slate-600 mt-1">
@@ -1396,19 +1399,15 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <select
                                     value={settings.fampnn_checkpoint}
                                     onChange={(e) => updateSetting('fampnn_checkpoint', e.target.value)}
-                                    className={`w-full bg-slate-800 border rounded px-2 py-1 text-sm ${
-                                        settings.fampnn_checkpoint
-                                            ? 'border-slate-700 text-slate-300'
-                                            : 'border-red-500/50 text-red-200'
-                                    }`}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                                 >
-                                    <option value="">Select FAMPNN weights...</option>
+                                    <option value="">Default: FAMPNN (0.0A)</option>
                                     {FAMPNN_CHECKPOINT_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                 </select>
                                 <p className="mt-1 text-[10px] text-slate-600">
-                                    No hidden default is applied. Pick the checkpoint explicitly for every campaign.
+                                    Defaults to FAMPNN (0.0A). Pick a different preset or override path if needed.
                                 </p>
                             </div>
 

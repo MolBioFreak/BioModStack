@@ -1,219 +1,402 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
-    useBioXpStatus,
+    getCameraStreamUrl,
     useAxisStatus,
-    useMoveRelative,
-    useHomeAxis,
-    useSetThermalTemp,
-    useGetLinkage,
-    useSetLinkage,
-    useDisconnectLinkage,
+    useBioXpStatus,
+    useCameraAutoRecover,
+    useCameraControls,
+    useCameraDevices,
     useCameraSnapshot,
-    useDaemonStatus,
+    useCameraStreamHealth,
+    useChillerBaseline,
+    useChillerHardReset,
+    useChillerSnapshot,
+    useClearLock,
     useDaemonStart,
-    useDaemonStop
+    useDaemonStatus,
+    useDaemonStop,
+    useDisconnectLinkage,
+    useGetLinkage,
+    useHomeAxis,
+    useLatchLock,
+    useLatchStatus,
+    useLatchUnlock,
+    useLedOff,
+    useLedPct,
+    useLedRgb,
+    useMoveAbsolute,
+    useMoveRelative,
+    usePrepareInterlock,
+    useReconnectRuntime,
+    useSetChillerTemp,
+    useSetLinkage,
+    useSetThermalTemp,
+    useThermalBaseline,
+    useThermalFastProfile,
+    useThermalHardReset,
+    useThermalSnapshot
 } from '../lib/bioxpClient';
-import type { AxisName, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisName, ChillerBankName, ThermalBankName } from '../lib/bioxpClient';
 
-const AxisControls = ({ axis, label }: { axis: AxisName, label: string }) => {
-    const { data: status, isLoading, isError } = useAxisStatus(axis);
-    const moveRel = useMoveRelative();
-    const home = useHomeAxis();
-    const [steps, setSteps] = useState<number>(1000);
+const getErrorMessage = (error: unknown) => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    if (typeof error === 'string') {
+        return error;
+    }
+    if (error && typeof error === 'object') {
+        return JSON.stringify(error);
+    }
+    return null;
+};
+
+const SectionCard = ({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) => (
+    <div className="p-4 bg-surface-secondary border border-border-primary rounded-lg space-y-4">
+        <div className="space-y-1 border-b border-border-secondary pb-2">
+            <h3 className="text-sm font-semibold text-content">{title}</h3>
+            {subtitle && <p className="text-xs text-content-muted">{subtitle}</p>}
+        </div>
+        {children}
+    </div>
+);
+
+const JsonBlock = ({ title, data, fallback = 'No data yet.' }: { title: string; data: unknown; fallback?: string }) => (
+    <div className="space-y-2">
+        <div className="text-xs font-semibold text-content-muted">{title}</div>
+        <pre className="text-[10px] font-mono text-content-muted p-3 bg-[#000000] rounded border border-border-primary overflow-x-auto max-h-72">
+            {data ? JSON.stringify(data, null, 2) : fallback}
+        </pre>
+    </div>
+);
+
+const CONNECTION_STICKY_WINDOW_MS = 15000;
+
+const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
+    const { data, isLoading, isError, error } = useAxisStatus(axis, enabled);
+    const moveRelative = useMoveRelative();
+    const moveAbsolute = useMoveAbsolute();
+    const homeAxis = useHomeAxis();
+    const [steps, setSteps] = useState(1000);
+    const [absolutePosition, setAbsolutePosition] = useState(0);
+
+    const reportedPosition = data?.status?.position?.position;
+    const reportedSpeed = data?.status?.speed?.speed;
+
+    useEffect(() => {
+        if (typeof reportedPosition === 'number') {
+            setAbsolutePosition(reportedPosition);
+        }
+    }, [reportedPosition]);
+
+    const moving = typeof reportedSpeed === 'number' ? reportedSpeed !== 0 : false;
+    const leftActive = data?.switch_activity?.left_active;
+    const rightActive = data?.switch_activity?.right_active;
 
     return (
         <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                    <span className="text-xs text-accent font-semibold">{label} Axis</span>
-                    {isLoading && <span className="text-xs text-content-muted animate-pulse">Loading...</span>}
+                    <span className="text-xs text-accent font-semibold">{label}</span>
+                    {isLoading && <span className="text-xs text-content-muted animate-pulse">Polling...</span>}
                 </div>
-                {status?.status && (
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${status.status.standstill ? 'bg-success/20 text-success border border-success/30' : 'bg-warning/20 text-warning border border-warning/30'}`}>
-                        {status.status.standstill ? "IDLE" : "MOVING"}
-                    </span>
-                )}
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving ? 'bg-warning/20 text-warning border-warning/30' : 'bg-success/20 text-success border-success/30'}`}>
+                    {moving ? 'MOVING' : 'IDLE'}
+                </span>
             </div>
 
-            {isError && <div className="text-xs text-error">Unable to reach hardware node.</div>}
+            {isError && <div className="text-xs text-error">{getErrorMessage(error) ?? 'Unable to read axis status.'}</div>}
+
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-content-muted">
+                <div>Pos: {reportedPosition ?? 'n/a'}</div>
+                <div>Speed: {reportedSpeed ?? 'n/a'}</div>
+                <div>L switch: {leftActive == null ? 'n/a' : leftActive ? '1' : '0'}</div>
+                <div>R switch: {rightActive == null ? 'n/a' : rightActive ? '1' : '0'}</div>
+            </div>
 
             <div className="flex gap-2 items-center">
-                <span className="text-xs text-content-muted w-12">Steps:</span>
+                <span className="text-xs text-content-muted w-12">Step</span>
                 <input
                     type="number"
                     value={steps}
-                    onChange={e => setSteps(Number(e.target.value))}
-                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-24"
+                    onChange={(e) => setSteps(Number(e.target.value))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
                 />
                 <button
-                    onClick={() => moveRel.mutate({ axis, steps: -steps })}
-                    disabled={moveRel.isPending}
-                    className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors flex items-center justify-center font-mono"
+                    onClick={() => moveRelative.mutate({ axis, steps: -Math.abs(steps) })}
+                    disabled={!enabled || moveRelative.isPending}
+                    className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
                     ◄
                 </button>
                 <button
-                    onClick={() => moveRel.mutate({ axis, steps })}
-                    disabled={moveRel.isPending}
-                    className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors flex items-center justify-center font-mono"
+                    onClick={() => moveRelative.mutate({ axis, steps: Math.abs(steps) })}
+                    disabled={!enabled || moveRelative.isPending}
+                    className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
                     ►
                 </button>
                 <button
-                    onClick={() => home.mutate({ axis })}
-                    disabled={home.isPending}
+                    onClick={() => homeAxis.mutate({ axis })}
+                    disabled={!enabled || homeAxis.isPending}
                     className="ml-auto px-3 py-1.5 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
                 >
-                    ⌂ Home
+                    Home
                 </button>
             </div>
-            {status?.status && (
-                <div className="text-[10px] text-content-muted font-mono flex justify-between">
-                    <span>Pos: {status.status.raw}</span>
-                    <span>Switches: [L:{status.status.switch_left ? '1' : '0'} R:{status.status.switch_right ? '1' : '0'}]</span>
+
+            <div className="flex gap-2 items-center">
+                <span className="text-xs text-content-muted w-12">Abs</span>
+                <input
+                    type="number"
+                    value={absolutePosition}
+                    onChange={(e) => setAbsolutePosition(Number(e.target.value))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                />
+                <button
+                    onClick={() => moveAbsolute.mutate({ axis, position_steps: absolutePosition })}
+                    disabled={!enabled || moveAbsolute.isPending}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                >
+                    Move Absolute
+                </button>
+            </div>
+
+            {(moveRelative.isError || moveAbsolute.isError || homeAxis.isError) && (
+                <div className="text-[10px] text-error">
+                    {getErrorMessage(moveRelative.error) || getErrorMessage(moveAbsolute.error) || getErrorMessage(homeAxis.error)}
                 </div>
             )}
         </div>
     );
 };
 
-const ThermalControls = ({ bank, label }: { bank: ThermalBankName, label: string }) => {
+const ThermalControlCard = ({ bank, label, enabled }: { bank: ThermalBankName; label: string; enabled: boolean }) => {
     const setTemp = useSetThermalTemp();
-    const [temp, setTempState] = useState<number>(37.0);
+    const [temp, setTempState] = useState(37);
 
     return (
         <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-accent font-semibold">{label} Thermal</span>
-                </div>
-            </div>
+            <div className="text-xs text-accent font-semibold">{label}</div>
             <div className="flex gap-2 items-center">
-                <span className="text-xs text-content-muted w-16">Target °C:</span>
                 <input
                     type="number"
-                    value={temp}
-                    onChange={e => setTempState(Number(e.target.value))}
                     step="0.1"
-                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-24"
+                    value={temp}
+                    onChange={(e) => setTempState(Number(e.target.value))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
                 />
                 <button
                     onClick={() => setTemp.mutate({ bank, target_temp_c: temp })}
-                    disabled={setTemp.isPending}
-                    className="ml-auto px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                    disabled={!enabled || setTemp.isPending}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
                 >
-                    Set Point
+                    Set Target
                 </button>
             </div>
+            {setTemp.isError && <div className="text-[10px] text-error">{getErrorMessage(setTemp.error)}</div>}
+        </div>
+    );
+};
+
+const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; label: string; enabled: boolean }) => {
+    const setTemp = useSetChillerTemp();
+    const [temp, setTempState] = useState(4);
+
+    return (
+        <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
+            <div className="text-xs text-accent font-semibold">{label}</div>
+            <div className="flex gap-2 items-center">
+                <input
+                    type="number"
+                    step="0.1"
+                    value={temp}
+                    onChange={(e) => setTempState(Number(e.target.value))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                />
+                <button
+                    onClick={() => setTemp.mutate({ bank, target_temp_c: temp })}
+                    disabled={!enabled || setTemp.isPending}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                >
+                    Set Target
+                </button>
+            </div>
+            {setTemp.isError && <div className="text-[10px] text-error">{getErrorMessage(setTemp.error)}</div>}
         </div>
     );
 };
 
 export const BioXpCockpit = () => {
     const [activeTab, setActiveTab] = useState<'connection' | 'controls' | 'camera'>('connection');
+    const [linkageInput, setLinkageInput] = useState('');
+    const [cameraDevice, setCameraDevice] = useState('/dev/video0');
+    const [snapshot, setSnapshot] = useState<string | null>(null);
+    const [pollCamera, setPollCamera] = useState(false);
+    const [streamFps, setStreamFps] = useState(8);
+    const [streamNonce, setStreamNonce] = useState(0);
+    const [streamError, setStreamError] = useState<string | null>(null);
+    const [ledRgbState, setLedRgbState] = useState({ r: 32, g: 128, b: 255 });
+    const [ledPctState, setLedPctState] = useState(35);
+    const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
 
-    // Status and Linkage Queries
     const { data: linkage, isLoading: linkageLoading } = useGetLinkage();
-    const { data: status, isLoading: statusLoading, isError: statusError, error: statusErrorDetails } = useBioXpStatus();
-
+    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus();
     const setLinkage = useSetLinkage();
     const disconnectLinkage = useDisconnectLinkage();
-    const [linkageInput, setLinkageInput] = useState("");
 
-    // Daemon control
     const { data: daemon, isLoading: daemonLoading } = useDaemonStatus();
     const daemonStart = useDaemonStart();
     const daemonStop = useDaemonStop();
+    const reconnectRuntime = useReconnectRuntime();
+    const prepareInterlock = usePrepareInterlock();
+    const clearLock = useClearLock();
 
-    // Camera polling
-    const camera = useCameraSnapshot();
-    const [snapshot, setSnapshot] = useState<string | null>(null);
-    const [pollCamera, setPollCamera] = useState(false);
+    const hardwareReachable = !!status && !statusIsError && status.hardware_connected;
+    const hasRecentHardwareContact =
+        lastHealthyAt != null &&
+        (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
+    const connectionPollingEnabled = hardwareReachable && activeTab === 'connection';
+    const controlsPollingEnabled = hardwareReachable && activeTab === 'controls';
+    const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera;
 
-    // Sync input with fetched linkage initially
+    const latchStatus = useLatchStatus(connectionPollingEnabled);
+    const latchLock = useLatchLock();
+    const latchUnlock = useLatchUnlock();
+    const ledRgb = useLedRgb();
+    const ledPct = useLedPct();
+    const ledOff = useLedOff();
+
+    const thermalSnapshot = useThermalSnapshot(controlsPollingEnabled);
+    const thermalBaseline = useThermalBaseline();
+    const thermalFastProfile = useThermalFastProfile();
+    const thermalHardReset = useThermalHardReset();
+
+    const chillerSnapshot = useChillerSnapshot(controlsPollingEnabled);
+    const chillerBaseline = useChillerBaseline();
+    const chillerHardReset = useChillerHardReset();
+
+    const cameraDevices = useCameraDevices(cameraDiscoveryEnabled);
+    const cameraControls = useCameraControls(cameraDevice, cameraDiscoveryEnabled && activeTab === 'camera');
+    const cameraSnapshot = useCameraSnapshot();
+    const cameraStreamHealth = useCameraStreamHealth();
+    const cameraAutoRecover = useCameraAutoRecover();
+
     useEffect(() => {
         if (linkage?.url && !linkageInput) {
             setLinkageInput(linkage.url);
+        } else if (!linkage?.url && linkage?.recommended_url && !linkageInput) {
+            setLinkageInput(linkage.recommended_url);
         }
     }, [linkage, linkageInput]);
 
-    // Simple poller for the camera when active
     useEffect(() => {
-        if (!pollCamera) return;
-        const interval = setInterval(() => {
-            camera.mutate(undefined, {
+        if (hardwareReachable) {
+            setLastHealthyAt(Date.now());
+        }
+    }, [hardwareReachable]);
+
+    useEffect(() => {
+        if (cameraDevices.data?.preferred_device && cameraDevice !== cameraDevices.data.preferred_device) {
+            setCameraDevice(cameraDevices.data.preferred_device);
+            return;
+        }
+        if (!cameraDevice && cameraDevices.data?.rows?.[0]?.device) {
+            setCameraDevice(cameraDevices.data.rows[0].device);
+        }
+    }, [cameraDevice, cameraDevices.data]);
+
+    const isConnected = hardwareReachable || (!!status?.linkage_configured && hasRecentHardwareContact);
+    const isRecovering = !hardwareReachable && !!status?.linkage_configured && hasRecentHardwareContact;
+    const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
+    const linkageHelp =
+        status?.status === 'not_configured'
+            ? 'No linkage is configured yet. Use the recommended daemon URL below and press Connect.'
+            : status?.proxy_error?.detail
+                ? getErrorMessage(status.proxy_error.detail)
+                : null;
+    const latestCameraResult = cameraAutoRecover.data ?? cameraStreamHealth.data ?? cameraSnapshot.data ?? null;
+    const latestHardwareAction = reconnectRuntime.data ?? prepareInterlock.data ?? clearLock.data ?? null;
+
+    const captureFrame = () => {
+        setStreamError(null);
+        cameraSnapshot.mutate(
+            { device: cameraDevice },
+            {
                 onSuccess: (data) => {
                     if (data.image_b64) {
                         setSnapshot(data.image_b64);
                     }
                 }
-            });
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [pollCamera, camera]);
+            }
+        );
+    };
 
-    const isConnected = !!status && (status.status === 'ok' || status.status === 'degraded') && !statusError;
-    const isDegraded = !!status && status.status === 'degraded' && !statusError;
+    useEffect(() => {
+        if (activeTab !== 'camera' && pollCamera) {
+            setPollCamera(false);
+        }
+    }, [activeTab, pollCamera]);
+
+    useEffect(() => {
+        if (!isConnected && pollCamera) {
+            setPollCamera(false);
+        }
+    }, [isConnected, pollCamera]);
+
+    useEffect(() => {
+        if (pollCamera) {
+            setStreamNonce((prev) => prev + 1);
+            setStreamError(null);
+        }
+    }, [pollCamera, cameraDevice, streamFps]);
+
+    const streamUrl = pollCamera
+        ? getCameraStreamUrl({
+            device: cameraDevice,
+            fps: streamFps,
+            quality: 7,
+            width: 640,
+            height: 480,
+            nonce: streamNonce,
+        })
+        : null;
 
     return (
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
-            {/* Header */}
             <div className="flex justify-between items-start border-b border-border-secondary pb-4">
                 <div>
                     <h2 className="text-lg font-semibold text-content">BioXP Hardware Interface</h2>
-                    <p className="text-sm text-content-muted">Direct telemetry & control proxy</p>
+                    <p className="text-sm text-content-muted">BMS proxy for the canonical BioXP USB runtime</p>
                 </div>
-                <div className="flex items-center gap-3">
-                    {/* Strict Connection Status - No Fallbacks - Directly reports true state */}
-                    <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${isConnected
-                            ? isDegraded
-                                ? 'bg-warning/10 text-warning border-warning/30'
-                                : 'bg-success/10 text-success border-success/30'
-                            : 'bg-error/10 text-error border-error/30'
-                        }`}>
-                        HARDWARE: {statusLoading ? 'PINGING...' : isConnected ? (isDegraded ? 'DEGRADED' : 'ONLINE') : 'OFFLINE'}
-                    </div>
+                <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${isConnected ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30') : 'bg-error/10 text-error border-error/30'}`}>
+                    HARDWARE: {statusLoading ? 'PINGING...' : isConnected ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE') : 'OFFLINE'}
                 </div>
             </div>
 
-            {/* Tab Navigation */}
             <div className="flex gap-1 border-b border-border-secondary">
-                <button
-                    onClick={() => setActiveTab('connection')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'connection' ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
-                >
-                    Linkage & Status
-                </button>
-                <button
-                    onClick={() => setActiveTab('controls')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'controls' ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
-                >
-                    Motion & Thermals
-                </button>
-                <button
-                    onClick={() => setActiveTab('camera')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'camera' ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
-                >
-                    Camera Feed
-                </button>
+                {(['connection', 'controls', 'camera'] as const).map((tab) => (
+                    <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab ? 'border-accent text-accent' : 'border-transparent text-content-muted hover:text-content hover:border-border-primary'}`}
+                    >
+                        {tab === 'connection' ? 'Linkage & Status' : tab === 'controls' ? 'Motion, Latch & Thermals' : 'Camera Feed'}
+                    </button>
+                ))}
             </div>
 
-            {/* Tab Contents */}
-            <div className="flex-1 mt-4">
-
-                {/* Connection Tab */}
-                {activeTab === 'connection' && (
-                    <div className="space-y-6 max-w-2xl">
-                        {/* Daemon Control Panel */}
-                        <div className="p-4 bg-surface-secondary border border-border-primary rounded-lg space-y-4">
-                            <h3 className="text-sm font-semibold text-content border-b border-border-secondary pb-2">Remote Daemon Control</h3>
-                            <p className="text-xs text-content-muted">Start or stop the BioXP API daemon running on the hardware node (<span className="font-mono">{daemon?.host ?? 'robot'}:{daemon?.port ?? 8123}</span>) via SSH.</p>
-
-                            <div className="flex items-center gap-4">
+            {activeTab === 'connection' && (
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <SectionCard
+                            title="Remote Daemon Control"
+                            subtitle={`Start or stop the BioXP API daemon on ${daemon?.host ?? 'robot'}:${daemon?.port ?? 8123} via SSH.`}
+                        >
+                            <div className="flex items-center gap-4 flex-wrap">
                                 <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${daemon?.running ? 'bg-success/10 text-success border-success/30' : 'bg-error/10 text-error border-error/30'}`}>
                                     DAEMON: {daemonLoading ? 'CHECKING...' : daemon?.running ? 'RUNNING' : 'STOPPED'}
                                 </div>
-
                                 {daemon?.running ? (
                                     <button
                                         onClick={() => daemonStop.mutate()}
@@ -231,23 +414,24 @@ export const BioXpCockpit = () => {
                                         {daemonStart.isPending ? 'STARTING...' : 'START SERVER'}
                                     </button>
                                 )}
-
-                                {daemonStart.isError && <span className="text-[10px] text-error">{daemonStart.error.message}</span>}
-                                {daemonStop.isError && <span className="text-[10px] text-error">{daemonStop.error.message}</span>}
                             </div>
-                        </div>
+                            {(daemonStart.isError || daemonStop.isError) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(daemonStart.error) || getErrorMessage(daemonStop.error)}
+                                </div>
+                            )}
+                        </SectionCard>
 
-                        {/* Linkage Control */}
-                        <div className="p-4 bg-surface-secondary border border-border-primary rounded-lg space-y-4">
-                            <h3 className="text-sm font-semibold text-content border-b border-border-secondary pb-2">Proxy Linkage</h3>
-                            <p className="text-xs text-content-muted">Configure the target URL for the BioXP hardware daemon proxy. Requests will fail strictly if the node is unresponsive.</p>
-
+                        <SectionCard
+                            title="Proxy Linkage"
+                            subtitle="Point BMS at the BioXP hardware daemon. The status poll is strict and will not fake success."
+                        >
                             <div className="flex gap-2">
                                 <input
                                     type="text"
                                     value={linkageInput}
-                                    onChange={e => setLinkageInput(e.target.value)}
-                                    placeholder="http://100.124.140.56:8123"
+                                    onChange={(e) => setLinkageInput(e.target.value)}
+                                    placeholder={linkage?.recommended_url ?? 'http://robot:8123'}
                                     className="flex-1 bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono"
                                 />
                                 <button
@@ -258,100 +442,393 @@ export const BioXpCockpit = () => {
                                     {setLinkage.isPending ? 'Connecting...' : 'Connect'}
                                 </button>
                                 <button
-                                    onClick={() => { disconnectLinkage.mutate(); setLinkageInput(''); }}
+                                    onClick={() => {
+                                        disconnectLinkage.mutate();
+                                        setLinkageInput('');
+                                    }}
                                     disabled={disconnectLinkage.isPending || !linkage?.url}
                                     className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-sm rounded-lg transition-colors font-medium disabled:opacity-40"
                                 >
                                     {disconnectLinkage.isPending ? '...' : 'Disconnect'}
                                 </button>
                             </div>
-
-                            {linkage?.url && (
-                                <div className="text-xs font-mono text-content-muted">Active linkage: <span className="text-accent">{linkage.url}</span></div>
+                            <div className="flex items-center gap-3 text-xs font-mono text-content-muted">
+                                <span>Recommended: <span className="text-accent">{linkage?.recommended_url ?? 'http://robot:8123'}</span></span>
+                                <button
+                                    onClick={() => setLinkageInput(linkage?.recommended_url ?? 'http://robot:8123')}
+                                    className="px-2 py-1 bg-surface-tertiary hover:bg-surface border border-border-primary text-content rounded transition-colors"
+                                >
+                                    Use Recommended URL
+                                </button>
+                            </div>
+                            <div className="text-xs font-mono text-content-muted">
+                                Active linkage: <span className="text-accent">{linkage?.url ?? '(not configured)'}</span>
+                            </div>
+                            {(setLinkage.isError || disconnectLinkage.isError || statusIsError || linkageHelp) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(setLinkage.error) || getErrorMessage(disconnectLinkage.error) || getErrorMessage(statusError) || linkageHelp}
+                                </div>
                             )}
-                        </div>
-
-                        {/* Telemetry Debug Box */}
-                        <div className="p-4 bg-surface-tertiary border border-border-primary rounded-lg space-y-2">
-                            <h3 className="text-sm font-semibold text-content">Telemetry Payload</h3>
-                            <pre className="text-[10px] font-mono text-content-muted p-2 bg-[#000000] rounded border border-border-primary overflow-x-auto min-h-[100px]">
-                                {statusLoading ? "Polling..." :
-                                    statusError ? `Connection Error:\n${statusErrorDetails?.message}` :
-                                        JSON.stringify(status, null, 2)}
-                            </pre>
-                        </div>
+                        </SectionCard>
                     </div>
-                )}
 
-                {/* Controls Tab */}
-                {activeTab === 'controls' && (
-                    !isConnected ? (
-                        <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
-                            <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                            <p className="text-xs text-content-muted mt-2">Configure a valid hardware node linkage in the Linkage & Status tab to enable motion and thermal controls.</p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                            <div className="space-y-4">
-                                <h3 className="text-sm font-semibold text-content border-b border-border-secondary pb-2">Motion Control System</h3>
-                                <AxisControls axis="x" label="Gantry X" />
-                                <AxisControls axis="y" label="Gantry Y" />
-                                <AxisControls axis="z" label="Pipette Z" />
-                                <AxisControls axis="door" label="Thermal Door" />
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <SectionCard
+                            title="Recovery & Interlocks"
+                            subtitle="These are the high-value recovery paths from the canonical BioXP runtime."
+                        >
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    onClick={() => reconnectRuntime.mutate()}
+                                    disabled={!isConnected || reconnectRuntime.isPending}
+                                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
+                                >
+                                    {reconnectRuntime.isPending ? 'RECONNECTING...' : 'Reconnect USB Runtime'}
+                                </button>
+                                <button
+                                    onClick={() => prepareInterlock.mutate()}
+                                    disabled={!isConnected || prepareInterlock.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Motion Interlock'}
+                                </button>
+                                <button
+                                    onClick={() => clearLock.mutate()}
+                                    disabled={!isConnected || clearLock.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
+                                </button>
                             </div>
-                            <div className="space-y-4">
-                                <h3 className="text-sm font-semibold text-content border-b border-border-secondary pb-2">Thermal Management</h3>
-                                <ThermalControls bank="nest" label="Main Nest" />
-                                <ThermalControls bank="lid" label="Heated Lid" />
-                                <ThermalControls bank="pedestal" label="Chiller Pedestal" />
-                            </div>
-                        </div>
-                    )
-                )}
+                            {(reconnectRuntime.isError || prepareInterlock.isError || clearLock.isError) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(reconnectRuntime.error) || getErrorMessage(prepareInterlock.error) || getErrorMessage(clearLock.error)}
+                                </div>
+                            )}
+                            <JsonBlock title="Latest Recovery Result" data={latestHardwareAction} fallback="No recovery action executed yet." />
+                        </SectionCard>
 
-                {/* Camera Tab */}
-                {activeTab === 'camera' && !isConnected && (
+                        <SectionCard
+                            title="Latch & Deck IO"
+                            subtitle="Motion prep depends on the latch and deck IO states exposed by the BioXP runtime."
+                        >
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    onClick={() => latchLock.mutate()}
+                                    disabled={!isConnected || latchLock.isPending}
+                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                                >
+                                    {latchLock.isPending ? 'LOCKING...' : 'Lock'}
+                                </button>
+                                <button
+                                    onClick={() => latchUnlock.mutate()}
+                                    disabled={!isConnected || latchUnlock.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    {latchUnlock.isPending ? 'UNLOCKING...' : 'Unlock'}
+                                </button>
+                            </div>
+                            {(latchLock.isError || latchUnlock.isError || latchStatus.isError) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(latchLock.error) || getErrorMessage(latchUnlock.error) || getErrorMessage(latchStatus.error)}
+                                </div>
+                            )}
+                            <JsonBlock title="Latch Snapshot" data={latchStatus.data} fallback="Latch status will appear when the hardware link is online." />
+                        </SectionCard>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <SectionCard
+                            title="LED Control"
+                            subtitle="The upstream runtime supports the deck LED path; BMS can now drive it directly."
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg border border-border-primary" style={{ backgroundColor: `rgb(${ledRgbState.r}, ${ledRgbState.g}, ${ledRgbState.b})` }} />
+                                <div className="text-xs font-mono text-content-muted">
+                                    rgb({ledRgbState.r}, {ledRgbState.g}, {ledRgbState.b})
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                {(['r', 'g', 'b'] as const).map((channel) => (
+                                    <input
+                                        key={channel}
+                                        type="number"
+                                        min={0}
+                                        max={255}
+                                        value={ledRgbState[channel]}
+                                        onChange={(e) => setLedRgbState((prev) => ({ ...prev, [channel]: Number(e.target.value) }))}
+                                        className="bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm"
+                                    />
+                                ))}
+                            </div>
+                            <div className="flex flex-wrap gap-2 items-center">
+                                <input
+                                    type="number"
+                                    min={0}
+                                    max={100}
+                                    value={ledPctState}
+                                    onChange={(e) => setLedPctState(Number(e.target.value))}
+                                    className="bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm w-24"
+                                />
+                                <button
+                                    onClick={() => ledPct.mutate(ledPctState)}
+                                    disabled={!isConnected || ledPct.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    Set White %
+                                </button>
+                                <button
+                                    onClick={() => ledRgb.mutate(ledRgbState)}
+                                    disabled={!isConnected || ledRgb.isPending}
+                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                                >
+                                    Apply RGB
+                                </button>
+                                <button
+                                    onClick={() => ledOff.mutate()}
+                                    disabled={!isConnected || ledOff.isPending}
+                                    className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors"
+                                >
+                                    LED Off
+                                </button>
+                            </div>
+                            {(ledRgb.isError || ledPct.isError || ledOff.isError) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(ledRgb.error) || getErrorMessage(ledPct.error) || getErrorMessage(ledOff.error)}
+                                </div>
+                            )}
+                        </SectionCard>
+
+                        <SectionCard title="Telemetry Payload" subtitle="This is the raw status object returned from the BioXP daemon through the BMS proxy.">
+                            <JsonBlock title="Status JSON" data={statusIsError ? { error: getErrorMessage(statusError) } : status} fallback="Polling..." />
+                        </SectionCard>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'controls' && (
+                !isConnected ? (
                     <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
                         <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a valid hardware node linkage in the Linkage & Status tab to enable the camera feed.</p>
+                        <p className="text-xs text-content-muted mt-2">Configure a working daemon linkage first. Motion, latch, thermal, and chiller actions stay disabled until the runtime reports actual board reachability.</p>
                     </div>
-                )}
-                {activeTab === 'camera' && isConnected && (
-                    <div className="space-y-4 max-w-3xl">
-                        <div className="flex justify-between items-center bg-surface-tertiary p-3 rounded-t-lg border border-border-primary border-b-0">
-                            <h3 className="text-sm font-semibold text-content">Internal Deck View</h3>
-                            <button
-                                onClick={() => setPollCamera(!pollCamera)}
-                                className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-colors ${pollCamera ? 'bg-error/20 text-error hover:bg-error/30' : 'bg-success/20 text-success hover:bg-success/30'}`}
-                            >
-                                {pollCamera ? "⏹ STOP STREAM" : "▶ START STREAM"}
-                            </button>
-                        </div>
+                ) : (
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <SectionCard
+                            title="Motion Control System"
+                            subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
+                        >
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    onClick={() => prepareInterlock.mutate()}
+                                    disabled={prepareInterlock.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    Prepare Interlock
+                                </button>
+                                <button
+                                    onClick={() => clearLock.mutate()}
+                                    disabled={clearLock.isPending}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    Clear Head Lock
+                                </button>
+                            </div>
+                            <div className="space-y-4">
+                                <AxisControls axis="x" label="Gantry X" enabled={isConnected} />
+                                <AxisControls axis="y" label="Gantry Y" enabled={isConnected} />
+                                <AxisControls axis="z" label="Pipette Z" enabled={isConnected} />
+                                <AxisControls axis="g" label="Gripper" enabled={isConnected} />
+                                <AxisControls axis="door" label="Thermal Door" enabled={isConnected} />
+                            </div>
+                        </SectionCard>
 
-                        <div className="w-full aspect-video bg-[#000000] rounded-b-lg border border-border-primary flex items-center justify-center overflow-hidden relative mt-0">
-                            {snapshot ? (
+                        <div className="space-y-6">
+                            <SectionCard
+                                title="Thermal Cycler"
+                                subtitle="Setpoint control plus baseline, fast-profile, and hard-reset recovery."
+                            >
+                                <div className="grid grid-cols-1 gap-3">
+                                    <ThermalControlCard bank="nest" label="Nest" enabled={isConnected} />
+                                    <ThermalControlCard bank="lid" label="Lid" enabled={isConnected} />
+                                    <ThermalControlCard bank="pedestal" label="Pedestal" enabled={isConnected} />
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => thermalBaseline.mutate()}
+                                        disabled={thermalBaseline.isPending}
+                                        className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                    >
+                                        Apply Baseline
+                                    </button>
+                                    <button
+                                        onClick={() => thermalFastProfile.mutate()}
+                                        disabled={thermalFastProfile.isPending}
+                                        className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
+                                    >
+                                        Fast Profile
+                                    </button>
+                                    <button
+                                        onClick={() => thermalHardReset.mutate()}
+                                        disabled={thermalHardReset.isPending}
+                                        className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors"
+                                    >
+                                        Hard Reset
+                                    </button>
+                                </div>
+                                {(thermalBaseline.isError || thermalFastProfile.isError || thermalHardReset.isError || thermalSnapshot.isError) && (
+                                    <div className="text-xs text-error">
+                                        {getErrorMessage(thermalBaseline.error) || getErrorMessage(thermalFastProfile.error) || getErrorMessage(thermalHardReset.error) || getErrorMessage(thermalSnapshot.error)}
+                                    </div>
+                                )}
+                                <JsonBlock title="Thermal Snapshot" data={thermalSnapshot.data} fallback="Thermal snapshot pending." />
+                            </SectionCard>
+
+                            <SectionCard
+                                title="Chiller System"
+                                subtitle="The upstream chiller surface is now available in BMS for both RC and OC banks."
+                            >
+                                <div className="grid grid-cols-1 gap-3">
+                                    <ChillerControlCard bank="rc" label="RC Bank" enabled={isConnected} />
+                                    <ChillerControlCard bank="oc" label="OC Bank" enabled={isConnected} />
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => chillerBaseline.mutate()}
+                                        disabled={chillerBaseline.isPending}
+                                        className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                    >
+                                        Apply Baseline
+                                    </button>
+                                    <button
+                                        onClick={() => chillerHardReset.mutate()}
+                                        disabled={chillerHardReset.isPending}
+                                        className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors"
+                                    >
+                                        Hard Reset
+                                    </button>
+                                </div>
+                                {(chillerBaseline.isError || chillerHardReset.isError || chillerSnapshot.isError) && (
+                                    <div className="text-xs text-error">
+                                        {getErrorMessage(chillerBaseline.error) || getErrorMessage(chillerHardReset.error) || getErrorMessage(chillerSnapshot.error)}
+                                    </div>
+                                )}
+                                <JsonBlock title="Chiller Snapshot" data={chillerSnapshot.data} fallback="Chiller snapshot pending." />
+                            </SectionCard>
+                        </div>
+                    </div>
+                )
+            )}
+
+            {activeTab === 'camera' && (
+                !isConnected ? (
+                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
+                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
+                        <p className="text-xs text-content-muted mt-2">The camera tab now depends on the real daemon responses. Bring the linkage online first, then capture or stream frames from the actual device.</p>
+                    </div>
+                ) : (
+                    <div className="space-y-6">
+                        <SectionCard
+                            title="Camera Transport"
+                            subtitle="BMS now uses an on-demand MJPEG stream for live view. Device discovery and control probes pause while the stream is active to avoid camera bus contention."
+                        >
+                            <div className="flex flex-wrap gap-2 items-center">
+                                <input
+                                    type="text"
+                                    value={cameraDevice}
+                                    onChange={(e) => setCameraDevice(e.target.value)}
+                                    className="bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono min-w-[14rem]"
+                                />
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={15}
+                                    value={streamFps}
+                                    onChange={(e) => setStreamFps(Number(e.target.value))}
+                                    className="bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono w-24"
+                                />
+                                <button
+                                    onClick={captureFrame}
+                                    disabled={cameraSnapshot.isPending || pollCamera}
+                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                                >
+                                    {cameraSnapshot.isPending ? 'CAPTURING...' : 'Capture Frame'}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setStreamError(null);
+                                        setPollCamera((prev) => !prev);
+                                    }}
+                                    className={`px-4 py-2 text-xs rounded-lg transition-colors ${pollCamera ? 'bg-error/20 text-error hover:bg-error/30' : 'bg-success/20 text-success hover:bg-success/30'}`}
+                                >
+                                    {pollCamera ? 'Stop Stream' : 'Start Stream'}
+                                </button>
+                                <button
+                                    onClick={() => cameraStreamHealth.mutate({ device: cameraDevice, seconds: 5 })}
+                                    disabled={cameraStreamHealth.isPending || pollCamera}
+                                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
+                                >
+                                    Stream Health
+                                </button>
+                                <button
+                                    onClick={() => cameraAutoRecover.mutate({ device: cameraDevice, max_resets: 2 })}
+                                    disabled={cameraAutoRecover.isPending || pollCamera}
+                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                >
+                                    Auto Recover
+                                </button>
+                            </div>
+                            <div className="text-[11px] text-content-muted font-mono">
+                                Live stream: MJPEG on demand at {streamFps} FPS
+                            </div>
+                            {(cameraSnapshot.isError || cameraStreamHealth.isError || cameraAutoRecover.isError || streamError) && (
+                                <div className="text-xs text-error">
+                                    {getErrorMessage(cameraSnapshot.error) || getErrorMessage(cameraStreamHealth.error) || getErrorMessage(cameraAutoRecover.error) || streamError}
+                                </div>
+                            )}
+                        </SectionCard>
+
+                        <div className="w-full aspect-video bg-[#000000] rounded-lg border border-border-primary flex items-center justify-center overflow-hidden relative">
+                            {pollCamera && streamUrl ? (
+                                <img
+                                    src={streamUrl}
+                                    alt="BioXP Deck Live"
+                                    className="w-full h-full object-contain"
+                                    onLoad={() => setStreamError(null)}
+                                    onError={() => {
+                                        setStreamError('Live stream failed. Stop the stream and run Auto Recover if the camera stays busy.');
+                                        setPollCamera(false);
+                                    }}
+                                />
+                            ) : snapshot ? (
                                 <img src={`data:image/jpeg;base64,${snapshot}`} alt="BioXP Deck" className="w-full h-full object-contain" />
                             ) : (
                                 <div className="text-content-muted text-sm font-mono flex flex-col items-center gap-2">
-                                    <span className="text-2xl">📷</span>
-                                    <span>{camera.isPending ? "CAPTURING FRAME..." : pollCamera ? "WAITING FOR SIGNAL..." : "STREAM INACTIVE"}</span>
+                                    <span className="text-2xl">CAM</span>
+                                    <span>{cameraSnapshot.isPending ? 'CAPTURING FRAME...' : pollCamera ? 'OPENING STREAM...' : 'STREAM INACTIVE'}</span>
                                 </div>
                             )}
-
-                            {/* OSD Overlay */}
                             <div className="absolute top-4 left-4 flex flex-col gap-1 text-[10px] font-mono text-[#00ff00] bg-black/50 p-2 rounded">
-                                <div>CAM: /dev/video0</div>
-                                <div>STATUS: {pollCamera ? "LIVE (1FPS)" : "IDLE"}</div>
-                                {camera.error && <div className="text-error mt-2">{camera.error.message}</div>}
+                                <div>CAM: {cameraDevice}</div>
+                                <div>STATUS: {pollCamera ? `LIVE (${streamFps} FPS target)` : 'IDLE'}</div>
+                                {cameraSnapshot.data?.path && <div>PATH: {cameraSnapshot.data.path}</div>}
                             </div>
                         </div>
 
-                        <div className="flex justify-end gap-2 text-[10px] text-content-muted">
-                            <p>Note: Stream is achieved via rapid JPEG snapshot polling directly from the hardware node proxy.</p>
+                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                            <SectionCard title="Visible Camera Nodes" subtitle="Live device discovery from the daemon host.">
+                                <JsonBlock title="Devices" data={cameraDevices.data} fallback="No camera devices reported yet." />
+                            </SectionCard>
+                            <SectionCard title="Control Enumeration" subtitle="V4L2 control enumeration for the selected device.">
+                                <JsonBlock title="Controls" data={cameraControls.data} fallback="Control enumeration pending." />
+                            </SectionCard>
+                            <SectionCard title="Latest Camera Result" subtitle="Most recent snapshot, health test, or auto-recovery response.">
+                                <JsonBlock title="Camera Action" data={latestCameraResult} fallback="No camera action executed yet." />
+                            </SectionCard>
                         </div>
                     </div>
-                )}
-            </div>
+                )
+            )}
         </div>
     );
 };

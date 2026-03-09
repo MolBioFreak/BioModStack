@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from collections import deque
 from pathlib import Path
 import base64
+import copy
 import os
 import subprocess
 import json
@@ -129,12 +130,41 @@ class RAMStatus(BaseModel):
 class SystemStatusResponse(BaseModel):
     """Complete system status response."""
     gpus: List[GPUStatusEnhanced]
+    gpu_error: Optional[str] = None
     cpu: CPUStatus
     ram: RAMStatus
     timestamp: datetime
     # Historical data for sparkline graphs (last 60 samples)
     cpu_history: List[float] = []  # Overall CPU % over time
     ram_history: List[float] = []  # RAM % over time
+
+
+_gpu_status_cache: List[GPUStatusEnhanced] = []
+_gpu_status_error: Optional[str] = None
+_gpu_status_cache_time: float = 0.0
+_GPU_STATUS_CACHE_TTL_SECONDS = 5.0
+
+_power_control_cache: Optional[Dict[str, Any]] = None
+_power_control_cache_time: float = 0.0
+_POWER_CONTROL_CACHE_TTL_SECONDS = 5.0
+
+_fan_control_cache: Optional[Dict[str, Any]] = None
+_fan_control_cache_time: float = 0.0
+_FAN_CONTROL_CACHE_TTL_SECONDS = 5.0
+
+_coolercontrol_cookie_cache: Optional[str] = None
+_coolercontrol_cookie_cache_time: float = 0.0
+_COOLERCONTROL_COOKIE_CACHE_TTL_SECONDS = 20.0
+
+_coolercontrol_devices_cache: List[Dict[str, Any]] = []
+_coolercontrol_devices_error: str = ""
+_coolercontrol_devices_cache_time: float = 0.0
+_COOLERCONTROL_DEVICES_CACHE_TTL_SECONDS = 15.0
+
+_coolercontrol_modes_cache: List[str] = []
+_coolercontrol_modes_error: str = ""
+_coolercontrol_modes_cache_time: float = 0.0
+_COOLERCONTROL_MODES_CACHE_TTL_SECONDS = 30.0
 
 
 def _clamp_power_limit(gpu_index: int, watts: int) -> int:
@@ -244,6 +274,46 @@ def _refresh_power_state_from_hardware() -> None:
     for gpu_idx, watts in live_limits.items():
         _current_limits[gpu_idx] = watts
     _power_enabled = _derive_power_enabled_from_current()
+
+
+def _invalidate_power_control_cache() -> None:
+    global _power_control_cache, _power_control_cache_time
+    _power_control_cache = None
+    _power_control_cache_time = 0.0
+
+
+def _power_control_payload() -> Dict[str, Any]:
+    summary = _power_summary()
+    return {
+        "limits": _current_limits,
+        "saved_limits": _saved_limits,
+        "enabled": _power_enabled,
+        "eco_mode": summary["any_below_default"],
+        "power_percentage": summary["power_percentage"],
+        "total_current_watts": summary["total_current_watts"],
+        "total_max_watts": summary["total_max_watts"],
+        "total_default_watts": summary["total_default_watts"],
+        "per_gpu": summary["per_gpu"],
+        "hardware_limits": HARDWARE_LIMITS,
+    }
+
+
+def _get_power_control_payload(force_refresh: bool = False) -> Dict[str, Any]:
+    global _power_control_cache, _power_control_cache_time
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _power_control_cache is not None
+        and (now - _power_control_cache_time) < _POWER_CONTROL_CACHE_TTL_SECONDS
+    ):
+        return copy.deepcopy(_power_control_cache)
+
+    _refresh_power_state_from_hardware()
+    payload = _power_control_payload()
+    _power_control_cache = copy.deepcopy(payload)
+    _power_control_cache_time = now
+    return payload
 
 
 def _power_summary() -> Dict[str, Any]:
@@ -551,22 +621,42 @@ def _coolercontrol_request(
         return False, 0, None, str(exc), {}
 
 
-def _coolercontrol_login_cookie() -> tuple[Optional[str], str]:
+def _clear_coolercontrol_cookie_cache() -> None:
+    global _coolercontrol_cookie_cache, _coolercontrol_cookie_cache_time
+    _coolercontrol_cookie_cache = None
+    _coolercontrol_cookie_cache_time = 0.0
+
+
+def _coolercontrol_login_cookie(force_refresh: bool = False) -> tuple[Optional[str], str]:
+    global _coolercontrol_cookie_cache, _coolercontrol_cookie_cache_time
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _coolercontrol_cookie_cache
+        and (now - _coolercontrol_cookie_cache_time) < _COOLERCONTROL_COOKIE_CACHE_TTL_SECONDS
+    ):
+        return _coolercontrol_cookie_cache, ""
+
     username, password = _coolercontrol_credentials()
     auth = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     ok, status, _payload, raw, headers = _coolercontrol_request(
         method="POST",
         path="/login",
         headers={"Authorization": f"Basic {auth}"},
-        timeout=8,
+        timeout=3,
     )
     if not ok:
+        _clear_coolercontrol_cookie_cache()
         return None, f"CoolerControl login failed ({status}): {raw.strip() or 'unknown error'}"
     set_cookie = headers.get("Set-Cookie") or headers.get("set-cookie") or ""
     match = re.search(r"\bcc=[^;,\s]+", set_cookie)
     if not match:
+        _clear_coolercontrol_cookie_cache()
         return None, "CoolerControl login did not return a session cookie"
-    return match.group(0), ""
+    _coolercontrol_cookie_cache = match.group(0)
+    _coolercontrol_cookie_cache_time = now
+    return _coolercontrol_cookie_cache, ""
 
 
 def _normalize_pci_bus_id(raw_bus_id: Optional[str]) -> Optional[str]:
@@ -617,16 +707,48 @@ def _coolercontrol_device_pci_location(device: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _coolercontrol_devices() -> tuple[List[Dict[str, Any]], str]:
-    ok, status, payload, raw, _headers = _coolercontrol_request("GET", "/devices", timeout=8)
+def _coolercontrol_devices(force_refresh: bool = False) -> tuple[List[Dict[str, Any]], str]:
+    global _coolercontrol_devices_cache, _coolercontrol_devices_error, _coolercontrol_devices_cache_time
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and (now - _coolercontrol_devices_cache_time) < _COOLERCONTROL_DEVICES_CACHE_TTL_SECONDS
+    ):
+        return copy.deepcopy(_coolercontrol_devices_cache), _coolercontrol_devices_error
+
+    ok, status, payload, raw, _headers = _coolercontrol_request("GET", "/devices", timeout=3)
+    if not ok and status in {401, 403}:
+        cookie, cookie_error = _coolercontrol_login_cookie(force_refresh=True)
+        if cookie:
+            ok, status, payload, raw, _headers = _coolercontrol_request(
+                "GET",
+                "/devices",
+                headers={"Cookie": cookie},
+                timeout=3,
+            )
+        elif cookie_error:
+            raw = cookie_error
+            status = 401
     if not ok:
-        return [], f"CoolerControl /devices failed ({status}): {raw.strip() or 'unknown error'}"
-    if not isinstance(payload, dict):
-        return [], "CoolerControl /devices returned malformed payload"
-    devices = payload.get("devices")
+        _coolercontrol_devices_cache = []
+        _coolercontrol_devices_error = f"CoolerControl /devices failed ({status}): {raw.strip() or 'unknown error'}"
+        _coolercontrol_devices_cache_time = now
+        return [], _coolercontrol_devices_error
+    devices: Any = None
+    if isinstance(payload, dict):
+        devices = payload.get("devices")
+    elif isinstance(payload, list):
+        devices = payload
     if not isinstance(devices, list):
-        return [], "CoolerControl /devices payload missing devices list"
-    return [d for d in devices if isinstance(d, dict)], ""
+        _coolercontrol_devices_cache = []
+        _coolercontrol_devices_error = "CoolerControl /devices payload missing devices list"
+        _coolercontrol_devices_cache_time = now
+        return [], _coolercontrol_devices_error
+    _coolercontrol_devices_cache = [d for d in devices if isinstance(d, dict)]
+    _coolercontrol_devices_error = ""
+    _coolercontrol_devices_cache_time = now
+    return copy.deepcopy(_coolercontrol_devices_cache), ""
 
 
 def _coolercontrol_settings_map(device_uid: str, cookie: str) -> tuple[Dict[str, Dict[str, Any]], str]:
@@ -635,9 +757,11 @@ def _coolercontrol_settings_map(device_uid: str, cookie: str) -> tuple[Dict[str,
         "GET",
         f"/devices/{uid}/settings",
         headers={"Cookie": cookie},
-        timeout=8,
+        timeout=3,
     )
     if not ok:
+        if status in {401, 403}:
+            _clear_coolercontrol_cookie_cache()
         return {}, f"settings read failed ({status}): {raw.strip() or 'unknown error'}"
     if not isinstance(payload, dict):
         return {}, "settings payload malformed"
@@ -655,9 +779,22 @@ def _coolercontrol_settings_map(device_uid: str, cookie: str) -> tuple[Dict[str,
     return out, ""
 
 
-def _coolercontrol_channel_status_map(device_uid: str) -> tuple[Dict[str, Dict[str, Any]], str]:
+def _coolercontrol_channel_status_map(device_uid: str, cookie: Optional[str] = None) -> tuple[Dict[str, Dict[str, Any]], str]:
     uid = urlquote(str(device_uid), safe="")
-    ok, status, payload, raw, _headers = _coolercontrol_request("GET", f"/status/{uid}", timeout=8)
+    headers = {"Cookie": cookie} if cookie else None
+    ok, status, payload, raw, _headers = _coolercontrol_request("GET", f"/status/{uid}", headers=headers, timeout=3)
+    if not ok and status in {401, 403} and not cookie:
+        refreshed_cookie, cookie_error = _coolercontrol_login_cookie(force_refresh=True)
+        if refreshed_cookie:
+            ok, status, payload, raw, _headers = _coolercontrol_request(
+                "GET",
+                f"/status/{uid}",
+                headers={"Cookie": refreshed_cookie},
+                timeout=3,
+            )
+        elif cookie_error:
+            raw = cookie_error
+            status = 401
     if not ok:
         return {}, f"status read failed ({status}): {raw.strip() or 'unknown error'}"
     if not isinstance(payload, dict):
@@ -692,6 +829,8 @@ def _coolercontrol_apply_manual(device_uid: str, channel_name: str, target_perce
     )
     if ok:
         return True, ""
+    if status in {401, 403}:
+        _clear_coolercontrol_cookie_cache()
     return False, f"{channel_name}: manual apply failed ({status}): {raw.strip() or 'unknown error'}"
 
 
@@ -706,6 +845,8 @@ def _coolercontrol_apply_reset(device_uid: str, channel_name: str, cookie: str) 
     )
     if ok:
         return True, ""
+    if status in {401, 403}:
+        _clear_coolercontrol_cookie_cache()
     return False, f"{channel_name}: reset failed ({status}): {raw.strip() or 'unknown error'}"
 
 
@@ -739,36 +880,90 @@ def _run_cctv(args: List[str], timeout: int = 10) -> tuple[bool, str]:
     return False, " | ".join(errors)
 
 
-def _coolercontrol_list_modes() -> tuple[List[str], str]:
-    ok, output = _run_cctv(["--list-modes"])
-    if not ok:
-        return [], output
-    modes: List[str] = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        lowered = line.lower()
-        if lowered.startswith("available modes"):
-            _, _, remainder = line.partition(":")
-            if remainder.strip():
-                for chunk in remainder.split(","):
-                    mode = chunk.strip()
-                    if mode:
-                        modes.append(mode)
-            continue
-        modes.append(line)
+def _coolercontrol_extract_mode_names(payload: Any) -> List[str]:
+    raw_modes: Any = None
+    if isinstance(payload, list):
+        raw_modes = payload
+    elif isinstance(payload, dict):
+        for key in ("modes", "items", "data"):
+            if isinstance(payload.get(key), list):
+                raw_modes = payload.get(key)
+                break
+        if raw_modes is None:
+            raw_modes = [payload]
+
+    if not isinstance(raw_modes, list):
+        return []
+
+    names: List[str] = []
+    for item in raw_modes:
+        if isinstance(item, str):
+            value = item.strip()
+        elif isinstance(item, dict):
+            value = (
+                item.get("name")
+                or item.get("mode_name")
+                or item.get("title")
+                or item.get("uid")
+                or ""
+            )
+            value = str(value).strip()
+        else:
+            value = ""
+        if value:
+            names.append(value)
+
     deduped: List[str] = []
     seen: set[str] = set()
-    for mode in modes:
-        normalized = mode.strip()
-        if not normalized:
-            continue
-        key = normalized.lower()
+    for mode in names:
+        key = mode.lower()
         if key in seen:
             continue
         seen.add(key)
-        deduped.append(normalized)
+        deduped.append(mode)
+    return deduped
+
+
+def _coolercontrol_list_modes(force_refresh: bool = False) -> tuple[List[str], str]:
+    global _coolercontrol_modes_cache, _coolercontrol_modes_error, _coolercontrol_modes_cache_time
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and (now - _coolercontrol_modes_cache_time) < _COOLERCONTROL_MODES_CACHE_TTL_SECONDS
+    ):
+        return list(_coolercontrol_modes_cache), _coolercontrol_modes_error
+
+    ok, status, payload, raw, _headers = _coolercontrol_request("GET", "/modes", timeout=3)
+    if not ok and status in {401, 403}:
+        cookie, cookie_error = _coolercontrol_login_cookie(force_refresh=True)
+        if cookie:
+            ok, status, payload, raw, _headers = _coolercontrol_request(
+                "GET",
+                "/modes",
+                headers={"Cookie": cookie},
+                timeout=3,
+            )
+        elif cookie_error:
+            raw = cookie_error
+            status = 401
+
+    if not ok:
+        _coolercontrol_modes_cache = []
+        _coolercontrol_modes_error = f"CoolerControl /modes failed ({status}): {raw.strip() or 'unknown error'}"
+        _coolercontrol_modes_cache_time = now
+        return [], _coolercontrol_modes_error
+
+    deduped = _coolercontrol_extract_mode_names(payload)
+    if not deduped and payload not in (None, "", []):
+        _coolercontrol_modes_cache = []
+        _coolercontrol_modes_error = "CoolerControl /modes payload missing mode names"
+        _coolercontrol_modes_cache_time = now
+        return [], _coolercontrol_modes_error
+
+    _coolercontrol_modes_cache = list(deduped)
+    _coolercontrol_modes_error = ""
+    _coolercontrol_modes_cache_time = now
     return deduped, ""
 
 
@@ -1301,7 +1496,7 @@ def _fan_control_snapshot_coolercontrol() -> Dict[str, Any]:
                 warning_parts.append(cookie_error or "CoolerControl login failed")
 
             if device_uid not in status_cache:
-                status_cache[device_uid], status_error_cache[device_uid] = _coolercontrol_channel_status_map(device_uid)
+                status_cache[device_uid], status_error_cache[device_uid] = _coolercontrol_channel_status_map(device_uid, cookie)
             status_map = status_cache.get(device_uid, {})
             if status_error_cache.get(device_uid):
                 warning_parts.append(f"status: {status_error_cache[device_uid]}")
@@ -1417,6 +1612,29 @@ def _fan_control_snapshot() -> Dict[str, Any]:
     return _fan_control_snapshot_nvidia_settings()
 
 
+def _invalidate_fan_control_cache() -> None:
+    global _fan_control_cache, _fan_control_cache_time
+    _fan_control_cache = None
+    _fan_control_cache_time = 0.0
+
+
+def _get_fan_control_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
+    global _fan_control_cache, _fan_control_cache_time
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _fan_control_cache is not None
+        and (now - _fan_control_cache_time) < _FAN_CONTROL_CACHE_TTL_SECONDS
+    ):
+        return copy.deepcopy(_fan_control_cache)
+
+    snapshot = _fan_control_snapshot()
+    _fan_control_cache = copy.deepcopy(snapshot)
+    _fan_control_cache_time = now
+    return snapshot
+
+
 def _apply_coolercontrol_gpu_setting(
     device_uid: str,
     channels: List[str],
@@ -1464,56 +1682,129 @@ _load_power_state()
 _load_fan_state()
 
 
-def get_gpu_stats() -> List[GPUStatusEnhanced]:
-    """Get enhanced GPU statistics using pynvml."""
-    try:
-        import pynvml
-        pynvml.nvmlInit()
-        
-        device_count = pynvml.nvmlDeviceGetCount()
-        gpus = []
-
-        # Load active reservations and extract job info for process naming
-        reservations = {}  # gpu_idx -> total_vram
-        gpu_job_info = {}  # gpu_idx -> list of (job_name, model_type) for active reservations
+def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
+    """Get enhanced GPU statistics using pynvml, with nvidia-smi fallback."""
+    def _load_active_gpu_reservations() -> tuple[Dict[int, int], Dict[int, List[tuple[Optional[str], Optional[str]]]]]:
+        reservations: Dict[int, int] = {}
+        gpu_job_info: Dict[int, List[tuple[Optional[str], Optional[str]]]] = {}
         try:
             if GPU_RESERVATIONS_PATH.exists():
                 with open(GPU_RESERVATIONS_PATH, "r") as f:
                     data = json.load(f)
                     now = time.time() * 1000  # ms
-                    
+
                     for gpu_idx, res_list in data.items():
                         active_vram = 0
-                        job_infos = []
+                        job_infos: List[tuple[Optional[str], Optional[str]]] = []
                         for res in res_list:
-                            # Only count if within last 60s (or custom duration)
-                            # The scheduler cleans this up, but we filter here for UI accuracy
                             if (now - res.get("timestamp", 0)) < 60000:
                                 active_vram += res.get("vram", 0)
-                                job_name = res.get("job_name")
-                                model_type = res.get("model_type")
-                                if model_type:
-                                    job_infos.append((job_name, model_type))
+                                job_infos.append((res.get("job_name"), res.get("model_type")))
                         reservations[int(gpu_idx)] = active_vram
                         if job_infos:
                             gpu_job_info[int(gpu_idx)] = job_infos
         except Exception as e:
             print(f"Error reading reservations: {e}")
-        
+        return reservations, gpu_job_info
+
+    def _collect_gpu_stats_via_nvidia_smi() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit,temperature.gpu,fan.speed,clocks.current.graphics,clocks.current.memory",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception as exc:
+            return [], str(exc).strip() or exc.__class__.__name__
+
+        if result.returncode != 0:
+            raw = (result.stderr or result.stdout or "").strip()
+            return [], raw or f"nvidia-smi exited with {result.returncode}"
+
+        reservations, _gpu_job_info = _load_active_gpu_reservations()
+        gpus: List[GPUStatusEnhanced] = []
+
+        def _parse_int(raw: str, default: int = 0) -> int:
+            try:
+                return int(round(float(str(raw).strip())))
+            except (TypeError, ValueError):
+                return default
+
+        def _parse_float(raw: str, default: float = 0.0) -> float:
+            try:
+                return float(str(raw).strip())
+            except (TypeError, ValueError):
+                return default
+
+        for line in result.stdout.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 12:
+                continue
+            try:
+                gpu_idx = int(parts[0])
+            except (TypeError, ValueError):
+                continue
+
+            hw_limits = HARDWARE_LIMITS.get(gpu_idx, {"min": 100, "default": 300, "max": 400})
+            clock_graphics = _parse_int(parts[10], 0)
+            clock_memory = _parse_int(parts[11], 0)
+            gpus.append(
+                GPUStatusEnhanced(
+                    index=gpu_idx,
+                    name=parts[1] or f"GPU {gpu_idx}",
+                    utilization=_parse_int(parts[2], 0),
+                    memory_utilization=_parse_int(parts[3], 0),
+                    memory_used_mb=_parse_int(parts[4], 0),
+                    memory_total_mb=_parse_int(parts[5], 0),
+                    reserved_memory_mb=reservations.get(gpu_idx, 0),
+                    power_draw_w=round(_parse_float(parts[6], 0.0), 1),
+                    power_limit_w=round(_parse_float(parts[7], 0.0), 1),
+                    min_power_watts=hw_limits["min"],
+                    default_power_watts=hw_limits["default"],
+                    max_power_watts=hw_limits["max"],
+                    temperature=_parse_int(parts[8], 0),
+                    fan_speed=_parse_int(parts[9], 0),
+                    clock_graphics_mhz=clock_graphics,
+                    clock_memory_mhz=clock_memory,
+                    clock_max_graphics_mhz=clock_graphics,
+                    clock_max_memory_mhz=clock_memory,
+                    processes=[],
+                )
+            )
+
+        if not gpus:
+            return [], "nvidia-smi returned no GPU records"
+        return gpus, None
+
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+
+        device_count = pynvml.nvmlDeviceGetCount()
+        gpus = []
+
+        # Load active reservations and extract job info for process naming
+        reservations, gpu_job_info = _load_active_gpu_reservations()
+
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            
+
             # Name
             name = pynvml.nvmlDeviceGetName(handle)
             if isinstance(name, bytes):
                 name = name.decode('utf-8')
-            
+
             # Utilization
             utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            
+
             # Memory
             memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            
+
             # Power
             try:
                 power_draw = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0  # mW to W
@@ -1521,16 +1812,16 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
             except pynvml.NVMLError:
                 power_draw = 0.0
                 power_limit = 0.0
-            
+
             # Temperature
             temperature = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-            
+
             # Fan speed
             try:
                 fan_speed = pynvml.nvmlDeviceGetFanSpeed(handle)
             except pynvml.NVMLError:
                 fan_speed = 0  # Some GPUs don't report fan speed
-            
+
             # Clocks
             try:
                 clock_graphics = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
@@ -1539,7 +1830,7 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 clock_max_memory = pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_MEM)
             except pynvml.NVMLError:
                 clock_graphics = clock_memory = clock_max_graphics = clock_max_memory = 0
-            
+
             def _infer_process_label(proc_name: str, cmdline: Optional[List[str]]) -> str:
                 """Infer a human-friendly label from process name/cmdline."""
                 base_name = proc_name or ""
@@ -1606,7 +1897,7 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                         proc_name = _infer_process_label(proc_name, cmdline)
                     except:
                         proc_name = f"PID {proc.pid}"
-                    
+
                     processes.append(GPUProcess(
                         pid=proc.pid,
                         name=proc_name,
@@ -1623,7 +1914,7 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
                 if i in gpu_job_info:
                     for job_name, model_type in gpu_job_info[i]:
                         model_types.append(model_type)
-                
+
                 # Create display name
                 if model_types:
                     # Map model types to display names - MPNN variants explicitly listed
@@ -1676,11 +1967,35 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
             ))
         
         pynvml.nvmlShutdown()
-        return gpus
+        return gpus, None
         
     except Exception as e:
-        print(f"GPU stats error: {e}")
-        return []
+        message = str(e).strip() or e.__class__.__name__
+        fallback_gpus, fallback_error = _collect_gpu_stats_via_nvidia_smi()
+        if fallback_gpus:
+            logger.warning("pynvml failed (%s); using nvidia-smi fallback", message)
+            return fallback_gpus, None
+        return [], fallback_error or message
+
+
+def get_gpu_stats_with_error(force_refresh: bool = False) -> tuple[List[GPUStatusEnhanced], Optional[str]]:
+    global _gpu_status_cache, _gpu_status_error, _gpu_status_cache_time
+
+    now = time.monotonic()
+    if not force_refresh and (now - _gpu_status_cache_time) < _GPU_STATUS_CACHE_TTL_SECONDS:
+        return list(_gpu_status_cache), _gpu_status_error
+
+    gpus, error = _collect_gpu_stats()
+    if error and error != _gpu_status_error:
+        logger.warning("GPU stats error: %s", error)
+    _gpu_status_cache = list(gpus)
+    _gpu_status_error = error
+    _gpu_status_cache_time = now
+    return list(gpus), error
+
+
+def get_gpu_stats() -> List[GPUStatusEnhanced]:
+    return get_gpu_stats_with_error()[0]
 
 
 def get_cpu_stats() -> CPUStatus:
@@ -1777,7 +2092,7 @@ async def get_system_status():
     # Run blocking hardware checks in thread pool to avoid blocking event loop
     cpu = await asyncio.to_thread(get_cpu_stats)
     ram = await asyncio.to_thread(get_ram_stats)
-    gpus = await asyncio.to_thread(get_gpu_stats)
+    gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error)
     
     # Append to history for sparkline graphs
     _cpu_history.append(cpu.utilization)
@@ -1785,6 +2100,7 @@ async def get_system_status():
     
     return SystemStatusResponse(
         gpus=gpus,
+        gpu_error=gpu_error,
         cpu=cpu,
         ram=ram,
         timestamp=datetime.utcnow(),
@@ -1796,8 +2112,8 @@ async def get_system_status():
 @router.get("/gpus")
 async def get_gpus_only():
     """Get GPU status only (for lighter polling)."""
-    gpus = await asyncio.to_thread(get_gpu_stats)
-    return {"gpus": gpus, "timestamp": datetime.utcnow()}
+    gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error)
+    return {"gpus": gpus, "gpu_error": gpu_error, "timestamp": datetime.utcnow()}
 
 
 @router.get("/cpu")
@@ -1846,21 +2162,7 @@ def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
 @router.get("/power-control")
 async def get_power_control():
     """Get current power control state."""
-    _refresh_power_state_from_hardware()
-    summary = _power_summary()
-
-    return {
-        "limits": _current_limits,
-        "saved_limits": _saved_limits,
-        "enabled": _power_enabled,
-        "eco_mode": summary["any_below_default"],
-        "power_percentage": summary["power_percentage"],
-        "total_current_watts": summary["total_current_watts"],
-        "total_max_watts": summary["total_max_watts"],
-        "total_default_watts": summary["total_default_watts"],
-        "per_gpu": summary["per_gpu"],
-        "hardware_limits": HARDWARE_LIMITS,
-    }
+    return _get_power_control_payload()
 
 
 class PowerControlRequest(BaseModel):
@@ -1875,6 +2177,7 @@ async def set_power_control(request: PowerControlRequest):
     """Set power limits via preset, manual control, or toggle."""
     global _current_limits, _saved_limits, _power_enabled
 
+    _invalidate_power_control_cache()
     _refresh_power_state_from_hardware()
     errors: List[str] = []
     applied_count = 0
@@ -1938,7 +2241,7 @@ async def set_power_control(request: PowerControlRequest):
     _refresh_power_state_from_hardware()
     if applied_count > 0:
         _save_power_state()
-    summary = _power_summary()
+    payload = _get_power_control_payload(force_refresh=True)
 
     if errors:
         message += f" (Failed: {', '.join(errors)})"
@@ -1946,16 +2249,7 @@ async def set_power_control(request: PowerControlRequest):
     return {
         "success": len(errors) == 0 and applied_count > 0,
         "message": message,
-        "limits": _current_limits,
-        "saved_limits": _saved_limits,
-        "enabled": _power_enabled,
-        "eco_mode": summary["any_below_default"],
-        "power_percentage": summary["power_percentage"],
-        "total_current_watts": summary["total_current_watts"],
-        "total_max_watts": summary["total_max_watts"],
-        "total_default_watts": summary["total_default_watts"],
-        "per_gpu": summary["per_gpu"],
-        "hardware_limits": HARDWARE_LIMITS,
+        **payload,
     }
 
 
@@ -1972,7 +2266,7 @@ class FanMappingOverrideRequest(BaseModel):
 @router.get("/fan-control")
 async def get_fan_control():
     """Get per-GPU fan control status and mapping."""
-    return _fan_control_snapshot()
+    return _get_fan_control_snapshot()
 
 
 @router.put("/fan-control/mapping")
@@ -2005,7 +2299,8 @@ async def update_fan_control_mapping(request: FanMappingOverrideRequest):
 
     _fan_mapping_overrides = normalized
     _save_fan_state()
-    snapshot = _fan_control_snapshot()
+    _invalidate_fan_control_cache()
+    snapshot = _get_fan_control_snapshot(force_refresh=True)
     return {
         "success": True,
         "message": "Updated fan target mapping overrides",
@@ -2021,7 +2316,7 @@ async def set_fan_control(request: FanControlRequest):
         valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
         raise HTTPException(status_code=400, detail=f"Unknown GPU index {gpu_idx}. Valid: {valid}")
 
-    snapshot = _fan_control_snapshot()
+    snapshot = _get_fan_control_snapshot(force_refresh=True)
     gpu_state = snapshot.get("gpus", {}).get(str(gpu_idx), {})
     if not snapshot.get("supported"):
         return {
@@ -2070,7 +2365,8 @@ async def set_fan_control(request: FanControlRequest):
                 "target_percent": desired_target,
             }
             _save_fan_state()
-        refreshed = _fan_control_snapshot()
+        _invalidate_fan_control_cache()
+        refreshed = _get_fan_control_snapshot(force_refresh=True)
         if mode_ok:
             if desired_mode == "manual":
                 message = (
@@ -2124,7 +2420,8 @@ async def set_fan_control(request: FanControlRequest):
         }
         _save_fan_state()
 
-    refreshed = _fan_control_snapshot()
+    _invalidate_fan_control_cache()
+    refreshed = _get_fan_control_snapshot(force_refresh=True)
     if success:
         if desired_mode == "auto":
             message = f"GPU {gpu_idx} fan control set to auto"

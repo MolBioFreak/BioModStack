@@ -80,7 +80,7 @@ process RunFAMPNN {
     path "*.log"
 
     script:
-    def checkpointPreset = (params.fampnn_checkpoint ?: '').toString().trim()
+    def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
         'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',

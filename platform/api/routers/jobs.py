@@ -42,6 +42,8 @@ router = APIRouter()
 
 # Project root for resolving code-relative paths
 CODE_ROOT = get_code_root()
+DEFAULT_FAMPNN_CHECKPOINT = "fampnn_0_0.pt"
+DEFAULT_PPIFLOW_CHECKPOINT = "nanobody"
 
 
 class ResumeJobRequest(BaseModel):
@@ -167,6 +169,14 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         normalized["run_thermompnn"] = _to_bool(canonical_thermompnn)
         normalized["run_stability_scoring"] = normalized["run_thermompnn"]
 
+    ppiflow_checkpoint = str(normalized.get("ppiflow_checkpoint") or "").strip()
+    if not ppiflow_checkpoint and (
+        _to_bool(normalized.get("run_maturation"))
+        or _to_bool(normalized.get("run_post_validation_maturation"))
+        or _to_bool(normalized.get("run_post_boltz_maturation"))
+    ):
+        normalized["ppiflow_checkpoint"] = DEFAULT_PPIFLOW_CHECKPOINT
+
     gate_stage = normalized.get("interactive_gate_stage")
     if isinstance(gate_stage, str):
         normalized_gate_stage = gate_stage.strip().lower()
@@ -283,13 +293,7 @@ def _validate_fampnn_checkpoint_requirements(model_id: str, params: dict) -> Non
     if checkpoint or checkpoint_path:
         return
 
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "FAMPNN weights are required for this job. Set 'fampnn_checkpoint' or "
-            "'fampnn_checkpoint_path' explicitly; no default checkpoint is applied."
-        ),
-    )
+    params["fampnn_checkpoint"] = DEFAULT_FAMPNN_CHECKPOINT
 
 
 def _is_meaningful_param_value(value: object) -> bool:
