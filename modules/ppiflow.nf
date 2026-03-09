@@ -49,23 +49,30 @@ process RunPartialFlow {
     def heavyChain = params.ppiflow_heavy_chain ?: (antibodyList ? antibodyList[0] : 'H')
     def lightChain = params.ppiflow_light_chain ?: (antibodyList.size() > 1 ? antibodyList[1] : '')
     def antigenChain = params.ppiflow_antigen_chain ?: (params.antigen_chains ? params.antigen_chains.toString().replace(',', '') : '')
-    def startT = params.ppiflow_start_t ?: 0.8
+    def startT = params.ppiflow_start_t != null ? params.ppiflow_start_t : 0.8
     def samplesPerTarget = params.ppiflow_samples_per_target ?: 1
     def retryLimit = params.ppiflow_retry_limit ?: 10
-    def configPath = params.ppiflow_config ?: "/app/ppiflow/configs/inference_nanobody.yaml"
-    def checkpointPath = params.ppiflow_checkpoint_path ?: (params.ppiflow_weights_dir ? "/opt/ppiflow/ckpt/${params.ppiflow_checkpoint ?: 'antibody'}.ckpt" : "")
-    def hotspots = params.epitope_residues ?: ''
-    def hotspotArg = hotspots ? "--specified_hotspots \"${hotspots}\"" : ""
+    def configPath = params.ppiflow_config ?: "/app/ppiflow/configs/test_antibody.yaml"
+    def defaultCheckpoint = frameworkType == 'nanobody' ? 'nanobody' : 'antibody'
+    def checkpointName = params.ppiflow_checkpoint ?: defaultCheckpoint
+    def checkpointPath = params.ppiflow_checkpoint_path ?: (params.ppiflow_weights_dir ? "/opt/ppiflow/ckpt/${checkpointName}.ckpt" : "")
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
+
+    export HOME="\$PWD"
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    export TRITON_CACHE_DIR="\${XDG_CACHE_HOME}/triton"
+    export TORCH_EXTENSIONS_DIR="\${XDG_CACHE_HOME}/torch_extensions"
+    mkdir -p "\${TRITON_CACHE_DIR}" "\${TORCH_EXTENSIONS_DIR}"
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/anchors_to_ppiflow_positions.py" \\
         --anchors_json "${anchors_json}" \\
         --output fixed_positions.txt
 
-    fixed_positions=\$(cat fixed_positions.txt | tr -d '\\n')
-    cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
+    fixedPositionsSpec=\$(tr -d '\\n' < fixed_positions.txt)
+    cdrPositionsSpec=\$(tr -d '\\n' < "${cdr_positions}")
+    hotspotsSpec="${params.epitope_residues ?: ''}"
 
     heavyChain="${heavyChain}"
     lightChain="${lightChain}"
@@ -85,8 +92,28 @@ print("".join(chains))
 PY
     )
 
-    if ! printf '%s' "\${detectedChains}" | grep -q "${heavyChain}"; then
-        inferredHeavy=\$("\${PYTHON_BIN}" - <<'PY'
+    cdrChains=\$("\${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+import re
+
+chains = []
+for token in Path("${cdr_positions}").read_text().strip().split(","):
+    token = token.strip()
+    if not token:
+        continue
+    match = re.match(r"([A-Za-z])", token)
+    if match:
+        chain = match.group(1)
+        if chain not in chains:
+            chains.append(chain)
+print("".join(chains))
+PY
+    )
+
+    if ! printf '%s' "\${detectedChains}" | grep -qF "\${heavyChain}"; then
+        inferredHeavy=\$(printf '%s' "\${cdrChains}" | cut -c1)
+        if [ -z "\${inferredHeavy}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${inferredHeavy}"; then
+            inferredHeavy=\$("\${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 
 chains = []
@@ -98,7 +125,8 @@ with open(Path("${complex_pdb}")) as handle:
                 chains.append(chain)
 print(chains[0] if chains else "")
 PY
-        )
+            )
+        fi
         if [ -n "\${inferredHeavy}" ]; then
             echo "[PPIFlow] Warning: heavy chain '${heavyChain}' not found in ${complex_pdb}; using detected chain '\${inferredHeavy}' instead" >&2
             heavyChain="\${inferredHeavy}"
@@ -108,9 +136,17 @@ PY
         fi
     fi
 
-    if [ -n "\${lightChain}" ] && ! printf '%s' "\${detectedChains}" | grep -q "\${lightChain}"; then
-        echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; continuing in single-chain mode" >&2
-        lightChain=""
+    if [ -z "\${lightChain}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${lightChain}"; then
+        inferredLight=\$(printf '%s' "\${cdrChains}" | cut -c2)
+        if [ -n "\${inferredLight}" ] && [ "\${inferredLight}" != "\${heavyChain}" ] && printf '%s' "\${detectedChains}" | grep -qF "\${inferredLight}"; then
+            if [ -n "\${lightChain}" ]; then
+                echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; using CDR-derived chain '\${inferredLight}' instead" >&2
+            fi
+            lightChain="\${inferredLight}"
+        elif [ -n "\${lightChain}" ]; then
+            echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; continuing in single-chain mode" >&2
+            lightChain=""
+        fi
     fi
 
     if [ -n "\${antigenChainBash}" ] && [ "\${antigenChainBash}" = "\${heavyChain}" ]; then
@@ -118,8 +154,9 @@ PY
         antigenChainBash=""
     fi
 
-    if [ -z "\${antigenChainBash}" ] || ! printf '%s' "\${detectedChains}" | grep -q "\${antigenChainBash}"; then
-        antigenChainBash=\$("\${PYTHON_BIN}" - <<'PY'
+    if [ -z "\${antigenChainBash}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${antigenChainBash}"; then
+        antigenChainBash=\$(PPI_HEAVY_CHAIN="\${heavyChain}" PPI_LIGHT_CHAIN="\${lightChain}" "\${PYTHON_BIN}" - <<'PY'
+import os
 from pathlib import Path
 
 pdb_path = Path("${complex_pdb}")
@@ -131,13 +168,74 @@ with open(pdb_path) as f:
             if chain and chain not in chains:
                 chains.append(chain)
 
-heavy = "${heavyChain}"
-light = "${lightChain}"
-ab = f"{heavy}{light}"
-chains = [c for c in chains if c not in list(ab)]
+heavy = os.environ.get("PPI_HEAVY_CHAIN", "")
+light = os.environ.get("PPI_LIGHT_CHAIN", "")
+ab = {c for c in (heavy, light) if c}
+chains = [c for c in chains if c not in ab]
 print("".join(chains))
 PY
         )
+    fi
+
+    if [ -z "\${antigenChainBash}" ]; then
+        echo "[PPIFlow] ERROR: unable to infer antigen chain for ${complex_pdb}; detected chains: \${detectedChains}, antibody chains: \${heavyChain}\${lightChain}" >&2
+        exit 1
+    fi
+
+    hotspotsSpec=\$(PPI_HOTSPOTS_SPEC="\${hotspotsSpec}" PPI_ANTIGEN_CHAIN="\${antigenChainBash}" PPI_HEAVY_CHAIN="\${heavyChain}" PPI_LIGHT_CHAIN="\${lightChain}" "\${PYTHON_BIN}" - <<'PY'
+import os
+import re
+
+hotspots = os.environ.get("PPI_HOTSPOTS_SPEC", "").strip()
+antigen = os.environ.get("PPI_ANTIGEN_CHAIN", "").strip()
+heavy = os.environ.get("PPI_HEAVY_CHAIN", "").strip()
+light = os.environ.get("PPI_LIGHT_CHAIN", "").strip()
+
+if not hotspots:
+    print("")
+    raise SystemExit(0)
+
+tokens = [token.strip() for token in hotspots.split(",") if token.strip()]
+chains = []
+for token in tokens:
+    match = re.match(r"([A-Za-z])", token)
+    if not match:
+        print("")
+        raise SystemExit(0)
+    chain = match.group(1)
+    if chain not in chains:
+        chains.append(chain)
+
+antigen_set = set(antigen)
+antibody_set = {c for c in (heavy, light) if c}
+
+if set(chains).issubset(antigen_set):
+    print(",".join(tokens))
+    raise SystemExit(0)
+
+if len(chains) == 1 and len(antigen) == 1:
+    old_chain = chains[0]
+    new_chain = antigen
+    remapped = [re.sub(r"^[A-Za-z]", new_chain, token, count=1) for token in tokens]
+    print(",".join(remapped))
+    raise SystemExit(0)
+
+if set(chains).issubset(antibody_set):
+    print("")
+    raise SystemExit(0)
+
+print("")
+PY
+    )
+
+    hotspotArg=""
+    if [ -n "\${hotspotsSpec}" ]; then
+        if [ "${params.epitope_residues ?: ''}" != "\${hotspotsSpec}" ]; then
+            echo "[PPIFlow] Warning: remapped hotspot residues from '${params.epitope_residues ?: ''}' to '\${hotspotsSpec}' to match antigen chain '\${antigenChainBash}'" >&2
+        fi
+        hotspotArg="--specified_hotspots \${hotspotsSpec}"
+    elif [ -n "${params.epitope_residues ?: ''}" ]; then
+        echo "[PPIFlow] Warning: dropping hotspot residues '${params.epitope_residues ?: ''}' because they do not match inferred antigen chain '\${antigenChainBash}'" >&2
     fi
 
     if [ -z "${checkpointPath}" ]; then
@@ -145,9 +243,25 @@ PY
         exit 1
     fi
 
-    ppiflow_script="/app/ppiflow/sample_antibody_partial_flow.py"
+    ppiflow_script="/app/ppiflow/sample_antibody_nanobody_partial.py"
     if [ ! -f "\${ppiflow_script}" ]; then
-        ppiflow_script="/app/ppiflow/sample_antibody_nanobody_partial.py"
+        ppiflow_script="/app/ppiflow/sample_antibody_partial_flow.py"
+    fi
+
+    if [ ! -f "\${ppiflow_script}" ]; then
+        echo "[PPIFlow] ERROR: No antibody partial-flow entrypoint found in container" >&2
+        exit 1
+    fi
+
+    configPathBash="${configPath}"
+    if [ "\${configPathBash}" = "/app/ppiflow/configs/inference_nanobody.yaml" ] && [ -f "/app/ppiflow/configs/test_antibody.yaml" ]; then
+        echo "[PPIFlow] Warning: remapping config '\${configPathBash}' to '/app/ppiflow/configs/test_antibody.yaml' for antibody partial-flow compatibility" >&2
+        configPathBash="/app/ppiflow/configs/test_antibody.yaml"
+    fi
+
+    if [ ! -f "\${configPathBash}" ]; then
+        echo "[PPIFlow] ERROR: PPIFlow config not found: \${configPathBash}" >&2
+        exit 1
     fi
 
     lightChainArg=""
@@ -157,18 +271,18 @@ PY
 
     "\${PYTHON_BIN}" "\${ppiflow_script}" \\
         --complex_pdb "${complex_pdb}" \\
-        --fixed_positions "\${fixed_positions}" \\
-        --cdr_position "\${cdr_positions}" \\
+        --fixed_positions "\${fixedPositionsSpec}" \\
+        --cdr_position "\${cdrPositionsSpec}" \\
         --start_t ${startT} \\
         --samples_per_target ${samplesPerTarget} \\
         --output_dir "ppiflow_out" \\
         --retry_Limit ${retryLimit} \\
-        --config "${configPath}" \\
+        --config "\${configPathBash}" \\
         --model_weights "${checkpointPath}" \\
         --antigen_chain "\${antigenChainBash}" \\
-        --heavy_chain "${heavyChain}" \\
+        --heavy_chain "\${heavyChain}" \\
         \${lightChainArg} \\
-        ${hotspotArg} \\
+        \${hotspotArg} \\
         --name "${meta.id}"
 
 "\${PYTHON_BIN}" - <<'PY'
@@ -250,7 +364,7 @@ process RunMaturationFAMPNN {
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
     def temperature = params.maturation_redesign_temp ?: (params.fampnn_temperature ?: 0.1)
     def numSteps = params.maturation_redesign_steps ?: (params.fampnn_num_steps ?: 100)
-    def checkpointPreset = (params.fampnn_checkpoint ?: '').toString().trim()
+    def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
         'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',
@@ -266,7 +380,9 @@ process RunMaturationFAMPNN {
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
 
     mkdir -p results
-    "\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py \\
+    # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
+    # legacy FAMPNN checkpoints saved with OmegaConf/defaultdict metadata.
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py \\
         batch_size=1 \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
