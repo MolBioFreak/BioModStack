@@ -104,6 +104,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).forEach((key) => {
             if (params[key] !== undefined) {
+                if (
+                    (key === 'fampnn_checkpoint' || key === 'ppiflow_checkpoint') &&
+                    typeof params[key] === 'string' &&
+                    !params[key].trim()
+                ) {
+                    return;
+                }
                 (merged as any)[key] = key === 'protenix_model_weights'
                     ? normalizeProtenixModel(params[key])
                     : params[key];
@@ -201,6 +208,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     // Quality settings
     const [qualityPreset, setQualityPreset] = useState<QualityPreset>((initialValues?.quality_preset as QualityPreset) || 'balanced');
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
+    const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
+    const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
 
     // Physics refinement settings (OpenMM)
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
@@ -753,11 +762,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
         }
         const fampnnCheckpointSpecified = Boolean(
-            qualitySettings.fampnn_checkpoint_path.trim() || qualitySettings.fampnn_checkpoint.trim()
+            qualitySettings.fampnn_checkpoint_path.trim() || resolvedFampnnCheckpoint.trim()
         );
         const needsFampnnCheckpoint = seqDesigner === 'fampnn' || qualitySettings.run_maturation;
         if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
-            alert('Please choose FAMPNN weights before submitting. No default checkpoint is applied.');
+            alert('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
             return;
         }
 
@@ -958,7 +967,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
                     // Quality settings - FAMPNN (sequence design)
-                    fampnn_checkpoint: qualitySettings.fampnn_checkpoint || undefined,
+                    fampnn_checkpoint: resolvedFampnnCheckpoint || undefined,
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path.trim() || undefined,
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
@@ -984,7 +993,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     maturation_filter_percentile: qualitySettings.maturation_filter_percentile,
                     maturation_redesign_enabled: qualitySettings.maturation_redesign_enabled,
                     maturation_redesign_top_n: qualitySettings.maturation_redesign_top_n,
-                    ppiflow_checkpoint: qualitySettings.ppiflow_checkpoint,
+                    ppiflow_checkpoint: resolvedPpiFlowCheckpoint,
                     ppiflow_antigen_chain: qualitySettings.ppiflow_antigen_chain,
                     ppiflow_heavy_chain: qualitySettings.ppiflow_heavy_chain,
                     ppiflow_light_chain: qualitySettings.ppiflow_light_chain,
@@ -2683,7 +2692,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_use_template: qualitySettings.protenix_use_template,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
-                    fampnn_checkpoint: qualitySettings.fampnn_checkpoint,
+                    fampnn_checkpoint: resolvedFampnnCheckpoint,
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
                     run_post_validation_maturation: qualitySettings.run_maturation,
                     run_post_boltz_maturation: qualitySettings.run_maturation,
