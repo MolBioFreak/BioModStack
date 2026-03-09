@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, frustrampnn
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, frustrampnn, bioxp
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -129,7 +129,7 @@ app.include_router(molbio_ops.router)
 app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
 app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
-
+app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
 
 @app.get("/api/health")
 async def health_check():
