@@ -11,6 +11,7 @@ Attribution: Schneider, C. et al. (2022) Nucleic Acids Res. 50(D1):D1368-D1372
 import asyncio
 import aiohttp
 import time
+import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
@@ -36,6 +37,14 @@ CACHE_DIR = get_sabdab_cache_dir()
 _vhh_summary_cache: List["SAbDabEntry"] = []
 _vhh_summary_cache_time: float = 0.0
 _VHH_CACHE_TTL_SECONDS = 3600  # 1 hour
+
+
+def _touch_cache_file(cache_file: Path) -> None:
+    try:
+        stat = cache_file.stat()
+        os.utime(cache_file, ns=(time.time_ns(), stat.st_mtime_ns))
+    except Exception as exc:
+        logger.warning(f"[SAbDab] Failed to update last-used timestamp for {cache_file}: {exc}")
 
 
 @dataclass
@@ -272,6 +281,7 @@ async def download_pdb(
         cache_file = CACHE_DIR / f"{pdb_code}_{scheme}.pdb"
         if cache_file.exists():
             logger.info(f"[SAbDab] Cache hit: {cache_file}")
+            _touch_cache_file(cache_file)
             return cache_file.read_text()
     
     # Download from SAbDab
