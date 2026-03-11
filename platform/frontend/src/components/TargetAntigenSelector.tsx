@@ -5,9 +5,9 @@
  * Allows selecting PDBs from previous job results, presets, or RCSB
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchInputPresets, fetchDesigns } from '../lib/api';
+import { fetchInputPresets, fetchDesigns, listCachedRcsbPdbs, type CachedRcsbEntry } from '../lib/api';
 import type { Job } from '../lib/api';
 import { JobBrowser } from './JobBrowser';
 
@@ -47,6 +47,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
     const [sortDesc, setSortDesc] = useState(true);
     const [reingestStatus, setReingestStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
     const [reingestMessage, setReingestMessage] = useState<string | null>(null);
+    const [cachedRcsbSortBy, setCachedRcsbSortBy] = useState<'last_used_at' | 'cached_at' | 'pdb_id'>('last_used_at');
     const reingestAttempted = useRef<Set<string>>(new Set());
     const DESIGNS_PER_PAGE = 50;
     const queryClient = useQueryClient();
@@ -91,6 +92,26 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
         enabled: debouncedSearch.length >= 3,
     });
     const searchResults: SearchResult[] = searchData?.results ?? [];
+
+    const { data: cachedRcsbData, isLoading: cachedRcsbLoading } = useQuery({
+        queryKey: ['rcsb-cached'],
+        queryFn: listCachedRcsbPdbs,
+        enabled: activeTab === 'rcsb',
+    });
+    const cachedRcsb: CachedRcsbEntry[] = (cachedRcsbData as any)?.data?.cached ?? [];
+    const sortedCachedRcsb = useMemo(() => {
+        const entries = [...cachedRcsb];
+        entries.sort((a, b) => {
+            if (cachedRcsbSortBy === 'pdb_id') {
+                return a.pdb_id.localeCompare(b.pdb_id);
+            }
+
+            const aTime = Date.parse(a[cachedRcsbSortBy] || '') || 0;
+            const bTime = Date.parse(b[cachedRcsbSortBy] || '') || 0;
+            return bTime - aTime;
+        });
+        return entries;
+    }, [cachedRcsb, cachedRcsbSortBy]);
 
     // Fetch designs for selected job
     const { data: designsData, isLoading: designsLoading } = useQuery({
@@ -215,6 +236,18 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
 
     const handleClearSelection = () => {
         onSelect(null);
+    };
+
+    const formatCacheTimestamp = (value?: string | null) => {
+        if (!value) return 'n/a';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return 'n/a';
+        return parsed.toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+        });
     };
 
     const tabs = [
@@ -486,6 +519,56 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
                                             </div>
                                             <div className="text-xs text-slate-300 truncate">
                                                 {result.title}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-700/50 space-y-2">
+                            <div className="flex items-center gap-2">
+                                <div className="text-xs text-slate-500">Cached PDBs</div>
+                                <select
+                                    value={cachedRcsbSortBy}
+                                    onChange={(e) => setCachedRcsbSortBy(e.target.value as 'last_used_at' | 'cached_at' | 'pdb_id')}
+                                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-sm text-white"
+                                >
+                                    <option value="last_used_at">Recently Used</option>
+                                    <option value="cached_at">Recently Cached</option>
+                                    <option value="pdb_id">PDB ID</option>
+                                </select>
+                                <span className="text-xs text-slate-500">
+                                    {cachedRcsb.length} cached
+                                </span>
+                            </div>
+
+                            {cachedRcsbLoading ? (
+                                <div className="text-xs text-slate-400">Loading cached PDBs...</div>
+                            ) : sortedCachedRcsb.length === 0 ? (
+                                <div className="text-xs text-slate-500">
+                                    No cached RCSB PDBs yet.
+                                </div>
+                            ) : (
+                                <div className="space-y-1 max-h-40 overflow-y-auto">
+                                    {sortedCachedRcsb.map((entry) => (
+                                        <button
+                                            key={entry.pdb_id}
+                                            onClick={() => fetchRcsbMutation.mutate(entry.pdb_id)}
+                                            disabled={fetchRcsbMutation.isPending}
+                                            className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-900/50 hover:bg-slate-700/50 transition-colors"
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="font-mono text-xs text-blue-400 font-medium">
+                                                    {entry.pdb_id}
+                                                </span>
+                                                <span className="text-xs text-slate-500">
+                                                    {(entry.size_bytes / 1024).toFixed(1)} KB
+                                                </span>
+                                            </div>
+                                            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                                                <span>Used {formatCacheTimestamp(entry.last_used_at)}</span>
+                                                <span>Cached {formatCacheTimestamp(entry.cached_at)}</span>
                                             </div>
                                         </button>
                                     ))}

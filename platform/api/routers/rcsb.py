@@ -7,9 +7,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
 from typing import Optional, List
+from datetime import datetime, timezone
 import httpx
 import logging
 import json
+import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,30 @@ RCSB_CACHE_DIR.mkdir(exist_ok=True)
 
 RCSB_BASE_URL = "https://files.rcsb.org/download"
 RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
+
+
+def _isoformat_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _touch_last_used(cache_path: Path) -> None:
+    try:
+        stat = cache_path.stat()
+        os.utime(cache_path, ns=(time.time_ns(), stat.st_mtime_ns))
+    except Exception as exc:
+        logger.warning(f"[RCSB] Failed to update last-used timestamp for {cache_path}: {exc}")
+
+
+def _cached_entry(cache_path: Path, pdb_id: str) -> dict:
+    stat = cache_path.stat()
+    return {
+        "pdb_id": pdb_id,
+        "path": to_allowed_relative(cache_path),
+        "url": f"/api/rcsb/{pdb_id}/file",
+        "size_bytes": stat.st_size,
+        "cached_at": _isoformat_timestamp(stat.st_mtime),
+        "last_used_at": _isoformat_timestamp(stat.st_atime),
+    }
 
 
 # ============================================================================
@@ -149,12 +176,7 @@ async def list_cached():
     
     for pdb_file in RCSB_CACHE_DIR.glob("*.pdb"):
         pdb_id = pdb_file.stem.upper()
-        cached.append({
-            "pdb_id": pdb_id,
-            "path": to_allowed_relative(pdb_file),
-            "url": f"/api/rcsb/{pdb_id}/file",
-            "size_bytes": pdb_file.stat().st_size
-        })
+        cached.append(_cached_entry(pdb_file, pdb_id))
     
     return {
         "cached": cached,
@@ -175,6 +197,8 @@ async def serve_cached_pdb(pdb_id: str):
     
     if not cache_path.exists():
         raise HTTPException(status_code=404, detail=f"PDB {pdb_id} not cached. Fetch it first.")
+
+    _touch_last_used(cache_path)
     
     return FileResponse(
         path=cache_path,
@@ -205,12 +229,10 @@ async def fetch_pdb(pdb_id: str, force: bool = False):
     # Check cache
     if cache_path.exists() and not force:
         logger.info(f"[RCSB] Using cached PDB: {pdb_id}")
+        _touch_last_used(cache_path)
         return {
-            "pdb_id": pdb_id,
             "cached": True,
-            "path": to_allowed_relative(cache_path),
-            "url": f"/api/rcsb/{pdb_id}/file",
-            "size_bytes": cache_path.stat().st_size
+            **_cached_entry(cache_path, pdb_id),
         }
     
     # Download from RCSB
@@ -231,11 +253,8 @@ async def fetch_pdb(pdb_id: str, force: bool = False):
             logger.info(f"[RCSB] Cached PDB {pdb_id} to {cache_path}")
             
             return {
-                "pdb_id": pdb_id,
                 "cached": False,
-                "path": to_allowed_relative(cache_path),
-                "url": f"/api/rcsb/{pdb_id}/file",
-                "size_bytes": len(response.content)
+                **_cached_entry(cache_path, pdb_id),
             }
             
     except httpx.HTTPStatusError as e:
