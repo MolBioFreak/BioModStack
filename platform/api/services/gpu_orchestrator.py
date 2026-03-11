@@ -13,6 +13,7 @@ Key Features:
 """
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -127,6 +128,62 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _read_successful_child_wait_result(work_dir: Optional[str]) -> Optional[Dict[str, Any]]:
+    """
+    Detect a successful wait-for-children task from a Nextflow work directory.
+
+    This is used during reconciliation when the parent launcher/API lost the
+    live Nextflow process but the wait task itself already completed and wrote a
+    child_outputs.json file.
+    """
+    if not work_dir:
+        return None
+
+    task_dir = Path(work_dir)
+    if not task_dir.exists():
+        return None
+
+    exitcode_path = task_dir / ".exitcode"
+    child_outputs_path = task_dir / "child_outputs.json"
+    if not exitcode_path.exists() or not child_outputs_path.exists():
+        return None
+
+    try:
+        if exitcode_path.read_text(errors="ignore").strip() != "0":
+            return None
+        payload = json.loads(child_outputs_path.read_text())
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    status = str(payload.get("status", "")).strip().lower()
+    total = _coerce_int(payload.get("total"), 0)
+    completed = _coerce_int(payload.get("completed"), 0)
+    failed = _coerce_int(payload.get("failed"), 0)
+    cancelled = _coerce_int(payload.get("cancelled"), 0)
+    if status != "complete":
+        return None
+    if completed <= 0:
+        return None
+    if failed != 0 or cancelled != 0:
+        return None
+    if total > 0 and completed < total:
+        return None
+
+    output_dirs = payload.get("child_output_dirs")
+    if not isinstance(output_dirs, list):
+        output_dirs = []
+
+    return {
+        "total": total,
+        "completed": completed,
+        "output_dirs": output_dirs,
+        "mtime": child_outputs_path.stat().st_mtime,
+    }
 
 
 def _normalize_protenix_profile(params: Dict[str, Any]) -> str:
@@ -1175,6 +1232,7 @@ class GPUOrchestrator:
                             history_status = history_status_by_job.get(str(job.id))
                             history_outcome = None
                             history_note = None
+                            child_wait_success = None
                             if history_status:
                                 status_token, duration = history_status
                                 duration_suffix = f", duration {duration}" if duration else ""
@@ -1184,6 +1242,11 @@ class GPUOrchestrator:
                                 elif status_token == "OK":
                                     history_outcome = "completed"
                                     history_note = f"Reconciled from .nextflow/history (OK{duration_suffix})"
+
+                            if history_outcome != "failed":
+                                current_stage_name = (job.current_stage or "").lower()
+                                if "waitfor" in current_stage_name and "children" in current_stage_name:
+                                    child_wait_success = _read_successful_child_wait_result(job.stage_work_dir)
 
                             failure_reason = history_note if history_outcome == "failed" else None
                             if failure_reason is None and job.error_message:
@@ -1208,6 +1271,17 @@ class GPUOrchestrator:
                                                 break
                                 except Exception as log_err:
                                     logger.debug(f"[COMPLETION] Could not inspect nextflow log for {job.name}: {log_err}")
+
+                            interrupted_after_child_wait_reason = None
+                            if failure_reason is None and history_outcome != "completed" and child_wait_success:
+                                completed = child_wait_success["completed"]
+                                total = child_wait_success["total"]
+                                child_summary = f"{completed}/{total}" if total > 0 else str(completed)
+                                interrupted_after_child_wait_reason = (
+                                    "Launcher/API interruption after successful child aggregation: "
+                                    f"{child_summary} child workflows completed in "
+                                    f"{job.stage_work_dir}; resume is recommended."
+                                )
 
                             if failure_reason:
                                 if job.status == "running":
@@ -1260,6 +1334,17 @@ class GPUOrchestrator:
                                         f"[COMPLETION] {job.name} completed "
                                         f"(no process found, age: {age_seconds:.0f}s)"
                                     )
+                            elif interrupted_after_child_wait_reason:
+                                if job.status == "running":
+                                    job.status = "failed"
+                                job.queue_status = "failed"
+                                job.error_message = interrupted_after_child_wait_reason
+                                job.completed_at = datetime.utcnow()
+                                logger.warning(
+                                    f"[COMPLETION] {job.name} reconciled as interrupted after "
+                                    f"successful child aggregation (age: {age_seconds:.0f}s): "
+                                    f"{interrupted_after_child_wait_reason}"
+                                )
                             else:
                                 if age_seconds >= stale_fail_after_seconds:
                                     unresolved_reason = (
