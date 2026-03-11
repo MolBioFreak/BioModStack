@@ -6,6 +6,44 @@ PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
 API_LOG="/tmp/biomodstack_api.log"
 API_LOG_DIR="/tmp/biomodstack_api_logs"
 MAX_LOGS=10
+API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
+
+api_reload_enabled() {
+    case "${API_RELOAD_RAW,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+build_api_cmd() {
+    local cmd=(uv run uvicorn main:app --port 8000 --host 127.0.0.1)
+    if api_reload_enabled; then
+        cmd+=(
+            --reload
+            --reload-dir "$PROJECT_DIR/platform/api"
+            --reload-exclude "inputs/*"
+            --reload-exclude "*.db"
+            --reload-exclude "__pycache__/*"
+            --reload-exclude ".venv/*"
+        )
+    fi
+    printf '%q ' "${cmd[@]}"
+}
+
+build_api_launch_wrapper() {
+    local api_cmd
+    api_cmd="$(build_api_cmd)"
+    printf '%s\n' "set -o errexit"
+    printf '%s\n' "set -o nounset"
+    printf '%s\n' "set +o errexit"
+    printf '%s\n' "API_CMD=\"$api_cmd\""
+    printf '%s\n' 'echo "[API] Launch wrapper PID $$ starting at $(date -Is)"'
+    printf '%s\n' 'echo "[API] Command: $API_CMD"'
+    printf '%s\n' 'eval "$API_CMD"'
+    printf '%s\n' 'status=$?'
+    printf '%s\n' 'echo "[API] Uvicorn exited with status $status at $(date -Is)"'
+    printf '%s\n' 'exit $status'
+}
 
 # ── Log rotation: preserve last N logs ──
 rotate_logs() {
@@ -35,6 +73,9 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
+# Keep runtime-generated inputs outside the watched API source tree.
+export BMS_INPUTS="${BMS_INPUTS:-$PROJECT_DIR/inputs}"
+
 # Fan-control backend defaults to CoolerControl unless explicitly overridden.
 export BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-coolercontrol}"
 
@@ -50,7 +91,9 @@ sleep 1
 
 # Start API
 cd "$PROJECT_DIR/platform/api"
-nohup uv run uvicorn main:app --reload --port 8000 --host 0.0.0.0 > "$API_LOG" 2>&1 &
+API_CMD="$(build_api_cmd)"
+echo "[API] Starting command: $API_CMD"
+nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
 API_PID=$!
 
 sleep 2

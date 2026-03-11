@@ -51,6 +51,19 @@ export interface AxisStatus {
     };
 }
 
+export interface MotionPowerStatus {
+    hardware_connected?: boolean;
+    board_status?: Record<string, any> | null;
+    deck_io_snapshot?: Record<string, number | null> | null;
+    rail_24v?: {
+        raw?: number | null;
+        no24v?: boolean | null;
+        ack?: Record<string, any> | null;
+    } | null;
+    motion_arm?: Record<string, any> | null;
+    latch_override?: Record<string, any> | null;
+}
+
 export interface CameraSnapshotResponse {
     ok: boolean;
     device: string | null;
@@ -67,6 +80,41 @@ export interface CameraDevicesResponse {
     ok: boolean;
     rows: Array<Record<string, any>>;
     preferred_device?: string | null;
+}
+
+export interface CameraControlRow {
+    cid: number;
+    type: number;
+    name: string;
+    minimum: number;
+    maximum: number;
+    step: number;
+    default: number;
+    flags: number;
+    get?: {
+        ok?: boolean;
+        value?: number | null;
+        device?: string;
+        error?: string;
+    };
+}
+
+export interface CameraControlsResponse {
+    ok: boolean;
+    device: string;
+    rows: CameraControlRow[];
+    error?: string | null;
+}
+
+export interface CameraControlWriteResponse {
+    ok: boolean;
+    cid: number;
+    set_value: number;
+    readback?: number | null;
+    device: string;
+    error?: string | null;
+    stream_active?: boolean;
+    stream_state?: Record<string, any>;
 }
 
 export interface CameraStreamOptions {
@@ -153,14 +201,15 @@ export const useDaemonStop = () => {
     });
 };
 
-export const useBioXpStatus = () =>
+export const useBioXpStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
     useQuery<BioXpStatus, Error>({
         queryKey: ['bioxp', 'status'],
         queryFn: async () => {
             const res = await api.get('/api/bioxp/status');
             return res.data;
         },
-        refetchInterval: 5000,
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
         retry: false,
     });
 
@@ -175,7 +224,7 @@ export const useReconnectRuntime = () => {
     });
 };
 
-export const useAxisStatus = (axis: AxisName | null, enabled = true) =>
+export const useAxisStatus = (axis: AxisName | null, enabled = true, refetchIntervalMs: number | false = 3000) =>
     useQuery<AxisStatus, Error>({
         queryKey: ['bioxp', 'axis', axis],
         queryFn: async () => {
@@ -183,15 +232,64 @@ export const useAxisStatus = (axis: AxisName | null, enabled = true) =>
             return res.data;
         },
         enabled: !!axis && enabled,
-        refetchInterval: enabled ? 3000 : false,
+        refetchInterval: enabled ? refetchIntervalMs : false,
         retry: false,
     });
 
 export const usePrepareInterlock = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'motion'],
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/interlock/prepare');
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useMotionPowerStatus = (enabled = true, refetchIntervalMs: number | false = 8000) =>
+    useQuery<MotionPowerStatus, Error>({
+        queryKey: ['bioxp', 'motion', 'power', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/power/status');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useMotionPowerEnable = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: ['bioxp', 'motion'],
+        mutationFn: async () => {
+            const res = await api.post('/api/bioxp/motion/power/enable');
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useMotionPowerDiag = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: ['bioxp', 'motion'],
+        mutationFn: async () => {
+            const res = await api.post('/api/bioxp/motion/power/diag');
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useMotionHardReset = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: ['bioxp', 'motion'],
+        mutationFn: async ({ rounds }: { rounds: number }) => {
+            const res = await api.post('/api/bioxp/motion/hard_reset', { rounds });
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
@@ -201,6 +299,7 @@ export const usePrepareInterlock = () => {
 export const useClearLock = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'motion'],
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/clear_lock');
             return res.data;
@@ -212,6 +311,7 @@ export const useClearLock = () => {
 export const useMoveRelative = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'motion'],
         mutationFn: async ({ axis, steps }: { axis: AxisName; steps: number }) => {
             const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s: 15.0 });
             return res.data;
@@ -226,6 +326,7 @@ export const useMoveRelative = () => {
 export const useMoveAbsolute = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'motion'],
         mutationFn: async ({ axis, position_steps }: { axis: AxisName; position_steps: number }) => {
             const res = await api.post('/api/bioxp/motion/axis/absolute', { axis, position_steps, wait_timeout_s: 60.0 });
             return res.data;
@@ -240,8 +341,9 @@ export const useMoveAbsolute = () => {
 export const useHomeAxis = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'motion'],
         mutationFn: async ({ axis }: { axis: AxisName }) => {
-            const res = await api.post('/api/bioxp/motion/axis/home', { axis, timeout_s: 45.0 });
+            const res = await api.post('/api/bioxp/motion/axis/home', { axis, timeout_s: 20.0 });
             return res.data;
         },
         onSuccess: (_, variables) => {
@@ -432,7 +534,7 @@ export const useCameraDevices = (enabled = true) =>
     });
 
 export const useCameraControls = (device: string, enabled = true) =>
-    useQuery<BioXpPayload, Error>({
+    useQuery<CameraControlsResponse, Error>({
         queryKey: ['bioxp', 'camera', 'controls', device],
         queryFn: async () => {
             const res = await api.get('/api/bioxp/camera/controls', { params: { device } });
@@ -442,6 +544,43 @@ export const useCameraControls = (device: string, enabled = true) =>
         refetchInterval: enabled ? 10000 : false,
         retry: false,
     });
+
+export const useSetCameraControl = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ device, cid, value }: { device: string; cid: number; value: number }) => {
+            const res = await api.post('/api/bioxp/camera/control', { device, cid, value });
+            return res.data as CameraControlWriteResponse;
+        },
+        onSuccess: (data, variables) => {
+            queryClient.setQueryData<CameraControlsResponse | undefined>(
+                ['bioxp', 'camera', 'controls', variables.device],
+                (current) => {
+                    if (!current?.rows?.length) {
+                        return current;
+                    }
+                    return {
+                        ...current,
+                        rows: current.rows.map((row) =>
+                            row.cid === variables.cid
+                                ? {
+                                    ...row,
+                                    get: {
+                                        ...(row.get ?? {}),
+                                        ok: data.ok,
+                                        value: typeof data.readback === 'number' ? data.readback : variables.value,
+                                        device: variables.device,
+                                    },
+                                }
+                                : row,
+                        ),
+                    };
+                },
+            );
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'camera', 'controls', variables.device] });
+        },
+    });
+};
 
 export const useCameraSnapshot = () =>
     useMutation({
@@ -463,6 +602,22 @@ export const useCameraAutoRecover = () =>
     useMutation({
         mutationFn: async ({ device, max_resets }: { device: string; max_resets: number }) => {
             const res = await api.post('/api/bioxp/camera/auto_recover', { device, max_resets });
+            return res.data;
+        }
+    });
+
+export const useCameraReset = () =>
+    useMutation({
+        mutationFn: async ({ device }: { device: string }) => {
+            const res = await api.post('/api/bioxp/camera/reset', { device });
+            return res.data;
+        }
+    });
+
+export const useCameraStop = () =>
+    useMutation({
+        mutationFn: async ({ device }: { device: string }) => {
+            const res = await api.post('/api/bioxp/camera/stop', { device });
             return res.data;
         }
     });
