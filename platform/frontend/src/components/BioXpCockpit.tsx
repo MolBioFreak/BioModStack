@@ -1026,14 +1026,34 @@ export const BioXpCockpit = () => {
         getErrorMessage(cameraAutoRecover.error) ||
         getErrorMessage(cameraReset.error) ||
         streamError;
-    const motionPowerRail = motionPowerStatus.data?.rail_24v ?? null;
+    const motionPowerApiError = getErrorMessage(motionPowerStatus.error);
+    const motionPowerApiMissing = (motionPowerApiError ?? '').includes('404');
+    const motionPowerEffectiveStatus: MotionPowerStatus | null = motionPowerApiMissing
+        ? {
+            hardware_connected: status?.hardware_connected,
+            board_status: status?.board_status ?? null,
+            deck_io_snapshot: status?.deck_io_snapshot ?? null,
+            rail_24v: status?.deck_io_snapshot
+                ? {
+                    raw: status.deck_io_snapshot['0'] ?? null,
+                    no24v:
+                        status.deck_io_snapshot['0'] == null
+                            ? null
+                            : Number(status.deck_io_snapshot['0']) !== 0,
+                }
+                : null,
+            motion_arm: null,
+            latch_override: null,
+        }
+        : (motionPowerStatus.data ?? null);
+    const motionPowerRail = motionPowerEffectiveStatus?.rail_24v ?? null;
     const motion24vState = get24vStateLabel(motionPowerRail);
-    const motionIoSnapshot = motionPowerStatus.data?.deck_io_snapshot ?? null;
+    const motionIoSnapshot = motionPowerEffectiveStatus?.deck_io_snapshot ?? null;
     const motionActionError =
         getErrorMessage(motionPowerEnable.error) ||
         getErrorMessage(motionPowerDiag.error) ||
         getErrorMessage(motionHardReset.error) ||
-        getErrorMessage(motionPowerStatus.error) ||
+        (!motionPowerApiMissing ? motionPowerApiError : null) ||
         getErrorMessage(prepareInterlock.error) ||
         getErrorMessage(clearLock.error);
     const applyCameraControl = (control: CameraControlRow, value: number) => {
@@ -1249,16 +1269,24 @@ export const BioXpCockpit = () => {
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Motion Arm</div>
                     <div className="mt-1 font-semibold text-content">
-                        {motionPowerStatus.data?.motion_arm?.armed ? 'ARMED' : 'DISARMED'}
+                        {motionPowerEffectiveStatus?.motion_arm?.armed == null
+                            ? 'LEGACY'
+                            : motionPowerEffectiveStatus.motion_arm.armed
+                                ? 'ARMED'
+                                : 'DISARMED'}
                     </div>
-                    <div className="mt-1">seq {motionPowerStatus.data?.motion_arm?.seq ?? 'n/a'}</div>
+                    <div className="mt-1">seq {motionPowerEffectiveStatus?.motion_arm?.seq ?? 'n/a'}</div>
                 </div>
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Latch Override</div>
                     <div className="mt-1 font-semibold text-content">
-                        {motionPowerStatus.data?.latch_override?.enabled ? 'ENABLED' : 'OFF'}
+                        {motionPowerEffectiveStatus?.latch_override?.enabled == null
+                            ? 'LEGACY'
+                            : motionPowerEffectiveStatus.latch_override.enabled
+                                ? 'ENABLED'
+                                : 'OFF'}
                     </div>
-                    <div className="mt-1 truncate">{motionPowerStatus.data?.latch_override?.note ?? 'default lock path'}</div>
+                    <div className="mt-1 truncate">{motionPowerEffectiveStatus?.latch_override?.note ?? 'default lock path'}</div>
                 </div>
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Solenoid</div>
@@ -1274,22 +1302,35 @@ export const BioXpCockpit = () => {
                 </div>
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Boards</div>
-                    <div className="mt-1 leading-relaxed break-words">{getBoardAckSummary(motionPowerStatus.data?.board_status)}</div>
+                    <div className="mt-1 leading-relaxed break-words">{getBoardAckSummary(motionPowerEffectiveStatus?.board_status)}</div>
                 </div>
             </div>
 
+            {motionPowerApiMissing && (
+                <div className="rounded border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] text-warning">
+                    Linked robot daemon is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Driver Power Diag` and `Hard Reset` require the newer daemon update.
+                </div>
+            )}
+
             <div className="flex flex-wrap gap-2">
                 <button
-                    onClick={() =>
+                    onClick={() => {
+                        if (motionPowerApiMissing) {
+                            prepareInterlock.mutate(undefined, {
+                                onSuccess: (data) => recordMotionInfraAction('enable_legacy', { ...data, legacy_fallback: true }),
+                                onError: (error) => recordMotionInfraError('enable_legacy', error),
+                            });
+                            return;
+                        }
                         motionPowerEnable.mutate(undefined, {
                             onSuccess: (data) => recordMotionInfraAction('enable', data),
                             onError: (error) => recordMotionInfraError('enable', error),
-                        })
-                    }
-                    disabled={motionPowerEnable.isPending}
+                        });
+                    }}
+                    disabled={motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending)}
                     className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
                 >
-                    {motionPowerEnable.isPending ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
+                    {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
                 </button>
                 <button
                     onClick={() =>
@@ -1322,7 +1363,7 @@ export const BioXpCockpit = () => {
                             onError: (error) => recordMotionInfraError('diag', error),
                         })
                     }
-                    disabled={motionPowerDiag.isPending}
+                    disabled={motionPowerDiag.isPending || motionPowerApiMissing}
                     className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
                 >
                     {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
@@ -1346,7 +1387,7 @@ export const BioXpCockpit = () => {
                                 },
                             )
                         }
-                        disabled={motionHardReset.isPending}
+                        disabled={motionHardReset.isPending || motionPowerApiMissing}
                         className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
                     >
                         {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
@@ -1366,7 +1407,7 @@ export const BioXpCockpit = () => {
 
             <JsonBlock
                 title="Latest Motion Infra Result"
-                data={latestMotionInfraResult ?? motionPowerStatus.data}
+                data={latestMotionInfraResult ?? motionPowerEffectiveStatus}
                 fallback="Motion power snapshot pending."
             />
         </SectionCard>
