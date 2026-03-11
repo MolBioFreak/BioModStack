@@ -887,6 +887,43 @@ export const BioXpCockpit = () => {
         }
         return parts.join(' | ');
     })();
+    const recordMotionInfraAction = (action: string, data: any) => {
+        setLatestMotionInfraAction({ action, data });
+    };
+    const recordMotionInfraError = (action: string, error: unknown) => {
+        setLatestMotionInfraAction({
+            action,
+            data: {
+                ok: false,
+                error: getErrorMessage(error) ?? `${action} failed`,
+            },
+        });
+    };
+    const latestMotionInfraResult = latestMotionInfraAction?.data ?? null;
+    const latestMotionInfraSummary = (() => {
+        if (!latestMotionInfraAction?.data) {
+            return null;
+        }
+        const action = latestMotionInfraAction.action.toUpperCase();
+        const data = latestMotionInfraAction.data;
+        const parts = [action];
+        if (typeof data.ok === 'boolean') {
+            parts.push(data.ok ? 'OK' : 'FAIL');
+        }
+        if (data.hardware_connected === true) {
+            parts.push('HW');
+        }
+        if (typeof data.elapsed_ms === 'number') {
+            parts.push(`${data.elapsed_ms}ms`);
+        }
+        if (data.rail_24v) {
+            parts.push(`24V ${get24vStateLabel(data.rail_24v)}`);
+        }
+        if (typeof data.error === 'string' && data.error) {
+            parts.push(data.error);
+        }
+        return parts.join(' | ');
+    })();
 
     const cameraControlRows = Array.isArray(cameraControls.data?.rows)
         ? [...cameraControls.data.rows]
@@ -989,6 +1026,16 @@ export const BioXpCockpit = () => {
         getErrorMessage(cameraAutoRecover.error) ||
         getErrorMessage(cameraReset.error) ||
         streamError;
+    const motionPowerRail = motionPowerStatus.data?.rail_24v ?? null;
+    const motion24vState = get24vStateLabel(motionPowerRail);
+    const motionIoSnapshot = motionPowerStatus.data?.deck_io_snapshot ?? null;
+    const motionActionError =
+        getErrorMessage(motionPowerEnable.error) ||
+        getErrorMessage(motionPowerDiag.error) ||
+        getErrorMessage(motionHardReset.error) ||
+        getErrorMessage(motionPowerStatus.error) ||
+        getErrorMessage(prepareInterlock.error) ||
+        getErrorMessage(clearLock.error);
     const applyCameraControl = (control: CameraControlRow, value: number) => {
         const nextValue = clampCameraControlValue(control, value);
         setPendingCameraControlCid(control.cid);
