@@ -205,6 +205,14 @@ process BatchProtenixValidation {
 
     PROTENIX_INPUT_JSON="input.json"
     if [ "${use_msa}" = "true" ]; then
+        PROTENIX_MSA_CACHE_DIR="${params.msa_cache_dir}"
+        if [ -z "\$PROTENIX_MSA_CACHE_DIR" ] || ! mkdir -p "\$PROTENIX_MSA_CACHE_DIR/.locks" 2>/dev/null; then
+            PROTENIX_MSA_CACHE_DIR="\$PWD/msa_prepared/cache"
+            mkdir -p "\$PROTENIX_MSA_CACHE_DIR"
+            echo "[BatchProtenixValidation] Shared MSA cache unavailable; using task-local cache at \$PROTENIX_MSA_CACHE_DIR"
+        else
+            echo "[BatchProtenixValidation] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
+        fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
             --input_json input.json \\
             --output_json prepared_input.json \\
@@ -212,7 +220,7 @@ process BatchProtenixValidation {
             --backend "${msa_backend}" \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
             --db-path "${params.msa_local_db}" \\
-            --cache-dir "${params.msa_cache_dir}" \\
+            --cache-dir "\$PROTENIX_MSA_CACHE_DIR" \\
             --threads ${params.msa_threads ?: task.cpus} \\
             --preset "${params.msa_preset ?: 'fast'}" \\
             ${msa_cpu_only_flag} \\

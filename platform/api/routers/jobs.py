@@ -93,6 +93,32 @@ class AntibodyIterationLaunchResponse(BaseModel):
     launched_job: JobResponse
 
 
+class ManualMutagenesisConfig(BaseModel):
+    """Configuration for explicit user-provided mutation rounds."""
+    chain_id: Optional[str] = None
+    mutation_sets: List[str] = Field(default_factory=list)
+    predictor: str = Field(default="protenix")
+    msa_provider: str = Field(default="local")
+
+
+class ManualMutagenesisLaunchRequest(BaseModel):
+    """Launch explicit manual mutation sets from selected structures."""
+    source_job_id: str = Field(..., min_length=1)
+    design_ids: List[str] = Field(default_factory=list)
+    config: ManualMutagenesisConfig
+    name_suffix: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualMutagenesisLaunchResponse(BaseModel):
+    """Response for viewer-driven manual mutation launches."""
+    message: str
+    source_job_id: str
+    selected_design_count: int
+    variant_count: int
+    launched_job: JobResponse
+
+
 NANOPORE_PATH_PARAM_KEYS = {
     "pod5_dir",
     "bam_path",
@@ -618,6 +644,259 @@ def _normalize_aa_pool(allowed_aas: List[str], blocked_aas: List[str]) -> List[s
     return filtered or STANDARD_AMINO_ACIDS
 
 
+MANUAL_MUTATION_TOKEN_RE = re.compile(r"^([A-Za-z])(\d+)([A-Za-z])$")
+
+
+def _resolve_manual_mutagenesis_chain(
+    requested_chain: Optional[str],
+    source_job: Job,
+    available_chain_ids: List[str],
+) -> str:
+    normalized_requested = str(requested_chain or "").strip().upper()
+    if normalized_requested:
+        if normalized_requested not in available_chain_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Requested chain '{normalized_requested}' is not present in the selected structure. "
+                    f"Available chains: {', '.join(available_chain_ids)}."
+                ),
+            )
+        return normalized_requested
+
+    antibody_chains = _parse_chain_list((source_job.params or {}).get("antibody_chains") if isinstance(source_job.params, dict) else None)
+    for chain_id in antibody_chains:
+        if chain_id in available_chain_ids:
+            return chain_id
+
+    antigen_chains = _parse_chain_list((source_job.params or {}).get("antigen_chains") if isinstance(source_job.params, dict) else None)
+    non_antigen_candidates = [chain_id for chain_id in available_chain_ids if chain_id not in set(antigen_chains)]
+    if antigen_chains and len(non_antigen_candidates) == 1:
+        return non_antigen_candidates[0]
+
+    if len(available_chain_ids) == 1:
+        return available_chain_ids[0]
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Selected designs contain multiple protein chains. Specify a chain ID for manual mutagenesis "
+            f"(available: {', '.join(available_chain_ids)})."
+        ),
+    )
+
+
+def _parse_manual_mutation_set(raw_mutation_set: str) -> List[Dict[str, Any]]:
+    tokens = [
+        token.strip().upper()
+        for token in re.split(r"[\s,;]+", str(raw_mutation_set or "").strip())
+        if token.strip()
+    ]
+    if not tokens:
+        raise HTTPException(status_code=422, detail="Each manual mutation set must contain at least one substitution like S31Y.")
+
+    parsed: List[Dict[str, Any]] = []
+    seen_positions: set[int] = set()
+    for token in tokens:
+        match = MANUAL_MUTATION_TOKEN_RE.match(token)
+        if not match:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported manual mutation token '{token}'. Use substitutions like S31Y or comma-separated sets like S31Y,K58R.",
+            )
+        from_aa, pos_raw, to_aa = match.groups()
+        position = int(pos_raw)
+        if from_aa not in STANDARD_AMINO_ACIDS or to_aa not in STANDARD_AMINO_ACIDS:
+            raise HTTPException(status_code=422, detail=f"Mutation token '{token}' contains a non-standard amino acid code.")
+        if from_aa == to_aa:
+            raise HTTPException(status_code=422, detail=f"Mutation token '{token}' does not change the residue.")
+        if position in seen_positions:
+            raise HTTPException(status_code=422, detail=f"Manual mutation set '{raw_mutation_set}' mutates position {position} more than once.")
+        seen_positions.add(position)
+        parsed.append(
+            {
+                "from": from_aa,
+                "to": to_aa,
+                "position": position,
+                "summary": f"{from_aa}{position}{to_aa}",
+            }
+        )
+
+    return sorted(parsed, key=lambda entry: int(entry["position"]))
+
+
+def _build_manual_mutagenesis_iteration_job(
+    source_job: Job,
+    designs: List[Design],
+    config: ManualMutagenesisConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    predictor = str(config.predictor or "protenix").strip().lower()
+    if predictor == "boltz":
+        predictor = "boltz2"
+    if predictor not in {"protenix", "boltz2"}:
+        raise HTTPException(status_code=422, detail="Manual mutagenesis currently supports predictor='protenix' or 'boltz2'.")
+
+    raw_mutation_sets = [entry.strip() for entry in config.mutation_sets if isinstance(entry, str) and entry.strip()]
+    if not raw_mutation_sets:
+        raise HTTPException(status_code=422, detail="Add at least one manual mutation set before launching.")
+
+    parsed_mutation_sets = [_parse_manual_mutation_set(entry) for entry in raw_mutation_sets]
+    variants: List[Dict[str, Any]] = []
+
+    for design in designs:
+        design_path = _resolve_design_structure_path(design.pdb_path)
+        chain_records = _extract_chain_records_from_pdb(design_path)
+        if not chain_records:
+            raise HTTPException(status_code=422, detail=f"Could not extract protein chains from '{design.name}'.")
+
+        available_chain_ids = list(chain_records.keys())
+        binder_chain_id = _resolve_manual_mutagenesis_chain(config.chain_id, source_job, available_chain_ids)
+        binder_records = chain_records.get(binder_chain_id) or []
+        base_sequence = "".join(record["aa"] for record in binder_records)
+        if not base_sequence:
+            raise HTTPException(status_code=422, detail=f"Could not extract a mutable sequence for chain '{binder_chain_id}' in '{design.name}'.")
+
+        for idx, mutation_set in enumerate(parsed_mutation_sets, start=1):
+            seq_chars = list(base_sequence)
+            mutation_meta: List[Dict[str, Any]] = []
+            summary_tokens: List[str] = []
+            for mutation in mutation_set:
+                position = int(mutation["position"])
+                if position < 1 or position > len(seq_chars):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Mutation '{mutation['summary']}' is outside the length of chain '{binder_chain_id}' "
+                            f"for '{design.name}' (length {len(seq_chars)})."
+                        ),
+                    )
+                wildtype = seq_chars[position - 1]
+                if wildtype != mutation["from"]:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Mutation '{mutation['summary']}' does not match '{design.name}' chain '{binder_chain_id}'. "
+                            f"Expected {wildtype}{position}{mutation['to']}."
+                        ),
+                    )
+                seq_chars[position - 1] = mutation["to"]
+                mutation_meta.append(
+                    {
+                        "type": "substitution",
+                        "position": position,
+                        "from": mutation["from"],
+                        "to": mutation["to"],
+                        "summary": mutation["summary"],
+                    }
+                )
+                summary_tokens.append(mutation["summary"])
+
+            variant_sequence = "".join(seq_chars)
+            complex_components = []
+            for chain_id, records in chain_records.items():
+                sequence = variant_sequence if chain_id == binder_chain_id else "".join(record["aa"] for record in records)
+                complex_components.append(
+                    {
+                        "type": "protein",
+                        "id": chain_id,
+                        "sequence": sequence,
+                    }
+                )
+
+            summary = "_".join(summary_tokens)
+            variants.append(
+                {
+                    "name": f"{design.name}_{summary}_{idx}",
+                    "sequence": variant_sequence,
+                    "complex_components": complex_components,
+                    "source_design_id": design.id,
+                    "source_design_name": design.name,
+                    "binder_chain_id": binder_chain_id,
+                    "mutation": mutation_meta,
+                }
+            )
+
+    base_params = _prune_iteration_params(source_job.params if isinstance(source_job.params, dict) else {})
+    requested_msa_provider = str(config.msa_provider or "local").strip().lower()
+    if requested_msa_provider not in {"local", "colabfold_api"}:
+        raise HTTPException(status_code=422, detail="msa_provider must be 'local' or 'colabfold_api'.")
+
+    effective_msa_provider = "local" if requested_msa_provider == "colabfold_api" else requested_msa_provider
+    launch_params: Dict[str, Any] = {
+        "pred_method": "protenix" if predictor == "protenix" else "boltz",
+        "mutagenesis_variants": variants,
+        "msa_force_refresh": True,
+        "msa_provider": effective_msa_provider,
+        "pinned_gpus": base_params.get("pinned_gpus"),
+        "lock_gpus": base_params.get("lock_gpus"),
+        "iteration_source_job_id": source_job.id,
+        "iteration_source_root_job_id": (
+            ((source_job.params or {}).get("iteration_source_root_job_id") if isinstance(source_job.params, dict) else None)
+            or source_job.parent_job_id
+            or source_job.id
+        ),
+        "iteration_source_design_ids": [design.id for design in designs],
+        "iteration_action": "manual_mutagenesis_round",
+        "manual_mutagenesis_config": config.model_dump(),
+        "run_frustrampnn": False,
+        "openmm_enabled": False,
+    }
+
+    if predictor == "protenix":
+        for key in (
+            "protenix_model_weights",
+            "protenix_seeds",
+            "protenix_n_sample",
+            "protenix_n_step",
+            "protenix_n_cycle",
+            "protenix_use_msa",
+            "protenix_use_template",
+            "protenix_enable_cache",
+            "protenix_enable_fusion",
+            "protenix_msa_backend",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+    else:
+        for key in (
+            "boltz_use_msa",
+            "boltz_sampling_steps",
+            "boltz_recycling_steps",
+            "boltz_num_samples",
+            "boltz_use_potentials",
+            "boltz_step_scale",
+            "boltz_predict_affinity",
+            "boltz_diffusion_samples_affinity",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+
+    if param_overrides:
+        launch_params.update(dict(param_overrides))
+
+    suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "manual_mutagenesis"
+    model_id = "protenix" if predictor == "protenix" else "boltz2"
+    launch_request = JobCreate(
+        name=f"{source_job.name}_{suffix}",
+        model_id=model_id,
+        mode="complex",
+        params=launch_params,
+        pinned_gpu=source_job.pinned_gpu,
+    )
+    message_note = ""
+    if requested_msa_provider == "colabfold_api":
+        message_note = " ColabFold API was downgraded to local MSA because batch mutagenesis jobs do not support server-backed MSA yet."
+    return launch_request, len(variants), message_note
+
+
 def _generate_cdr_indel_variants(
     base_sequence: str,
     base_name: str,
@@ -839,13 +1118,12 @@ def _build_cdr_indel_iteration_job(
 
     if param_overrides:
         cleaned_overrides = dict(param_overrides)
-        if action == "ui_refinement":
-            for key in ("epitope_residues", "target_pdb"):
-                value = cleaned_overrides.get(key)
-                if value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode")):
-                    cleaned_overrides.pop(key, None)
-            if not cleaned_overrides.get("selected_residues"):
-                cleaned_overrides.pop("selected_residues", None)
+        for key in ("epitope_residues", "target_pdb"):
+            value = cleaned_overrides.get(key)
+            if value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode")):
+                cleaned_overrides.pop(key, None)
+        if not cleaned_overrides.get("selected_residues"):
+            cleaned_overrides.pop("selected_residues", None)
         launch_params.update(cleaned_overrides)
 
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "cdr_indel_round"
@@ -1099,8 +1377,33 @@ def _build_antibody_iteration_job(
         launch_params.update(param_overrides)
 
     if action == "ui_refinement":
+        refinement_screen_keys = {
+            "enable_rfantibody_filter",
+            "rfantibody_min_epitope_contacts",
+            "rfantibody_max_epitope_distance",
+            "rfantibody_min_target_contacts",
+            "rfantibody_max_epitope_centroid_distance",
+            "rfantibody_contact_distance_threshold",
+            "rfantibody_target_contact_distance_threshold",
+        }
+
         def _invalid_refinement_value(value: Any) -> bool:
             return value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode"))
+
+        def _has_explicit_refinement_screen_request(overrides: Dict[str, Any]) -> bool:
+            if overrides.get("enable_rfantibody_filter") is True:
+                return True
+            for key in (
+                "rfantibody_min_epitope_contacts",
+                "rfantibody_max_epitope_distance",
+                "rfantibody_min_target_contacts",
+                "rfantibody_max_epitope_centroid_distance",
+            ):
+                if key in overrides and not _invalid_refinement_value(overrides.get(key)):
+                    return True
+            return False
+
+        has_refinement_screen_override = _has_explicit_refinement_screen_request(param_overrides or {})
 
         def _pick_refinement_context(key: str) -> Any:
             for job in (root_job, source_job):
@@ -1128,6 +1431,13 @@ def _build_antibody_iteration_job(
         else:
             launch_params["fampnn_collected_pdbs"] = str(selection_dir)
             launch_params["rfantibody_input_pdbs"] = None
+
+        # UI refinement starts from hand-selected structures. Do not reapply the
+        # coarse RFantibody screen unless the caller explicitly overrides it.
+        if not has_refinement_screen_override:
+            launch_params["enable_rfantibody_filter"] = False
+            for key in refinement_screen_keys - {"enable_rfantibody_filter"}:
+                launch_params.pop(key, None)
 
     launch_params = _normalize_antibody_job_params(launch_params)
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
@@ -1617,6 +1927,44 @@ async def create_job(
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
+
+    if job_data.parent_job_id and job_data.child_stage and job_data.name:
+        existing_child_result = await session.execute(
+            select(Job)
+            .where(
+                Job.parent_job_id == job_data.parent_job_id,
+                Job.child_stage == job_data.child_stage,
+                Job.name == job_data.name,
+            )
+            .order_by(Job.created_at.asc())
+        )
+        existing_child = existing_child_result.scalars().first()
+        if existing_child is not None:
+            logger.info(
+                "[QUEUE] Reusing existing child job %s for parent=%s stage=%s name=%s",
+                existing_child.id,
+                job_data.parent_job_id,
+                job_data.child_stage,
+                job_data.name,
+            )
+            return JobResponse(
+                id=existing_child.id,
+                name=existing_child.name,
+                status=existing_child.status,
+                model_id=existing_child.model_id,
+                mode=existing_child.mode,
+                params=existing_child.params,
+                created_at=existing_child.created_at,
+                started_at=existing_child.started_at,
+                completed_at=existing_child.completed_at,
+                output_dir=existing_child.output_dir,
+                error_message=existing_child.error_message,
+                design_count=0,
+                awaiting_input=existing_child.awaiting_input,
+                awaiting_stage=existing_child.awaiting_stage,
+                awaiting_payload=existing_child.awaiting_payload,
+                decision_history=existing_child.decision_history,
+            )
     
     # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
@@ -2051,6 +2399,54 @@ async def launch_antibody_iteration_from_designs(
         root_job_id=root_job.id,
         selection_dir=str(selection_dir),
         selected_design_count=len(ordered_designs),
+        launched_job=launched_job,
+    )
+
+
+@router.post("/mutagenesis/from-designs", response_model=ManualMutagenesisLaunchResponse, status_code=201)
+async def launch_manual_mutagenesis_from_designs(
+    request: ManualMutagenesisLaunchRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Launch an explicit manual mutation batch from selected structure designs."""
+    design_ids = [design_id.strip() for design_id in request.design_ids if isinstance(design_id, str) and design_id.strip()]
+    if not design_ids:
+        raise HTTPException(status_code=422, detail="At least one design must be selected.")
+
+    source_job = await session.get(Job, request.source_job_id)
+    if source_job is None:
+        raise HTTPException(status_code=404, detail="Source job not found.")
+
+    result = await session.execute(select(Design).where(Design.id.in_(design_ids)))
+    found_designs = result.scalars().all()
+    design_by_id = {design.id: design for design in found_designs}
+    missing_designs = [design_id for design_id in design_ids if design_id not in design_by_id]
+    if missing_designs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Some selected designs were not found: {', '.join(missing_designs[:10])}",
+        )
+
+    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    launch_request, variant_count, variant_note = _build_manual_mutagenesis_iteration_job(
+        source_job=source_job,
+        designs=ordered_designs,
+        config=request.config,
+        name_suffix=request.name_suffix,
+        param_overrides=request.param_overrides,
+    )
+    launched_job = await create_job(launch_request, background_tasks, session)
+
+    return ManualMutagenesisLaunchResponse(
+        message=(
+            f"Launched manual mutagenesis from {len(ordered_designs)} selected designs."
+            f" Generated {variant_count} explicit variants."
+            + variant_note
+        ),
+        source_job_id=source_job.id,
+        selected_design_count=len(ordered_designs),
+        variant_count=variant_count,
         launched_job=launched_job,
     )
 
