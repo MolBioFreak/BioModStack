@@ -256,6 +256,32 @@ export interface LaunchAntibodyIterationResponse {
 export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
     api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request);
 
+export interface ManualMutagenesisConfig {
+    chain_id?: string;
+    mutation_sets: string[];
+    predictor: 'boltz2' | 'protenix';
+    msa_provider: 'local' | 'colabfold_api';
+}
+
+export interface LaunchManualMutagenesisRequest {
+    source_job_id: string;
+    design_ids: string[];
+    config: ManualMutagenesisConfig;
+    name_suffix?: string;
+    param_overrides?: Record<string, unknown>;
+}
+
+export interface LaunchManualMutagenesisResponse {
+    message: string;
+    source_job_id: string;
+    selected_design_count: number;
+    variant_count: number;
+    launched_job: Job;
+}
+
+export const launchManualMutagenesis = (request: LaunchManualMutagenesisRequest) =>
+    api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request);
+
 export interface MsaCacheEntry {
     name: string;
     profile: string;
@@ -1088,6 +1114,23 @@ export interface CachedFramework {
     scheme: string;
     file_path: string;
     size_bytes: number;
+    cached_at: string;
+    last_used_at: string;
+}
+
+export interface CachedRcsbEntry {
+    pdb_id: string;
+    path: string;
+    url: string;
+    size_bytes: number;
+    cached_at: string;
+    last_used_at: string;
+}
+
+export interface RcsbCacheResponse {
+    cached: CachedRcsbEntry[];
+    count: number;
+    cache_dir: string;
 }
 
 export interface FrameworkLibraryResponse {
@@ -1161,8 +1204,14 @@ export const getFrameworkSummary = (pdbCode: string) =>
 export const listCachedFrameworks = () =>
     api.get<FrameworkLibraryResponse>('/api/frameworks/library');
 
+export const touchCachedFramework = (pdbCode: string, scheme: string) =>
+    api.post<CachedFramework>(`/api/frameworks/library/${pdbCode}/touch`, null, { params: { scheme } });
+
 export const removeCachedFramework = (pdbCode: string, scheme?: string) =>
     api.delete(`/api/frameworks/library/${pdbCode}`, { params: { scheme } });
+
+export const listCachedRcsbPdbs = () =>
+    api.get<RcsbCacheResponse>('/api/rcsb');
 
 export const getSabdabAttribution = () =>
     api.get<SAbDabAttribution>('/api/frameworks/attribution');

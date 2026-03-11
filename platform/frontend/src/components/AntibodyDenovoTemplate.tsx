@@ -169,7 +169,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         () => parseLoopLengthRanges(initialValues?.rfantibody_loop_length_ranges_config || initialValues?.rfantibody_loop_length_ranges)
     );
     const [enableRfantibodyFilter, setEnableRfantibodyFilter] = useState<boolean>(
-        isRefinementMode ? true : initialValues?.enable_rfantibody_filter === true
+        isRefinementMode ? false : initialValues?.enable_rfantibody_filter === true
     );
     const [rfantibodyMinEpitopeContacts, setRfantibodyMinEpitopeContacts] = useState<number>(
         Number.isFinite(Number(initialValues?.rfantibody_min_epitope_contacts))
@@ -520,25 +520,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     parseLoopLengthRanges(initialValues.rfantibody_loop_length_ranges_config || initialValues.rfantibody_loop_length_ranges)
                 );
             }
-            if (typeof initialValues.enable_rfantibody_filter === 'boolean') {
+            if (!isRefinementMode && typeof initialValues.enable_rfantibody_filter === 'boolean') {
                 setEnableRfantibodyFilter(initialValues.enable_rfantibody_filter);
             }
-            if (initialValues.rfantibody_min_epitope_contacts !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_min_epitope_contacts !== undefined) {
                 setRfantibodyMinEpitopeContacts(Math.max(0, Number(initialValues.rfantibody_min_epitope_contacts) || 0));
             }
-            if (initialValues.rfantibody_max_epitope_distance !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_max_epitope_distance !== undefined) {
                 setRfantibodyMaxEpitopeDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_distance) || 0));
             }
-            if (initialValues.rfantibody_min_target_contacts !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_min_target_contacts !== undefined) {
                 setRfantibodyMinTargetContacts(Math.max(0, Number(initialValues.rfantibody_min_target_contacts) || 0));
             }
-            if (initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
                 setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_centroid_distance) || 0));
             }
-            if (initialValues.rfantibody_contact_distance_threshold !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_contact_distance_threshold !== undefined) {
                 setRfantibodyContactDistanceThreshold(Math.max(0, Number(initialValues.rfantibody_contact_distance_threshold) || 0));
             }
-            if (initialValues.rfantibody_target_contact_distance_threshold !== undefined) {
+            if (!isRefinementMode && initialValues.rfantibody_target_contact_distance_threshold !== undefined) {
                 setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(initialValues.rfantibody_target_contact_distance_threshold) || 0));
             }
             if (typeof initialValues.protect_tetrad === 'boolean') setProtectTetrad(initialValues.protect_tetrad);
@@ -949,6 +949,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
                     rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,
                     // Structure validation settings
+                    msa_preset: qualitySettings.msa_preset,
                     boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
                     boltz_recycling_steps: qualitySettings.boltz_recycling_steps,
                     boltz_num_samples: qualitySettings.boltz_num_samples,
@@ -963,6 +964,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_n_step: qualitySettings.protenix_n_step,
                     protenix_n_cycle: qualitySettings.protenix_n_cycle,
                     protenix_use_msa: qualitySettings.protenix_use_msa,
+                    protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
@@ -972,6 +974,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_temperature: qualitySettings.fampnn_temperature,
                     fampnn_num_steps: qualitySettings.fampnn_num_steps,
                     fampnn_psce_threshold: qualitySettings.fampnn_psce_threshold,
+                    lock_target_chains: qualitySettings.lock_target_chains,
+                    lock_antibody_framework: qualitySettings.lock_antibody_framework,
                     fampnn_constraint_mode: seqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
                     // PPIFlow maturation settings
                     run_maturation: qualitySettings.run_maturation,
@@ -1049,21 +1053,33 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (isRefinementMode && refinementParentJobId && refinementDesignIds) {
                 // Determine action based on UI settings
                 // Nextflow determines the correct start based on skip flags which jobs.py injects
+                const refinementOverrides = { ...jobData.params } as Record<string, any>;
+                for (const key of [
+                    'enable_rfantibody_filter',
+                    'rfantibody_min_epitope_contacts',
+                    'rfantibody_max_epitope_distance',
+                    'rfantibody_min_target_contacts',
+                    'rfantibody_max_epitope_centroid_distance',
+                    'rfantibody_contact_distance_threshold',
+                    'rfantibody_target_contact_distance_threshold',
+                ]) {
+                    delete refinementOverrides[key];
+                }
+                if (enableRfantibodyFilter) {
+                    refinementOverrides.enable_rfantibody_filter = true;
+                    refinementOverrides.rfantibody_min_epitope_contacts = rfantibodyMinEpitopeContacts;
+                    refinementOverrides.rfantibody_max_epitope_distance = rfantibodyMaxEpitopeDistance;
+                    refinementOverrides.rfantibody_min_target_contacts = rfantibodyMinTargetContacts;
+                    refinementOverrides.rfantibody_max_epitope_centroid_distance = rfantibodyMaxEpitopeCentroidDistance;
+                    refinementOverrides.rfantibody_contact_distance_threshold = rfantibodyContactDistanceThreshold;
+                    refinementOverrides.rfantibody_target_contact_distance_threshold = rfantibodyTargetContactDistanceThreshold;
+                }
+
                 await launchAntibodyIteration({
                     source_job_id: refinementParentJobId,
                     action: 'ui_refinement',
                     design_ids: refinementDesignIds,
-                    param_overrides: {
-                        ...jobData.params,
-                        // Explicitly include active distance filter parameters
-                        enable_rfantibody_filter: enableRfantibodyFilter,
-                        rfantibody_min_epitope_contacts: enableRfantibodyFilter ? rfantibodyMinEpitopeContacts : undefined,
-                        rfantibody_max_epitope_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeDistance : undefined,
-                        rfantibody_min_target_contacts: enableRfantibodyFilter ? rfantibodyMinTargetContacts : undefined,
-                        rfantibody_max_epitope_centroid_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeCentroidDistance : undefined,
-                        rfantibody_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyContactDistanceThreshold : undefined,
-                        rfantibody_target_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyTargetContactDistanceThreshold : undefined,
-                    }
+                    param_overrides: refinementOverrides,
                 });
                 queryClient.invalidateQueries({ queryKey: ['jobs'] });
                 navigate('/');
@@ -1766,7 +1782,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
 
                     {/* Design Mode Selector */}
-                    {!isRefinementMode && (
+                    <div className="space-y-3">
+                        {isRefinementMode && (
+                            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-xs text-cyan-100">
+                                Refinement mode reuses the selected backbone inputs. The design-mode controls here affect downstream redesign steps like FAMPNN and PPIFlow rather than RFantibody backbone generation.
+                            </div>
+                        )}
                         <DesignModeSelector
                             mode={designMode}
                             onModeChange={setDesignMode}
@@ -1776,7 +1797,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             onProtectTetradChange={setProtectTetrad}
                             frameworkType={frameworkType}
                         />
-                    )}
+                    </div>
 
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
                             <div>
@@ -2592,31 +2613,31 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             );
                             loaded.push('rfantibody_loop_length_ranges');
                         }
-                        if (typeof p.enable_rfantibody_filter === 'boolean') {
+                        if (!isRefinementMode && typeof p.enable_rfantibody_filter === 'boolean') {
                             setEnableRfantibodyFilter(p.enable_rfantibody_filter);
                             loaded.push('enable_rfantibody_filter');
                         }
-                        if (p.rfantibody_min_epitope_contacts !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_min_epitope_contacts !== undefined) {
                             setRfantibodyMinEpitopeContacts(Math.max(0, Number(p.rfantibody_min_epitope_contacts) || 0));
                             loaded.push('rfantibody_min_epitope_contacts');
                         }
-                        if (p.rfantibody_max_epitope_distance !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_max_epitope_distance !== undefined) {
                             setRfantibodyMaxEpitopeDistance(Math.max(0, Number(p.rfantibody_max_epitope_distance) || 0));
                             loaded.push('rfantibody_max_epitope_distance');
                         }
-                        if (p.rfantibody_min_target_contacts !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_min_target_contacts !== undefined) {
                             setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
                             loaded.push('rfantibody_min_target_contacts');
                         }
-                        if (p.rfantibody_max_epitope_centroid_distance !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
                             setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
                             loaded.push('rfantibody_max_epitope_centroid_distance');
                         }
-                        if (p.rfantibody_contact_distance_threshold !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_contact_distance_threshold !== undefined) {
                             setRfantibodyContactDistanceThreshold(Math.max(0, Number(p.rfantibody_contact_distance_threshold) || 0));
                             loaded.push('rfantibody_contact_distance_threshold');
                         }
-                        if (p.rfantibody_target_contact_distance_threshold !== undefined) {
+                        if (!isRefinementMode && p.rfantibody_target_contact_distance_threshold !== undefined) {
                             setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(p.rfantibody_target_contact_distance_threshold) || 0));
                             loaded.push('rfantibody_target_contact_distance_threshold');
                         }
@@ -2682,6 +2703,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_thermompnn: qualitySettings.run_thermompnn,
                     run_stability_scoring: qualitySettings.run_thermompnn,
+                    msa_preset: qualitySettings.msa_preset,
                     structure_validator: structureValidator,
                     protenix_model_weights: qualitySettings.protenix_model_weights,
                     protenix_seeds: qualitySettings.protenix_seeds,
@@ -2689,11 +2711,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_n_step: qualitySettings.protenix_n_step,
                     protenix_n_cycle: qualitySettings.protenix_n_cycle,
                     protenix_use_msa: qualitySettings.protenix_use_msa,
+                    protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
                     fampnn_checkpoint: resolvedFampnnCheckpoint,
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
+                    lock_target_chains: qualitySettings.lock_target_chains,
+                    lock_antibody_framework: qualitySettings.lock_antibody_framework,
                     run_post_validation_maturation: qualitySettings.run_maturation,
                     run_post_boltz_maturation: qualitySettings.run_maturation,
                     run_frustrampnn: runFrustrampnn,
