@@ -95,6 +95,14 @@ resolve_cctv_bin() {
     printf '%s\n' "${BMS_COOLERCONTROL_CLI}"
     return 0
   fi
+  if [ -x "/usr/bin/cctv" ]; then
+    printf '%s\n' "/usr/bin/cctv"
+    return 0
+  fi
+  if [ -x "/usr/local/bin/cctv" ]; then
+    printf '%s\n' "/usr/local/bin/cctv"
+    return 0
+  fi
   if [ -x "${HOME}/.cargo/bin/cctv" ]; then
     printf '%s\n' "${HOME}/.cargo/bin/cctv"
     return 0

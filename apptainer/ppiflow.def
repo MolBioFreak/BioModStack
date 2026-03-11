@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
 %labels
     Author BioModStack
@@ -24,14 +24,14 @@ From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
     
-    # Install PyTorch with CUDA 12.1 (--compile for faster startup)
-    uv pip install --compile torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 \
-        --index-url https://download.pytorch.org/whl/cu121
+    # Install a Blackwell-capable PyTorch stack.
+    uv pip install --compile torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+        --index-url https://download.pytorch.org/whl/cu128
     
     # Install PyG dependencies
     uv pip install --compile pyg-lib torch-cluster torch-scatter torch-sparse torch-spline-conv \
-        -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
-    uv pip install --compile torch-geometric==2.6.1
+        -f https://data.pyg.org/whl/torch-2.7.1+cu128.html
+    uv pip install --compile torch-geometric==2.7.0
     
     # Install core scientific dependencies
     uv pip install --compile numpy==1.26.3 scipy==1.15.2 pandas==2.2.3
@@ -44,6 +44,8 @@ From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     uv pip install --compile fair-esm==2.0.0
     uv pip install --compile rdkit==2023.3.1
     uv pip install --compile scikit-learn==1.2.2
+    # Match the upstream antibody partial-flow runtime imports.
+    uv pip install --compile deepspeed==0.16.4 dm-tree==0.1.6 optree==0.14.1 GPUtil==1.4.0 gpustat==1.1.1
     
     # Clone PPIFlow
     mkdir -p /app
@@ -55,6 +57,59 @@ From: nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     if [ -f "setup.py" ]; then
         uv pip install --compile -e .
     fi
+
+    # The upstream fused layer-norm extension hardcodes pre-Blackwell CUDA arch
+    # flags. Patch it before any import compiles the extension.
+    python - <<'PY'
+from pathlib import Path
+
+path = Path("/app/ppiflow/models/layer_norm/torch_ext_compile.py")
+text = path.read_text()
+text = text.replace(
+    'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0"',
+    'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0;8.6;9.0;10.0;12.0+PTX"',
+)
+text = text.replace(
+    '''            "-gencode",
+            "arch=compute_90,code=sm_90",''',
+    '''            "-gencode",
+            "arch=compute_90,code=sm_90",
+            "-gencode",
+            "arch=compute_100,code=sm_100",
+            "-gencode",
+            "arch=compute_120,code=sm_120",
+            "-gencode",
+            "arch=compute_120,code=compute_120",''',
+)
+path.write_text(text)
+PY
+
+    rm -f /app/ppiflow/models/layer_norm/fastfold_layer_norm_cuda.so \
+          /app/ppiflow/models/layer_norm/layer_norm_cuda.o \
+          /app/ppiflow/models/layer_norm/layer_norm_cuda_kernel.cuda.o \
+          /app/ppiflow/models/layer_norm/build.ninja \
+          /app/ppiflow/models/layer_norm/.ninja_log
+
+    # Upstream scripts refer to configs/test_antibody.yaml, but some snapshots only
+    # carry the hydrated test config under test/4dn4_ccl2/.
+    if [ ! -f "/app/ppiflow/configs/test_antibody.yaml" ] && [ -f "/app/ppiflow/test/4dn4_ccl2/config.yaml" ]; then
+        cp /app/ppiflow/test/4dn4_ccl2/config.yaml /app/ppiflow/configs/test_antibody.yaml
+    fi
+
+    # Fail the build if the packaged partial-flow runtime cannot import.
+    export PYTHONPATH="/app/ppiflow:$PYTHONPATH"
+    python - <<'PY'
+from pathlib import Path
+import tree
+import optree
+import deepspeed
+from experiments.inference_antibody_partial import Experiment
+from models.layer_norm.layer_norm import FusedLayerNorm
+
+assert Path("/app/ppiflow/configs/test_antibody.yaml").exists()
+assert Path("/app/ppiflow/models/layer_norm/fastfold_layer_norm_cuda.so").exists()
+print("PPIFlow partial-flow runtime imports OK")
+PY
     
     # Generate lockfile for reproducibility
     uv pip freeze > /opt/venv/requirements.lock

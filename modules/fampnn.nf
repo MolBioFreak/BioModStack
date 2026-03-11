@@ -36,7 +36,9 @@ process PrepFAMPNN {
         --design_loops "${designLoops}" \\
         ${customCdrFlag} \\
         --protect_tetrad "${protectTetrad}" \\
-        --antibody_chains "${antibodyChains}"
+        --antibody_chains "${antibodyChains}" \\
+        --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
+        --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}"
     """
         : """
     # Generate generic constraints (no fixed residues)
@@ -80,7 +82,7 @@ process RunFAMPNN {
     path "*.log"
 
     script:
-    def checkpointPreset = (params.fampnn_checkpoint ?: '').toString().trim()
+    def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
         'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',
