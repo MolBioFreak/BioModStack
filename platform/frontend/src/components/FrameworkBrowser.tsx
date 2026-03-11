@@ -15,6 +15,7 @@ import {
     searchSabdabFrameworks,
     downloadSabdabFramework,
     listCachedFrameworks,
+    touchCachedFramework,
     getSabdabAttribution,
     getSabdabFilterOptions,
     getSabdabDatabaseStats,
@@ -123,6 +124,7 @@ export function FrameworkBrowser({
     // Sort & pagination
     const [sortBy, setSortBy] = useState<'resolution' | 'cdr_h3_length' | 'pdb_code' | 'date'>('resolution');
     const [sortDesc, setSortDesc] = useState(false);
+    const [cachedSortBy, setCachedSortBy] = useState<'last_used_at' | 'cached_at' | 'pdb_code'>('last_used_at');
     const [page, setPage] = useState(0);
     const pageSize = 50;
 
@@ -190,6 +192,19 @@ export function FrameworkBrowser({
         enabled: activeTab === 'cached',
     });
     const cached: CachedFramework[] = (cachedData as any)?.data?.frameworks ?? [];
+    const sortedCached = useMemo(() => {
+        const entries = [...cached];
+        entries.sort((a, b) => {
+            if (cachedSortBy === 'pdb_code') {
+                return a.pdb_code.localeCompare(b.pdb_code);
+            }
+
+            const aTime = Date.parse(a[cachedSortBy] || '') || 0;
+            const bTime = Date.parse(b[cachedSortBy] || '') || 0;
+            return bTime - aTime;
+        });
+        return entries;
+    }, [cached, cachedSortBy]);
 
     // Get attribution
     const { data: attributionData } = useQuery({
@@ -237,6 +252,14 @@ export function FrameworkBrowser({
         }
     });
 
+    const touchCachedMutation = useMutation({
+        mutationFn: ({ pdbCode, scheme }: { pdbCode: string; scheme: string }) =>
+            touchCachedFramework(pdbCode, scheme),
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ['cached-frameworks'] });
+        }
+    });
+
     // Confirm chain selection for frameworks with antigens
     const handleConfirmChainSelection = useCallback((useFullComplex: boolean) => {
         if (!pendingDownload) return;
@@ -270,6 +293,10 @@ export function FrameworkBrowser({
     }, [onSelect]);
 
     const handleCachedSelect = useCallback((framework: CachedFramework) => {
+        touchCachedMutation.mutate({
+            pdbCode: framework.pdb_code,
+            scheme: framework.scheme
+        });
         onSelect({
             type: 'cached',
             id: framework.pdb_code,
@@ -277,7 +304,7 @@ export function FrameworkBrowser({
             pdbCode: framework.pdb_code,
             filePath: framework.file_path
         });
-    }, [onSelect]);
+    }, [onSelect, touchCachedMutation]);
 
     const toggleMethod = useCallback((method: string) => {
         setSelectedMethods(prev =>
@@ -295,6 +322,17 @@ export function FrameworkBrowser({
 
     // CDR-H3 length range from filter options
     const cdrRange = filterOptions?.cdr_h3_length_range ?? [5, 25];
+    const formatCacheTimestamp = (value?: string | null) => {
+        if (!value) return 'n/a';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return 'n/a';
+        return parsed.toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+        });
+    };
 
     return (
         <div className="space-y-3">
@@ -628,8 +666,24 @@ export function FrameworkBrowser({
                                 No cached frameworks. Search SAbDab to download some.
                             </div>
                         ) : (
-                            <div className="space-y-1 max-h-48 overflow-y-auto">
-                                {cached.map(fw => (
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <label className="text-xs text-slate-500">Sort cached:</label>
+                                    <select
+                                        value={cachedSortBy}
+                                        onChange={e => setCachedSortBy(e.target.value as 'last_used_at' | 'cached_at' | 'pdb_code')}
+                                        className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-white"
+                                    >
+                                        <option value="last_used_at">Recently Used</option>
+                                        <option value="cached_at">Recently Cached</option>
+                                        <option value="pdb_code">PDB Code</option>
+                                    </select>
+                                    <span className="text-xs text-slate-500">
+                                        {cached.length} cached
+                                    </span>
+                                </div>
+                                <div className="space-y-1 max-h-48 overflow-y-auto">
+                                    {sortedCached.map(fw => (
                                     <button
                                         key={`${fw.pdb_code}-${fw.scheme}`}
                                         onClick={() => handleCachedSelect(fw)}
@@ -646,8 +700,13 @@ export function FrameworkBrowser({
                                                 {fw.scheme} • {(fw.size_bytes / 1024).toFixed(1)} KB
                                             </span>
                                         </div>
+                                        <div className="mt-1 text-[11px] text-slate-500 flex items-center justify-between">
+                                            <span>Used {formatCacheTimestamp(fw.last_used_at)}</span>
+                                            <span>Cached {formatCacheTimestamp(fw.cached_at)}</span>
+                                        </div>
                                     </button>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
                         )}
                     </div>

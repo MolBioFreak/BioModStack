@@ -12,7 +12,10 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 from pydantic import BaseModel
 from pathlib import Path
+from datetime import datetime, timezone
 import logging
+import os
+import time
 
 # Local database for search (offline-capable, fast)
 from services.sabdab_db import get_sabdab_db, VHHStructure
@@ -68,12 +71,46 @@ class CachedFramework(BaseModel):
     scheme: str
     file_path: str
     size_bytes: int
+    cached_at: str
+    last_used_at: str
 
 
 class FrameworkLibraryResponse(BaseModel):
     frameworks: List[CachedFramework]
     total: int
     cache_dir: str
+
+
+def _isoformat_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _touch_last_used(cache_file: Path) -> None:
+    try:
+        stat = cache_file.stat()
+        os.utime(cache_file, ns=(time.time_ns(), stat.st_mtime_ns))
+    except Exception as exc:
+        logger.warning(f"[Framework Library] Failed to update last-used timestamp for {cache_file}: {exc}")
+
+
+def _parse_cached_framework_name(pdb_file: Path) -> tuple[str, str]:
+    parts = pdb_file.stem.split("_", 1)
+    pdb_code = parts[0].upper()
+    scheme = parts[1] if len(parts) > 1 else "unknown"
+    return pdb_code, scheme
+
+
+def _cached_framework_entry(pdb_file: Path) -> CachedFramework:
+    pdb_code, scheme = _parse_cached_framework_name(pdb_file)
+    stat = pdb_file.stat()
+    return CachedFramework(
+        pdb_code=pdb_code,
+        scheme=scheme,
+        file_path=str(pdb_file),
+        size_bytes=stat.st_size,
+        cached_at=_isoformat_timestamp(stat.st_mtime),
+        last_used_at=_isoformat_timestamp(stat.st_atime),
+    )
 
 
 class DatabaseStatsResponse(BaseModel):
@@ -370,21 +407,7 @@ async def list_cached_frameworks():
         
         frameworks = []
         for pdb_file in CACHE_DIR.glob("*.pdb"):
-            # Parse filename: {pdb_code}_{scheme}.pdb
-            parts = pdb_file.stem.split("_")
-            if len(parts) >= 2:
-                pdb_code = parts[0].upper()
-                scheme = parts[1]
-            else:
-                pdb_code = parts[0].upper()
-                scheme = "unknown"
-            
-            frameworks.append(CachedFramework(
-                pdb_code=pdb_code,
-                scheme=scheme,
-                file_path=str(pdb_file),
-                size_bytes=pdb_file.stat().st_size
-            ))
+            frameworks.append(_cached_framework_entry(pdb_file))
         
         return FrameworkLibraryResponse(
             frameworks=frameworks,
@@ -393,6 +416,26 @@ async def list_cached_frameworks():
         )
     except Exception as e:
         logger.error(f"[Framework Library] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/library/{pdb_code}/touch", response_model=CachedFramework)
+async def touch_cached_framework(
+    pdb_code: str,
+    scheme: str = Query(..., description="Cached framework scheme suffix, e.g. imgt or imgt_hlt")
+):
+    """Mark a cached framework as recently used for UI sorting."""
+    try:
+        cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
+        if not cache_file.exists():
+            raise HTTPException(status_code=404, detail=f"No cached file found for {pdb_code} ({scheme})")
+
+        _touch_last_used(cache_file)
+        return _cached_framework_entry(cache_file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Framework Library] Touch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

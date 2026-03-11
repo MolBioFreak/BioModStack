@@ -120,6 +120,25 @@ export function Layout({ children }: LayoutProps) {
                                     <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
                                 </span>
                             </Link>
+                            <Link
+                                to="/bioxp"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                style={{
+                                    backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
+                                    color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
+                                }}
+                                title="BioXP Control Surface"
+                            >
+                                <span className="inline-flex items-center gap-1.5">
+                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                                        <path d="M7 15h10M7 9h2" strokeLinecap="round" strokeDasharray="2 2" />
+                                        <circle cx="16" cy="9" r="1.5" />
+                                    </svg>
+                                    <span className="hidden 2xl:inline ml-1.5">BioXP Control Surface</span>
+                                    <span className="inline 2xl:hidden ml-1.5">BioXP Cockpit</span>
+                                </span>
+                            </Link>
 
                             {/* Theme Selector */}
                             <ThemeSelector />
@@ -412,10 +431,13 @@ function PowerControlMenu() {
     };
 
     useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
         fetchState(true);
         const interval = setInterval(() => {
-            fetchState(!isOpen);
-        }, 5000);
+            fetchState(false);
+        }, 10000);
         return () => clearInterval(interval);
     }, [isOpen]);
 
@@ -897,10 +919,13 @@ function MSAServerSettingsMenu() {
     };
 
     useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
         fetchState();
-        const interval = setInterval(fetchState, 5000);
+        const interval = setInterval(fetchState, 10000);
         return () => clearInterval(interval);
-    }, []);
+    }, [isOpen]);
 
     const saveSettings = async (patch: Partial<typeof settings>) => {
         const next = { ...settings, ...patch };
