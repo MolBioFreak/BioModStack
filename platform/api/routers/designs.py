@@ -5,6 +5,7 @@ Provides endpoints for listing, filtering, and managing designs
 stored in the SQLite database after pipeline ingestion.
 """
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,7 @@ class DesignResponse(BaseModel):
     pae_overall: Optional[float]
     rmsd_overall: Optional[float]
     rmsd_binder: Optional[float]
+    rmsd_target: Optional[float]
     
     # Boltz-2 specific
     conf_score: Optional[float]
@@ -108,6 +110,8 @@ class DesignResponse(BaseModel):
     backbone_id: Optional[int] = None
     epitope_contact_count: Optional[int] = None
     epitope_min_distance: Optional[float] = None
+    target_contact_count: Optional[int] = None
+    screening_reason: Optional[str] = None
     
     # Frustration analysis (FrustraMPNN)
     frustration_high_count: Optional[int] = None
@@ -206,6 +210,7 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "pae_overall": design.pae_overall,
         "rmsd_overall": design.rmsd_overall,
         "rmsd_binder": design.rmsd_binder,
+        "rmsd_target": design.rmsd_target,
         "fampnn_psce": design.fampnn_psce,
         "conf_score": design.conf_score,
         "ptm": design.ptm,
@@ -227,6 +232,7 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "binder_length": design.binder_length,
         "epitope_contact_count": design.epitope_contact_count,
         "epitope_min_distance": design.epitope_min_distance,
+        "target_contact_count": design.target_contact_count,
         "frustration_high_count": design.frustration_high_count,
         "frustration_min_count": design.frustration_min_count,
         "frustration_pct_high": design.frustration_pct_high,
@@ -234,6 +240,7 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "maturation_interface_score": design.maturation_interface_score,
         "maturation_rmsd": design.maturation_rmsd,
     }
+    _inject_metric(metrics, "screening_reason_present", 1.0 if design.screening_reason else None)
     for key, value in base_metrics.items():
         _inject_metric(metrics, key, value)
     if design.has_clash is not None:
@@ -357,6 +364,7 @@ async def list_designs(
     # Build base query with optional sorting
     sort_field_map = {
         'plddt': Design.plddt_overall,
+        'name': Design.name,
         'iptm': Design.iptm,
         'ptm': Design.ptm,
         'pae': Design.pae_overall,
@@ -997,7 +1005,39 @@ async def get_antibody_data(
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
-    
+
+    has_annotation = any(
+        getattr(design, field)
+        for field in ("cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3")
+    )
+    if not has_annotation and design.pdb_path:
+        try:
+            from services.cdr_annotator import annotate_pdb
+
+            annotation = await asyncio.to_thread(annotate_pdb, design.pdb_path)
+            if annotation:
+                design.antibody_type = annotation.antibody_type
+                design.binder_length = annotation.binder_length
+                design.cdr_h1 = annotation.cdr_h1
+                design.cdr_h2 = annotation.cdr_h2
+                design.cdr_h3 = annotation.cdr_h3
+                design.cdr_l1 = annotation.cdr_l1
+                design.cdr_l2 = annotation.cdr_l2
+                design.cdr_l3 = annotation.cdr_l3
+                design.cdr_h1_length = annotation.cdr_h1_length
+                design.cdr_h2_length = annotation.cdr_h2_length
+                design.cdr_h3_length = annotation.cdr_h3_length
+                design.cdr_l1_length = annotation.cdr_l1_length
+                design.cdr_l2_length = annotation.cdr_l2_length
+                design.cdr_l3_length = annotation.cdr_l3_length
+                design.fr2_contacts = annotation.fr2_contacts
+                design.de_loop = annotation.de_loop
+                design.fr3_contacts = annotation.fr3_contacts
+                design.fr4_contacts = annotation.fr4_contacts
+                await session.commit()
+        except Exception:
+            await session.rollback()
+
     imgt_url = None
     if design.pdb_path:
         pdb_path = Path(design.pdb_path)

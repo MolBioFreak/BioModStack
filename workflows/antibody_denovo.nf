@@ -1506,6 +1506,22 @@ workflow ANTIBODY_DENOVO {
         def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
         def fampnnCandidateDir = params.fampnn_collected_pdbs ? params.fampnn_collected_pdbs.toString() : null
 
+        if (!run_fampnn && params.fampnn_collected_pdbs) {
+            log.info("  Sequence design skipped: Using pre-collected PDBs from ${params.fampnn_collected_pdbs}")
+
+            pre_collected_pdbs = Channel.fromPath("${params.fampnn_collected_pdbs}/*.pdb")
+                .collect()
+
+            pre_collected_pdbs.subscribe { pdbs ->
+                log.info("  Sequence design skipped: Loaded ${pdbs.size()} input PDBs")
+            }
+
+            fampnn_seqs = pre_collected_pdbs.map { pdbs ->
+                def meta = [id: "selected_designs"]
+                [meta, pdbs]
+            }
+        }
+
         // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
         if (run_fampnn) {
         // =====================================================================
@@ -1942,9 +1958,26 @@ workflow ANTIBODY_DENOVO {
                     protenix_n_step: params.protenix_n_step,
                     protenix_n_cycle: params.protenix_n_cycle,
                     protenix_use_msa: params.protenix_use_msa,
+                    protenix_msa_backend: params.protenix_msa_backend,
                     protenix_use_template: params.protenix_use_template,
                     protenix_enable_cache: params.protenix_enable_cache,
                     protenix_enable_fusion: params.protenix_enable_fusion,
+                    protenix_auto_oom_retry: params.protenix_auto_oom_retry,
+                    protenix_oom_retry_attempts: params.protenix_oom_retry_attempts,
+                    msa_preset: params.msa_preset,
+                    msa_use_gpu: params.msa_use_gpu,
+                    msa_local_db: params.msa_local_db,
+                    msa_cache_dir: params.msa_cache_dir,
+                    msa_threads: params.msa_threads,
+                    colabfold_api_host: params.colabfold_api_host,
+                    msa_gpu_mode: params.msa_gpu_mode,
+                    msa_gpu_threshold: params.msa_gpu_threshold,
+                    msa_preferred_gpus: params.msa_preferred_gpus,
+                    msa_excluded_gpus: params.msa_excluded_gpus,
+                    msa_gpu_server_mode: params.msa_gpu_server_mode,
+                    msa_gpu_server_wait_timeout: params.msa_gpu_server_wait_timeout,
+                    msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
+                    msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
                     run_thermompnn: params.run_thermompnn ?: false,
                     thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
