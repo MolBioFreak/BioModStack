@@ -272,11 +272,11 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
             tuned["protenix_n_cycle"] = 4
             notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
 
-    # Allow override; default to 2 OOM retries for protenix jobs.
+    # Allow override; keep the retry ladder configured but disabled by default.
     if "protenix_oom_retry_attempts" not in tuned:
         tuned["protenix_oom_retry_attempts"] = 2
     if "protenix_auto_oom_retry" not in tuned:
-        tuned["protenix_auto_oom_retry"] = True
+        tuned["protenix_auto_oom_retry"] = False
 
     if notes:
         notes.insert(0, f"tier={tier}, token_estimate={token_count}, use_msa={use_msa}")
@@ -1013,7 +1013,7 @@ async def launch_nextflow_job(
                 max_resume_lock_retries = max(0, min(5, max_resume_lock_retries))
 
             max_protenix_oom_retries = 0
-            if is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", True), default=True):
+            if is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", False), default=False):
                 max_protenix_oom_retries = max(
                     0,
                     min(3, _coerce_int(launch_params.get("protenix_oom_retry_attempts", 2), 2)),
@@ -1733,6 +1733,8 @@ def build_nextflow_command(
         'protenix_use_template': 'protenix_use_template',
         'protenix_enable_cache': 'protenix_enable_cache',
         'protenix_enable_fusion': 'protenix_enable_fusion',
+        'protenix_auto_oom_retry': 'protenix_auto_oom_retry',
+        'protenix_oom_retry_attempts': 'protenix_oom_retry_attempts',
         # Sequence input
         'sequence': 'sequence_input',
         'sequence_name': 'sequence_name',
@@ -1753,9 +1755,17 @@ def build_nextflow_command(
         'msa_force_refresh': 'msa_force_refresh',
         'msa_cache_only': 'msa_cache_only',
         'msa_provider': 'msa_provider',
+        'msa_use_gpu': 'msa_use_gpu',
+        'msa_local_db': 'msa_local_db',
+        'msa_cache_dir': 'msa_cache_dir',
+        'msa_threads': 'msa_threads',
         'colabfold_api_host': 'colabfold_api_host',
         'colabfold_api_min_interval': 'colabfold_api_min_interval',
         'colabfold_api_poll_interval': 'colabfold_api_poll_interval',
+        'msa_gpu_mode': 'msa_gpu_mode',
+        'msa_gpu_threshold': 'msa_gpu_threshold',
+        'msa_preferred_gpus': 'msa_preferred_gpus',
+        'msa_excluded_gpus': 'msa_excluded_gpus',
         'msa_gpu_server_mode': 'msa_gpu_server_mode',
         'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
         'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',

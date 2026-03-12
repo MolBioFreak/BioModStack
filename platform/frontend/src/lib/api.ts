@@ -402,6 +402,7 @@ export interface Design {
     conf_score: number | null;
     rmsd_overall: number | null;
     rmsd_binder: number | null;
+    rmsd_target?: number | null;
     ligand_iptm: number | null;
     affinity_score: number | null;
     binder_probability: number | null;
@@ -420,6 +421,8 @@ export interface Design {
     backbone_id: number | null;
     epitope_contact_count: number | null;
     epitope_min_distance: number | null;
+    target_contact_count?: number | null;
+    screening_reason?: string | null;
     // Antibody annotation
     binder_length: number | null;
     antibody_type: string | null;
@@ -472,7 +475,7 @@ export interface DesignFilters {
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
+    sort_by?: 'name' | 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
