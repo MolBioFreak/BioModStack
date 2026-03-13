@@ -6,7 +6,8 @@ import type { JobLogs, Job } from '../lib/api';
 
 import { QuickViewer } from './QuickViewer';
 import { JobQueuePanel } from './JobQueuePanel';
-import { SystemResources } from './dashboard/SystemResources';
+import { GpuSchedulerControls } from './dashboard/SystemResources';
+import { DashboardTelemetry } from './dashboard/DashboardTelemetry';
 import { JobQueueTable } from './dashboard/JobQueueTable';
 import { JobFilters } from './dashboard/JobFilters';
 
@@ -358,7 +359,10 @@ export function Dashboard() {
             </header>
 
             {/* System Overview & GPU Status */}
-            <SystemResources />
+            <DashboardTelemetry />
+
+            {/* GPU Scheduler */}
+            <GpuSchedulerControls />
 
             {/* GPU Orchestrator Job Queue */}
             <JobQueuePanel />
@@ -889,10 +893,10 @@ function LogsModal({
                 {/* Tabs */}
                 <div className="flex border-b border-slate-700 px-4">
                     {[
-                        { id: 'parsed' as const, label: '🎯 Parsed Error' },
-                        { id: 'command' as const, label: '📜 Command Log' },
-                        { id: 'stderr' as const, label: '⚠️ Stderr' },
-                        { id: 'nextflow' as const, label: '📋 Nextflow Log' },
+                        { id: 'parsed' as const, label: 'Parsed Error' },
+                        { id: 'command' as const, label: 'Command Log' },
+                        { id: 'stderr' as const, label: 'Stderr' },
+                        { id: 'nextflow' as const, label: 'Nextflow Log' },
                     ].map(tab => (
                         <button
                             key={tab.id}

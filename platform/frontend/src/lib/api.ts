@@ -141,6 +141,38 @@ export interface PowerControlResponse {
     eco_mode: boolean;
 }
 
+export interface PerGpuFanStatus {
+    gpu_index: number;
+    gpu_name: string;
+    settings_gpu_target?: number | null;
+    fan_targets?: string[];
+    mapping_source?: string;
+    mode: 'auto' | 'manual' | 'unknown';
+    target_percent: number | null;
+    current_percent: number | null;
+    current_rpm: number | null;
+    min_percent: number;
+    max_percent: number;
+    profile_mode: 'auto' | 'manual' | 'unknown';
+    profile_target_percent: number;
+    writable: boolean;
+    warning?: string | null;
+}
+
+export interface FanControlState {
+    supported: boolean;
+    message: string;
+    backend: string;
+    available_modes: string[];
+    gpus: Record<string, PerGpuFanStatus>;
+}
+
+export interface FanControlResponse {
+    success: boolean;
+    message: string;
+    fan_control: FanControlState;
+}
+
 // API functions
 // API functions
 export const fetchJobs = (params?: {
@@ -581,6 +613,20 @@ export const setPowerControlManual = (gpuIndex: number, limitWatts: number) =>
         limit_watts: limitWatts
     });
 
+export const fetchFanControl = () =>
+    api.get<FanControlState>('/api/gpu/fan-control');
+
+export const setFanControl = (
+    gpuIndex: number,
+    mode: 'auto' | 'manual',
+    targetPercent?: number
+) =>
+    api.post<FanControlResponse>('/api/gpu/fan-control', {
+        gpu_index: gpuIndex,
+        mode,
+        ...(targetPercent != null ? { target_percent: targetPercent } : {}),
+    });
+
 // Analytics API
 export interface MetricDistribution {
     min: number;
@@ -864,7 +910,7 @@ export const retryQueueJob = (jobId: string) =>
     api.post(`/api/queue/${jobId}/retry`);
 
 export const cancelAllQueuedJobs = () =>
-    api.delete('/api/queue/cancel-all');
+    api.delete('/api/queue/clear-all');
 
 export const fetchCancelledJobs = (limit: number = 20) =>
     api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit } });
