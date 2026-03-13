@@ -11,6 +11,20 @@ import requests
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 
+def _child_display_name(display_prefix, stage_label, index, total):
+    prefix = (display_prefix or "").strip() or "Antibody"
+    if total > 1:
+        return f"{prefix} · {stage_label} {index + 1}/{total}"
+    return f"{prefix} · {stage_label}"
+
+
+def _stage_label(stage):
+    stage_key = (stage or "").strip().lower()
+    if stage_key in {"maturation", "validated_maturation", "maturation_post_validation"}:
+        return "PPIFlow"
+    return stage_key.replace("_", " ").title() or "Child"
+
+
 def _normalize_pinned_gpus(raw_value):
     if raw_value in (None, "", []):
         return None
@@ -62,7 +76,7 @@ def check_existing_children(parent_job_id, stage, api_url, batch_name=None):
         return False, [], {}
 
 
-def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, stage, params_json, api_url):
+def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_prefix, stage, params_json, api_url):
     pdb_dir = Path(pdb_dir)
     pdb_files = sorted(pdb_dir.glob("*.pdb"))
     if not pdb_files:
@@ -71,6 +85,7 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, stage, param
 
     total_designs = len(pdb_files)
     num_jobs = (total_designs + designs_per_job - 1) // designs_per_job
+    stage_label = _stage_label(stage)
 
     all_done, existing_children, child_status = check_existing_children(
         parent_job_id, stage, api_url, batch_name=batch_name
@@ -132,7 +147,7 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, stage, param
         pdb_paths = ",".join(str(p.resolve()) for p in batch_slice)
 
         job_data = {
-            "name": f"{batch_name}_{stage}_{i}",
+            "name": _child_display_name(display_prefix, stage_label, i, num_jobs),
             "model_id": "template_antibody_denovo",
             "mode": "maturation_child",
             "params": {
@@ -185,6 +200,7 @@ def main():
     parser.add_argument("--designs_per_job", type=int, default=4,
                         help="PDBs per child job")
     parser.add_argument("--batch_name", required=True, help="Batch name")
+    parser.add_argument("--display_prefix", default="", help="Human-readable prefix for child job names")
     parser.add_argument("--stage", default="maturation", help="Stage name to record on child jobs")
     parser.add_argument("--params_json", default="", help="Additional params as JSON")
     parser.add_argument("--api_url", default=DEFAULT_API_URL,
@@ -198,6 +214,7 @@ def main():
         pdb_dir=args.pdb_dir,
         designs_per_job=args.designs_per_job,
         batch_name=args.batch_name,
+        display_prefix=args.display_prefix,
         stage=args.stage,
         params_json=args.params_json,
         api_url=args.api_url

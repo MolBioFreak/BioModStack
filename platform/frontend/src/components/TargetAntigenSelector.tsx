@@ -108,7 +108,13 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
 
             const aTime = Date.parse(a[cachedRcsbSortBy] || '') || 0;
             const bTime = Date.parse(b[cachedRcsbSortBy] || '') || 0;
-            return bTime - aTime;
+            if (bTime !== aTime) return bTime - aTime;
+
+            const aCached = Date.parse(a.cached_at || '') || 0;
+            const bCached = Date.parse(b.cached_at || '') || 0;
+            if (bCached !== aCached) return bCached - aCached;
+
+            return a.pdb_id.localeCompare(b.pdb_id);
         });
         return entries;
     }, [cachedRcsb, cachedRcsbSortBy]);
@@ -239,9 +245,9 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
     };
 
     const formatCacheTimestamp = (value?: string | null) => {
-        if (!value) return 'n/a';
+        if (!value) return 'unknown';
         const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return 'n/a';
+        if (Number.isNaN(parsed.getTime())) return 'unknown';
         return parsed.toLocaleString([], {
             month: 'short',
             day: 'numeric',

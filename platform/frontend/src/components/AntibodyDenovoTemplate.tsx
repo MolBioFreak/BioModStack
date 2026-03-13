@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, type CDRAnnotationResponse } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -23,6 +23,10 @@ type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_des
 type LoopLengthMode = 'defaults' | 'custom_ranges';
 type LoopLengthRange = { min: number; max: number };
 type InteractiveGateStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
+type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
+type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
+type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
+type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
 
 const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
     H1: { min: 7, max: 10 },
@@ -126,11 +130,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [targetPdb, setTargetPdb] = useState<File | null>(null);
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
-    const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
+    const [seqDesigner, setSeqDesigner] = useState<SeqDesigner>('fampnn');
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
     const [runFrustrampnn, setRunFrustrampnn] = useState(false);
+    const [runStructureValidation, setRunStructureValidation] = useState(initialValues?.run_structure_validation !== false);
     const [runAnarciiPost, setRunAnarciiPost] = useState(false);
     const [anarciiIncludeChildren, setAnarciiIncludeChildren] = useState(true);
     const [interactiveWorkflow, setInteractiveWorkflow] = useState(
@@ -157,6 +162,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Template manager
     const [showTemplateManager, setShowTemplateManager] = useState(false);
+    const interactiveWorkflowTouchedRef = useRef(false);
+    const interactiveGateStageTouchedRef = useRef(false);
 
     // Design mode settings
     const [designMode, setDesignMode] = useState<DesignMode>('cdr_only');
@@ -185,6 +192,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         Number.isFinite(Number(initialValues?.rfantibody_min_target_contacts))
             ? Math.max(0, Number(initialValues?.rfantibody_min_target_contacts))
             : 3
+    );
+    const [rfantibodyMaxTargetDistance, setRfantibodyMaxTargetDistance] = useState<number>(
+        Number.isFinite(Number((initialValues as any)?.rfantibody_max_target_distance))
+            ? Math.max(0, Number((initialValues as any)?.rfantibody_max_target_distance))
+            : 0
     );
     const [rfantibodyMaxEpitopeCentroidDistance, setRfantibodyMaxEpitopeCentroidDistance] = useState<number>(
         Number.isFinite(Number(initialValues?.rfantibody_max_epitope_centroid_distance))
@@ -260,6 +272,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [skipFampnn, setSkipFampnn] = useState(false);
     const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
     const [customOutputDir, setCustomOutputDir] = useState<string>('');
+    const [refinementPreset, setRefinementPreset] = useState<RefinementPreset>(isRefinementMode ? 'full_loop' : 'custom');
+    const [useManualMutagenesis, setUseManualMutagenesis] = useState(false);
+    const [mutagenesisMethod, setMutagenesisMethod] = useState<MutagenesisMethod>('explicit_substitutions');
+    const [mutagenesisLaunchMode, setMutagenesisLaunchMode] = useState<MutagenesisLaunchMode>('seeded_refinement');
+    const [manualMutagenesisConfig, setManualMutagenesisConfig] = useState({
+        chain_id: '',
+        mutation_sets_text: '',
+        predictor: 'protenix' as 'protenix' | 'boltz2',
+        msa_provider: 'local' as 'local' | 'colabfold_api',
+    });
+    const [cdrIndelConfig, setCdrIndelConfig] = useState({
+        loop_ids: ['H1', 'H2', 'H3'],
+        variants_per_design: 5,
+        allow_insertions: true,
+        allow_deletions: true,
+        indel_sizes: [1, 2],
+        indel_probability: 0.1,
+        allowed_aas: [] as string[],
+        blocked_aas: [] as string[],
+        predictor: 'protenix' as 'protenix' | 'boltz2',
+        msa_provider: 'local' as 'local' | 'colabfold_api',
+    });
+    const detectedAntibodyType = String(detectedCDRs?.antibody_type || '').trim().toLowerCase();
+    const isSingleDomainFramework = frameworkType === 'nanobody'
+        || detectedAntibodyType.includes('vhh')
+        || detectedAntibodyType.includes('nanobody');
+    const availableDesignLoops = isSingleDomainFramework
+        ? ['H1', 'H2', 'H3']
+        : ['H1', 'H2', 'H3', 'L1', 'L2', 'L3'];
+    const availableDesignLoopKey = availableDesignLoops.join(',');
 
     // If starting in refinement mode, we are bypassing RFantibody by default
     useEffect(() => {
@@ -267,6 +309,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSkipRFantibody(true);
         }
     }, [isRefinementMode]);
+
+    useEffect(() => {
+        const allowedLoops = new Set(availableDesignLoops);
+
+        setSelectedCDRLoops((current) => {
+            const filtered = Array.from(current).filter((loopId) => allowedLoops.has(loopId));
+            if (filtered.length === 0) {
+                return new Set(availableDesignLoops);
+            }
+            if (filtered.length === current.size && filtered.every((loopId) => current.has(loopId))) {
+                return current;
+            }
+            return new Set(filtered);
+        });
+
+        setCdrIndelConfig((current) => {
+            const filteredLoops = current.loop_ids.filter((loopId) => allowedLoops.has(loopId));
+            const nextLoops = filteredLoops.length > 0 ? filteredLoops : availableDesignLoops;
+            if (
+                nextLoops.length === current.loop_ids.length
+                && nextLoops.every((loopId, index) => current.loop_ids[index] === loopId)
+            ) {
+                return current;
+            }
+            return {
+                ...current,
+                loop_ids: nextLoops,
+            };
+        });
+    }, [availableDesignLoopKey]);
 
     const buildFilesApiUrl = (mode: 'download' | 'pdb', path: string) =>
         `/api/files/${mode}/${encodeURIComponent(path)}`;
@@ -445,6 +517,54 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    const launchMutagenesisMutation = useMutation({
+        mutationFn: async (data: any) => launchManualMutagenesis(data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            navigate('/');
+        },
+    });
+
+    const applyRefinementPreset = (preset: RefinementPreset) => {
+        setRefinementPreset(preset);
+        setUseManualMutagenesis(preset === 'manual_mutagenesis');
+        if (preset === 'manual_mutagenesis') {
+            setManualMutagenesisConfig((current) => ({ ...current, predictor: structureValidator }));
+            setMutagenesisLaunchMode('seeded_refinement');
+            return;
+        }
+        if (preset === 'full_loop') {
+            setSeqDesigner((current) => (current === 'none' ? 'fampnn' : current));
+            setRunStructureValidation(true);
+            return;
+        }
+        if (preset === 'fampnn_only') {
+            setSeqDesigner('fampnn');
+            setRunStructureValidation(false);
+            setRunFrustrampnn(false);
+            setQualitySettings((current) => ({ ...current, run_maturation: false }));
+            setInteractiveWorkflow(true);
+            setInteractiveGateStage('post_fampnn');
+            return;
+        }
+        if (preset === 'validation_only') {
+            setSeqDesigner('none');
+            setRunStructureValidation(true);
+            setRunFrustrampnn(false);
+            setQualitySettings((current) => ({ ...current, run_maturation: false }));
+            setInteractiveWorkflow(true);
+            setInteractiveGateStage('post_structure_validation');
+            return;
+        }
+        if (preset === 'ppiflow_only') {
+            setSeqDesigner('none');
+            setRunStructureValidation(false);
+            setRunFrustrampnn(false);
+            setQualitySettings((current) => ({ ...current, run_maturation: true }));
+            setInteractiveWorkflow(false);
+        }
+    };
+
     // Initialize from initialValues (Clone Job)
     useEffect(() => {
         if (initialValues) {
@@ -468,14 +588,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.run_thermompnn !== undefined) setUseThermoMPNN(initialValues.run_thermompnn);
             else if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
             if (initialValues.run_frustrampnn !== undefined) setRunFrustrampnn(initialValues.run_frustrampnn);
+            if (initialValues.run_structure_validation !== undefined) setRunStructureValidation(initialValues.run_structure_validation !== false);
             if (initialValues.run_anarcii_post !== undefined) setRunAnarciiPost(initialValues.run_anarcii_post);
             if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
-            if (initialValues.interactive_swa !== undefined) setInteractiveWorkflow(initialValues.interactive_swa);
-            else if (initialValues.interactive_gating !== undefined) setInteractiveWorkflow(initialValues.interactive_gating);
+            if (!interactiveWorkflowTouchedRef.current) {
+                if (initialValues.interactive_swa !== undefined) setInteractiveWorkflow(initialValues.interactive_swa);
+                else if (initialValues.interactive_gating !== undefined) setInteractiveWorkflow(initialValues.interactive_gating);
+            }
             if (
-                initialValues.interactive_gate_stage === 'post_rfantibody' ||
-                initialValues.interactive_gate_stage === 'post_structure_validation' ||
-                initialValues.interactive_gate_stage === 'post_fampnn'
+                !interactiveGateStageTouchedRef.current &&
+                (
+                    initialValues.interactive_gate_stage === 'post_rfantibody' ||
+                    initialValues.interactive_gate_stage === 'post_structure_validation' ||
+                    initialValues.interactive_gate_stage === 'post_fampnn'
+                )
             ) {
                 setInteractiveGateStage(initialValues.interactive_gate_stage);
             }
@@ -497,6 +623,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.seq_design_fampnn) setSeqDesigner('fampnn');
             else if (initialValues.seq_design_antifold) setSeqDesigner('antifold');
             else if (initialValues.seq_design_proteinmpnn) setSeqDesigner('proteinmpnn');
+            else if (
+                initialValues.seq_design_fampnn === false &&
+                initialValues.seq_design_antifold === false &&
+                initialValues.seq_design_proteinmpnn === false
+            ) setSeqDesigner('none');
             else if (initialValues.seq_designer) setSeqDesigner(initialValues.seq_designer); // Direct name
             if (initialValues.fampnn_constraint_mode) {
                 setFampnnConstraintMode(initialValues.fampnn_constraint_mode);
@@ -531,6 +662,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
             if (!isRefinementMode && initialValues.rfantibody_min_target_contacts !== undefined) {
                 setRfantibodyMinTargetContacts(Math.max(0, Number(initialValues.rfantibody_min_target_contacts) || 0));
+            }
+            if (!isRefinementMode && (initialValues as any).rfantibody_max_target_distance !== undefined) {
+                setRfantibodyMaxTargetDistance(Math.max(0, Number((initialValues as any).rfantibody_max_target_distance) || 0));
             }
             if (!isRefinementMode && initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
                 setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_centroid_distance) || 0));
@@ -736,6 +870,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const handleSubmit = async () => {
         // When skipping early steps, target PDB and epitope are not required
         const skippingEarlySteps = skipRFantibody || skipFampnn;
+        const runSequenceDesign = seqDesigner !== 'none';
 
         if (!skippingEarlySteps && !targetPdb) {
             alert('Please upload a target PDB file');
@@ -767,6 +902,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const needsFampnnCheckpoint = seqDesigner === 'fampnn' || qualitySettings.run_maturation;
         if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
             alert('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
+            return;
+        }
+
+        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !qualitySettings.run_maturation && !runStructureValidation && !runFrustrampnn) {
+            alert('Enable at least one refinement stage before launching.');
             return;
         }
 
@@ -815,11 +955,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             const epitopeString = Array.from(selectedResidues).sort().join(',');
 
             // Determine pipeline steps
-            const pipelineSteps = ['rfantibody', seqDesigner];
+            const pipelineSteps = [isRefinementMode ? 'selected_inputs' : 'rfantibody'];
+            if (runSequenceDesign) pipelineSteps.push(seqDesigner);
             if (qualitySettings.run_maturation) pipelineSteps.push('ppiflow');
             if (useAntiberty) pipelineSteps.push('antiberty');
             if (useThermoMPNN) pipelineSteps.push('thermompnn');
-            pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
+            if (runStructureValidation) pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
+            if (runFrustrampnn) pipelineSteps.push('frustrampnn');
 
             // Step 2: Upload custom framework if provided
             let frameworkPath = frameworkType === 'sabdab'
@@ -915,7 +1057,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: qualitySettings.run_thermompnn,
-                    run_structure_validation: true,
+                    run_structure_validation: runStructureValidation,
                     structure_validator: structureValidator,
                     run_frustrampnn: runFrustrampnn,
                     run_anarcii_post: runAnarciiPost,
@@ -938,16 +1080,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_min_epitope_contacts: enableRfantibodyFilter ? rfantibodyMinEpitopeContacts : undefined,
                     rfantibody_max_epitope_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeDistance : undefined,
                     rfantibody_min_target_contacts: enableRfantibodyFilter ? rfantibodyMinTargetContacts : undefined,
+                    rfantibody_max_target_distance: enableRfantibodyFilter && rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
                     rfantibody_max_epitope_centroid_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeCentroidDistance : undefined,
                     rfantibody_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyContactDistanceThreshold : undefined,
                     rfantibody_target_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyTargetContactDistanceThreshold : undefined,
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: effectiveAntibodyType === 'vhh' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
-                    rfantibody_diffusion_steps: Math.min(qualitySettings.rfantibody_diffusion_steps, 50),
+                    rfantibody_diffusion_steps: qualitySettings.rfantibody_diffusion_steps,
                     rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
                     rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
                     rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,
+                    rfantibody_ckpt_override: qualitySettings.rfantibody_ckpt_override.trim() || undefined,
+                    rfantibody_debug_repo_overlay: qualitySettings.rfantibody_debug_repo_overlay,
                     // Structure validation settings
                     msa_preset: qualitySettings.msa_preset,
                     boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
@@ -955,6 +1100,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     boltz_num_samples: qualitySettings.boltz_num_samples,
                     boltz_use_potentials: qualitySettings.boltz_use_potentials,
                     boltz_use_msa: qualitySettings.boltz_use_msa,
+                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
+                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
                     // Boltz-2 affinity prediction
                     boltz_predict_affinity: qualitySettings.boltz_predict_affinity,
                     boltz_diffusion_samples_affinity: qualitySettings.boltz_diffusion_samples_affinity,
@@ -966,8 +1113,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
+                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
+                    protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
+                    protenix_oom_retry_attempts: qualitySettings.protenix_oom_retry_attempts,
+                    colabfold_api_host: qualitySettings.colabfold_api_host.trim() || undefined,
+                    msa_use_gpu: qualitySettings.msa_use_gpu,
+                    msa_local_db: qualitySettings.msa_local_db.trim() || undefined,
+                    msa_cache_dir: qualitySettings.msa_cache_dir.trim() || undefined,
+                    msa_threads: qualitySettings.msa_threads ?? undefined,
+                    msa_gpu_mode: qualitySettings.msa_gpu_mode,
+                    msa_gpu_threshold: qualitySettings.msa_gpu_threshold,
+                    msa_preferred_gpus: qualitySettings.msa_preferred_gpus.trim() || undefined,
+                    msa_excluded_gpus: qualitySettings.msa_excluded_gpus.trim() || undefined,
+                    msa_gpu_server_mode: qualitySettings.msa_gpu_server_mode,
+                    msa_gpu_server_wait_timeout: qualitySettings.msa_gpu_server_wait_timeout,
+                    msa_gpu_server_db_load_mode: qualitySettings.msa_gpu_server_db_load_mode,
+                    msa_gpu_server_startup_wait: qualitySettings.msa_gpu_server_startup_wait,
                     // Quality settings - FAMPNN (sequence design)
                     fampnn_checkpoint: resolvedFampnnCheckpoint || undefined,
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path.trim() || undefined,
@@ -1059,6 +1223,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     'rfantibody_min_epitope_contacts',
                     'rfantibody_max_epitope_distance',
                     'rfantibody_min_target_contacts',
+                    'rfantibody_max_target_distance',
                     'rfantibody_max_epitope_centroid_distance',
                     'rfantibody_contact_distance_threshold',
                     'rfantibody_target_contact_distance_threshold',
@@ -1070,9 +1235,74 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     refinementOverrides.rfantibody_min_epitope_contacts = rfantibodyMinEpitopeContacts;
                     refinementOverrides.rfantibody_max_epitope_distance = rfantibodyMaxEpitopeDistance;
                     refinementOverrides.rfantibody_min_target_contacts = rfantibodyMinTargetContacts;
+                    if (rfantibodyMaxTargetDistance > 0) refinementOverrides.rfantibody_max_target_distance = rfantibodyMaxTargetDistance;
                     refinementOverrides.rfantibody_max_epitope_centroid_distance = rfantibodyMaxEpitopeCentroidDistance;
                     refinementOverrides.rfantibody_contact_distance_threshold = rfantibodyContactDistanceThreshold;
                     refinementOverrides.rfantibody_target_contact_distance_threshold = rfantibodyTargetContactDistanceThreshold;
+                }
+
+                if (useManualMutagenesis) {
+                    if (mutagenesisMethod === 'cdr_indels') {
+                        if (cdrIndelConfig.loop_ids.length === 0) {
+                            alert('Select at least one CDR loop before launching a CDR indel round.');
+                            return;
+                        }
+                        if (!cdrIndelConfig.allow_insertions && !cdrIndelConfig.allow_deletions) {
+                            alert('Enable insertions, deletions, or both before launching a CDR indel round.');
+                            return;
+                        }
+
+                        await launchAntibodyIteration({
+                            source_job_id: refinementParentJobId,
+                            action: mutagenesisLaunchMode === 'seeded_refinement' ? 'mutation_seeded_refinement' : 'cdr_indel_round',
+                            design_ids: refinementDesignIds,
+                            cdr_indel_config: cdrIndelConfig,
+                            param_overrides: refinementOverrides,
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                        navigate('/');
+                        return;
+                    }
+
+                    const mutationSets = manualMutagenesisConfig.mutation_sets_text
+                        .split('\n')
+                        .map((entry) => entry.trim())
+                        .filter(Boolean);
+                    if (mutationSets.length === 0) {
+                        alert('Add at least one manual mutation set, one per line, before launching.');
+                        return;
+                    }
+
+                    if (mutagenesisLaunchMode === 'seeded_refinement') {
+                        await launchAntibodyIteration({
+                            source_job_id: refinementParentJobId,
+                            action: 'mutation_seeded_refinement',
+                            design_ids: refinementDesignIds,
+                            manual_mutagenesis_config: {
+                                chain_id: manualMutagenesisConfig.chain_id.trim() || undefined,
+                                mutation_sets: mutationSets,
+                                predictor: manualMutagenesisConfig.predictor,
+                                msa_provider: manualMutagenesisConfig.msa_provider,
+                            },
+                            param_overrides: refinementOverrides,
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                        navigate('/');
+                        return;
+                    }
+
+                    await launchMutagenesisMutation.mutateAsync({
+                        source_job_id: refinementParentJobId,
+                        design_ids: refinementDesignIds,
+                        config: {
+                            chain_id: manualMutagenesisConfig.chain_id.trim() || undefined,
+                            mutation_sets: mutationSets,
+                            predictor: manualMutagenesisConfig.predictor,
+                            msa_provider: manualMutagenesisConfig.msa_provider,
+                        },
+                        param_overrides: refinementOverrides,
+                    });
+                    return;
                 }
 
                 await launchAntibodyIteration({
@@ -1103,6 +1333,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             undefined
         )
         : undefined;
+    const availableMutagenesisLoops = availableDesignLoops;
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1142,41 +1373,584 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             {/* Pipeline Visualization */}
             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                <h3 className="text-sm font-medium text-slate-400 mb-3">Workflow Pipeline</h3>
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                        <h3 className="text-sm font-medium text-slate-300">Workflow Pipeline</h3>
+                        <p className="mt-1 text-xs text-slate-500">
+                            {isRefinementMode
+                                ? 'Selected designs are re-queued through the workflow UI only. Choose which stages to rerun below.'
+                                : 'Backbone generation, sequence design, optional maturation, structural validation, then optional review/QC.'}
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2 text-[11px]">
+                        <span className="rounded-full border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-slate-300">
+                            Validator: <span className="font-medium text-cyan-300">{structureValidator === 'protenix' ? 'Protenix' : 'Boltz2'}</span>
+                        </span>
+                        {interactiveWorkflow && (
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+                                Review Gate: {interactiveGateStage === 'post_structure_validation'
+                                    ? 'After validation'
+                                    : interactiveGateStage === 'post_fampnn'
+                                        ? 'After FAMPNN'
+                                        : 'After RFantibody'}
+                            </span>
+                        )}
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-stretch gap-2">
                     {(() => {
-                        // Color classes must be complete strings for Tailwind purging
-                        const colorClasses: Record<string, string> = {
-                            emerald: 'bg-emerald-500/20 text-emerald-400',
-                            blue: 'bg-blue-500/20 text-blue-400',
-                            purple: 'bg-accent/20 text-accent',
-                            amber: 'bg-amber-500/20 text-amber-400',
-                            rose: 'bg-rose-500/20 text-rose-400',
-                            teal: 'bg-teal-500/20 text-teal-400',
-                        };
-
-                        const steps: Array<{ name: string; colorKey: string }> = [
-                            { name: 'RFantibody', colorKey: 'emerald' },
-                            { name: seqDesigner.toUpperCase(), colorKey: 'blue' },
+                        const steps: Array<{ title: string; detail: string; tone: string; optional?: boolean }> = [
+                            {
+                                title: isRefinementMode ? 'Selected Inputs' : 'RFantibody',
+                                detail: isRefinementMode ? 'Reuse selected backbones or re-screen inputs' : 'Generate backbone ensemble',
+                                tone: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+                            },
+                            {
+                                title: seqDesigner === 'none' ? 'Sequence Design' : seqDesigner.toUpperCase(),
+                                detail: seqDesigner === 'none' ? 'Skipped in this round' : 'Sequence redesign + filter',
+                                tone: seqDesigner === 'none'
+                                    ? 'border-slate-700 bg-slate-800/60 text-slate-500'
+                                    : 'border-blue-500/30 bg-blue-500/10 text-blue-200',
+                                optional: true,
+                            },
+                            {
+                                title: 'PPIFlow',
+                                detail: qualitySettings.run_maturation ? 'Maturation loop enabled' : 'Optional maturation loop',
+                                tone: qualitySettings.run_maturation
+                                    ? 'border-teal-500/30 bg-teal-500/10 text-teal-200'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-500',
+                                optional: true,
+                            },
+                            {
+                                title: structureValidator === 'protenix' ? 'Protenix' : 'Boltz2',
+                                detail: runStructureValidation ? 'Structure validation' : 'Skipped in this round',
+                                tone: runStructureValidation
+                                    ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200'
+                                    : 'border-slate-700 bg-slate-800/60 text-slate-500',
+                                optional: true,
+                            },
                         ];
-                        if (qualitySettings.run_maturation) {
-                            steps.push({ name: 'PPIFlow', colorKey: 'teal' });
-                        }
-                        steps.push({ name: 'Boltz2', colorKey: 'purple' });
-                        if (useAntiberty) steps.push({ name: 'AntiBERTy', colorKey: 'amber' });
-                        if (useThermoMPNN) steps.push({ name: 'ThermoMPNN', colorKey: 'rose' });
 
                         return steps.map((step, idx) => (
-                            <React.Fragment key={step.name}>
-                                {idx > 0 && <span className="text-slate-600">-&gt;</span>}
-                                <div className={`${colorClasses[step.colorKey]} px-3 py-1.5 rounded-lg text-sm font-medium`}>
-                                    {idx + 1}. {step.name}
+                            <React.Fragment key={step.title}>
+                                {idx > 0 && <span className="self-center text-slate-600">-&gt;</span>}
+                                <div className={`min-w-[150px] rounded-xl border px-3 py-2 ${step.tone}`}>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-sm font-semibold">{idx + 1}. {step.title}</span>
+                                        {step.optional && (
+                                            <span className="rounded-full border border-current/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide opacity-80">
+                                                Optional
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="mt-1 text-[11px] opacity-85">{step.detail}</div>
                                 </div>
                             </React.Fragment>
                         ));
                     })()}
                 </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                    {interactiveWorkflow && (
+                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+                            Interactive review enabled
+                        </span>
+                    )}
+                    {runFrustrampnn && (
+                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-200">
+                            FrustraMPNN QC
+                        </span>
+                    )}
+                    {useManualMutagenesis && (
+                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-200">
+                            Manual mutation sets
+                        </span>
+                    )}
+                    {useAntiberty && (
+                        <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-1 text-yellow-200">
+                            AntiBERTy scoring
+                        </span>
+                    )}
+                    {useThermoMPNN && (
+                        <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 text-indigo-200">
+                            ThermoMPNN stability
+                        </span>
+                    )}
+                    {!runFrustrampnn && !useAntiberty && !useThermoMPNN && (
+                        <span className="rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-slate-400">
+                            No optional QC stages enabled
+                        </span>
+                    )}
+                </div>
             </div>
+
+            {isRefinementMode && (
+                <div className="mb-6 rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <h3 className="text-sm font-medium text-indigo-200">Refinement Orchestration</h3>
+                            <p className="mt-1 text-xs text-slate-400">
+                                Use this form as the single approved relaunch path for selected designs. Stage presets below map onto the same workflow orchestrator used for full antibody runs.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {([
+                                ['full_loop', 'Full Loop'],
+                                ['fampnn_only', 'FAMPNN Only'],
+                                ['validation_only', structureValidator === 'protenix' ? 'Protenix Only' : 'Boltz2 Only'],
+                                ['ppiflow_only', 'PPIFlow Only'],
+                                ['manual_mutagenesis', 'Manual Mutagenesis'],
+                            ] as Array<[RefinementPreset, string]>).map(([preset, label]) => (
+                                <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => applyRefinementPreset(preset)}
+                                    className={`rounded-lg border px-3 py-2 text-xs transition-colors ${refinementPreset === preset
+                                        ? 'border-indigo-400 bg-indigo-500/20 text-indigo-100'
+                                        : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                        }`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+                        <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                            <div className="flex items-center justify-between gap-3">
+                                <span>Sequence redesign</span>
+                                <input
+                                    type="checkbox"
+                                    checked={seqDesigner !== 'none'}
+                                    onChange={(e) => {
+                                        setRefinementPreset('custom');
+                                        setUseManualMutagenesis(false);
+                                        setSeqDesigner(e.target.checked ? 'fampnn' : 'none');
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
+                                />
+                            </div>
+                            <select
+                                value={seqDesigner}
+                                onChange={(e) => {
+                                    const next = e.target.value as SeqDesigner;
+                                    setRefinementPreset('custom');
+                                    setUseManualMutagenesis(false);
+                                    setSeqDesigner(next);
+                                }}
+                                className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+                                disabled={seqDesigner === 'none'}
+                            >
+                                <option value="fampnn">FAMPNN</option>
+                                <option value="antifold">AntiFold</option>
+                                <option value="proteinmpnn">ProteinMPNN</option>
+                            </select>
+                        </label>
+
+                        <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                            <div className="flex items-center justify-between gap-3">
+                                <span>PPIFlow maturation</span>
+                                <input
+                                    type="checkbox"
+                                    checked={qualitySettings.run_maturation}
+                                    onChange={(e) => {
+                                        setRefinementPreset('custom');
+                                        setUseManualMutagenesis(false);
+                                        setQualitySettings((current) => ({ ...current, run_maturation: e.target.checked }));
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
+                                />
+                            </div>
+                            <div className="mt-2 text-[11px] text-slate-500">
+                                Uses selected structures directly when sequence redesign is off.
+                            </div>
+                        </label>
+
+                        <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                            <div className="flex items-center justify-between gap-3">
+                                <span>Structure validation</span>
+                                <input
+                                    type="checkbox"
+                                    checked={runStructureValidation}
+                                    onChange={(e) => {
+                                        setRefinementPreset('custom');
+                                        setUseManualMutagenesis(false);
+                                        setRunStructureValidation(e.target.checked);
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
+                                />
+                            </div>
+                            <select
+                                value={structureValidator}
+                                onChange={(e) => {
+                                    setRefinementPreset('custom');
+                                    setStructureValidator(e.target.value as 'boltz2' | 'protenix');
+                                }}
+                                className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+                                disabled={!runStructureValidation}
+                            >
+                                <option value="boltz2">Boltz-2</option>
+                                <option value="protenix">Protenix</option>
+                            </select>
+                        </label>
+
+                        <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                            <div className="flex items-center justify-between gap-3">
+                                <span>FrustraMPNN QC</span>
+                                <input
+                                    type="checkbox"
+                                    checked={runFrustrampnn}
+                                    onChange={(e) => {
+                                        setRefinementPreset('custom');
+                                        setUseManualMutagenesis(false);
+                                        setRunFrustrampnn(e.target.checked);
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
+                                />
+                            </div>
+                            <div className="mt-2 text-[11px] text-slate-500">
+                                Optional QC pass after structure generation.
+                            </div>
+                        </label>
+                    </div>
+
+                    <div className="mt-4 rounded-lg border border-emerald-500/20 bg-slate-950/70 p-3">
+                        <label className="flex items-center justify-between gap-3 text-xs text-emerald-200">
+                            <span>Mutation methodology</span>
+                            <input
+                                type="checkbox"
+                                checked={useManualMutagenesis}
+                                onChange={(e) => {
+                                    const enabled = e.target.checked;
+                                    setUseManualMutagenesis(enabled);
+                                    setRefinementPreset(enabled ? 'manual_mutagenesis' : 'custom');
+                                    if (enabled) {
+                                        setMutagenesisLaunchMode('seeded_refinement');
+                                    }
+                                }}
+                                className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
+                            />
+                        </label>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                            Launch manual sequence variants from this workflow UI. Substitutions keep sequence length fixed. CDR indels change loop length and rely on the predictor to rebuild the resulting backbone.
+                        </p>
+                        {useManualMutagenesis && (
+                            <div className="mt-3 space-y-4">
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisLaunchMode('seeded_refinement')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisLaunchMode === 'seeded_refinement'
+                                            ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">Mutation-Seeded Refinement</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Use the manual variants as new workflow seeds, then continue through the selected refinement stages like FAMPNN, PPIFlow, and validation.
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisLaunchMode('exact_evaluation')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisLaunchMode === 'exact_evaluation'
+                                            ? 'border-amber-400 bg-amber-400/10 text-amber-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">Exact Mutant Evaluation</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Evaluate the exact manual variants directly with Protenix or Boltz-2. This bypasses the antibody refinement orchestrator.
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-400">
+                                    {mutagenesisLaunchMode === 'seeded_refinement'
+                                        ? 'Seeded refinement preserves user-imposed residues during downstream redesign. For indels, the workflow first rebuilds structural seeds, then automatically relaunches antibody refinement from the rebuilt variants.'
+                                        : 'Exact evaluation is the direct predictor path. It is useful for checking one exact mutant, but it is not a full redesign/refinement round.'}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisMethod('explicit_substitutions')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisMethod === 'explicit_substitutions'
+                                            ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">Explicit substitutions</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Apply manual residue substitutions like <span className="font-mono">A27Y</span>. This preserves sequence length and does not insert or delete residues.
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisMethod('cdr_indels')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisMethod === 'cdr_indels'
+                                            ? 'border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">CDR indels</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Insert and delete residues within selected CDR loops, then regenerate structure. This is the backbone-changing mutagenesis path.
+                                        </div>
+                                    </button>
+                                </div>
+
+                                {mutagenesisMethod === 'explicit_substitutions' ? (
+                                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                                        <label className="text-xs text-slate-400">
+                                            Binder chain ID (optional)
+                                            <input
+                                                type="text"
+                                                value={manualMutagenesisConfig.chain_id}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, chain_id: e.target.value }))}
+                                                placeholder={isSingleDomainFramework ? 'H' : 'H or L'}
+                                                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                            />
+                                        </label>
+                                        <label className="text-xs text-slate-400">
+                                            Predictor
+                                            <select
+                                                value={manualMutagenesisConfig.predictor}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, predictor: e.target.value as 'protenix' | 'boltz2' }))}
+                                                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                            >
+                                                <option value="protenix">Protenix</option>
+                                                <option value="boltz2">Boltz-2</option>
+                                            </select>
+                                        </label>
+                                        <label className="text-xs text-slate-400">
+                                            MSA Provider
+                                            <select
+                                                value={manualMutagenesisConfig.msa_provider}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, msa_provider: e.target.value as 'local' | 'colabfold_api' }))}
+                                                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                                            >
+                                                <option value="local">Local</option>
+                                                <option value="colabfold_api">ColabFold Server</option>
+                                            </select>
+                                        </label>
+                                        <label className="lg:col-span-3 text-xs text-slate-400">
+                                            Mutation sets
+                                            <textarea
+                                                value={manualMutagenesisConfig.mutation_sets_text}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, mutation_sets_text: e.target.value }))}
+                                                rows={5}
+                                                placeholder={"A27Y,H31W\nS52R"}
+                                                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
+                                            />
+                                            <div className="mt-1 text-[11px] text-slate-500">
+                                                One variant per line. This path supports substitutions only. It does not add residues to the existing output PDB; it edits sequence and sends the new sequence back through the predictor.
+                                            </div>
+                                        </label>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                                        <div className="space-y-4">
+                                            <div>
+                                                <div className="text-xs text-slate-400 mb-2">Target loops</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {availableMutagenesisLoops.map((loopId) => {
+                                                        const selected = cdrIndelConfig.loop_ids.includes(loopId);
+                                                        return (
+                                                            <button
+                                                                key={loopId}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setCdrIndelConfig((current) => {
+                                                                        const next = new Set(current.loop_ids);
+                                                                        if (next.has(loopId)) next.delete(loopId);
+                                                                        else next.add(loopId);
+                                                                        return { ...current, loop_ids: Array.from(next).sort() };
+                                                                    });
+                                                                }}
+                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${selected
+                                                                    ? 'border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-200'
+                                                                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                                                    }`}
+                                                            >
+                                                                {loopId}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <p className="mt-2 text-[11px] text-slate-500">
+                                                    {isSingleDomainFramework
+                                                        ? 'Single-domain refinement limits indels to H1/H2/H3.'
+                                                        : 'Keep loop edits within one chain family per round when possible so variant generation stays interpretable.'}
+                                                </p>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <label className="text-xs text-slate-400">
+                                                    Variants / design
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        max={200}
+                                                        value={cdrIndelConfig.variants_per_design}
+                                                        onChange={(e) => setCdrIndelConfig((current) => ({
+                                                            ...current,
+                                                            variants_per_design: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
+                                                        }))}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                    />
+                                                </label>
+                                                <label className="text-xs text-slate-400">
+                                                    Indel sizes
+                                                    <input
+                                                        type="text"
+                                                        value={cdrIndelConfig.indel_sizes.join(',')}
+                                                        onChange={(e) => {
+                                                            const sizes = e.target.value
+                                                                .split(',')
+                                                                .map((token) => Number(token.trim()))
+                                                                .filter((value) => Number.isFinite(value) && value > 0)
+                                                                .map((value) => Math.floor(value));
+                                                            setCdrIndelConfig((current) => ({
+                                                                ...current,
+                                                                indel_sizes: sizes.length > 0 ? Array.from(new Set(sizes)).sort((a, b) => a - b) : [1],
+                                                            }));
+                                                        }}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                        placeholder="1,2"
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={cdrIndelConfig.allow_insertions}
+                                                        onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_insertions: e.target.checked }))}
+                                                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                    />
+                                                    Allow insertions
+                                                </label>
+                                                <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={cdrIndelConfig.allow_deletions}
+                                                        onChange={(e) => setCdrIndelConfig((current) => ({ ...current, allow_deletions: e.target.checked }))}
+                                                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-fuchsia-500"
+                                                    />
+                                                    Allow deletions
+                                                </label>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                                <label className="text-xs text-slate-400">
+                                                    Allowed insertion amino acids
+                                                    <input
+                                                        type="text"
+                                                        value={(cdrIndelConfig.allowed_aas || []).join('')}
+                                                        onChange={(e) => {
+                                                            const aas = Array.from(new Set(
+                                                                e.target.value.toUpperCase().replace(/[^A-Z]/g, '').split('')
+                                                            )).filter((aa) => 'ACDEFGHIKLMNPQRSTVWY'.includes(aa));
+                                                            setCdrIndelConfig((current) => ({ ...current, allowed_aas: aas }));
+                                                        }}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                        placeholder="Leave blank for full set"
+                                                    />
+                                                </label>
+                                                <label className="text-xs text-slate-400">
+                                                    Excluded insertion amino acids
+                                                    <input
+                                                        type="text"
+                                                        value={(cdrIndelConfig.blocked_aas || []).join('')}
+                                                        onChange={(e) => {
+                                                            const aas = Array.from(new Set(
+                                                                e.target.value.toUpperCase().replace(/[^A-Z]/g, '').split('')
+                                                            )).filter((aa) => 'ACDEFGHIKLMNPQRSTVWY'.includes(aa));
+                                                            setCdrIndelConfig((current) => ({ ...current, blocked_aas: aas }));
+                                                        }}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                        placeholder="Optional"
+                                                    />
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <label className="text-xs text-slate-400">
+                                                    Predictor
+                                                    <select
+                                                        value={cdrIndelConfig.predictor}
+                                                        onChange={(e) => setCdrIndelConfig((current) => ({
+                                                            ...current,
+                                                            predictor: e.target.value === 'boltz2' ? 'boltz2' : 'protenix',
+                                                        }))}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                    >
+                                                        <option value="protenix">Protenix</option>
+                                                        <option value="boltz2">Boltz-2</option>
+                                                    </select>
+                                                </label>
+                                                <label className="text-xs text-slate-400">
+                                                    MSA provider
+                                                    <select
+                                                        value={cdrIndelConfig.msa_provider}
+                                                        onChange={(e) => setCdrIndelConfig((current) => ({
+                                                            ...current,
+                                                            msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                        }))}
+                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                    >
+                                                        <option value="local">Local</option>
+                                                        <option value="colabfold_api">ColabFold API</option>
+                                                    </select>
+                                                </label>
+                                            </div>
+
+                                            <label className="block text-xs text-slate-400">
+                                                Indel probability
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    max={1}
+                                                    step={0.05}
+                                                    value={cdrIndelConfig.indel_probability}
+                                                    onChange={(e) => setCdrIndelConfig((current) => ({
+                                                        ...current,
+                                                        indel_probability: Math.max(0, Math.min(1, Number(e.target.value) || 0)),
+                                                    }))}
+                                                    className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
+                                                />
+                                            </label>
+
+                                            <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-400">
+                                                <div className="text-slate-200 font-medium mb-1">Launch summary</div>
+                                                <div>{refinementDesignIds?.length || 0} selected design{(refinementDesignIds?.length || 0) === 1 ? '' : 's'}</div>
+                                                <div>{cdrIndelConfig.variants_per_design} variant{cdrIndelConfig.variants_per_design === 1 ? '' : 's'} per design</div>
+                                                <div>{cdrIndelConfig.loop_ids.join(', ') || 'No loops selected'}</div>
+                                                <div className="mt-1 text-fuchsia-200">
+                                                    {(refinementDesignIds?.length || 0) * cdrIndelConfig.variants_per_design} total variant predictions
+                                                </div>
+                                                {cdrIndelConfig.msa_provider === 'colabfold_api' && (refinementDesignIds?.length || 0) * cdrIndelConfig.variants_per_design > 1 && (
+                                                    <div className="mt-2 text-amber-300">
+                                                        Multi-variant indel rounds are automatically downgraded to local MSA.
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-500">
+                                                The workflow does not splice residues directly into the existing output PDB. It edits the binder sequence, preserves the other chains, then asks the selected predictor to rebuild the complex for that new sequence.
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Form - 2 Column Layout */}
             <div className="grid grid-cols-2 gap-8">
@@ -1799,107 +2573,115 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         />
                     </div>
 
-                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
-                            <div>
-                                <h3 className="text-sm font-semibold text-slate-200">Initial Loop Length Variability</h3>
-                                <p className="text-xs text-slate-500 mt-1">
-                                    Control RFantibody’s initial CDR loop-length search space independently from the downstream manual CDR position map used by FAMPNN.
+                    {!isRefinementMode ? (
+                        <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-slate-200">Initial Loop Length Variability</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Control RFantibody’s initial CDR loop-length search space independently from the downstream manual CDR position map used by FAMPNN.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setRfantibodyLoopLengthMode('defaults')}
+                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'defaults'
+                                            ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        Default Ranges
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setRfantibodyLoopLengthMode('custom_ranges')}
+                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'custom_ranges'
+                                            ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
+                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        Custom Ranges
+                                    </button>
+                                </div>
+
+                                <p className="text-xs text-slate-500">
+                                    {rfantibodyLoopLengthMode === 'defaults'
+                                        ? 'Use RFantibody’s standard loop-length priors for the selected CDRs.'
+                                        : 'Expand or tighten the initial de novo backbone search space per selected loop. This affects RFantibody generation, not the later fixed-position FAMPNN constraint map.'}
                                 </p>
-                            </div>
 
-                            <div className="grid grid-cols-2 gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setRfantibodyLoopLengthMode('defaults')}
-                                    className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'defaults'
-                                        ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                                        : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                        }`}
-                                >
-                                    Default Ranges
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setRfantibodyLoopLengthMode('custom_ranges')}
-                                    className={`rounded-lg border px-3 py-2 text-sm transition-colors ${rfantibodyLoopLengthMode === 'custom_ranges'
-                                        ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
-                                        : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                        }`}
-                                >
-                                    Custom Ranges
-                                </button>
-                            </div>
-
-                            <p className="text-xs text-slate-500">
-                                {rfantibodyLoopLengthMode === 'defaults'
-                                    ? 'Use RFantibody’s standard loop-length priors for the selected CDRs.'
-                                    : 'Expand or tighten the initial de novo backbone search space per selected loop. This affects RFantibody generation, not the later fixed-position FAMPNN constraint map.'}
-                            </p>
-
-                            {rfantibodyLoopLengthMode === 'custom_ranges' && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {Array.from(selectedCDRLoops)
-                                        .sort()
-                                        .filter((loopId) => frameworkType !== 'nanobody' || loopId.startsWith('H'))
-                                        .map((loopId) => {
-                                            const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
-                                            return (
-                                                <div key={loopId} className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
-                                                    <div className="flex items-center justify-between mb-2">
-                                                        <div className="text-sm font-medium text-slate-200">{loopId}</div>
-                                                        <div className="text-[11px] text-slate-500">
-                                                            default {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min}
-                                                            {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max !== DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min
-                                                                ? `-${DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max}`
-                                                                : ''}
+                                {rfantibodyLoopLengthMode === 'custom_ranges' && (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {Array.from(selectedCDRLoops)
+                                            .sort()
+                                            .filter((loopId) => availableDesignLoops.includes(loopId))
+                                            .map((loopId) => {
+                                                const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
+                                                return (
+                                                    <div key={loopId} className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <div className="text-sm font-medium text-slate-200">{loopId}</div>
+                                                            <div className="text-[11px] text-slate-500">
+                                                                default {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min}
+                                                                {DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max !== DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min
+                                                                    ? `-${DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max}`
+                                                                    : ''}
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <label className="text-xs text-slate-500">
+                                                                Min
+                                                                <input
+                                                                    type="number"
+                                                                    min={1}
+                                                                    value={range.min}
+                                                                    onChange={(e) => {
+                                                                        const min = Math.max(1, Number(e.target.value) || 1);
+                                                                        setRfantibodyLoopLengthRanges((current) => ({
+                                                                            ...current,
+                                                                            [loopId]: {
+                                                                                min,
+                                                                                max: Math.max(min, current[loopId]?.max ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max ?? min),
+                                                                            },
+                                                                        }));
+                                                                    }}
+                                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
+                                                                />
+                                                            </label>
+                                                            <label className="text-xs text-slate-500">
+                                                                Max
+                                                                <input
+                                                                    type="number"
+                                                                    min={range.min}
+                                                                    value={range.max}
+                                                                    onChange={(e) => {
+                                                                        const max = Math.max(range.min, Number(e.target.value) || range.min);
+                                                                        setRfantibodyLoopLengthRanges((current) => ({
+                                                                            ...current,
+                                                                            [loopId]: {
+                                                                                min: current[loopId]?.min ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min ?? 1,
+                                                                                max,
+                                                                            },
+                                                                        }));
+                                                                    }}
+                                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
+                                                                />
+                                                            </label>
                                                         </div>
                                                     </div>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <label className="text-xs text-slate-500">
-                                                            Min
-                                                            <input
-                                                                type="number"
-                                                                min={1}
-                                                                value={range.min}
-                                                                onChange={(e) => {
-                                                                    const min = Math.max(1, Number(e.target.value) || 1);
-                                                                    setRfantibodyLoopLengthRanges((current) => ({
-                                                                        ...current,
-                                                                        [loopId]: {
-                                                                            min,
-                                                                            max: Math.max(min, current[loopId]?.max ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.max ?? min),
-                                                                        },
-                                                                    }));
-                                                                }}
-                                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
-                                                            />
-                                                        </label>
-                                                        <label className="text-xs text-slate-500">
-                                                            Max
-                                                            <input
-                                                                type="number"
-                                                                min={range.min}
-                                                                value={range.max}
-                                                                onChange={(e) => {
-                                                                    const max = Math.max(range.min, Number(e.target.value) || range.min);
-                                                                    setRfantibodyLoopLengthRanges((current) => ({
-                                                                        ...current,
-                                                                        [loopId]: {
-                                                                            min: current[loopId]?.min ?? DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId]?.min ?? 1,
-                                                                            max,
-                                                                        },
-                                                                    }));
-                                                                }}
-                                                                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none"
-                                                            />
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                </div>
-                            )}
+                                                );
+                                            })}
+                                    </div>
+                                )}
+                            </div>
+                    ) : (
+                        <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4 text-xs text-slate-400">
+                            RFantibody loop-length variability is only used for de novo backbone generation. In refinement mode, use{' '}
+                            <span className="text-fuchsia-300">Manual mutagenesis methodology &rarr; CDR indels</span>{' '}
+                            when you want loop insertions/deletions and downstream backbone rebuilding.
                         </div>
+                    )}
 
                     {!isRefinementMode && (
                         <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
@@ -1957,6 +2739,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         step={1}
                                         value={rfantibodyMinTargetContacts}
                                         onChange={(e) => setRfantibodyMinTargetContacts(Math.max(0, Number(e.target.value) || 0))}
+                                        disabled={!enableRfantibodyFilter}
+                                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50"
+                                    />
+                                </label>
+                                <label className="text-xs text-slate-500">
+                                    Max whole-target distance (A)
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        step={0.5}
+                                        value={rfantibodyMaxTargetDistance}
+                                        onChange={(e) => setRfantibodyMaxTargetDistance(Math.max(0, Number(e.target.value) || 0))}
                                         disabled={!enableRfantibodyFilter}
                                         className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50"
                                     />
@@ -2084,7 +2878,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <div className="grid grid-cols-2 gap-3">
                             <button
                                 type="button"
-                                onClick={() => setInteractiveWorkflow(false)}
+                                onClick={() => {
+                                    interactiveWorkflowTouchedRef.current = true;
+                                    setInteractiveWorkflow(false);
+                                }}
                                 className={`rounded-lg border px-3 py-2 text-sm transition-colors ${!interactiveWorkflow
                                     ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
                                     : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
@@ -2094,7 +2891,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setInteractiveWorkflow(true)}
+                                onClick={() => {
+                                    interactiveWorkflowTouchedRef.current = true;
+                                    setInteractiveWorkflow(true);
+                                }}
                                 className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveWorkflow
                                     ? 'border-amber-400 bg-amber-400/10 text-amber-300'
                                     : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
@@ -2110,7 +2910,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                     <button
                                         type="button"
-                                        onClick={() => setInteractiveGateStage('post_rfantibody')}
+                                        onClick={() => {
+                                            interactiveGateStageTouchedRef.current = true;
+                                            setInteractiveGateStage('post_rfantibody');
+                                        }}
                                         className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_rfantibody'
                                             ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
                                             : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
@@ -2120,7 +2923,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setInteractiveGateStage('post_fampnn')}
+                                        onClick={() => {
+                                            interactiveGateStageTouchedRef.current = true;
+                                            setInteractiveGateStage('post_fampnn');
+                                        }}
                                         className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_fampnn'
                                             ? 'border-blue-400 bg-blue-400/10 text-blue-300'
                                             : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
@@ -2130,7 +2936,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setInteractiveGateStage('post_structure_validation')}
+                                        onClick={() => {
+                                            interactiveGateStageTouchedRef.current = true;
+                                            setInteractiveGateStage('post_structure_validation');
+                                        }}
                                         className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_structure_validation'
                                             ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
                                             : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
@@ -2182,8 +2991,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                         <p className="text-xs text-slate-500">
                             {structureValidator === 'protenix'
-                                ? 'Protenix-specific quality controls now live inside Quality Settings. AntiFold FASTA-only outputs remain excluded in this validator mode because the antibody workflow uses PDB-backed candidates for iterative review.'
-                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings.'}
+                                ? 'Protenix inference controls live in Quality Settings. Flexible co-fold remains the default; anchored-target mode uses task-local target templates without freezing the binder.'
+                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings. Flexible co-fold remains the default; anchored-target mode injects templates only on the target chains.'}
                         </p>
                     </div>
 
@@ -2305,16 +3114,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
                         <div className="flex gap-3">
-                            {(['fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                            {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
                                 <button
                                     key={designer}
-                                    onClick={() => setSeqDesigner(designer)}
+                                    onClick={() => {
+                                        setSeqDesigner(designer);
+                                        if (isRefinementMode) {
+                                            setRefinementPreset('custom');
+                                            setUseManualMutagenesis(false);
+                                        }
+                                    }}
                                     className={`px-4 py-2 rounded-lg font-medium transition-all ${seqDesigner === designer
                                         ? 'bg-blue-600 text-white'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {designer.toUpperCase()}
+                                    {designer === 'none' ? 'SKIP' : designer.toUpperCase()}
                                 </button>
                             ))}
                         </div>
@@ -2521,12 +3336,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     onClick={handleSubmit}
                     disabled={
                         submitMutation.isPending ||
+                        launchMutagenesisMutation.isPending ||
                         isUploading ||
                         // Refinement mode and skip modes don't require target PDB or hotspots
                         (!(isRefinementMode || skipRFantibody || skipFampnn) && (!targetPdb || selectedResidues.size === 0)) ||
                         // When skipping, require the skip paths
                         (!isRefinementMode && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
-                        (!isRefinementMode && skipFampnn && !fampnnCollectedPdbs.trim())
+                        (!isRefinementMode && skipFampnn && !fampnnCollectedPdbs.trim()) ||
+                        (isRefinementMode && !useManualMutagenesis && seqDesigner === 'none' && !qualitySettings.run_maturation && !runStructureValidation && !runFrustrampnn)
                     }
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
@@ -2534,13 +3351,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <>
                             Uploading PDB...
                         </>
-                    ) : submitMutation.isPending ? (
+                    ) : (submitMutation.isPending || launchMutagenesisMutation.isPending) ? (
                         <>
                             Submitting...
                         </>
                     ) : isRefinementMode ? (
                         <>
-                            Launch Refinement ({refinementDesignIds?.length ?? 0} designs)
+                            {useManualMutagenesis
+                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
+                                : 'Launch Refinement'} ({refinementDesignIds?.length ?? 0} designs)
                         </>
                     ) : (skipRFantibody || skipFampnn) ? (
                         <>
@@ -2568,17 +3387,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         const p = template.params || {};
                         const loaded: string[] = [];
                         const skipped: string[] = [];
+                        interactiveWorkflowTouchedRef.current = false;
+                        interactiveGateStageTouchedRef.current = false;
 
                         // Core settings (check both new and old field names for backward compatibility)
                         if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
                         if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
-                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); } else { skipped.push('seq_designer'); }
+                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); }
+                        else if (p.seq_design_fampnn === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
+                        else { skipped.push('seq_designer'); }
                         if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
                         if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
                         if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
                         if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
                         else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
                         if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
                         if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
@@ -2628,6 +3452,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (!isRefinementMode && p.rfantibody_min_target_contacts !== undefined) {
                             setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
                             loaded.push('rfantibody_min_target_contacts');
+                        }
+                        if (!isRefinementMode && (p as any).rfantibody_max_target_distance !== undefined) {
+                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as any).rfantibody_max_target_distance) || 0));
+                            loaded.push('rfantibody_max_target_distance');
                         }
                         if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
                             setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
@@ -2703,6 +3531,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_thermompnn: qualitySettings.run_thermompnn,
                     run_stability_scoring: qualitySettings.run_thermompnn,
+                    run_structure_validation: runStructureValidation,
                     msa_preset: qualitySettings.msa_preset,
                     structure_validator: structureValidator,
                     protenix_model_weights: qualitySettings.protenix_model_weights,
@@ -2713,8 +3542,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
+                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
+                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
+                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
+                    protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
+                    protenix_oom_retry_attempts: qualitySettings.protenix_oom_retry_attempts,
+                    colabfold_api_host: qualitySettings.colabfold_api_host.trim() || undefined,
+                    msa_use_gpu: qualitySettings.msa_use_gpu,
+                    msa_local_db: qualitySettings.msa_local_db.trim() || undefined,
+                    msa_cache_dir: qualitySettings.msa_cache_dir.trim() || undefined,
+                    msa_threads: qualitySettings.msa_threads ?? undefined,
+                    msa_gpu_mode: qualitySettings.msa_gpu_mode,
+                    msa_gpu_threshold: qualitySettings.msa_gpu_threshold,
+                    msa_preferred_gpus: qualitySettings.msa_preferred_gpus.trim() || undefined,
+                    msa_excluded_gpus: qualitySettings.msa_excluded_gpus.trim() || undefined,
+                    msa_gpu_server_mode: qualitySettings.msa_gpu_server_mode,
+                    msa_gpu_server_wait_timeout: qualitySettings.msa_gpu_server_wait_timeout,
+                    msa_gpu_server_db_load_mode: qualitySettings.msa_gpu_server_db_load_mode,
+                    msa_gpu_server_startup_wait: qualitySettings.msa_gpu_server_startup_wait,
                     fampnn_checkpoint: resolvedFampnnCheckpoint,
                     fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
                     lock_target_chains: qualitySettings.lock_target_chains,
@@ -2755,6 +3603,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
                     rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
                     rfantibody_min_target_contacts: rfantibodyMinTargetContacts,
+                    rfantibody_max_target_distance: rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
                     rfantibody_max_epitope_centroid_distance: rfantibodyMaxEpitopeCentroidDistance,
                     rfantibody_contact_distance_threshold: rfantibodyContactDistanceThreshold,
                     rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
