@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 
 
@@ -35,7 +35,9 @@ class CDRAnnotation:
     cdr_l2_length: Optional[int] = None
     cdr_l3_length: Optional[int] = None
     
-    # IMGT position ranges (classic)
+    # IMGT position ranges (base IMGT positions; insertion-bearing residues remain
+    # part of the extracted loop sequence even when the displayed endpoints are
+    # the classic anchor positions)
     cdr_h1_range: Optional[tuple] = None
     cdr_h2_range: Optional[tuple] = None
     cdr_h3_range: Optional[tuple] = None
@@ -91,6 +93,86 @@ class CDRAnnotation:
 from paths import get_container_path
 import logging
 logger = logging.getLogger(__name__)
+
+
+IMGTLowerUpper = Tuple[Tuple[int, str], Tuple[int, str]]
+IMGT_CDR_ANCHORS: Dict[str, IMGTLowerUpper] = {
+    "cdr1": ((26, ""), (39, "")),
+    "cdr2": ((55, ""), (66, "")),
+    "cdr3": ((104, ""), (118, "")),
+}
+FR2_POSITIONS = {37, 42, 44, 45, 47}
+DE_LOOP_RANGE = (72, 75)
+FR3_RANGE = (82, 87)
+FR4_RANGE = (101, 103)
+VARIABLE_DOMAIN_MIN_LENGTH = 70
+VARIABLE_DOMAIN_MAX_LENGTH = 260
+
+
+def _normalize_insertion_code(value: Any) -> str:
+    if value is None:
+        return ""
+    normalized = str(value).strip()
+    if normalized in {"", "-"}:
+        return ""
+    return normalized
+
+
+def _position_key(pos: Any, insertion: Any) -> Tuple[int, str]:
+    return int(pos), _normalize_insertion_code(insertion)
+
+
+def _position_between(
+    current: Tuple[int, str],
+    lower: Tuple[int, str],
+    upper: Tuple[int, str],
+) -> bool:
+    return lower < current < upper
+
+
+def _collect_numbered_residues(numbering: List[Any]) -> List[Dict[str, Any]]:
+    residues: List[Dict[str, Any]] = []
+    seq_idx = -1
+    for entry in numbering:
+        try:
+            (pos, insertion), aa = entry
+        except Exception:
+            continue
+        if aa == "-":
+            continue
+        seq_idx += 1
+        residues.append(
+            {
+                "pos": int(pos),
+                "insertion": _normalize_insertion_code(insertion),
+                "aa": aa,
+                "seq_idx": seq_idx,
+                "key": _position_key(pos, insertion),
+            }
+        )
+    return residues
+
+
+def _build_loop_payload(numbering: List[Any]) -> Dict[str, Any]:
+    residues = _collect_numbered_residues(numbering)
+    output: Dict[str, Any] = {}
+
+    for loop_name, (lower, upper) in IMGT_CDR_ANCHORS.items():
+        lower_key = _position_key(*lower)
+        upper_key = _position_key(*upper)
+        loop_residues = [entry for entry in residues if _position_between(entry["key"], lower_key, upper_key)]
+        positions = [entry["pos"] for entry in loop_residues]
+        seq_indices = [entry["seq_idx"] for entry in loop_residues]
+        loop_index = loop_name[-1]
+        output[f"cdr{loop_index}"] = "".join(entry["aa"] for entry in loop_residues)
+        output[f"cdr{loop_index}_range"] = [min(positions), max(positions)] if positions else None
+        output[f"cdr{loop_index}_seq_range"] = [min(seq_indices), max(seq_indices)] if seq_indices else None
+
+    output["fr2_contacts"] = "".join(entry["aa"] for entry in residues if entry["pos"] in FR2_POSITIONS)
+    output["de_loop"] = "".join(entry["aa"] for entry in residues if DE_LOOP_RANGE[0] <= entry["pos"] <= DE_LOOP_RANGE[1])
+    output["fr3_contacts"] = "".join(entry["aa"] for entry in residues if FR3_RANGE[0] <= entry["pos"] <= FR3_RANGE[1])
+    output["fr4_contacts"] = "".join(entry["aa"] for entry in residues if FR4_RANGE[0] <= entry["pos"] <= FR4_RANGE[1])
+    return output
 
 
 def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> Dict[str, str]:
@@ -197,10 +279,10 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
 
         # Respect explicit chain IDs when they are present, but do not invent
         # additional antibody chains from unrelated target chains.
-        if 'H' not in found_chains and chain_id_upper == 'H' and 80 <= len(seq) <= 150:
+        if 'H' not in found_chains and chain_id_upper == 'H' and VARIABLE_DOMAIN_MIN_LENGTH <= len(seq) <= VARIABLE_DOMAIN_MAX_LENGTH:
             print(f"[CDR Annotator] Chain {chain_id} identified as H by chain ID")
             found_chains['H'] = chain_id
-        if 'L' not in found_chains and chain_id_upper in {'L', 'K'} and 80 <= len(seq) <= 150:
+        if 'L' not in found_chains and chain_id_upper in {'L', 'K'} and VARIABLE_DOMAIN_MIN_LENGTH <= len(seq) <= VARIABLE_DOMAIN_MAX_LENGTH:
             print(f"[CDR Annotator] Chain {chain_id} identified as L by chain ID")
             found_chains['L'] = chain_id
 
@@ -210,7 +292,7 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
 
     # Conservative fallback: only accept an unlabeled single variable-domain-sized
     # chain. Do not guess a second light chain from a target chain.
-    candidates = [chain_id for chain_id, seq in sequences.items() if 80 <= len(seq) <= 150]
+    candidates = [chain_id for chain_id, seq in sequences.items() if VARIABLE_DOMAIN_MIN_LENGTH <= len(seq) <= VARIABLE_DOMAIN_MAX_LENGTH]
     if len(candidates) == 1:
         print(f"[CDR Annotator] Single variable-domain candidate {candidates[0]} selected as H")
         return {'H': candidates[0]}
@@ -231,8 +313,8 @@ def run_anarcii(sequence: str, scheme: str = "imgt") -> Optional[Dict]:
     """
     Run ANARCII numbering on a sequence using the antibody_tools container.
     
-    Returns dict with chain type and CDR regions extracted from IMGT numbering.
-    CDR definitions (IMGT): H1=27-38, H2=56-65, H3=105-117, L1=27-38, L2=56-65, L3=105-117
+    Returns dict with chain type and CDR regions extracted from ANARCII IMGT
+    numbering using numbering-aware loop boundaries.
     """
     container_path = get_container_path("antibody_tools.sif")
     
@@ -274,53 +356,51 @@ for seq_name, data in result.items():
         }}
         continue
     
-    # Extract CDRs based on IMGT position ranges
-    # Track both residues and position ranges
-    cdr1_residues = []
-    cdr2_residues = []
-    cdr3_residues = []
-    cdr1_positions = []
-    cdr2_positions = []
-    cdr3_positions = []
-    
-    # Track raw sequence indices
-    cdr1_seq_indices = []
-    cdr2_seq_indices = []
-    cdr3_seq_indices = []
-    
-    seq_idx = -1
-    
-    for (pos, insertion), aa in numbering:
-        if aa != "-":
-            seq_idx += 1
-        else:
-            continue
-            
-        if 27 <= pos <= 38:
-            cdr1_residues.append(aa)
-            cdr1_positions.append(pos)
-            cdr1_seq_indices.append(seq_idx)
-        elif 56 <= pos <= 65:
-            cdr2_residues.append(aa)
-            cdr2_positions.append(pos)
-            cdr2_seq_indices.append(seq_idx)
-        elif 105 <= pos <= 117:
-            cdr3_residues.append(aa)
-            cdr3_positions.append(pos)
-            cdr3_seq_indices.append(seq_idx)
-    
-    output[chain_type] = {{
-        "cdr1": "".join(cdr1_residues),
-        "cdr2": "".join(cdr2_residues),
-        "cdr3": "".join(cdr3_residues),
-        "cdr1_range": [min(cdr1_positions), max(cdr1_positions)] if cdr1_positions else None,
-        "cdr2_range": [min(cdr2_positions), max(cdr2_positions)] if cdr2_positions else None,
-        "cdr3_range": [min(cdr3_positions), max(cdr3_positions)] if cdr3_positions else None,
-        "cdr1_seq_range": [min(cdr1_seq_indices), max(cdr1_seq_indices)] if cdr1_seq_indices else None,
-        "cdr2_seq_range": [min(cdr2_seq_indices), max(cdr2_seq_indices)] if cdr2_seq_indices else None,
-        "cdr3_seq_range": [min(cdr3_seq_indices), max(cdr3_seq_indices)] if cdr3_seq_indices else None,
-        "scheme": data.get("scheme", "imgt"),
+    def normalize_insertion(value):
+        if value is None:
+            return ""
+        value = str(value).strip()
+        return "" if value in ("", "-") else value
+
+    def position_key(pos, insertion):
+        return (int(pos), normalize_insertion(insertion))
+
+    def between(current, lower, upper):
+        return lower < current < upper
+
+    anchors = {{
+        "cdr1": ((26, ""), (39, "")),
+        "cdr2": ((55, ""), (66, "")),
+        "cdr3": ((104, ""), (118, "")),
     }}
+
+    residues = []
+    seq_idx = -1
+    for (pos, insertion), aa in numbering:
+        if aa == "-":
+            continue
+        seq_idx += 1
+        residues.append({{
+            "pos": int(pos),
+            "aa": aa,
+            "seq_idx": seq_idx,
+            "key": position_key(pos, insertion),
+        }})
+
+    payload = {{}}
+    for loop_name, (lower, upper) in anchors.items():
+        lower_key = position_key(*lower)
+        upper_key = position_key(*upper)
+        loop_residues = [entry for entry in residues if between(entry["key"], lower_key, upper_key)]
+        positions = [entry["pos"] for entry in loop_residues]
+        seq_indices = [entry["seq_idx"] for entry in loop_residues]
+        idx = loop_name[-1]
+        payload[f"cdr{{idx}}"] = "".join(entry["aa"] for entry in loop_residues)
+        payload[f"cdr{{idx}}_range"] = [min(positions), max(positions)] if positions else None
+        payload[f"cdr{{idx}}_seq_range"] = [min(seq_indices), max(seq_indices)] if seq_indices else None
+
+    payload["scheme"] = data.get("scheme", "imgt")
+    output[chain_type] = payload
 
 print(json.dumps(output))
 '''
@@ -576,6 +656,23 @@ FR2_POSITIONS = {37, 42, 44, 45, 47}  # VHH tetrad + contacts
 DE_LOOP_RANGE = (72, 75)              # DE loop
 FR3_RANGE = (82, 87)                  # FR3 contacts
 FR4_RANGE = (101, 103)                # C-terminal contacts
+ANCHORS = {
+    "cdr1": ((26, ""), (39, "")),
+    "cdr2": ((55, ""), (66, "")),
+    "cdr3": ((104, ""), (118, "")),
+}
+
+def normalize_insertion(value):
+    if value is None:
+        return ""
+    value = str(value).strip()
+    return "" if value in ("", "-") else value
+
+def position_key(pos, insertion):
+    return (int(pos), normalize_insertion(insertion))
+
+def between(current, lower, upper):
+    return lower < current < upper
 
 if isinstance(results, dict):
     ordered_results = list(results.values())
@@ -619,61 +716,47 @@ for data in ordered_results:
         })
         continue
     
-    cdr1_residues = []
-    cdr2_residues = []
-    cdr3_residues = []
-    
-    cdr1_seq_indices = []
-    cdr2_seq_indices = []
-    cdr3_seq_indices = []
-    
-    # FR contact hotspots
-    fr2_residues = []
-    de_loop_residues = []
-    fr3_residues = []
-    fr4_residues = []
-    
+    residues = []
     seq_idx = -1
     
     for (pos, insertion), aa in numbering:
-        if aa != "-":
-            seq_idx += 1
-        else:
+        if aa == "-":
             continue
-            
-        # CDRs (IMGT)
-        if 27 <= pos <= 38:
-            cdr1_residues.append(aa)
-            cdr1_seq_indices.append(seq_idx)
-        elif 56 <= pos <= 65:
-            cdr2_residues.append(aa)
-            cdr2_seq_indices.append(seq_idx)
-        elif 105 <= pos <= 117:
-            cdr3_residues.append(aa)
-            cdr3_seq_indices.append(seq_idx)
-        
-        # FR contact hotspots
-        if pos in FR2_POSITIONS:
-            fr2_residues.append(aa)
-        if DE_LOOP_RANGE[0] <= pos <= DE_LOOP_RANGE[1]:
-            de_loop_residues.append(aa)
-        if FR3_RANGE[0] <= pos <= FR3_RANGE[1]:
-            fr3_residues.append(aa)
-        if FR4_RANGE[0] <= pos <= FR4_RANGE[1]:
-            fr4_residues.append(aa)
+        seq_idx += 1
+        residues.append({
+            "pos": int(pos),
+            "aa": aa,
+            "seq_idx": seq_idx,
+            "key": position_key(pos, insertion),
+        })
+
+    payload = {}
+    for loop_name, (lower, upper) in ANCHORS.items():
+        lower_key = position_key(*lower)
+        upper_key = position_key(*upper)
+        loop_residues = [entry for entry in residues if between(entry["key"], lower_key, upper_key)]
+        positions = [entry["pos"] for entry in loop_residues]
+        seq_indices = [entry["seq_idx"] for entry in loop_residues]
+        idx = loop_name[-1]
+        payload[f"cdr{idx}"] = "".join(entry["aa"] for entry in loop_residues)
+        payload[f"cdr{idx}_range"] = [min(positions), max(positions)] if positions else None
+        payload[f"cdr{idx}_seq_range"] = [min(seq_indices), max(seq_indices)] if seq_indices else None
     
     output.append({
         "chain_type": chain_type,
-        "cdr1": "".join(cdr1_residues),
-        "cdr2": "".join(cdr2_residues),
-        "cdr3": "".join(cdr3_residues),
-        "cdr1_seq_range": [min(cdr1_seq_indices), max(cdr1_seq_indices)] if cdr1_seq_indices else None,
-        "cdr2_seq_range": [min(cdr2_seq_indices), max(cdr2_seq_indices)] if cdr2_seq_indices else None,
-        "cdr3_seq_range": [min(cdr3_seq_indices), max(cdr3_seq_indices)] if cdr3_seq_indices else None,
-        "fr2_contacts": "".join(fr2_residues),
-        "de_loop": "".join(de_loop_residues),
-        "fr3_contacts": "".join(fr3_residues),
-        "fr4_contacts": "".join(fr4_residues),
+        "cdr1": payload["cdr1"],
+        "cdr2": payload["cdr2"],
+        "cdr3": payload["cdr3"],
+        "cdr1_range": payload["cdr1_range"],
+        "cdr2_range": payload["cdr2_range"],
+        "cdr3_range": payload["cdr3_range"],
+        "cdr1_seq_range": payload["cdr1_seq_range"],
+        "cdr2_seq_range": payload["cdr2_seq_range"],
+        "cdr3_seq_range": payload["cdr3_seq_range"],
+        "fr2_contacts": "".join(entry["aa"] for entry in residues if entry["pos"] in FR2_POSITIONS),
+        "de_loop": "".join(entry["aa"] for entry in residues if DE_LOOP_RANGE[0] <= entry["pos"] <= DE_LOOP_RANGE[1]),
+        "fr3_contacts": "".join(entry["aa"] for entry in residues if FR3_RANGE[0] <= entry["pos"] <= FR3_RANGE[1]),
+        "fr4_contacts": "".join(entry["aa"] for entry in residues if FR4_RANGE[0] <= entry["pos"] <= FR4_RANGE[1]),
     })
 
 print(json.dumps(output))
@@ -747,6 +830,12 @@ print(json.dumps(output))
             annotation.cdr_h1_length = len(annotation.cdr_h1) if annotation.cdr_h1 else None
             annotation.cdr_h2_length = len(annotation.cdr_h2) if annotation.cdr_h2 else None
             annotation.cdr_h3_length = len(annotation.cdr_h3) if annotation.cdr_h3 else None
+            if result.get("cdr1_range"):
+                annotation.cdr_h1_range = tuple(result["cdr1_range"])
+            if result.get("cdr2_range"):
+                annotation.cdr_h2_range = tuple(result["cdr2_range"])
+            if result.get("cdr3_range"):
+                annotation.cdr_h3_range = tuple(result["cdr3_range"])
             # FR contact hotspots (VHH/heavy chain only - Zavrtanik et al. 2018)
             annotation.fr2_contacts = result.get("fr2_contacts", "")
             annotation.de_loop = result.get("de_loop", "")
@@ -770,6 +859,12 @@ print(json.dumps(output))
             annotation.cdr_l1_length = len(annotation.cdr_l1) if annotation.cdr_l1 else None
             annotation.cdr_l2_length = len(annotation.cdr_l2) if annotation.cdr_l2 else None
             annotation.cdr_l3_length = len(annotation.cdr_l3) if annotation.cdr_l3 else None
+            if result.get("cdr1_range"):
+                annotation.cdr_l1_range = tuple(result["cdr1_range"])
+            if result.get("cdr2_range"):
+                annotation.cdr_l2_range = tuple(result["cdr2_range"])
+            if result.get("cdr3_range"):
+                annotation.cdr_l3_range = tuple(result["cdr3_range"])
             
             # Extract raw sequential ranges for seamless frontend mapping
             if result.get("cdr1_seq_range"):
