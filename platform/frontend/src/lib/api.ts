@@ -225,13 +225,17 @@ export interface ExtractChainResult {
 export const extractChain = async (
     inputPath: string,
     chainId: string,
-    renameTo?: string
+    renameTo?: string,
+    modelNumber?: number
 ): Promise<{ data: ExtractChainResult }> => {
     const formData = new FormData();
     formData.append('input_path', inputPath);
     formData.append('chain_id', chainId);
     if (renameTo) {
         formData.append('rename_to', renameTo);
+    }
+    if (modelNumber != null) {
+        formData.append('model_number', String(modelNumber));
     }
     return api.post<ExtractChainResult>('/api/files/extract-chain', formData, {
         headers: {
@@ -495,6 +499,7 @@ export interface Design {
     frustration_pct_high: number | null;
     frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
     frustration_csv_path: string | null;
+    frustration_csv_relpath?: string | null;
     // PPIFlow maturation metrics
     maturation_delta_interface: number | null;
     maturation_interface_score: number | null;
@@ -526,6 +531,12 @@ export interface DesignFilters {
     limit?: number;
     offset?: number;
 }
+
+export const buildFileDownloadUrl = (relativePath: string) =>
+    `/api/files/download/${encodeURIComponent(relativePath)}`;
+
+export const buildFileStreamUrl = (relativePath: string) =>
+    `/api/files/stream/${encodeURIComponent(relativePath)}`;
 
 export interface BackboneSummary {
     job_id: string;

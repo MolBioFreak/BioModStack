@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
+import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
-import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, type Design, type Job, type StructureAnalysis, type ChainMetric } from '../lib/api';
 import { inferDesignOutputSource } from './designOutputSource';
 
 interface Selection {
@@ -28,6 +29,14 @@ interface Props {
 }
 
 type OverlayView = 'metrics' | 'plddt' | 'pae';
+type ReferenceDockMode = 'selector' | 'viewer';
+
+interface ReferenceWindowState {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
 
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
     const source = inferDesignOutputSource(design || {});
@@ -71,6 +80,15 @@ export default function StructureViewerPane({
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
+    const [showReferenceDock, setShowReferenceDock] = useState(false);
+    const [selectedReference, setSelectedReference] = useState<ReferenceStructure | null>(null);
+    const [referenceDockMode, setReferenceDockMode] = useState<ReferenceDockMode>('selector');
+    const [referenceWindow, setReferenceWindow] = useState<ReferenceWindowState>({
+        x: 28,
+        y: 64,
+        width: 430,
+        height: 320,
+    });
 
     // For oligo_design jobs: B-factors are NA-MPNN design confidence, not AlphaFold pLDDT
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
@@ -81,11 +99,45 @@ export default function StructureViewerPane({
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const [chainBoundaries, setChainBoundaries] = useState<{ id: string; start: number; end: number }[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
+    const viewerAreaRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const referenceDragRef = useRef<{ pointerX: number; pointerY: number; startX: number; startY: number } | null>(null);
+    const referenceResizeRef = useRef<{ pointerX: number; pointerY: number; startWidth: number; startHeight: number } | null>(null);
 
     // Theme-aware colors for Molstar viewer
     const themeColors = useThemeColors();
     const designOrigin = getDesignOriginLabel(selectedDesign);
+
+    const clampReferenceWindow = useCallback((next: ReferenceWindowState): ReferenceWindowState => {
+        const bounds = viewerAreaRef.current?.getBoundingClientRect();
+        if (!bounds) return next;
+        const minWidth = 280;
+        const minHeight = 180;
+        const width = Math.min(Math.max(next.width, minWidth), Math.max(minWidth, bounds.width - 24));
+        const height = Math.min(Math.max(next.height, minHeight), Math.max(minHeight, bounds.height - 24));
+        const maxX = Math.max(12, bounds.width - width - 12);
+        const maxY = Math.max(12, bounds.height - height - 12);
+        return {
+            width,
+            height,
+            x: Math.min(Math.max(next.x, 12), maxX),
+            y: Math.min(Math.max(next.y, 12), maxY),
+        };
+    }, []);
+
+    const positionReferenceWindow = useCallback((mode: ReferenceDockMode) => {
+        const bounds = viewerAreaRef.current?.getBoundingClientRect();
+        if (!bounds) return;
+        const width = mode === 'selector' ? 420 : 460;
+        const height = mode === 'selector' ? 420 : 320;
+        setReferenceWindow((current) => clampReferenceWindow({
+            ...current,
+            width,
+            height,
+            x: Math.max(12, bounds.width - width - 24),
+            y: 64,
+        }));
+    }, [clampReferenceWindow]);
 
     // Fetch all structure metrics in parallel when design changes
     // (Consolidated from 3 separate useEffects to reduce network round-trips)
@@ -248,6 +300,78 @@ export default function StructureViewerPane({
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
+
+    useEffect(() => {
+        const handlePointerMove = (event: MouseEvent) => {
+            if (referenceDragRef.current) {
+                const drag = referenceDragRef.current;
+                setReferenceWindow((current) => clampReferenceWindow({
+                    ...current,
+                    x: drag.startX + (event.clientX - drag.pointerX),
+                    y: drag.startY + (event.clientY - drag.pointerY),
+                }));
+            } else if (referenceResizeRef.current) {
+                const resize = referenceResizeRef.current;
+                setReferenceWindow((current) => clampReferenceWindow({
+                    ...current,
+                    width: resize.startWidth + (event.clientX - resize.pointerX),
+                    height: resize.startHeight + (event.clientY - resize.pointerY),
+                }));
+            }
+        };
+
+        const handlePointerUp = () => {
+            referenceDragRef.current = null;
+            referenceResizeRef.current = null;
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerUp);
+        return () => {
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', handlePointerUp);
+        };
+    }, [clampReferenceWindow]);
+
+    const openReferenceSelector = useCallback(() => {
+        setReferenceDockMode('selector');
+        setShowReferenceDock(true);
+        requestAnimationFrame(() => positionReferenceWindow('selector'));
+    }, [positionReferenceWindow]);
+
+    const showSelectedReference = useCallback((reference: ReferenceStructure) => {
+        setSelectedReference(reference);
+        setReferenceDockMode('viewer');
+        setShowReferenceDock(true);
+        requestAnimationFrame(() => positionReferenceWindow('viewer'));
+    }, [positionReferenceWindow]);
+
+    const closeReferenceDock = useCallback(() => {
+        setShowReferenceDock(false);
+        setSelectedReference(null);
+        setReferenceDockMode('selector');
+    }, []);
+
+    const startReferenceDrag = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        referenceDragRef.current = {
+            pointerX: event.clientX,
+            pointerY: event.clientY,
+            startX: referenceWindow.x,
+            startY: referenceWindow.y,
+        };
+    }, [referenceWindow.x, referenceWindow.y]);
+
+    const startReferenceResize = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        referenceResizeRef.current = {
+            pointerX: event.clientX,
+            pointerY: event.clientY,
+            startWidth: referenceWindow.width,
+            startHeight: referenceWindow.height,
+        };
+    }, [referenceWindow.height, referenceWindow.width]);
 
     // Toggleable Analytics Panel for fullscreen
     const FullscreenOverlay = () => (
@@ -649,7 +773,27 @@ export default function StructureViewerPane({
             {/* Frustration Analysis (FrustraMPNN) */}
             {selectedDesign?.frustration_high_count != null && (
                 <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
-                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Frustration Analysis</h4>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Frustration Analysis</h4>
+                        {selectedDesign.frustration_csv_relpath && (
+                            <div className="flex items-center gap-2">
+                                <a
+                                    href={buildFileStreamUrl(selectedDesign.frustration_csv_relpath)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                                >
+                                    Open CSV
+                                </a>
+                                <a
+                                    href={buildFileDownloadUrl(selectedDesign.frustration_csv_relpath)}
+                                    className="rounded border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                                >
+                                    Download CSV
+                                </a>
+                            </div>
+                        )}
+                    </div>
                     <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                             <span className="text-slate-500">Highly Frustrated</span>
@@ -794,6 +938,28 @@ export default function StructureViewerPane({
 
             {/* Fullscreen Toggle */}
             <button
+                onClick={() => {
+                    if (showReferenceDock) {
+                        closeReferenceDock();
+                    } else if (selectedReference) {
+                        setReferenceDockMode('viewer');
+                        setShowReferenceDock(true);
+                        requestAnimationFrame(() => positionReferenceWindow('viewer'));
+                    } else {
+                        openReferenceSelector();
+                    }
+                }}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
+                    ? (showReferenceDock
+                        ? 'bg-blue-500/80 text-white backdrop-blur-sm'
+                        : 'bg-slate-800/90 text-slate-100 hover:bg-slate-700/90 backdrop-blur-sm')
+                    : (showReferenceDock
+                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600')}`}
+            >
+                {showReferenceDock ? 'Close Reference' : 'Reference'}
+            </button>
+            <button
                 onClick={toggleFullscreen}
                 className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
                     ? 'bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm'
@@ -812,7 +978,7 @@ export default function StructureViewerPane({
             {/* Main layout container - always present */}
             <div className={isFullscreen ? 'h-full w-full relative' : 'flex gap-4'}>
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
                         <ViewerToolbar isCompact={isFullscreen} />
@@ -842,6 +1008,79 @@ export default function StructureViewerPane({
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />
+
+                        {showReferenceDock && (
+                            <div
+                                className="absolute z-30 rounded-xl border border-slate-700/70 bg-slate-950/92 shadow-2xl backdrop-blur-sm overflow-hidden"
+                                style={{
+                                    left: referenceWindow.x,
+                                    top: referenceWindow.y,
+                                    width: referenceWindow.width,
+                                    height: referenceWindow.height,
+                                    maxWidth: 'calc(100% - 24px)',
+                                    maxHeight: 'calc(100% - 24px)',
+                                }}
+                            >
+                                <div
+                                    onMouseDown={startReferenceDrag}
+                                    className="flex cursor-move items-center justify-between border-b border-slate-700/60 px-3 py-2"
+                                >
+                                    <div className="min-w-0">
+                                        <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                            {referenceDockMode === 'viewer' ? 'Reference Structure' : 'Compare to Reference'}
+                                        </div>
+                                        <div className="truncate text-[11px] text-slate-300">
+                                            {selectedReference ? selectedReference.name : 'Select a crystal or prior design reference'}
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 pl-3">
+                                        <button
+                                            onClick={closeReferenceDock}
+                                            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-700"
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {referenceDockMode === 'viewer' && selectedReference ? (
+                                    <div className="h-[calc(100%-45px)] p-2">
+                                        <MolstarViewer
+                                            key={`reference:${selectedReference.url}`}
+                                            structureUrl={selectedReference.url}
+                                            format={selectedReference.format}
+                                            alphafoldView={false}
+                                            height="100%"
+                                            backgroundColor={themeColors.bgSecondary}
+                                            label={selectedReference.name}
+                                        />
+                                    </div>
+                                ) : (
+                                    <div className="h-[calc(100%-45px)] overflow-y-auto p-2">
+                                        <ReferenceSelector
+                                            selectedRef={selectedReference}
+                                            onSelect={(reference) => {
+                                                if (reference) {
+                                                    showSelectedReference(reference);
+                                                } else {
+                                                    setSelectedReference(null);
+                                                }
+                                            }}
+                                            currentDesignId={selectedDesignId || undefined}
+                                        />
+                                    </div>
+                                )}
+
+                                <button
+                                    onMouseDown={startReferenceResize}
+                                    className="absolute bottom-2 right-2 h-5 w-5 cursor-se-resize rounded border border-slate-700/70 bg-slate-800/80 text-[10px] leading-none text-slate-400 hover:bg-slate-700"
+                                    aria-label="Resize reference window"
+                                    title="Resize"
+                                >
+                                    ◢
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
 
