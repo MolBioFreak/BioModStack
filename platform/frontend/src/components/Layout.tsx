@@ -10,11 +10,31 @@ interface LayoutProps {
     children: React.ReactNode;
 }
 
+const SHOW_SYSTEM_ANALYTICS_TAB_KEY = 'show_system_analytics_tab';
+
+function readShowSystemAnalyticsTab(): boolean {
+    try {
+        return localStorage.getItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY) === 'true';
+    } catch {
+        return false;
+    }
+}
+
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
+    const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
 
     const isActive = (path: string) => location.pathname === path;
     const showSystemMenus = location.pathname !== '/ngs';
+
+    const handleSetShowSystemAnalyticsTab = (enabled: boolean) => {
+        setShowSystemAnalyticsTab(enabled);
+        try {
+            localStorage.setItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY, String(enabled));
+        } catch {
+            // Ignore localStorage failures and keep UI responsive.
+        }
+    };
 
     return (
         <div
@@ -34,19 +54,11 @@ export function Layout({ children }: LayoutProps) {
                 <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
                     <div className="flex items-center justify-between h-16 min-w-0 gap-3">
                         {/* Logo / Brand */}
-                        <Link to="/" className="flex items-center gap-3 shrink-0">
-                            <div
-                                className="w-10 h-10 rounded-xl flex items-center justify-center"
-                                style={{
-                                    background: `linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-to))`
-                                }}
-                            >
-                                <span className="text-white font-bold text-xl">B</span>
-                            </div>
+                        <Link to="/" className="flex items-center shrink-0">
                             <span
-                                className="text-lg font-bold bg-clip-text text-transparent whitespace-nowrap"
+                                className="text-lg font-bold whitespace-nowrap"
                                 style={{
-                                    backgroundImage: `linear-gradient(to right, var(--accent-gradient-from), var(--accent-gradient-to))`
+                                    color: 'var(--accent-primary)'
                                 }}
                             >
                                 <span className="inline 2xl:hidden">BMS</span>
@@ -110,38 +122,22 @@ export function Layout({ children }: LayoutProps) {
                                 }}
                                 title="NGS Data Visualization Toolkit"
                             >
-                                <span className="inline-flex items-center gap-1.5">
-                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                        <rect x="4" y="3" width="16" height="18" rx="2" />
-                                        <path d="M8 7h8M8 11h8" strokeDasharray="2 2" />
-                                        <circle cx="12" cy="16" r="2" />
-                                    </svg>
-                                    <span className="inline 2xl:hidden">NGS Toolkit</span>
-                                    <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
-                                </span>
+                                <span className="inline 2xl:hidden">NGS Toolkit</span>
+                                <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
                             </Link>
-                            <Link
-                                to="/infra"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                                title="Infra Monitor"
-                            >
-                                <span className="inline-flex items-center gap-1.5">
-                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                        <path d="M4 18h16" strokeLinecap="round" />
-                                        <path d="M6 15l3-4 3 2 4-6 2 3" strokeLinecap="round" strokeLinejoin="round" />
-                                        <circle cx="6" cy="15" r="1" fill="currentColor" stroke="none" />
-                                        <circle cx="9" cy="11" r="1" fill="currentColor" stroke="none" />
-                                        <circle cx="12" cy="13" r="1" fill="currentColor" stroke="none" />
-                                        <circle cx="16" cy="7" r="1" fill="currentColor" stroke="none" />
-                                        <circle cx="18" cy="10" r="1" fill="currentColor" stroke="none" />
-                                    </svg>
-                                    <span>Infra</span>
-                                </span>
-                            </Link>
+                            {showSystemAnalyticsTab && (
+                                <Link
+                                    to="/infra"
+                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                    style={{
+                                        backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="System Analytics"
+                                >
+                                    <span>System Analytics</span>
+                                </Link>
+                            )}
                             <Link
                                 to="/bioxp"
                                 className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
@@ -151,15 +147,8 @@ export function Layout({ children }: LayoutProps) {
                                 }}
                                 title="BioXP Control Surface"
                             >
-                                <span className="inline-flex items-center gap-1.5">
-                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                        <rect x="3" y="5" width="18" height="14" rx="2" />
-                                        <path d="M7 15h10M7 9h2" strokeLinecap="round" strokeDasharray="2 2" />
-                                        <circle cx="16" cy="9" r="1.5" />
-                                    </svg>
-                                    <span className="hidden 2xl:inline ml-1.5">BioXP Control Surface</span>
-                                    <span className="inline 2xl:hidden ml-1.5">BioXP Cockpit</span>
-                                </span>
+                                <span className="hidden 2xl:inline">BioXP Control Surface</span>
+                                <span className="inline 2xl:hidden">BioXP Cockpit</span>
                             </Link>
 
                             {/* Theme Selector */}
@@ -172,7 +161,10 @@ export function Layout({ children }: LayoutProps) {
                             {showSystemMenus && <MSAServerSettingsMenu />}
 
                             {/* Debug Menu */}
-                            <DebugMenu />
+                            <DebugMenu
+                                showSystemAnalyticsTab={showSystemAnalyticsTab}
+                                onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
+                            />
                         </div>
                     </div>
                 </div>
@@ -186,7 +178,13 @@ export function Layout({ children }: LayoutProps) {
     );
 }
 
-function DebugMenu() {
+function DebugMenu({
+    showSystemAnalyticsTab,
+    onSetShowSystemAnalyticsTab,
+}: {
+    showSystemAnalyticsTab: boolean;
+    onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
+}) {
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
     const [result, setResult] = useState<string | null>(null);
@@ -234,6 +232,22 @@ function DebugMenu() {
 
                     {/* Dropdown */}
                     <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2">
+                        <div className="px-3 py-2 border-b border-slate-700">
+                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Navigation</p>
+                        </div>
+
+                        <div className="p-2 border-b border-slate-700">
+                            <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
+                                <span className="text-sm text-slate-300">Show System Analytics tab</span>
+                                <input
+                                    type="checkbox"
+                                    checked={showSystemAnalyticsTab}
+                                    onChange={(event) => onSetShowSystemAnalyticsTab(event.target.checked)}
+                                    className="h-4 w-4"
+                                />
+                            </label>
+                        </div>
+
                         <div className="px-3 py-2 border-b border-slate-700">
                             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cache Cleanup</p>
                         </div>

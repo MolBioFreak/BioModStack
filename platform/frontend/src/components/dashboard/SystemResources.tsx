@@ -318,6 +318,97 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
     );
 }
 
+function GpuPowerControlCard({
+    gpu,
+    currentLimit,
+    onSetLimit,
+    isPending,
+    disabled,
+    onToggleDisable,
+}: {
+    gpu: GPUStatus;
+    currentLimit: number;
+    onSetLimit: (watts: number) => void;
+    isPending: boolean;
+    disabled: boolean;
+    onToggleDisable: () => void;
+}) {
+    const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
+    const powerPercent = currentLimit > 0 ? (gpu.power_draw_w / currentLimit) * 100 : 0;
+
+    const handleApply = () => {
+        const watts = parseInt(inputValue, 10);
+        if (!Number.isNaN(watts) && watts >= gpu.min_power_watts && watts <= gpu.max_power_watts) {
+            onSetLimit(watts);
+        }
+    };
+
+    const handleIncrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        setInputValue(String(Math.min(current + 5, gpu.max_power_watts)));
+    };
+
+    const handleDecrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        setInputValue(String(Math.max(current - 5, gpu.min_power_watts)));
+    };
+
+    const parsedValue = parseInt(inputValue, 10);
+    const isOutOfRange = !Number.isNaN(parsedValue) && (parsedValue < gpu.min_power_watts || parsedValue > gpu.max_power_watts);
+    const isDirty = parsedValue !== currentLimit;
+
+    return (
+        <div className={`rounded-xl border bg-slate-900/80 p-3 transition-colors ${disabled ? 'border-red-500/40' : 'border-slate-800 hover:border-accent/40'}`}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-100">{gpu.name}</div>
+                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                        <span>{gpu.power_draw_w.toFixed(1)}W draw</span>
+                        <span>{currentLimit}W cap</span>
+                    </div>
+                </div>
+                <button
+                    onClick={onToggleDisable}
+                    className={`rounded px-2 py-1 text-xs font-medium transition-colors ${disabled ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
+                    title={disabled ? 'Enable GPU for inference' : 'Disable GPU from inference'}
+                >
+                    {disabled ? 'Enable' : 'Disable'}
+                </button>
+            </div>
+
+            <div className="mb-3 h-1.5 rounded-full bg-slate-800">
+                <div
+                    className={`h-1.5 rounded-full ${powerPercent > 90 ? 'bg-red-500' : powerPercent > 70 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+                    style={{ width: `${Math.min(powerPercent, 100)}%` }}
+                />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+                <button onClick={handleDecrement} className="h-7 w-7 rounded bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">−</button>
+                <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                    className={`w-16 rounded border bg-slate-800 px-2 py-1.5 text-center text-sm text-slate-100 ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-700'}`}
+                />
+                <button onClick={handleIncrement} className="h-7 w-7 rounded bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">+</button>
+                <span className="ml-1 text-xs text-slate-500">W</span>
+                {isDirty && (
+                    <button
+                        onClick={handleApply}
+                        disabled={isPending || isOutOfRange}
+                        className="ml-auto rounded bg-accent/15 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/25 disabled:opacity-50"
+                    >
+                        Apply
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // GPU Names for dropdown
 const GPU_NAMES: Record<number, string> = {
     0: 'RTX 5090',
@@ -1258,6 +1349,101 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 </div>
             )}
         </div>
+    );
+}
+
+export function GpuSchedulerControls() {
+    const { data: systemData } = useQuery({
+        queryKey: ['system'],
+        queryFn: fetchSystemStatus,
+        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const gpus = systemData?.data.gpus ?? [];
+
+    return (
+        <section className="mb-6">
+            <GPUSchedulerSettings gpus={gpus} />
+        </section>
+    );
+}
+
+export function GpuPowerControls() {
+    const queryClient = useQueryClient();
+
+    const { data: systemData } = useQuery({
+        queryKey: ['system'],
+        queryFn: fetchSystemStatus,
+        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const { data: powerControlData } = useQuery({
+        queryKey: ['powerControl'],
+        queryFn: fetchPowerControl,
+        refetchInterval: POWER_CONTROL_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const { data: schedulerConfigData } = useQuery({
+        queryKey: ['schedulerConfig'],
+        queryFn: fetchSchedulerConfig,
+        refetchInterval: SCHEDULER_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const manualMutation = useMutation({
+        mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
+            setPowerControlManual(gpuIndex, limitWatts),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
+            queryClient.invalidateQueries({ queryKey: ['system'] });
+        },
+    });
+
+    const toggleDisableMutation = useMutation({
+        mutationFn: (gpuId: number) => toggleGpuDisabled(gpuId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['schedulerConfig'] });
+        },
+    });
+
+    const currentLimits = powerControlData?.data.limits ?? {};
+    const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
+    const gpus = systemData?.data.gpus ?? [];
+
+    if (gpus.length === 0) return null;
+
+    return (
+        <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-2xl shadow-black/20">
+            <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-lg font-semibold text-slate-100">GPU Power Controls</h2>
+                    <p className="mt-1 text-sm text-slate-400">
+                        Manual power caps and enable state for each GPU.
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-2">
+                {gpus.map((gpu) => (
+                    <GpuPowerControlCard
+                        key={gpu.index}
+                        gpu={gpu}
+                        currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
+                        onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
+                        isPending={manualMutation.isPending}
+                        disabled={gpuOverrides[String(gpu.index)]?.disabled ?? false}
+                        onToggleDisable={() => toggleDisableMutation.mutate(gpu.index)}
+                    />
+                ))}
+            </div>
+        </section>
     );
 }
 

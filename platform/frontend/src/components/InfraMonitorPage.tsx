@@ -17,7 +17,7 @@ export function InfraMonitorPage() {
                 </div>
                 <div>
                     <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-300 via-blue-300 to-emerald-300 bg-clip-text text-transparent">
-                        Infra Monitor
+                        System Analytics
                     </h1>
                     <p className="mt-2 max-w-3xl text-sm text-slate-400">
                         Dedicated workstation telemetry for CPU, memory, and GPUs. This page stays separate from the main dashboard until the upgraded monitor is ready to replace the legacy system block.

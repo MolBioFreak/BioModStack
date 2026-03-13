@@ -1531,11 +1531,15 @@ async def launch_nextflow_job(
                         # the orchestrator may have prematurely marked this job complete.
                         if job.awaiting_input:
                             job.status = JobStatus.AWAITING_INPUT.value
-                            job.queue_status = 'paused'
+                            job.queue_status = 'completed'
+                            job.paused = False
+                            job.assigned_gpu = None
                             job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
                         else:
                             job.status = JobStatus.COMPLETED.value
                             job.queue_status = 'completed'
+                            job.paused = False
+                            job.assigned_gpu = None
                             job.current_stage = "Complete"
                         job.error_message = None
                         
