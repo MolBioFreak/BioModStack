@@ -17,6 +17,7 @@ export interface Job {
     params: Record<string, any>;
     created_at: string;
     design_count: number;
+    requested_design_count?: number | null;
     output_dir: string | null;
     error_message?: string | null;
     // Batch grouping for job sets
@@ -219,6 +220,7 @@ export type AntibodyIterationAction =
     | 'fampnn_redesign'
     | 'frustrampnn'
     | 'cdr_indel_round'
+    | 'mutation_seeded_refinement'
     | 'ui_refinement';
 
 export interface AntibodyCdrIndelConfig {
@@ -241,6 +243,7 @@ export interface LaunchAntibodyIterationRequest {
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
     cdr_indel_config?: AntibodyCdrIndelConfig;
+    manual_mutagenesis_config?: ManualMutagenesisConfig;
 }
 
 export interface LaunchAntibodyIterationResponse {
@@ -421,7 +424,18 @@ export interface Design {
     backbone_id: number | null;
     epitope_contact_count: number | null;
     epitope_min_distance: number | null;
+    epitope_min_atom_distance?: number | null;
+    epitope_nearest_antibody_residue?: string | null;
+    epitope_nearest_target_residue?: string | null;
+    epitope_nearest_antibody_atom?: string | null;
+    epitope_nearest_target_atom?: string | null;
     target_contact_count?: number | null;
+    target_min_distance?: number | null;
+    target_min_atom_distance?: number | null;
+    target_nearest_antibody_residue?: string | null;
+    target_nearest_target_residue?: string | null;
+    target_nearest_antibody_atom?: string | null;
+    target_nearest_target_atom?: string | null;
     screening_reason?: string | null;
     // Antibody annotation
     binder_length: number | null;
@@ -484,12 +498,28 @@ export interface DesignFilters {
 export interface BackboneSummary {
     job_id: string;
     total: number;
+    assigned_total?: number;
+    unassigned_total?: number;
     backbones: Record<number, {
         count: number;
         avg_plddt: number | null;
+        max_plddt?: number | null;
         avg_iptm: number | null;
         avg_ptm: number | null;
         min_pae: number | null;
+        max_epitope_contacts?: number | null;
+        min_epitope_distance?: number | null;
+        avg_cdr_h1_length?: number | null;
+        avg_cdr_h2_length?: number | null;
+        avg_cdr_h3_length?: number | null;
+        representative?: {
+            id: string;
+            name: string;
+            pdb_path: string | null;
+            plddt_overall: number | null;
+            epitope_contact_count: number | null;
+            epitope_min_distance: number | null;
+        } | null;
     }>;
 }
 
@@ -742,8 +772,27 @@ export const generateNTP3D = (ntpName: string) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface SchedulerConfig {
-    global: { busy_threshold: number; cooldown_ms: number; enabled: boolean };
-    overrides: Record<string, { disabled?: boolean; force_available?: boolean }>;
+    global: {
+        busy_threshold: number;
+        cooldown_ms: number;
+        enabled: boolean;
+        target_vram_fill: number;
+        capacity_weight: number;
+        emptiness_weight: number;
+        max_launches_per_cycle: number;
+        msa_concurrency_limit: number;
+        msa_preferred_gpu_ids?: number[];
+        msa_avoid_heavy_gpus?: boolean;
+    };
+    overrides: Record<string, {
+        disabled?: boolean;
+        force_available?: boolean;
+        quick_enable?: boolean;
+        threshold?: number | null;
+        priority_tier?: number | null;
+        vram_safety_margin_mb?: number;
+        max_concurrent_jobs?: number | null;
+    }>;
 }
 
 export const fetchSchedulerConfig = () =>
@@ -767,6 +816,7 @@ export interface QueuedJob {
     assigned_gpu: number | null;
     priority: number;
     vram_estimate_mb: number | null;
+    live_vram_mb: number | null;
     sequence_length: number | null;
     batch_id: string | null;
     batch_name: string | null;
@@ -776,6 +826,10 @@ export interface QueuedJob {
     started_at: string | null;
     current_stage: string | null;  // Current workflow step (e.g., 'rfantibody', 'fampnn', 'boltz2')
     stage_progress: string | null;  // Granular progress (e.g., '5/30', 'step 500/1000')
+    scheduler_required_mb: number | null;
+    scheduler_candidate_gpus: number[] | null;
+    scheduler_ready: boolean | null;
+    scheduler_blockers: string[] | null;
 }
 
 export interface QueueStats {
@@ -1118,7 +1172,7 @@ export interface CachedFramework {
     file_path: string;
     size_bytes: number;
     cached_at: string;
-    last_used_at: string;
+    last_used_at?: string | null;
 }
 
 export interface CachedRcsbEntry {
@@ -1127,7 +1181,7 @@ export interface CachedRcsbEntry {
     url: string;
     size_bytes: number;
     cached_at: string;
-    last_used_at: string;
+    last_used_at?: string | null;
 }
 
 export interface RcsbCacheResponse {

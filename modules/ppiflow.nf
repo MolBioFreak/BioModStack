@@ -315,6 +315,7 @@ process PrepMaturationRedesign {
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
+    def extraFixedJson = params.manual_mutation_fixed_positions_json ? " \\\\\n        --extra_fixed_positions_json \\\"${params.manual_mutation_fixed_positions_json}\\\"" : ""
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -343,7 +344,7 @@ process PrepMaturationRedesign {
         --antibody_chains "${antibodyChains}" \\
         --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
         --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}" \\
-        --extra_fixed_positions "\${anchors_spec}" \\
+        --extra_fixed_positions "\${anchors_spec}"${extraFixedJson} \\
         --cdr_positions "\${cdr_positions}" \\
         --cdr_positions_by_loop "${cdr_positions_by_loop}"
     """

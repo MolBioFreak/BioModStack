@@ -79,6 +79,47 @@ def unique_residue_ids(ca_atoms) -> list[int]:
     return seen
 
 
+def format_residue_label(atom) -> str:
+    chain_id = str(getattr(atom, "chain_id", "") or "")
+    res_id = int(getattr(atom, "res_id", 0))
+    res_name = str(getattr(atom, "res_name", "") or "").strip()
+    if res_name:
+        return f"{chain_id}{res_id}:{res_name}"
+    return f"{chain_id}{res_id}"
+
+
+def format_atom_label(atom) -> str:
+    residue_label = format_residue_label(atom)
+    atom_name = str(getattr(atom, "atom_name", "") or "").strip()
+    return f"{residue_label}:{atom_name}" if atom_name else residue_label
+
+
+def nearest_pair_details(query_atoms, target_atoms) -> dict[str, Any]:
+    if len(query_atoms) == 0 or len(target_atoms) == 0:
+        return {
+            "distance": None,
+            "query_residue": None,
+            "target_residue": None,
+            "query_atom": None,
+            "target_atom": None,
+        }
+
+    pairwise_distances = np.linalg.norm(
+        query_atoms.coord[:, None, :] - target_atoms.coord[None, :, :],
+        axis=2,
+    )
+    query_idx, target_idx = np.unravel_index(np.argmin(pairwise_distances), pairwise_distances.shape)
+    query_atom = query_atoms[query_idx]
+    target_atom = target_atoms[target_idx]
+    return {
+        "distance": float(pairwise_distances[query_idx, target_idx]),
+        "query_residue": format_residue_label(query_atom),
+        "target_residue": format_residue_label(target_atom),
+        "query_atom": format_atom_label(query_atom),
+        "target_atom": format_atom_label(target_atom),
+    }
+
+
 def infer_antibody_chains(all_chains: list[str], antibody_chain_hint: str | None) -> list[str]:
     antibody_chains: list[str] = []
     for chain_id in ["H", "L"]:
@@ -206,6 +247,8 @@ def compute_geometry_metrics(
 
     antibody_ca = structure[np.isin(structure.chain_id, antibody_chain_ids) & (structure.atom_name == "CA")]
     target_ca = structure[(structure.chain_id == target_chain_id) & (structure.atom_name == "CA")]
+    antibody_atoms = structure[np.isin(structure.chain_id, antibody_chain_ids)]
+    target_atoms = structure[structure.chain_id == target_chain_id]
     if len(antibody_ca) == 0:
         raise ValueError(f"No antibody CA atoms found in chains {antibody_chain_ids}")
     if len(target_ca) == 0:
@@ -218,6 +261,8 @@ def compute_geometry_metrics(
         axis=2,
     )
     min_target_distances = np.min(pairwise_target_distances, axis=1)
+    target_ca_nearest = nearest_pair_details(antibody_ca, target_ca)
+    target_atom_nearest = nearest_pair_details(antibody_atoms, target_atoms)
 
     epitope_residue_numbers, epitope_mapping_mode = map_epitope_residue_numbers(
         epitope_residues,
@@ -230,6 +275,20 @@ def compute_geometry_metrics(
     epitope_residue_count = 0
     epitope_contact_count = 0
     epitope_min_distance: float | None = None
+    epitope_ca_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
+    epitope_atom_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
     if epitope_residue_numbers:
         epitope_ca = target_ca[np.isin(target_ca.res_id, list(epitope_residue_numbers))]
         epitope_residue_count = int(len(epitope_ca))
@@ -245,6 +304,10 @@ def compute_geometry_metrics(
             antibody_centroid = np.mean(antibody_coords, axis=0)
             epitope_centroid = np.mean(epitope_ca.coord, axis=0)
             epitope_centroid_distance = float(np.linalg.norm(antibody_centroid - epitope_centroid))
+            epitope_ca_nearest = nearest_pair_details(antibody_ca, epitope_ca)
+            epitope_atoms = target_atoms[np.isin(target_atoms.res_id, list(epitope_residue_numbers))]
+            if len(epitope_atoms) > 0:
+                epitope_atom_nearest = nearest_pair_details(antibody_atoms, epitope_atoms)
 
     antibody_target_centroid_distance = float(
         np.linalg.norm(np.mean(antibody_coords, axis=0) - np.mean(target_coords, axis=0))
@@ -259,8 +322,18 @@ def compute_geometry_metrics(
         "epitope_mapping_mode": epitope_mapping_mode,
         "epitope_contact_count": epitope_contact_count,
         "epitope_min_distance": epitope_min_distance,
+        "epitope_min_atom_distance": epitope_atom_nearest["distance"],
+        "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
+        "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
+        "epitope_nearest_antibody_atom": epitope_atom_nearest["query_atom"],
+        "epitope_nearest_target_atom": epitope_atom_nearest["target_atom"],
         "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
         "target_min_distance": float(np.min(min_target_distances)),
+        "target_min_atom_distance": target_atom_nearest["distance"],
+        "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
+        "target_nearest_target_residue": target_ca_nearest["target_residue"],
+        "target_nearest_antibody_atom": target_atom_nearest["query_atom"],
+        "target_nearest_target_atom": target_atom_nearest["target_atom"],
         "target_contact_distance_threshold": float(target_contact_distance_threshold),
         "epitope_centroid_distance": epitope_centroid_distance,
         "target_centroid_distance": antibody_target_centroid_distance,
@@ -276,6 +349,7 @@ def screen_design(
     max_epitope_distance: float | None,
     contact_distance_threshold: float,
     min_target_contacts: int | None,
+    max_target_distance: float | None,
     max_epitope_centroid_distance: float | None,
     target_contact_distance_threshold: float,
     reference_target_pdb: Path | None,
@@ -308,11 +382,20 @@ def screen_design(
             reasons.append(f"min_distance>{max_epitope_distance}")
 
     target_contact_count = geometry_metrics["target_contact_count"]
+    target_min_distance = geometry_metrics["target_min_distance"]
     epitope_centroid_distance = geometry_metrics["epitope_centroid_distance"]
 
     if min_target_contacts is not None and int(target_contact_count) < int(min_target_contacts):
         passed = False
         reasons.append(f"target_contacts<{min_target_contacts}")
+
+    if max_target_distance is not None:
+        if target_min_distance is None:
+            passed = False
+            reasons.append("target_distance_missing")
+        elif float(target_min_distance) > float(max_target_distance):
+            passed = False
+            reasons.append(f"target_min_distance>{max_target_distance}")
 
     if max_epitope_centroid_distance is not None:
         if epitope_centroid_distance is None:
@@ -344,6 +427,7 @@ def main() -> int:
     parser.add_argument("--max-epitope-distance", type=float, default=None, help="Maximum allowed minimum CA distance to the selected epitope")
     parser.add_argument("--contact-distance-threshold", type=float, default=8.0, help="CA contact cutoff in angstroms")
     parser.add_argument("--min-target-contacts", type=int, default=None, help="Minimum loose CA contacts to any target residues")
+    parser.add_argument("--max-target-distance", type=float, default=None, help="Maximum allowed minimum CA distance to any target residue")
     parser.add_argument("--max-epitope-centroid-distance", type=float, default=None, help="Maximum antibody-to-epitope centroid distance in angstroms")
     parser.add_argument("--target-contact-distance-threshold", type=float, default=12.0, help="Loose antibody-target CA contact cutoff in angstroms")
     args = parser.parse_args()
@@ -363,6 +447,7 @@ def main() -> int:
             args.min_epitope_contacts,
             args.max_epitope_distance,
             args.min_target_contacts,
+            args.max_target_distance,
             args.max_epitope_centroid_distance,
         )
     )
@@ -384,6 +469,7 @@ def main() -> int:
             "max_epitope_distance": args.max_epitope_distance,
             "contact_distance_threshold": args.contact_distance_threshold,
             "min_target_contacts": args.min_target_contacts,
+            "max_target_distance": args.max_target_distance,
             "max_epitope_centroid_distance": args.max_epitope_centroid_distance,
             "target_contact_distance_threshold": args.target_contact_distance_threshold,
             "results": [],
@@ -402,6 +488,7 @@ def main() -> int:
                 max_epitope_distance=args.max_epitope_distance,
                 contact_distance_threshold=args.contact_distance_threshold,
                 min_target_contacts=args.min_target_contacts,
+                max_target_distance=args.max_target_distance,
                 max_epitope_centroid_distance=args.max_epitope_centroid_distance,
                 target_contact_distance_threshold=args.target_contact_distance_threshold,
                 reference_target_pdb=reference_target_pdb,
@@ -412,9 +499,19 @@ def main() -> int:
                 "pdb_path": str(pdb_path.resolve()),
                 "epitope_contact_count": 0,
                 "epitope_min_distance": None,
+                "epitope_min_atom_distance": None,
+                "epitope_nearest_antibody_residue": None,
+                "epitope_nearest_target_residue": None,
+                "epitope_nearest_antibody_atom": None,
+                "epitope_nearest_target_atom": None,
                 "epitope_mapping_mode": "error",
                 "target_contact_count": 0,
                 "target_min_distance": None,
+                "target_min_atom_distance": None,
+                "target_nearest_antibody_residue": None,
+                "target_nearest_target_residue": None,
+                "target_nearest_antibody_atom": None,
+                "target_nearest_target_atom": None,
                 "epitope_centroid_distance": None,
                 "target_centroid_distance": None,
                 "detected_antibody_chains": "",
@@ -442,9 +539,19 @@ def main() -> int:
                 "design_name",
                 "epitope_contact_count",
                 "epitope_min_distance",
+                "epitope_min_atom_distance",
+                "epitope_nearest_antibody_residue",
+                "epitope_nearest_target_residue",
+                "epitope_nearest_antibody_atom",
+                "epitope_nearest_target_atom",
                 "epitope_mapping_mode",
                 "target_contact_count",
                 "target_min_distance",
+                "target_min_atom_distance",
+                "target_nearest_antibody_residue",
+                "target_nearest_target_residue",
+                "target_nearest_antibody_atom",
+                "target_nearest_target_atom",
                 "epitope_centroid_distance",
                 "target_centroid_distance",
                 "target_contact_distance_threshold",
@@ -472,6 +579,7 @@ def main() -> int:
         "max_epitope_distance": args.max_epitope_distance,
         "contact_distance_threshold": args.contact_distance_threshold,
         "min_target_contacts": args.min_target_contacts,
+        "max_target_distance": args.max_target_distance,
         "max_epitope_centroid_distance": args.max_epitope_centroid_distance,
         "target_contact_distance_threshold": args.target_contact_distance_threshold,
         "results": results,

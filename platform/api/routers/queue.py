@@ -11,12 +11,15 @@ Provides endpoints for managing the GPU orchestrator job queue:
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
+from typing import Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, field_serializer
+from datetime import datetime, timezone
+from pathlib import Path
 
 from database import Job, get_session
 from services.gpu_metadata import HARDWARE_LIMITS
+from services.gpu_config import read_scheduler_config
+from services.gpu_orchestrator import collect_live_vram_by_job, build_queue_scheduler_diagnostics
 from services.job_control import force_launch_job as force_launch_job_service
 import logging
 
@@ -49,11 +52,168 @@ class QueuedJobResponse(BaseModel):
     max_retries: int
     created_at: datetime
     started_at: Optional[datetime]
+    live_vram_mb: Optional[int] = None
     current_stage: Optional[str] = None  # Current workflow step (rfantibody, fampnn, etc.)
     stage_progress: Optional[str] = None  # Granular progress (e.g., "5/30")
-    
-    class Config:
-        from_attributes = True
+    scheduler_required_mb: Optional[int] = None
+    scheduler_candidate_gpus: Optional[List[int]] = None
+    scheduler_ready: Optional[bool] = None
+    scheduler_blockers: Optional[List[str]] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer('created_at', 'started_at')
+    @classmethod
+    def serialize_datetime(cls, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _parse_pid(raw_pid: Optional[str]) -> Optional[int]:
+    try:
+        return int(str(raw_pid).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_process_ancestor_pids(pid: int, cache: Dict[int, set[int]]) -> set[int]:
+    if pid in cache:
+        return cache[pid]
+    ancestors: set[int] = set()
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        while proc is not None:
+            ancestors.add(proc.pid)
+            proc = proc.parent()
+    except Exception:
+        pass
+    cache[pid] = ancestors
+    return ancestors
+
+
+def _get_process_cmdline(pid: int, cache: Dict[int, str]) -> str:
+    if pid in cache:
+        return cache[pid]
+    cmdline = ""
+    try:
+        import psutil
+
+        cmdline = " ".join(psutil.Process(pid).cmdline()).lower()
+    except Exception:
+        cmdline = ""
+    cache[pid] = cmdline
+    return cmdline
+
+
+def _collect_live_vram_by_job(jobs: List[Job]) -> Dict[str, int]:
+    running_jobs = [job for job in jobs if job.queue_status == "running" and job.assigned_gpu is not None]
+    if not running_jobs:
+        return {}
+    try:
+        from routers.gpu import get_gpu_stats_with_error
+        gpu_stats, _error = get_gpu_stats_with_error(force_refresh=True)
+    except Exception as exc:
+        logger.debug("Queue VRAM enrichment unavailable: %s", exc)
+        return {}
+    if not gpu_stats:
+        return {}
+    return collect_live_vram_by_job(running_jobs, gpu_stats)
+
+
+def _resolve_task_work_dir(task_bucket: str, task_prefix: str) -> Optional[str]:
+    try:
+        from paths import get_code_root, get_work_dir
+    except Exception:
+        return None
+    work_roots = [Path(get_work_dir()), Path(get_code_root()) / "work"]
+    seen_roots = set()
+    for work_root in work_roots:
+        root_key = str(work_root)
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        bucket_dir = work_root / task_bucket
+        if not bucket_dir.exists():
+            continue
+        try:
+            matches = sorted(bucket_dir.glob(f"{task_prefix}*"))
+        except Exception:
+            continue
+        for candidate in matches:
+            if candidate.is_dir():
+                return str(candidate)
+    return None
+
+
+def _infer_stage_work_dir(job: Job) -> Optional[str]:
+    output_dir = getattr(job, "output_dir", None)
+    current_stage = str(getattr(job, "current_stage", "") or "").strip().lower()
+    if not output_dir or not current_stage:
+        return None
+
+    log_candidates = [Path(output_dir) / "nextflow.log", Path(output_dir) / ".nextflow.log"]
+    log_path = next((candidate for candidate in log_candidates if candidate.exists()), None)
+    if log_path is None:
+        return None
+
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()[-400:]
+    except Exception:
+        return None
+
+    stage_markers = {
+        "rfantibody": "rfantibody",
+        "fampnn": "fampnn",
+        "waitforchildren": "waitforchildren",
+        "waitforfampnnchildren": "waitforfampnnchildren",
+        "waitformaturationchildren": "waitformaturationchildren",
+        "spawnrfantibodyjobs": "spawnrfantibodyjobs",
+        "spawnfampnnjobs": "spawnfampnnjobs",
+        "spawnmaturationjobs": "spawnmaturationjobs",
+        "spawnchildjobs": "spawnchildjobs",
+        "waitandaggregatechildresults": "waitandaggregatechildresults",
+        "protenix": "protenix",
+        "boltz2": "boltz",
+    }
+    stage_marker = stage_markers.get(current_stage, current_stage)
+
+    import re
+
+    for line in reversed(lines):
+        if stage_marker not in line.lower():
+            continue
+        match = re.search(r'^\[([0-9a-f]{2})/([0-9a-f]+)\]\s+Submitted process >', line, re.IGNORECASE)
+        if match:
+            return _resolve_task_work_dir(match.group(1), match.group(2))
+    return None
+
+
+def _collect_stage_progress_by_job(jobs: List[Job]) -> Dict[str, str]:
+    try:
+        from services.nextflow import parse_stage_progress
+    except Exception as exc:
+        logger.debug("Queue progress enrichment unavailable: %s", exc)
+        return {}
+
+    progress_by_job: Dict[str, str] = {}
+    for job in jobs:
+        if job.queue_status != "running" or not job.current_stage:
+            continue
+        work_dir = job.stage_work_dir or _infer_stage_work_dir(job)
+        if not work_dir:
+            continue
+        total_designs = None
+        params = job.params if isinstance(job.params, dict) else {}
+        total_designs = params.get("rfantibody_num_designs") or params.get("num_designs")
+        progress = parse_stage_progress(work_dir, job.current_stage, total_designs)
+        if progress:
+            progress_by_job[job.id] = progress
+    return progress_by_job
 
 
 class PinGPURequest(BaseModel):
@@ -124,8 +284,57 @@ async def list_queue(
     
     result = await session.execute(query)
     jobs = result.scalars().all()
-    
-    return jobs
+    live_vram_by_job: Dict[str, int] = {}
+    scheduler_diagnostics: Dict[str, Dict[str, object]] = {}
+    running_jobs = [job for job in jobs if job.queue_status == "running"]
+    queued_jobs = [job for job in jobs if job.queue_status == "queued"]
+    try:
+        from routers.gpu import get_gpu_stats_with_error
+
+        gpu_stats, _gpu_error = get_gpu_stats_with_error(force_refresh=True)
+        if gpu_stats:
+            live_vram_by_job = collect_live_vram_by_job(running_jobs, gpu_stats)
+            if queued_jobs:
+                scheduler_diagnostics = build_queue_scheduler_diagnostics(
+                    queued_jobs,
+                    running_jobs,
+                    gpu_stats,
+                    read_scheduler_config(),
+                )
+    except Exception as exc:
+        logger.debug("Queue scheduler diagnostics unavailable: %s", exc)
+
+    stage_progress_by_job = _collect_stage_progress_by_job(jobs)
+
+    return [
+        QueuedJobResponse(
+            id=job.id,
+            name=job.name,
+            model_id=job.model_id,
+            mode=job.mode,
+            queue_status=job.queue_status,
+            paused=job.paused,
+            pinned_gpu=job.pinned_gpu,
+            assigned_gpu=job.assigned_gpu,
+            priority=job.priority,
+            vram_estimate_mb=job.vram_estimate_mb,
+            sequence_length=job.sequence_length,
+            batch_id=job.batch_id,
+            batch_name=job.batch_name,
+            retry_count=job.retry_count,
+            max_retries=job.max_retries,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            live_vram_mb=live_vram_by_job.get(job.id),
+            current_stage=job.current_stage,
+            stage_progress=stage_progress_by_job.get(job.id, job.stage_progress),
+            scheduler_required_mb=scheduler_diagnostics.get(job.id, {}).get("scheduler_required_mb"),
+            scheduler_candidate_gpus=scheduler_diagnostics.get(job.id, {}).get("scheduler_candidate_gpus"),
+            scheduler_ready=scheduler_diagnostics.get(job.id, {}).get("scheduler_ready"),
+            scheduler_blockers=scheduler_diagnostics.get(job.id, {}).get("scheduler_blockers"),
+        )
+        for job in jobs
+    ]
 
 
 @router.get("/stats", response_model=QueueStatsResponse)

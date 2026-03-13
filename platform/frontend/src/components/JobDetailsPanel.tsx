@@ -88,7 +88,14 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     {/* Job Info Row */}
                     <div className="flex items-center gap-6 text-xs text-slate-400 mb-3">
                         <span>Mode: <span className="text-slate-300">{job.mode}</span></span>
-                        <span>Designs: <span className="text-slate-300">{job.design_count}</span></span>
+                        {typeof job.requested_design_count === 'number' && job.requested_design_count !== job.design_count ? (
+                            <>
+                                <span>Requested: <span className="text-slate-300">{job.requested_design_count}</span></span>
+                                <span>Stored Rows: <span className="text-slate-300">{job.design_count}</span></span>
+                            </>
+                        ) : (
+                            <span>Designs: <span className="text-slate-300">{job.design_count}</span></span>
+                        )}
                         <span>Output: <code className="text-accent/80">{job.output_dir}</code></span>
                     </div>
 

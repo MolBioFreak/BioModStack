@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
 import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis } from '../lib/api';
-import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job, ManualMutagenesisConfig } from '../lib/api';
+import type { AntibodyCdrIndelConfig, AntibodyIterationAction, BackboneSummary, Job, ManualMutagenesisConfig } from '../lib/api';
 import { getOutputSourceBadgeClass, getOutputSourceLabel, inferDesignOutputSource, type OutputSourceFilter } from './designOutputSource';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
@@ -176,7 +176,27 @@ type AntibodyLoopRow = {
     length: number | null;
 };
 
+type GateBackboneSummary = {
+    mode?: string | null;
+    total?: number | null;
+    assigned_total?: number | null;
+    unassigned_total?: number | null;
+    backbones?: Record<string, {
+        count?: number | null;
+        representative_file?: string | null;
+        preview?: string[] | null;
+        sample_names?: string[] | null;
+    }> | null;
+};
+
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const coerceGateBackboneSummary = (value: unknown): GateBackboneSummary | null => {
+    if (!value || typeof value !== 'object') return null;
+    const typed = value as Record<string, unknown>;
+    if (!typed.backbones || typeof typed.backbones !== 'object') return null;
+    return typed as GateBackboneSummary;
+};
 
 export function ResultsViewer() {
     const { jobId } = useParams();
@@ -242,6 +262,7 @@ export function ResultsViewer() {
     const [rfdRogMin, setRfdRogMin] = useState<string>('');
     const [rfdRogMax, setRfdRogMax] = useState<string>('');
     const [epitopeMaxDist, setEpitopeMaxDist] = useState<string>('');
+    const [targetMaxDist, setTargetMaxDist] = useState<string>('');
     // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
@@ -422,6 +443,62 @@ export function ResultsViewer() {
         enabled: !!activeJob,
     });
     const backboneSummary = backboneSummaryData?.data;
+    const isPostRFantibodyReview = isAntibodyContext && String(activeJob?.awaiting_stage || '').toLowerCase() === 'post_rfantibody';
+    const gateCandidateBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.candidate_backbone_summary),
+        [activeJob?.awaiting_payload?.candidate_backbone_summary]
+    );
+    const gateRawBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.raw_backbone_summary),
+        [activeJob?.awaiting_payload?.raw_backbone_summary]
+    );
+    const gateFilteredBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.filtered_backbone_summary),
+        [activeJob?.awaiting_payload?.filtered_backbone_summary]
+    );
+    const reviewBackboneRows = useMemo(() => {
+        const ids = new Set<number>();
+        const apiBackbones = (backboneSummary?.backbones || {}) as Record<string, any>;
+        const pushKeys = (summary?: BackboneSummary | GateBackboneSummary | null) => {
+            const entries = summary?.backbones || {};
+            for (const key of Object.keys(entries)) {
+                const parsed = Number(key);
+                if (Number.isFinite(parsed)) ids.add(parsed);
+            }
+        };
+        pushKeys(backboneSummary);
+        pushKeys(gateCandidateBackboneSummary);
+        pushKeys(gateRawBackboneSummary);
+        pushKeys(gateFilteredBackboneSummary);
+
+        return Array.from(ids)
+            .sort((a, b) => a - b)
+            .map((backboneId) => {
+                const idKey = String(backboneId);
+                const apiEntry = apiBackbones[idKey];
+                const candidateEntry = gateCandidateBackboneSummary?.backbones?.[idKey];
+                const rawEntry = gateRawBackboneSummary?.backbones?.[idKey];
+                const filteredEntry = gateFilteredBackboneSummary?.backbones?.[idKey];
+                return {
+                    id: backboneId,
+                    count: apiEntry?.count ?? candidateEntry?.count ?? 0,
+                    avgPlddt: apiEntry?.avg_plddt ?? null,
+                    avgIptm: apiEntry?.avg_iptm ?? null,
+                    avgH3: apiEntry?.avg_cdr_h3_length ?? null,
+                    representative: apiEntry?.representative ?? null,
+                    candidateCount: candidateEntry?.count ?? null,
+                    rawCount: rawEntry?.count ?? null,
+                    filteredCount: filteredEntry?.count ?? null,
+                    previewName: candidateEntry?.sample_names?.[0] || null,
+                };
+            });
+    }, [backboneSummary, gateCandidateBackboneSummary, gateRawBackboneSummary, gateFilteredBackboneSummary]);
+    const reviewBackboneTotal = useMemo(() => {
+        if (isPostRFantibodyReview) {
+            return gateCandidateBackboneSummary?.total ?? backboneSummary?.total ?? 0;
+        }
+        return backboneSummary?.total ?? 0;
+    }, [isPostRFantibodyReview, gateCandidateBackboneSummary?.total, backboneSummary?.total]);
 
     // Fetch structure analysis for selected design (Biotite-powered)
     const { data: structureAnalysisData, isLoading: _structureAnalysisLoading } = useQuery({
@@ -521,6 +598,10 @@ export function ResultsViewer() {
         if (!isNaN(parsedEpitopeDist) && parsedEpitopeDist > 0) {
             filtered = filtered.filter(d => d.epitope_min_distance != null && d.epitope_min_distance <= parsedEpitopeDist);
         }
+        const parsedTargetDist = parseFloat(targetMaxDist);
+        if (!isNaN(parsedTargetDist) && parsedTargetDist > 0) {
+            filtered = filtered.filter(d => d.target_min_distance != null && d.target_min_distance <= parsedTargetDist);
+        }
         // RoG filter
         if (rogMinValue !== undefined) {
             filtered = filtered.filter(d => (d.rog ?? 0) >= rogMinValue);
@@ -581,6 +662,11 @@ export function ResultsViewer() {
         setOutputSourceFilter(preferredSource);
         setAntibodySourceFilter(preferredSource);
     }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir]);
+
+    useEffect(() => {
+        if (!isPostRFantibodyReview) return;
+        setSortField((current) => (current === 'name' ? 'backbone' : current));
+    }, [selectedJobId, isPostRFantibodyReview]);
 
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
@@ -967,6 +1053,37 @@ export function ResultsViewer() {
 
                 {activeJob && (
                     <>
+                        {isPostRFantibodyReview && (
+                            <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div className="text-sm font-semibold text-emerald-200">Paused after RFantibody backbone generation</div>
+                                        <div className="text-xs text-slate-300">
+                                            Review this stage by backbone family first. The UI is using existing <span className="font-mono text-emerald-300">backbone_id</span> as the first family primitive.
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
+                                        <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                            Candidate {gateCandidateBackboneSummary?.total ?? reviewBackboneTotal}
+                                        </span>
+                                        {gateRawBackboneSummary?.total != null && (
+                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                                Raw {gateRawBackboneSummary.total}
+                                            </span>
+                                        )}
+                                        {gateFilteredBackboneSummary?.total != null && (
+                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                                Filtered {gateFilteredBackboneSummary.total}
+                                            </span>
+                                        )}
+                                        <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                            Backbone families {reviewBackboneRows.length}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
                             {TABS.map(tab => (
@@ -1882,6 +1999,9 @@ export function ResultsViewer() {
                                                             { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
                                                             { label: 'Epitope Contacts', value: selectedDesign.epitope_contact_count ?? '—', tone: 'text-slate-200' },
                                                             { label: 'Min Epitope Dist', value: selectedDesign.epitope_min_distance != null ? `${selectedDesign.epitope_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Min Target Dist', value: selectedDesign.target_min_distance != null ? `${selectedDesign.target_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Epitope Atom Dist', value: selectedDesign.epitope_min_atom_distance != null ? `${selectedDesign.epitope_min_atom_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Target Atom Dist', value: selectedDesign.target_min_atom_distance != null ? `${selectedDesign.target_min_atom_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
@@ -1894,6 +2014,35 @@ export function ResultsViewer() {
                                                                 <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as any}</div>
                                                             </div>
                                                         ))}
+                                                    </div>
+
+                                                    <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                            <div className="text-[11px] uppercase tracking-wider text-slate-500">Nearest Epitope Pair</div>
+                                                            <div className="mt-2 text-sm text-slate-200">
+                                                                {selectedDesign.epitope_nearest_antibody_residue && selectedDesign.epitope_nearest_target_residue
+                                                                    ? `${selectedDesign.epitope_nearest_antibody_residue} ↔ ${selectedDesign.epitope_nearest_target_residue}`
+                                                                    : '—'}
+                                                            </div>
+                                                            <div className="mt-2 text-xs text-slate-500">
+                                                                Atom pair: {selectedDesign.epitope_nearest_antibody_atom && selectedDesign.epitope_nearest_target_atom
+                                                                    ? `${selectedDesign.epitope_nearest_antibody_atom} ↔ ${selectedDesign.epitope_nearest_target_atom}`
+                                                                    : '—'}
+                                                            </div>
+                                                        </div>
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                            <div className="text-[11px] uppercase tracking-wider text-slate-500">Nearest Target Pair</div>
+                                                            <div className="mt-2 text-sm text-slate-200">
+                                                                {selectedDesign.target_nearest_antibody_residue && selectedDesign.target_nearest_target_residue
+                                                                    ? `${selectedDesign.target_nearest_antibody_residue} ↔ ${selectedDesign.target_nearest_target_residue}`
+                                                                    : '—'}
+                                                            </div>
+                                                            <div className="mt-2 text-xs text-slate-500">
+                                                                Atom pair: {selectedDesign.target_nearest_antibody_atom && selectedDesign.target_nearest_target_atom
+                                                                    ? `${selectedDesign.target_nearest_antibody_atom} ↔ ${selectedDesign.target_nearest_target_atom}`
+                                                                    : '—'}
+                                                            </div>
+                                                        </div>
                                                     </div>
 
                                                     {!antibodyHasAnnotation && (
@@ -2002,11 +2151,20 @@ export function ResultsViewer() {
                                     {/* DATA TABLE TAB */}
                                     {activeTab === 'table' && (
                                         <div className="p-4">
-                                            {/* Backbone Toggle Bar */}
-                                            {backboneSummary && Object.keys(backboneSummary.backbones).length > 0 && (
+                                            {/* Backbone / Family Toggle Bar */}
+                                            {reviewBackboneRows.length > 0 && (
                                                 <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                                                    <div className="flex items-center gap-2 mb-2 flex-wrap overflow-x-auto max-h-24">
-                                                        <span className="text-xs text-slate-400 font-medium shrink-0">Backbone:</span>
+                                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                                        <div className="text-xs font-medium text-slate-300">
+                                                            {isPostRFantibodyReview ? 'Backbone families' : 'Backbone'}
+                                                        </div>
+                                                        {isPostRFantibodyReview && (
+                                                            <div className="text-[11px] text-slate-400">
+                                                                Candidate / raw / filtered counts come from the paused stage gate payload.
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 flex-wrap overflow-x-auto max-h-36">
                                                         <button
                                                             onClick={() => setSelectedBackboneId(null)}
                                                             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === null
@@ -2014,19 +2172,39 @@ export function ResultsViewer() {
                                                                 : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                                                 }`}
                                                         >
-                                                            All ({backboneSummary.total})
+                                                            All ({reviewBackboneTotal})
                                                         </button>
-                                                        {Object.entries(backboneSummary.backbones).map(([id, data]) => (
+                                                        {reviewBackboneRows.map((row) => (
                                                             <button
-                                                                key={id}
-                                                                onClick={() => setSelectedBackboneId(Number(id))}
-                                                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === Number(id)
+                                                                key={row.id}
+                                                                onClick={() => setSelectedBackboneId(row.id)}
+                                                                className={`px-3 py-1.5 text-left text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === row.id
                                                                     ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
                                                                     : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                                                     }`}
-                                                                title={`pLDDT: ${data.avg_plddt ?? '—'} | iPTM: ${data.avg_iptm ?? '—'}`}
+                                                                title={
+                                                                    row.representative?.name
+                                                                        ? `Representative: ${row.representative.name} | pLDDT: ${row.avgPlddt ?? '—'} | iPTM: ${row.avgIptm ?? '—'}`
+                                                                        : `pLDDT: ${row.avgPlddt ?? '—'} | iPTM: ${row.avgIptm ?? '—'}`
+                                                                }
                                                             >
-                                                                #{id} ({data.count})
+                                                                <div className="flex items-center gap-2">
+                                                                    <span>#{row.id}</span>
+                                                                    <span className="text-slate-500">({row.count})</span>
+                                                                </div>
+                                                                {isPostRFantibodyReview && (
+                                                                    <div className="mt-1 text-[10px] text-slate-500">
+                                                                        C {row.candidateCount ?? 0}
+                                                                        {row.rawCount != null ? ` • R ${row.rawCount}` : ''}
+                                                                        {row.filteredCount != null ? ` • F ${row.filteredCount}` : ''}
+                                                                    </div>
+                                                                )}
+                                                                {!isPostRFantibodyReview && (
+                                                                    <div className="mt-1 text-[10px] text-slate-500">
+                                                                        pLDDT {row.avgPlddt ?? '—'}
+                                                                        {row.avgH3 != null ? ` • H3 ${row.avgH3}` : ''}
+                                                                    </div>
+                                                                )}
                                                             </button>
                                                         ))}
                                                     </div>
@@ -2074,13 +2252,25 @@ export function ResultsViewer() {
                                                         <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500" title="RMSD / Distance limit from target AAs to CDR loop atoms">Max Dist ≤</span>
+                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to the selected epitope residues">Max Dist ≤</span>
                                                         <input
                                                             type="number"
                                                             min="0"
                                                             step="0.5"
                                                             value={epitopeMaxDist}
                                                             onChange={(e) => setEpitopeMaxDist(e.target.value)}
+                                                            placeholder="max (Å)"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to any target residue">Max Tgt Dist ≤</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.5"
+                                                            value={targetMaxDist}
+                                                            onChange={(e) => setTargetMaxDist(e.target.value)}
                                                             placeholder="max (Å)"
                                                             className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
                                                         />
@@ -2196,6 +2386,7 @@ export function ResultsViewer() {
                                                                 { key: 'epitope_contact_count', label: 'Contacts' },
                                                                 { key: 'target_contact_count', label: 'Tgt Cts' },
                                                                 { key: 'epitope_min_distance', label: 'Min Dist' },
+                                                                { key: 'target_min_distance', label: 'Tgt Dist' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'fampnn_psce', label: 'pSCE' },
@@ -2330,6 +2521,10 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${d.epitope_min_distance != null && d.epitope_min_distance <= 4 ? 'text-emerald-400' :
                                                                     d.epitope_min_distance != null && d.epitope_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
                                                                     {formatMetric(d.epitope_min_distance, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.target_min_distance != null && d.target_min_distance <= 4 ? 'text-emerald-400' :
+                                                                    d.target_min_distance != null && d.target_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.target_min_distance, 1)}
                                                                 </td>
 
                                                                 {/* Affinity */}

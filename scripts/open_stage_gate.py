@@ -6,6 +6,7 @@ Open an interactive stage gate for a running job.
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,71 @@ def count_files(directory: Path, patterns: list[str]) -> int:
     return len(files)
 
 
+def parse_backbone_id(name: str) -> int | None:
+    normalized = str(name or "").strip()
+    while re.match(r"^\d+_", normalized):
+        normalized = normalized.split("_", 1)[1]
+
+    patterns = (
+        r"(?:^|[_-])rfantibody[_-]?child[_-]?(\d+)(?=[_-]|$)",
+        r"(?:^|[_-])child[_-]?(\d+)(?=[_-]|$)",
+        r"(?:^|[_-])(?:job|input|design)[_-]?(\d+)(?=[_-]|$)",
+    )
+    for pattern in patterns:
+        matches = re.findall(pattern, normalized)
+        if matches:
+            return int(matches[-1])
+    return None
+
+
+def summarize_backbones(directory: Path | None, patterns: list[str], preview_limit: int = 3) -> dict | None:
+    if not directory or not directory.exists():
+        return None
+
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(directory.glob(pattern))
+    unique_files = sorted({path.resolve() for path in files})
+
+    backbones: dict[int, dict] = {}
+    unassigned_count = 0
+    unassigned_preview: list[str] = []
+
+    for path in unique_files:
+        backbone_id = parse_backbone_id(path.stem)
+        if backbone_id is None:
+            unassigned_count += 1
+            if len(unassigned_preview) < preview_limit:
+                unassigned_preview.append(normalize_path(str(path)))
+            continue
+
+        entry = backbones.setdefault(
+            backbone_id,
+            {
+                "count": 0,
+                "representative_file": None,
+                "preview": [],
+                "sample_names": [],
+            },
+        )
+        entry["count"] += 1
+        if entry["representative_file"] is None:
+            entry["representative_file"] = normalize_path(str(path))
+        if len(entry["preview"]) < preview_limit:
+            entry["preview"].append(normalize_path(str(path)))
+        if len(entry["sample_names"]) < preview_limit:
+            entry["sample_names"].append(path.name)
+
+    return {
+        "mode": "backbone_id",
+        "total": len(unique_files),
+        "assigned_total": sum(entry["count"] for entry in backbones.values()),
+        "unassigned_total": unassigned_count,
+        "unassigned_preview": unassigned_preview,
+        "backbones": {str(backbone_id): data for backbone_id, data in sorted(backbones.items())},
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Open an interactive stage gate")
     parser.add_argument("--job_id", required=True)
@@ -78,14 +144,18 @@ def main() -> int:
         "candidate_dir": normalize_path(str(candidate_dir)),
         "candidate_count": count_files(candidate_dir, structure_patterns),
         "candidate_preview": list_preview_files(candidate_dir, structure_patterns),
+        "candidate_backbone_summary": summarize_backbones(candidate_dir, structure_patterns),
         "metric_count": count_files(candidate_dir, metric_patterns),
         "metric_preview": list_preview_files(candidate_dir, metric_patterns),
         "raw_dir": normalize_path(str(raw_dir)) if raw_dir else None,
         "raw_candidate_count": count_files(raw_dir, structure_patterns) if raw_dir else None,
+        "raw_backbone_summary": summarize_backbones(raw_dir, structure_patterns) if raw_dir else None,
         "raw_metric_count": count_files(raw_dir, metric_patterns) if raw_dir else None,
         "filtered_dir": normalize_path(str(filtered_dir)) if filtered_dir else None,
         "filtered_candidate_count": count_files(filtered_dir, structure_patterns) if filtered_dir else None,
+        "filtered_backbone_summary": summarize_backbones(filtered_dir, structure_patterns) if filtered_dir else None,
         "filtered_metric_count": count_files(filtered_dir, metric_patterns) if filtered_dir else None,
+        "review_grouping": "backbone_id" if args.stage == "post_rfantibody" else None,
         "framework_type": args.framework_type or None,
         "antibody_chains": args.antibody_chains or None,
         "structure_validator": args.structure_validator or None,
