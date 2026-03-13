@@ -1462,19 +1462,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                             type="checkbox"
-                                            checked={settings.protenix_anchor_strict}
-                                            onChange={(e) => updateSetting('protenix_anchor_strict', e.target.checked)}
-                                            disabled={!settings.protenix_anchor_target}
-                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500 disabled:opacity-50"
-                                        />
-                                        <span className="text-sm text-slate-300">
-                                            Strict Target Drift Rejection <span className="text-xs text-slate-500">(drop predictions with moving target)</span>
-                                        </span>
-                                    </label>
-
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
                                             checked={settings.protenix_enable_cache}
                                             onChange={(e) => updateSetting('protenix_enable_cache', e.target.checked)}
                                             className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
@@ -1534,7 +1521,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 )}
                                 {settings.protenix_anchor_target && (
                                     <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
-                                        Anchored Protenix keeps the current sequence-only co-fold path but stages a task-local template DB built from the experimental target chains. The binder remains free; strict mode rejects outputs whose target RMSD drifts too far after alignment.
+                                        Anchored Protenix keeps the current sequence-only co-fold path but stages a task-local template DB built from the experimental target chains. The binder remains free while the target is template-conditioned.
                                     </div>
                                 )}
                             </>
@@ -1657,23 +1644,11 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                         </span>
                                     </label>
 
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={settings.boltz_anchor_strict}
-                                            onChange={(e) => updateSetting('boltz_anchor_strict', e.target.checked)}
-                                            disabled={!settings.boltz_anchor_target}
-                                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent disabled:opacity-50"
-                                        />
-                                        <span className="text-sm text-slate-300">
-                                            Strict Target Drift Rejection <span className="text-xs text-slate-500">(drop moving-target outputs)</span>
-                                        </span>
-                                    </label>
                                 </div>
 
                                 {settings.boltz_anchor_target && (
                                     <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-slate-200">
-                                        Anchored Boltz injects templates only on the target chains and leaves the binder flexible. Strict mode rejects aligned predictions whose target RMSD drifts beyond the anchored threshold.
+                                        Anchored Boltz injects templates only on the target chains and leaves the binder flexible.
                                     </div>
                                 )}
                             </>

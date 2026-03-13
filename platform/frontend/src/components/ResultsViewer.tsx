@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis } from '../lib/api';
 import type { AntibodyCdrIndelConfig, AntibodyIterationAction, BackboneSummary, Job, ManualMutagenesisConfig } from '../lib/api';
 import { getOutputSourceBadgeClass, getOutputSourceLabel, inferDesignOutputSource, type OutputSourceFilter } from './designOutputSource';
 import MolstarViewer from './MolstarViewer';
@@ -35,7 +35,10 @@ const formatMetric = (val: number | null | undefined, decimals = 2): string =>
 const getMetricColor = (metric: string, value: number | null): string => {
     if (value == null) return 'text-slate-500';
     if (metric === 'plddt_overall' || metric === 'plddt_binder' || metric === 'plddt_target') {
-        return value >= 80 ? 'text-emerald-400' : value >= 60 ? 'text-amber-400' : 'text-red-400';
+        if (value >= 90) return 'text-blue-400';
+        if (value >= 70) return 'text-cyan-400';
+        if (value >= 50) return 'text-yellow-400';
+        return 'text-orange-400';
     }
     if (metric === 'pae_overall' || metric === 'pae_interaction') {
         return value <= 5 ? 'text-emerald-400' : value <= 10 ? 'text-amber-400' : 'text-red-400';
@@ -85,38 +88,27 @@ const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFi
     return 'all';
 };
 
+const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
+    if (!job) return false;
+    const params = job.params && typeof job.params === 'object' ? job.params as Record<string, unknown> : {};
+    const modelId = String(job.model_id || '').toLowerCase();
+    const mode = String(job.mode || '').toLowerCase();
+    const rfdMode = String(params.rfd_mode || '').toLowerCase();
+
+    return (
+        rfdMode === 'antibody_denovo_pipeline' ||
+        modelId.includes('antibody') ||
+        mode.includes('antibody') ||
+        Boolean(params.antibody_chains)
+    );
+};
+
 const stageRank = (job: Job | null | undefined): number => {
     const stage = String(job?.awaiting_stage || job?.current_stage || '').toLowerCase();
     if (stage === 'post_structure_validation') return 3;
     if (stage === 'post_fampnn') return 2;
     if (stage === 'post_rfantibody') return 1;
     return 0;
-};
-
-const pickPreferredResultsJob = (jobs: Job[]): Job | undefined => {
-    if (jobs.length === 0) return undefined;
-
-    const scored = [...jobs].sort((a, b) => {
-        const aStage = stageRank(a);
-        const bStage = stageRank(b);
-        if (aStage !== bStage) return bStage - aStage;
-
-        const aIsParent = !a.parent_job_id;
-        const bIsParent = !b.parent_job_id;
-        if (aIsParent !== bIsParent) return aIsParent ? -1 : 1;
-
-        const aAwaiting = Boolean(a.awaiting_input);
-        const bAwaiting = Boolean(b.awaiting_input);
-        if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1;
-
-        const aCompleted = a.status === 'completed';
-        const bCompleted = b.status === 'completed';
-        if (aCompleted !== bCompleted) return aCompleted ? -1 : 1;
-
-        return String(b.created_at || '').localeCompare(String(a.created_at || ''));
-    });
-
-    return scored[0];
 };
 
 const normalizeValidationDesignName = (name: string): string => {
@@ -299,6 +291,7 @@ export function ResultsViewer() {
             rfdMode === 'antibody_denovo_pipeline'
         );
     }, [activeJob]);
+    const showBinderTargetConfidence = useMemo(() => hasExplicitBinderTargetRoles(activeJob), [activeJob]);
     const availableCdrLoopIds = useMemo(() => getAvailableCdrLoopIds(activeJob), [activeJob]);
 
     useEffect(() => {
@@ -326,8 +319,6 @@ export function ResultsViewer() {
 
     // Sync URL with selection
     useEffect(() => {
-        const fallbackJob = pickPreferredResultsJob(nonNgsJobs);
-
         if (nonNgsJobs.length === 0) {
             if (selectedJobId) {
                 setSelectedJobId('');
@@ -349,20 +340,17 @@ export function ResultsViewer() {
                 return;
             }
 
-            if (fallbackJob) {
-                if (selectedJobId !== fallbackJob.id) {
-                    setSelectedJobId(fallbackJob.id);
-                    setSelectedDesignId('');
-                }
-                navigate(`/designs/${fallbackJob.id}`, { replace: true });
+            if (selectedJobId) {
+                setSelectedJobId('');
+                setSelectedDesignId('');
             }
+            navigate('/designs', { replace: true });
             return;
         }
 
-        if (!activeJob && fallbackJob) {
-            setSelectedJobId(fallbackJob.id);
+        if (selectedJobId && !activeJob) {
+            setSelectedJobId('');
             setSelectedDesignId('');
-            navigate(`/designs/${fallbackJob.id}`, { replace: true });
         }
     }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate]);
 
@@ -2100,7 +2088,27 @@ export function ResultsViewer() {
                                                             </div>
 
                                                             <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
-                                                                <h3 className="text-sm font-semibold text-white">FrustraMPNN Hotspots</h3>
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                    <h3 className="text-sm font-semibold text-white">FrustraMPNN Hotspots</h3>
+                                                                    {selectedDesign.frustration_csv_relpath && (
+                                                                        <div className="flex items-center gap-2">
+                                                                            <a
+                                                                                href={buildFileStreamUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                target="_blank"
+                                                                                rel="noreferrer"
+                                                                                className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                                                                            >
+                                                                                Open CSV
+                                                                            </a>
+                                                                            <a
+                                                                                href={buildFileDownloadUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                                                                            >
+                                                                                Download CSV
+                                                                            </a>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                                 <div className="mt-3 space-y-2 text-xs">
                                                                     {antibodyTopFrustrationResidues.length > 0 ? antibodyTopFrustrationResidues.map((row: any) => (
                                                                         <div key={`${row.chain}:${row.pos}`} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
@@ -2391,8 +2399,10 @@ export function ResultsViewer() {
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'fampnn_psce', label: 'pSCE' },
                                                                 { key: 'plddt_overall', label: 'pLDDT' },
-                                                                { key: 'plddt_binder', label: 'pLDDT Bd' },
-                                                                { key: 'plddt_target', label: 'pLDDT Tgt' },
+                                                                ...(showBinderTargetConfidence ? [
+                                                                    { key: 'plddt_binder', label: 'pLDDT Binder' },
+                                                                    { key: 'plddt_target', label: 'pLDDT Target' },
+                                                                ] : []),
                                                                 { key: 'pae_overall', label: 'PAE' },
                                                                 { key: 'pae_interaction', label: 'iPAE' },
                                                                 { key: 'ptm', label: 'pTM' },
@@ -2545,12 +2555,16 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
-                                                                    {formatMetric(d.plddt_binder, 1)}
-                                                                </td>
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_target', d.plddt_target)}`}>
-                                                                    {formatMetric(d.plddt_target, 1)}
-                                                                </td>
+                                                                {showBinderTargetConfidence && (
+                                                                    <>
+                                                                        <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
+                                                                            {formatMetric(d.plddt_binder, 1)}
+                                                                        </td>
+                                                                        <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_target', d.plddt_target)}`}>
+                                                                            {formatMetric(d.plddt_target, 1)}
+                                                                        </td>
+                                                                    </>
+                                                                )}
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
                                                                 </td>
