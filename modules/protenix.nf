@@ -340,7 +340,11 @@ process ProtenixFromComplex {
         if (raw instanceof Collection) {
             return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
         }
-        return raw.toString().trim().replaceAll(/^\\[/, '').replaceAll(/\\]$/, '')
+        def text = raw.toString().trim()
+        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+            text = text.substring(1, text.length() - 1)
+        }
+        return text
     }
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)

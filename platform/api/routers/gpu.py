@@ -21,6 +21,7 @@ import shutil
 import threading
 from urllib import request as urlrequest, error as urlerror
 from urllib.parse import quote as urlquote
+import psutil
 
 from paths import get_code_root
 from services.gpu_config import (
@@ -60,6 +61,9 @@ FAN_BACKEND_COOLERCONTROL = "coolercontrol"
 # Historical data for sparkline graphs (max 60 samples = ~2 min at 2s polling)
 _cpu_history: deque = deque(maxlen=60)
 _ram_history: deque = deque(maxlen=60)
+_last_per_core_utilization: List[float] = []
+_cpu_percent_primed = False
+_cpu_percent_lock = threading.Lock()
 
 
 # --- Enhanced GPU Schema ---
@@ -116,6 +120,15 @@ class CPUStatus(BaseModel):
 _rapl_package_sources: Optional[List[Dict[str, Any]]] = None
 _rapl_sample_state: Dict[str, Dict[str, float]] = {}
 _rapl_state_lock = threading.Lock()
+
+try:
+    # Prime psutil's non-blocking CPU delta sampler once at process start so
+    # the first telemetry request does not need to block on an interval sleep.
+    _last_per_core_utilization = psutil.cpu_percent(interval=None, percpu=True)
+    _cpu_percent_primed = True
+except Exception:
+    _last_per_core_utilization = []
+    _cpu_percent_primed = False
 
 
 class RAMStatus(BaseModel):
@@ -2089,23 +2102,13 @@ def _sample_cpu_package_power_watts() -> Optional[float]:
             previous = _rapl_sample_state.get(cache_key)
 
             if not previous:
-                # Prime a first real delta instead of returning a fake value.
-                time.sleep(0.05)
-                try:
-                    primed_energy = float(energy_path.read_text().strip())
-                except (PermissionError, FileNotFoundError, ValueError, OSError):
-                    _rapl_sample_state[cache_key] = {
-                        "energy_uj": current_energy,
-                        "time_s": current_time,
-                    }
-                    continue
-                primed_time = time.monotonic()
-                previous = {
+                # Prime state without blocking the request. The first watt sample
+                # can be null; the next request will have a real delta.
+                _rapl_sample_state[cache_key] = {
                     "energy_uj": current_energy,
                     "time_s": current_time,
                 }
-                current_energy = primed_energy
-                current_time = primed_time
+                continue
 
             _rapl_sample_state[cache_key] = {
                 "energy_uj": current_energy,
@@ -2133,8 +2136,6 @@ def _sample_cpu_package_power_watts() -> Optional[float]:
 
 def get_cpu_stats() -> CPUStatus:
     """Get CPU statistics using psutil."""
-    import psutil
-    
     # Get CPU name from /proc/cpuinfo on Linux
     cpu_name = "Unknown CPU"
     try:
@@ -2145,9 +2146,9 @@ def get_cpu_stats() -> CPUStatus:
                     break
     except:
         pass
-    
+
     freq = psutil.cpu_freq()
-    
+
     # Try to get CPU temperature
     cpu_temp = None
     try:
@@ -2160,8 +2161,18 @@ def get_cpu_stats() -> CPUStatus:
                     break
     except:
         pass
-    
-    per_core_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
+
+    global _last_per_core_utilization, _cpu_percent_primed
+    with _cpu_percent_lock:
+        per_core_utilization = psutil.cpu_percent(interval=None, percpu=True)
+        if not _cpu_percent_primed:
+            _cpu_percent_primed = True
+
+        if per_core_utilization:
+            _last_per_core_utilization = list(per_core_utilization)
+        elif _last_per_core_utilization:
+            per_core_utilization = list(_last_per_core_utilization)
+
     overall_utilization = round(
         sum(per_core_utilization) / max(1, len(per_core_utilization)),
         1,

@@ -20,12 +20,22 @@ from paths import get_data_root
 from .structure_utils import calculate_epitope_contacts
 
 
+def _is_native_frustration_row(row: Dict[str, Any]) -> bool:
+    wildtype = row.get("wildtype")
+    mutation = row.get("mutation")
+    if wildtype is None or mutation is None:
+        return True
+    return str(wildtype).strip() == str(mutation).strip()
+
+
 def _summarize_frustration_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not rows:
         return None
 
     pos_values: Dict[tuple[int, str], List[float]] = {}
     for row in rows:
+        if not _is_native_frustration_row(row):
+            continue
         try:
             position = int(row["position"])
             chain = str(row["chain"])
@@ -120,7 +130,8 @@ def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None)
     """
     Parse FrustraMPNN output CSV into structured frustration data.
     
-    CSV format: position,chain,frustration_pred (multiple rows per position due to ensemble)
+    FrustraMPNN CSVs contain one row per position/mutation. For structural QC we want
+    the native profile only, i.e. rows where mutation == wildtype.
     
     Returns:
         dict with keys:
@@ -139,7 +150,8 @@ def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None)
             if df.empty:
                 return None
 
-        rows = df[["position", "chain", "frustration_pred"]].to_dict("records")
+        cols = [col for col in ["position", "chain", "frustration_pred", "wildtype", "mutation"] if col in df.columns]
+        rows = df[cols].to_dict("records")
         return _summarize_frustration_rows(rows)
     except ImportError:
         # Fallback without pandas
@@ -200,6 +212,23 @@ def _parse_job_params(raw_params: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
+    if not job:
+        return False
+    params = _parse_job_params(job.params)
+    model_id = str(job.model_id or "").strip().lower()
+    mode = str(job.mode or "").strip().lower()
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+
+    if rfd_mode == "antibody_denovo_pipeline":
+        return True
+    if "antibody" in model_id or "antibody" in mode:
+        return True
+    if params.get("antibody_chains"):
+        return True
+    return False
 
 
 def _parse_epitope_residues(raw_value: Any) -> Optional[List[str]]:
@@ -272,6 +301,10 @@ async def ingest_job_results(
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")
         return 0
+
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    current_job = job_result.scalar_one_or_none()
+    allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
     
     csv_path = output_path / "results" / "all_designs.csv"
     
@@ -1272,7 +1305,7 @@ async def ingest_loose_files(
 
                 plddt_binder = None
                 plddt_target = None
-                if isinstance(chain_plddt, list) and len(chain_plddt) >= 2:
+                if allow_binder_target_metrics and isinstance(chain_plddt, list) and len(chain_plddt) >= 2:
                     plddt_binder = chain_plddt[0]
                     plddt_target = chain_plddt[1]
                     if plddt_binder is not None and plddt_binder <= 1.0:
