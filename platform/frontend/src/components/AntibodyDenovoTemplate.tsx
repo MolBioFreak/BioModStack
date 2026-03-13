@@ -26,6 +26,7 @@ type InteractiveGateStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_
 type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
 type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
 type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
+type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
 
 const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
     H1: { min: 7, max: 10 },
@@ -192,6 +193,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             ? Math.max(0, Number(initialValues?.rfantibody_min_target_contacts))
             : 3
     );
+    const [rfantibodyMaxTargetDistance, setRfantibodyMaxTargetDistance] = useState<number>(
+        Number.isFinite(Number((initialValues as any)?.rfantibody_max_target_distance))
+            ? Math.max(0, Number((initialValues as any)?.rfantibody_max_target_distance))
+            : 0
+    );
     const [rfantibodyMaxEpitopeCentroidDistance, setRfantibodyMaxEpitopeCentroidDistance] = useState<number>(
         Number.isFinite(Number(initialValues?.rfantibody_max_epitope_centroid_distance))
             ? Math.max(0, Number(initialValues?.rfantibody_max_epitope_centroid_distance))
@@ -269,6 +275,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [refinementPreset, setRefinementPreset] = useState<RefinementPreset>(isRefinementMode ? 'full_loop' : 'custom');
     const [useManualMutagenesis, setUseManualMutagenesis] = useState(false);
     const [mutagenesisMethod, setMutagenesisMethod] = useState<MutagenesisMethod>('explicit_substitutions');
+    const [mutagenesisLaunchMode, setMutagenesisLaunchMode] = useState<MutagenesisLaunchMode>('seeded_refinement');
     const [manualMutagenesisConfig, setManualMutagenesisConfig] = useState({
         chain_id: '',
         mutation_sets_text: '',
@@ -523,10 +530,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         setUseManualMutagenesis(preset === 'manual_mutagenesis');
         if (preset === 'manual_mutagenesis') {
             setManualMutagenesisConfig((current) => ({ ...current, predictor: structureValidator }));
-            setSeqDesigner('none');
-            setRunStructureValidation(false);
-            setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: false }));
+            setMutagenesisLaunchMode('seeded_refinement');
             return;
         }
         if (preset === 'full_loop') {
@@ -658,6 +662,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
             if (!isRefinementMode && initialValues.rfantibody_min_target_contacts !== undefined) {
                 setRfantibodyMinTargetContacts(Math.max(0, Number(initialValues.rfantibody_min_target_contacts) || 0));
+            }
+            if (!isRefinementMode && (initialValues as any).rfantibody_max_target_distance !== undefined) {
+                setRfantibodyMaxTargetDistance(Math.max(0, Number((initialValues as any).rfantibody_max_target_distance) || 0));
             }
             if (!isRefinementMode && initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
                 setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_centroid_distance) || 0));
@@ -1073,16 +1080,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_min_epitope_contacts: enableRfantibodyFilter ? rfantibodyMinEpitopeContacts : undefined,
                     rfantibody_max_epitope_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeDistance : undefined,
                     rfantibody_min_target_contacts: enableRfantibodyFilter ? rfantibodyMinTargetContacts : undefined,
+                    rfantibody_max_target_distance: enableRfantibodyFilter && rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
                     rfantibody_max_epitope_centroid_distance: enableRfantibodyFilter ? rfantibodyMaxEpitopeCentroidDistance : undefined,
                     rfantibody_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyContactDistanceThreshold : undefined,
                     rfantibody_target_contact_distance_threshold: enableRfantibodyFilter ? rfantibodyTargetContactDistanceThreshold : undefined,
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: effectiveAntibodyType === 'vhh' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
-                    rfantibody_diffusion_steps: Math.min(qualitySettings.rfantibody_diffusion_steps, 50),
+                    rfantibody_diffusion_steps: qualitySettings.rfantibody_diffusion_steps,
                     rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
                     rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
                     rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,
+                    rfantibody_ckpt_override: qualitySettings.rfantibody_ckpt_override.trim() || undefined,
+                    rfantibody_debug_repo_overlay: qualitySettings.rfantibody_debug_repo_overlay,
                     // Structure validation settings
                     msa_preset: qualitySettings.msa_preset,
                     boltz_sampling_steps: qualitySettings.boltz_sampling_steps,
@@ -1090,6 +1100,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     boltz_num_samples: qualitySettings.boltz_num_samples,
                     boltz_use_potentials: qualitySettings.boltz_use_potentials,
                     boltz_use_msa: qualitySettings.boltz_use_msa,
+                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
+                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
                     // Boltz-2 affinity prediction
                     boltz_predict_affinity: qualitySettings.boltz_predict_affinity,
                     boltz_diffusion_samples_affinity: qualitySettings.boltz_diffusion_samples_affinity,
@@ -1101,6 +1113,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
+                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
                     protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
@@ -1209,6 +1223,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     'rfantibody_min_epitope_contacts',
                     'rfantibody_max_epitope_distance',
                     'rfantibody_min_target_contacts',
+                    'rfantibody_max_target_distance',
                     'rfantibody_max_epitope_centroid_distance',
                     'rfantibody_contact_distance_threshold',
                     'rfantibody_target_contact_distance_threshold',
@@ -1220,6 +1235,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     refinementOverrides.rfantibody_min_epitope_contacts = rfantibodyMinEpitopeContacts;
                     refinementOverrides.rfantibody_max_epitope_distance = rfantibodyMaxEpitopeDistance;
                     refinementOverrides.rfantibody_min_target_contacts = rfantibodyMinTargetContacts;
+                    if (rfantibodyMaxTargetDistance > 0) refinementOverrides.rfantibody_max_target_distance = rfantibodyMaxTargetDistance;
                     refinementOverrides.rfantibody_max_epitope_centroid_distance = rfantibodyMaxEpitopeCentroidDistance;
                     refinementOverrides.rfantibody_contact_distance_threshold = rfantibodyContactDistanceThreshold;
                     refinementOverrides.rfantibody_target_contact_distance_threshold = rfantibodyTargetContactDistanceThreshold;
@@ -1238,7 +1254,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                         await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
-                            action: 'cdr_indel_round',
+                            action: mutagenesisLaunchMode === 'seeded_refinement' ? 'mutation_seeded_refinement' : 'cdr_indel_round',
                             design_ids: refinementDesignIds,
                             cdr_indel_config: cdrIndelConfig,
                             param_overrides: refinementOverrides,
@@ -1254,6 +1270,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         .filter(Boolean);
                     if (mutationSets.length === 0) {
                         alert('Add at least one manual mutation set, one per line, before launching.');
+                        return;
+                    }
+
+                    if (mutagenesisLaunchMode === 'seeded_refinement') {
+                        await launchAntibodyIteration({
+                            source_job_id: refinementParentJobId,
+                            action: 'mutation_seeded_refinement',
+                            design_ids: refinementDesignIds,
+                            manual_mutagenesis_config: {
+                                chain_id: manualMutagenesisConfig.chain_id.trim() || undefined,
+                                mutation_sets: mutationSets,
+                                predictor: manualMutagenesisConfig.predictor,
+                                msa_provider: manualMutagenesisConfig.msa_provider,
+                            },
+                            param_overrides: refinementOverrides,
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                        navigate('/');
                         return;
                     }
 
@@ -1582,7 +1616,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                     <div className="mt-4 rounded-lg border border-emerald-500/20 bg-slate-950/70 p-3">
                         <label className="flex items-center justify-between gap-3 text-xs text-emerald-200">
-                            <span>Manual mutagenesis methodology</span>
+                            <span>Mutation methodology</span>
                             <input
                                 type="checkbox"
                                 checked={useManualMutagenesis}
@@ -1591,10 +1625,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     setUseManualMutagenesis(enabled);
                                     setRefinementPreset(enabled ? 'manual_mutagenesis' : 'custom');
                                     if (enabled) {
-                                        setSeqDesigner('none');
-                                        setRunStructureValidation(false);
-                                        setRunFrustrampnn(false);
-                                        setQualitySettings((current) => ({ ...current, run_maturation: false }));
+                                        setMutagenesisLaunchMode('seeded_refinement');
                                     }
                                 }}
                                 className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
@@ -1605,6 +1636,41 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </p>
                         {useManualMutagenesis && (
                             <div className="mt-3 space-y-4">
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisLaunchMode('seeded_refinement')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisLaunchMode === 'seeded_refinement'
+                                            ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">Mutation-Seeded Refinement</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Use the manual variants as new workflow seeds, then continue through the selected refinement stages like FAMPNN, PPIFlow, and validation.
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setMutagenesisLaunchMode('exact_evaluation')}
+                                        className={`rounded-lg border px-3 py-2 text-left transition-colors ${mutagenesisLaunchMode === 'exact_evaluation'
+                                            ? 'border-amber-400 bg-amber-400/10 text-amber-200'
+                                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                            }`}
+                                    >
+                                        <div className="text-sm font-medium">Exact Mutant Evaluation</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">
+                                            Evaluate the exact manual variants directly with Protenix or Boltz-2. This bypasses the antibody refinement orchestrator.
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-400">
+                                    {mutagenesisLaunchMode === 'seeded_refinement'
+                                        ? 'Seeded refinement preserves user-imposed residues during downstream redesign. For indels, the workflow first rebuilds structural seeds, then automatically relaunches antibody refinement from the rebuilt variants.'
+                                        : 'Exact evaluation is the direct predictor path. It is useful for checking one exact mutant, but it is not a full redesign/refinement round.'}
+                                </div>
+
                                 <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                                     <button
                                         type="button"
@@ -2611,7 +2677,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
                     ) : (
                         <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4 text-xs text-slate-400">
-                            RFantibody loop-length variability is only used for de novo backbone generation. In refinement mode, use <span className="text-fuchsia-300">Manual mutagenesis methodology -> CDR indels</span> when you want loop insertions/deletions and downstream backbone rebuilding.
+                            RFantibody loop-length variability is only used for de novo backbone generation. In refinement mode, use{' '}
+                            <span className="text-fuchsia-300">Manual mutagenesis methodology &rarr; CDR indels</span>{' '}
+                            when you want loop insertions/deletions and downstream backbone rebuilding.
                         </div>
                     )}
 
@@ -2671,6 +2739,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         step={1}
                                         value={rfantibodyMinTargetContacts}
                                         onChange={(e) => setRfantibodyMinTargetContacts(Math.max(0, Number(e.target.value) || 0))}
+                                        disabled={!enableRfantibodyFilter}
+                                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50"
+                                    />
+                                </label>
+                                <label className="text-xs text-slate-500">
+                                    Max whole-target distance (A)
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        step={0.5}
+                                        value={rfantibodyMaxTargetDistance}
+                                        onChange={(e) => setRfantibodyMaxTargetDistance(Math.max(0, Number(e.target.value) || 0))}
                                         disabled={!enableRfantibodyFilter}
                                         className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50"
                                     />
@@ -2911,8 +2991,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                         <p className="text-xs text-slate-500">
                             {structureValidator === 'protenix'
-                                ? 'Protenix inference controls live in Quality Settings, and MSA controls are now shared with the other validator paths. AntiFold FASTA-only outputs remain excluded here. The default validator path is still a naive sequence-only co-fold.'
-                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings.'}
+                                ? 'Protenix inference controls live in Quality Settings. Flexible co-fold remains the default; anchored-target mode uses task-local target templates without freezing the binder.'
+                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings. Flexible co-fold remains the default; anchored-target mode injects templates only on the target chains.'}
                         </p>
                     </div>
 
@@ -3277,7 +3357,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </>
                     ) : isRefinementMode ? (
                         <>
-                            {useManualMutagenesis ? 'Launch Mutagenesis' : 'Launch Refinement'} ({refinementDesignIds?.length ?? 0} designs)
+                            {useManualMutagenesis
+                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
+                                : 'Launch Refinement'} ({refinementDesignIds?.length ?? 0} designs)
                         </>
                     ) : (skipRFantibody || skipFampnn) ? (
                         <>
@@ -3371,6 +3453,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
                             loaded.push('rfantibody_min_target_contacts');
                         }
+                        if (!isRefinementMode && (p as any).rfantibody_max_target_distance !== undefined) {
+                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as any).rfantibody_max_target_distance) || 0));
+                            loaded.push('rfantibody_max_target_distance');
+                        }
                         if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
                             setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
                             loaded.push('rfantibody_max_epitope_centroid_distance');
@@ -3456,8 +3542,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
                     protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
+                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
                     protenix_enable_cache: qualitySettings.protenix_enable_cache,
                     protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
+                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
+                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
                     protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
                     protenix_oom_retry_attempts: qualitySettings.protenix_oom_retry_attempts,
                     colabfold_api_host: qualitySettings.colabfold_api_host.trim() || undefined,
@@ -3513,6 +3603,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
                     rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
                     rfantibody_min_target_contacts: rfantibodyMinTargetContacts,
+                    rfantibody_max_target_distance: rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
                     rfantibody_max_epitope_centroid_distance: rfantibodyMaxEpitopeCentroidDistance,
                     rfantibody_contact_distance_threshold: rfantibodyContactDistanceThreshold,
                     rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,

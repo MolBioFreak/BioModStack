@@ -19,6 +19,10 @@ npm run dev -- --host 0.0.0.0 --port 5173
 The UI is served at `http://localhost:5173/bms/` (base path `/bms/`).
 Requests to `/api` are proxied to `http://localhost:8000`.
 
+Infra preview route:
+
+- `http://localhost:5173/bms/infra`
+
 ## Build
 
 ```bash

@@ -18,10 +18,10 @@ import logging
 import math
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # Will be imported when integrated with FastAPI
 # from database import Job, async_session
@@ -30,8 +30,9 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-from services.gpu_config import read_scheduler_config
+from services.gpu_config import read_scheduler_config, write_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
+from services.stage_review import has_stage_gate, nextflow_history_status
 
 
 @dataclass
@@ -59,6 +60,7 @@ class JobInfo:
     created_at: datetime
     batch_id: Optional[str] = None  # For GPU locking - all jobs in a batch share exclusive GPU access
     pinned_gpus: Optional[List[int]] = None  # Multi-GPU allowlist for parallel distribution
+    scheduler_reservation_mb: Optional[int] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -99,14 +101,56 @@ VRAM_PROFILES = {
     'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
+    'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
     'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
 # Models that need heavy GPUs (exclude 5060 Ti)
-HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3'}
+HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3', 'maturation_child'}
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
+
+# Scheduler-side packing should follow observed live VRAM plus a modest surge
+# allowance, not reserve worst-case peak estimates for every running job.
+#
+# Keys:
+# - startup_reserve_mb: provisional reservation for a just-launched or queued job
+#   before live attribution settles
+# - live_surge_mb: extra headroom to add on top of live VRAM for a running job
+# - startup_grace_seconds: time window after launch where startup_reserve_mb is used
+SCHEDULER_RESERVATION_PROFILES: Dict[str, Dict[str, int]] = {
+    'rfantibody': {
+        'startup_reserve_mb': 2200,
+        'live_surge_mb': 1800,
+        'startup_grace_seconds': 45,
+    },
+    'rfantibody_child': {
+        'startup_reserve_mb': 2200,
+        'live_surge_mb': 1800,
+        'startup_grace_seconds': 45,
+    },
+    'fampnn': {
+        'startup_reserve_mb': 1200,
+        'live_surge_mb': 900,
+        'startup_grace_seconds': 30,
+    },
+    'fampnn_child': {
+        'startup_reserve_mb': 1200,
+        'live_surge_mb': 900,
+        'startup_grace_seconds': 30,
+    },
+    'antibody_child': {
+        'startup_reserve_mb': 3500,
+        'live_surge_mb': 2500,
+        'startup_grace_seconds': 60,
+    },
+    'maturation_child': {
+        'startup_reserve_mb': 3200,
+        'live_surge_mb': 3500,
+        'startup_grace_seconds': 75,
+    },
+}
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -338,6 +382,209 @@ def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] =
     return estimated
 
 
+def _scheduler_profile(model_type: str) -> Dict[str, int]:
+    normalized_model = (model_type or "default").strip().lower()
+    return SCHEDULER_RESERVATION_PROFILES.get(normalized_model, {})
+
+
+def _effective_job_model_type(job: Any) -> str:
+    mode = str(getattr(job, "mode", "") or "").strip().lower()
+    if mode == "maturation_child":
+        return "maturation_child"
+    return str(getattr(job, "model_id", None) or "default").strip().lower()
+
+
+def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str, List[int]]) -> int:
+    """
+    Return the scheduler packing reservation for a queued job.
+
+    This uses live observations when available plus a model-specific surge buffer,
+    falling back to a smaller startup reserve rather than the peak estimate.
+    """
+    profile = _scheduler_profile(job.model_type)
+    peak_estimate = max(1, int(job.vram_estimate_mb or 1))
+    startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
+    live_surge = int(profile.get("live_surge_mb", 0))
+    observed = observed_live_by_model.get(job.model_type, [])
+    if observed:
+        median_live = _median(observed) or 0
+        upper_live = _upper_quantile(observed, 0.75) or median_live
+        observed_live = max(median_live, upper_live)
+        return max(1, min(peak_estimate, max(startup_reserve, observed_live + live_surge)))
+    return max(1, min(peak_estimate, startup_reserve))
+
+
+def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+    """
+    Return the scheduler reservation to account for an already-running job.
+
+    Prefer live attribution plus a surge buffer. Only use the startup reserve
+    while the job is very new or has no live attribution yet.
+    """
+    peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
+    profile = _scheduler_profile(_effective_job_model_type(job))
+    startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
+    live_surge = int(profile.get("live_surge_mb", 0))
+    startup_grace = int(profile.get("startup_grace_seconds", 30))
+
+    started_at = getattr(job, "started_at", None)
+    if live_vram_mb is not None and live_vram_mb > 0:
+        return max(1, min(peak_estimate, int(live_vram_mb) + live_surge))
+
+    if started_at is not None:
+        try:
+            age_seconds = max(0.0, (datetime.utcnow() - started_at).total_seconds())
+        except Exception:
+            age_seconds = 0.0
+        if age_seconds <= startup_grace:
+            return max(1, min(peak_estimate, startup_reserve))
+
+    return max(1, min(peak_estimate, startup_reserve))
+
+
+def collect_live_vram_by_job(running_jobs: List[Any], gpu_stats: List[Any]) -> Dict[str, int]:
+    """
+    Attribute live GPU memory to running jobs.
+
+    Exact process attribution is preferred. When multiple jobs share a GPU and
+    only some processes can be matched exactly, the remaining GPU memory is
+    distributed across the unmatched jobs proportionally to their current
+    scheduler reservation. This keeps queue display and live-aware packing from
+    falling back to peak estimates whenever same-model jobs share a device.
+    """
+    runnable = [
+        job for job in running_jobs
+        if getattr(job, "queue_status", None) == "running" and getattr(job, "assigned_gpu", None) is not None
+    ]
+    if not runnable:
+        return {}
+
+    processes_by_gpu = {gpu.index: getattr(gpu, "processes", []) for gpu in gpu_stats}
+    ancestor_cache: Dict[int, set[int]] = {}
+    cmdline_cache: Dict[int, str] = {}
+    live_vram_by_job: Dict[str, int] = {}
+    jobs_by_gpu: Dict[int, List[Any]] = {}
+
+    for job in runnable:
+        jobs_by_gpu.setdefault(job.assigned_gpu, []).append(job)
+
+    for gpu_idx, gpu_jobs in jobs_by_gpu.items():
+        gpu_processes = processes_by_gpu.get(gpu_idx, [])
+        if not gpu_processes:
+            continue
+        matched_by_job: Dict[str, int] = {}
+
+        for job in gpu_jobs:
+            launcher_pid = None
+            try:
+                launcher_pid = int(str(getattr(job, "nextflow_run_id", "")).strip())
+            except (TypeError, ValueError):
+                launcher_pid = None
+
+            matched_vram = 0
+            for proc in gpu_processes:
+                matched = False
+                proc_pid = getattr(proc, "pid", None)
+
+                if launcher_pid is not None and proc_pid is not None:
+                    if proc_pid in ancestor_cache:
+                        ancestors = ancestor_cache[proc_pid]
+                    else:
+                        ancestors = set()
+                        try:
+                            import psutil
+                            ps_proc = psutil.Process(proc_pid)
+                            while ps_proc is not None:
+                                ancestors.add(ps_proc.pid)
+                                ps_proc = ps_proc.parent()
+                        except Exception:
+                            pass
+                        ancestor_cache[proc_pid] = ancestors
+                    if launcher_pid in ancestors:
+                        matched = True
+
+                if not matched and proc_pid is not None:
+                    if proc_pid in cmdline_cache:
+                        cmdline = cmdline_cache[proc_pid]
+                    else:
+                        cmdline = ""
+                        try:
+                            import psutil
+                            cmdline = " ".join(psutil.Process(proc_pid).cmdline()).lower()
+                        except Exception:
+                            cmdline = ""
+                        cmdline_cache[proc_pid] = cmdline
+
+                    candidate_tokens = [str(job.id).lower()]
+                    if getattr(job, "name", None):
+                        candidate_tokens.extend([
+                            str(job.name).lower(),
+                            str(job.name).lower().replace(" ", "."),
+                        ])
+                    if any(token and token in cmdline for token in candidate_tokens):
+                        matched = True
+
+                if matched:
+                    matched_vram += max(getattr(proc, "memory_mb", 0), 0)
+
+            if matched_vram > 0:
+                matched_by_job[job.id] = matched_vram
+
+        total_gpu_vram = sum(max(getattr(proc, "memory_mb", 0), 0) for proc in gpu_processes)
+        matched_total = sum(matched_by_job.values())
+        unmatched_jobs = [job for job in gpu_jobs if matched_by_job.get(job.id, 0) <= 0]
+
+        if not unmatched_jobs:
+            for job_id, matched_vram in matched_by_job.items():
+                live_vram_by_job[job_id] = matched_vram
+            continue
+
+        if len(gpu_jobs) == 1 and matched_total <= 0:
+            live_vram_by_job[gpu_jobs[0].id] = total_gpu_vram
+            continue
+
+        remaining_vram = max(0, total_gpu_vram - matched_total)
+        if remaining_vram > 0:
+            weighted_jobs: List[Tuple[Any, int]] = []
+            for job in unmatched_jobs:
+                weight = _running_job_reservation_mb(job, None)
+                weighted_jobs.append((job, max(1, weight)))
+
+            total_weight = sum(weight for _job, weight in weighted_jobs) or len(weighted_jobs)
+            remaining_assignments: Dict[str, int] = {}
+            fractional: List[Tuple[float, str]] = []
+            allocated = 0
+            for job, weight in weighted_jobs:
+                raw_share = (remaining_vram * weight) / total_weight
+                share = int(math.floor(raw_share))
+                if share > 0:
+                    remaining_assignments[job.id] = share
+                    allocated += share
+                fractional.append((raw_share - share, job.id))
+
+            remainder = remaining_vram - allocated
+            for _fraction, job_id in sorted(fractional, reverse=True):
+                if remainder <= 0:
+                    break
+                remaining_assignments[job_id] = remaining_assignments.get(job_id, 0) + 1
+                remainder -= 1
+
+            for job_id, matched_vram in matched_by_job.items():
+                live_vram_by_job[job_id] = matched_vram
+            for job_id, shared_vram in remaining_assignments.items():
+                live_vram_by_job[job_id] = live_vram_by_job.get(job_id, 0) + shared_vram
+            continue
+
+        for job_id, matched_vram in matched_by_job.items():
+            live_vram_by_job[job_id] = matched_vram
+
+    return live_vram_by_job
+
+
+def _collect_live_vram_by_job_for_scheduler(running_jobs: List[Any], gpu_stats: List[Any]) -> Dict[str, int]:
+    return collect_live_vram_by_job(running_jobs, gpu_stats)
+
+
 def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
     """Ensure job params are a dict, handling JSON-encoded strings safely."""
     if raw_params is None:
@@ -406,6 +653,15 @@ def _median(values: List[int]) -> Optional[int]:
     return int((sorted_vals[mid - 1] + sorted_vals[mid]) / 2)
 
 
+def _upper_quantile(values: List[int], quantile: float = 0.75) -> Optional[int]:
+    if not values:
+        return None
+    sorted_vals = sorted(values)
+    quantile = max(0.0, min(1.0, quantile))
+    index = int(math.ceil((len(sorted_vals) - 1) * quantile))
+    return sorted_vals[index]
+
+
 def _read_nextflow_history_statuses(job_ids: List[str]) -> Dict[str, Tuple[str, str]]:
     """
     Return latest Nextflow history status for each requested job id.
@@ -462,31 +718,54 @@ def _compute_auto_limit(
     model_id: str,
     job_infos: List["JobInfo"],
     gpu_stats: List[Any],
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    running_jobs_per_gpu: Optional[Dict[int, int]] = None,
 ) -> int:
     """Compute a VRAM-based concurrency cap for a model."""
-    model_vrams = [j.vram_estimate_mb for j in job_infos if j.model_type == model_id]
-    vram_estimate = _median(model_vrams)
-    if vram_estimate is None:
-        vram_estimate = estimate_vram(model_id, 300)
-    vram_estimate = max(1, int(vram_estimate))
+    reservations = [
+        (j.scheduler_reservation_mb if j.scheduler_reservation_mb is not None else j.vram_estimate_mb)
+        for j in job_infos if j.model_type == model_id
+    ]
+    reservation_estimate = _median([max(1, int(v)) for v in reservations if v is not None])
+    if reservation_estimate is None:
+        fallback_estimate = estimate_vram(model_id, 300)
+        probe_job = JobInfo(
+            id="auto-limit-probe",
+            name="auto-limit-probe",
+            model_type=model_id,
+            vram_estimate_mb=fallback_estimate,
+            sequence_length=300,
+            priority=0,
+            pinned_gpu=None,
+            created_at=datetime.utcnow(),
+            scheduler_reservation_mb=fallback_estimate,
+        )
+        reservation_estimate = _pending_job_reservation_mb(probe_job, {})
+    reservation_estimate = max(1, int(reservation_estimate))
 
-    target_fill = config.get("global", {}).get("target_vram_fill", 0.85)
+    running_jobs_per_gpu = running_jobs_per_gpu or {}
     limit = 0
     for gpu in gpu_stats:
-        if is_gpu_disabled(gpu.index, config):
+        if is_gpu_disabled(gpu.index, config) and not _gpu_force_available(gpu.index, config):
             continue
         if model_id in HEAVY_MODELS:
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
             if not gpu_caps.get('supports_heavy', True):
                 continue
 
-        gpu_override = config.get("overrides", {}).get(str(gpu.index), {})
-        safety_margin = gpu_override.get("vram_safety_margin_mb", 500)
+        safety_margin = _gpu_safety_margin_mb(gpu.index, config)
+        target_fill = _gpu_target_fill(gpu.index, config)
         available = (gpu.memory_total_mb * target_fill) - gpu.memory_used_mb - safety_margin
         if available <= 0:
             continue
-        limit += max(0, math.floor(available / vram_estimate))
+
+        slot_limit = math.floor(available / reservation_estimate)
+        gpu_slot_cap = _gpu_max_concurrent_jobs(gpu.index, config)
+        if gpu_slot_cap is not None:
+            remaining_slots = max(0, gpu_slot_cap - running_jobs_per_gpu.get(gpu.index, 0))
+            slot_limit = min(slot_limit, remaining_slots)
+
+        limit += max(0, slot_limit)
 
     return max(0, limit)
 
@@ -496,6 +775,44 @@ def is_gpu_disabled(gpu_index: int, config: Dict[str, Any]) -> bool:
     overrides = config.get("overrides", {})
     gpu_override = overrides.get(str(gpu_index), {})
     return gpu_override.get("disabled", False)
+
+
+def _gpu_override(gpu_index: int, config: Dict[str, Any]) -> Dict[str, Any]:
+    return config.get("overrides", {}).get(str(gpu_index), {})
+
+
+def _gpu_target_fill(gpu_index: int, config: Dict[str, Any]) -> float:
+    global_fill = float(config.get("global", {}).get("target_vram_fill", 0.85))
+    override_fill = _gpu_override(gpu_index, config).get("threshold")
+    try:
+        fill = float(override_fill if override_fill is not None else global_fill)
+    except (TypeError, ValueError):
+        fill = global_fill
+    return max(0.05, min(0.99, fill))
+
+
+def _gpu_safety_margin_mb(gpu_index: int, config: Dict[str, Any]) -> int:
+    try:
+        return max(0, int(_gpu_override(gpu_index, config).get("vram_safety_margin_mb", 500)))
+    except (TypeError, ValueError):
+        return 500
+
+
+def _gpu_max_concurrent_jobs(gpu_index: int, config: Dict[str, Any]) -> Optional[int]:
+    raw_value = _gpu_override(gpu_index, config).get("max_concurrent_jobs")
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _gpu_force_available(gpu_index: int, config: Dict[str, Any]) -> bool:
+    return bool(_gpu_override(gpu_index, config).get("force_available", False))
+
+
+def _gpu_quick_enable(gpu_index: int, config: Dict[str, Any]) -> bool:
+    return bool(_gpu_override(gpu_index, config).get("quick_enable", False))
 
 
 def get_workflow_pin(job_model_type: str, config: Dict[str, Any]) -> Optional[int]:
@@ -552,7 +869,9 @@ def pack_jobs_to_gpus(
     jobs: List[JobInfo],
     gpus: List[GPUState],
     target_fill: float,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    running_jobs_per_gpu: Optional[Dict[int, int]] = None,
+    gpu_last_launch_at: Optional[Dict[int, datetime]] = None,
 ) -> List[Tuple[JobInfo, int]]:
     """
     First Fit Decreasing bin-packing for GPU job assignment.
@@ -567,13 +886,22 @@ def pack_jobs_to_gpus(
     # ═══════════════════════════════════════════════════════════════════════
     active_gpus = [
         g for g in gpus
-        if not is_gpu_disabled(g.index, config)
+        if (not is_gpu_disabled(g.index, config)) or _gpu_force_available(g.index, config) or _gpu_quick_enable(g.index, config)
     ]
     active_gpu_ids = {g.index for g in active_gpus}
     global_config = config.get("global", {})
     msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
     msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
     msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
+    busy_threshold = max(0.0, min(1.0, float(global_config.get("busy_threshold", 0.5) or 0.0)))
+    cooldown_ms = max(0, int(global_config.get("cooldown_ms", 0) or 0))
+    cooldown_delta = timedelta(milliseconds=cooldown_ms)
+    running_jobs_per_gpu = running_jobs_per_gpu or {}
+    gpu_last_launch_at = gpu_last_launch_at or {}
+    quick_enable_tokens: Dict[int, int] = {
+        g.index: (1 if _gpu_quick_enable(g.index, config) else 0)
+        for g in active_gpus
+    }
     non_heavy_active_ids = {
         g.index for g in active_gpus
         if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
@@ -590,7 +918,12 @@ def pack_jobs_to_gpus(
     # ═══════════════════════════════════════════════════════════════════════
     sorted_jobs = sorted(
         jobs,
-        key=lambda j: (-j.priority, -j.vram_estimate_mb, j.created_at)
+        key=lambda j: (
+            -j.priority,
+            -(j.scheduler_reservation_mb if j.scheduler_reservation_mb is not None else j.vram_estimate_mb),
+            -j.vram_estimate_mb,
+            j.created_at,
+        )
     )
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -598,6 +931,7 @@ def pack_jobs_to_gpus(
     # ═══════════════════════════════════════════════════════════════════════
     projected = {g.index: g.memory_used_mb for g in active_gpus}
     capacity = {g.index: g.memory_total_mb for g in active_gpus}
+    projected_jobs_per_gpu = {g.index: running_jobs_per_gpu.get(g.index, 0) for g in active_gpus}
     
     # ═══════════════════════════════════════════════════════════════════════
     # 4. THE PACKING LOOP
@@ -625,18 +959,7 @@ def pack_jobs_to_gpus(
                 continue
             if filtered_allowlist != job.pinned_gpus:
                 logger.info(f"[PACK] {job.name}: GPU allowlist filtered to active GPUs {filtered_allowlist}")
-            job = JobInfo(
-                id=job.id,
-                name=job.name,
-                model_type=job.model_type,
-                vram_estimate_mb=job.vram_estimate_mb,
-                sequence_length=job.sequence_length,
-                priority=job.priority,
-                pinned_gpu=job.pinned_gpu,
-                created_at=job.created_at,
-                batch_id=job.batch_id,
-                pinned_gpus=filtered_allowlist,
-            )
+            job = replace(job, pinned_gpus=filtered_allowlist)
         
         # ═══════════════════════════════════════════════════════════════════
         # PRE-CHECK: Determine forced GPU assignment from pins/locks
@@ -676,6 +999,9 @@ def pack_jobs_to_gpus(
         
         for gpu in active_gpus:
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
+            force_available = _gpu_force_available(gpu.index, config)
+            quick_available = quick_enable_tokens.get(gpu.index, 0) > 0
+            availability_override = force_available or quick_available
             
             # Check 1: Respect forced GPU assignment (pins/locks)
             if forced_gpu is not None:
@@ -696,6 +1022,25 @@ def pack_jobs_to_gpus(
             job_batch_id = getattr(job, 'batch_id', None)
             if is_gpu_locked(gpu.index, job_batch_id, config):
                 continue  # GPU is locked by a different batch
+
+            # Check 2b: Disabled / busy / cooldown / per-GPU concurrent caps
+            if is_gpu_disabled(gpu.index, config) and not availability_override:
+                continue
+
+            max_jobs = _gpu_max_concurrent_jobs(gpu.index, config)
+            if max_jobs is not None and projected_jobs_per_gpu.get(gpu.index, 0) >= max_jobs and not availability_override:
+                continue
+
+            if busy_threshold > 0 and (gpu.utilization / 100.0) >= busy_threshold and not availability_override:
+                continue
+
+            last_launch_at = gpu_last_launch_at.get(gpu.index)
+            if cooldown_ms > 0 and last_launch_at is not None and not availability_override:
+                try:
+                    if datetime.utcnow() - last_launch_at < cooldown_delta:
+                        continue
+                except Exception:
+                    pass
             
             # Check 3: Model compatibility (heavy models skip 5060 Ti)
             if job.model_type in HEAVY_MODELS:
@@ -708,12 +1053,13 @@ def pack_jobs_to_gpus(
                     continue
             
             # Check 4: VRAM availability (with per-GPU safety margin)
-            gpu_override = config.get("overrides", {}).get(str(gpu.index), {})
-            safety_margin = gpu_override.get("vram_safety_margin_mb", 500)
-            target_fill = config.get("global", {}).get("target_vram_fill", 0.85)
-            available = (capacity[gpu.index] * target_fill) - projected[gpu.index] - safety_margin
+            gpu_override = _gpu_override(gpu.index, config)
+            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
+            gpu_fill_target = _gpu_target_fill(gpu.index, config)
+            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
             
-            if job.vram_estimate_mb > available:
+            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+            if required > available:
                 continue  # Doesn't fit
             
             # ═══════════════════════════════════════════════════════════════
@@ -761,11 +1107,15 @@ def pack_jobs_to_gpus(
         # ═══════════════════════════════════════════════════════════════════
         if best_gpu is not None:
             assignments.append((job, best_gpu))
-            projected[best_gpu] += job.vram_estimate_mb
+            projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+            projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
+            if quick_enable_tokens.get(best_gpu, 0) > 0:
+                quick_enable_tokens[best_gpu] = 0
             
             logger.info(
                 f"[PACK] {job.name} → GPU {best_gpu} | "
-                f"VRAM: {job.vram_estimate_mb}MB | "
+                f"reserve={job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb}MB "
+                f"(peak_est={job.vram_estimate_mb}MB) | "
                 f"Projected: {projected[best_gpu]}/{capacity[best_gpu]}MB "
                 f"({projected[best_gpu]/capacity[best_gpu]*100:.1f}%)"
             )
@@ -780,6 +1130,332 @@ def pack_jobs_to_gpus(
             logger.info(f"  GPU {gpu.index}: {util:.1f}% projected")
     
     return assignments
+
+
+def _summarize_queue_blockers(reason_buckets: Dict[str, List[int]]) -> List[str]:
+    messages: List[str] = []
+    for reason, gpu_ids in reason_buckets.items():
+        unique_gpu_ids = sorted(set(gpu_ids))
+        if unique_gpu_ids:
+            gpu_list = ",".join(str(gpu_id) for gpu_id in unique_gpu_ids)
+            messages.append(f"{reason} on GPU {gpu_list}")
+        else:
+            messages.append(reason)
+    return messages
+
+
+def build_queue_scheduler_diagnostics(
+    queued_jobs: List[Any],
+    running_jobs: List[Any],
+    gpu_stats: List[Any],
+    config: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Replay scheduler packing logic for queued jobs and explain blockers.
+
+    Returns per-job diagnostics:
+    - scheduler_required_mb
+    - scheduler_candidate_gpus
+    - scheduler_ready
+    - scheduler_blockers
+    """
+    diagnostics: Dict[str, Dict[str, Any]] = {}
+    if not queued_jobs or not gpu_stats:
+        return diagnostics
+
+    job_infos: List[JobInfo] = []
+    for job in queued_jobs:
+        job_params = _normalize_job_params(getattr(job, "params", None))
+        vram = getattr(job, "vram_estimate_mb", None)
+        if vram is None:
+            seq_len = getattr(job, "sequence_length", None) or 300
+            vram = estimate_vram(getattr(job, "model_id", None) or "default", seq_len, job_params)
+        job_infos.append(
+            JobInfo(
+                id=job.id,
+                name=job.name,
+                model_type=_effective_job_model_type(job),
+                vram_estimate_mb=vram,
+                sequence_length=getattr(job, "sequence_length", None) or 300,
+                priority=getattr(job, "priority", None) or 0,
+                pinned_gpu=job.pinned_gpu if isinstance(getattr(job, "pinned_gpu", None), int) else None,
+                created_at=getattr(job, "created_at", None) or datetime.utcnow(),
+                batch_id=getattr(job, "batch_id", None),
+                pinned_gpus=_normalize_pinned_gpus(job_params.get("pinned_gpus")),
+                scheduler_reservation_mb=vram,
+            )
+        )
+
+    live_vram_by_job = collect_live_vram_by_job(running_jobs, gpu_stats)
+    observed_live_by_model: Dict[str, List[int]] = {}
+    running_jobs_per_gpu: Dict[int, int] = {}
+    running_by_model: Dict[str, int] = {}
+    gpu_last_launch_at: Dict[int, datetime] = {}
+    for running_job in running_jobs:
+        effective_model = _effective_job_model_type(running_job)
+        running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
+        assigned_gpu = getattr(running_job, "assigned_gpu", None)
+        if assigned_gpu is not None:
+            running_jobs_per_gpu[assigned_gpu] = running_jobs_per_gpu.get(assigned_gpu, 0) + 1
+            started_at = getattr(running_job, "started_at", None)
+            if isinstance(started_at, datetime):
+                previous = gpu_last_launch_at.get(assigned_gpu)
+                if previous is None or started_at > previous:
+                    gpu_last_launch_at[assigned_gpu] = started_at
+        live_vram = live_vram_by_job.get(running_job.id)
+        if live_vram and live_vram > 0:
+            observed_live_by_model.setdefault(effective_model, []).append(live_vram)
+
+    for job_info in job_infos:
+        job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
+        diagnostics[job_info.id] = {
+            "scheduler_required_mb": job_info.scheduler_reservation_mb,
+            "scheduler_candidate_gpus": [],
+            "scheduler_ready": False,
+            "scheduler_blockers": [],
+        }
+
+    reservation_shortfall_by_gpu: Dict[int, int] = {}
+    for running_job in running_jobs:
+        gpu_idx = getattr(running_job, "assigned_gpu", None)
+        if gpu_idx is None:
+            continue
+        live_vram = live_vram_by_job.get(running_job.id)
+        reservation = _running_job_reservation_mb(running_job, live_vram)
+        shortfall = reservation if not live_vram else max(0, reservation - live_vram)
+        if shortfall > 0:
+            reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
+
+    gpu_states = []
+    for gpu in gpu_stats:
+        effective_used = gpu.memory_used_mb + reservation_shortfall_by_gpu.get(gpu.index, 0)
+        gpu_states.append(
+            GPUState(
+                index=gpu.index,
+                name=gpu.name,
+                memory_used_mb=effective_used,
+                memory_total_mb=gpu.memory_total_mb,
+                memory_free_mb=gpu.memory_total_mb - effective_used,
+                utilization=gpu.utilization,
+                temperature=gpu.temperature,
+            )
+        )
+
+    global_config = config.get("global", {})
+    active_gpus = [
+        g for g in gpu_states
+        if (not is_gpu_disabled(g.index, config)) or _gpu_force_available(g.index, config) or _gpu_quick_enable(g.index, config)
+    ]
+    active_gpu_ids = {g.index for g in active_gpus}
+    msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
+    msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
+    msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
+    busy_threshold = max(0.0, min(1.0, float(global_config.get("busy_threshold", 0.5) or 0.0)))
+    cooldown_ms = max(0, int(global_config.get("cooldown_ms", 0) or 0))
+    cooldown_delta = timedelta(milliseconds=cooldown_ms)
+    quick_enable_tokens: Dict[int, int] = {
+        g.index: (1 if _gpu_quick_enable(g.index, config) else 0)
+        for g in active_gpus
+    }
+    projected = {g.index: g.memory_used_mb for g in active_gpus}
+    capacity = {g.index: g.memory_total_mb for g in active_gpus}
+    projected_jobs_per_gpu = {g.index: running_jobs_per_gpu.get(g.index, 0) for g in active_gpus}
+    non_heavy_active_ids = {
+        g.index for g in active_gpus
+        if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
+    }
+
+    concurrency_limits = config.get("concurrency_limits", {})
+    auto_limits: Dict[str, int] = {}
+    for model_id, limit in concurrency_limits.items():
+        if isinstance(limit, str) and limit.lower() == "auto":
+            auto_limits[model_id] = _compute_auto_limit(
+                model_id,
+                job_infos,
+                gpu_states,
+                config,
+                running_jobs_per_gpu=running_jobs_per_gpu,
+            )
+
+    sorted_jobs = sorted(
+        job_infos,
+        key=lambda j: (
+            -j.priority,
+            -(j.scheduler_reservation_mb if j.scheduler_reservation_mb is not None else j.vram_estimate_mb),
+            -j.vram_estimate_mb,
+            j.created_at,
+        )
+    )
+
+    projected_by_model: Dict[str, int] = {}
+    assignments: List[Tuple[JobInfo, int]] = []
+
+    if not active_gpus:
+        for job in sorted_jobs:
+            diagnostics[job.id]["scheduler_blockers"] = ["no active GPUs available"]
+        return diagnostics
+
+    for job in sorted_jobs:
+        job_diag = diagnostics[job.id]
+        reason_buckets: Dict[str, List[int]] = {}
+        candidate_gpu_scores: List[Tuple[float, int]] = []
+
+        limit = concurrency_limits.get(job.model_type)
+        if isinstance(limit, str) and limit.lower() == "auto":
+            limit = auto_limits.get(job.model_type)
+        if isinstance(limit, str):
+            limit = None
+        if limit is not None:
+            current_for_model = running_by_model.get(job.model_type, 0) + projected_by_model.get(job.model_type, 0)
+            if current_for_model >= limit:
+                job_diag["scheduler_blockers"] = [f"model concurrency limit reached ({current_for_model}/{limit})"]
+                continue
+
+        if job.model_type in PROTENIX_MODELS:
+            has_protenix_gpu = any(
+                GPU_CAPABILITIES.get(g.index, {'supports_protenix': True}).get('supports_protenix', True)
+                for g in active_gpus
+            )
+            if not has_protenix_gpu:
+                job_diag["scheduler_blockers"] = ["no Protenix-compatible GPU available"]
+                continue
+
+        if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
+            filtered_allowlist = [gpu_id for gpu_id in job.pinned_gpus if gpu_id in active_gpu_ids]
+            if not filtered_allowlist:
+                job_diag["scheduler_blockers"] = ["GPU allowlist has no active GPUs"]
+                continue
+            if filtered_allowlist != job.pinned_gpus:
+                job = replace(job, pinned_gpus=filtered_allowlist)
+
+        forced_gpu = None
+        batch_lock_gpu = get_batch_lock_gpu(getattr(job, 'batch_id', None), config)
+        if batch_lock_gpu is not None:
+            if batch_lock_gpu in active_gpu_ids:
+                forced_gpu = batch_lock_gpu
+            else:
+                job_diag["scheduler_blockers"] = [f"batch lock targets inactive GPU {batch_lock_gpu}"]
+                continue
+        elif job.pinned_gpu is not None:
+            if job.pinned_gpu in active_gpu_ids:
+                forced_gpu = job.pinned_gpu
+            else:
+                job_diag["scheduler_blockers"] = [f"pinned GPU {job.pinned_gpu} is inactive"]
+                continue
+        else:
+            workflow_pin = get_workflow_pin(job.model_type, config)
+            if workflow_pin is not None:
+                if workflow_pin in active_gpu_ids:
+                    forced_gpu = workflow_pin
+                else:
+                    job_diag["scheduler_blockers"] = [f"workflow pin targets inactive GPU {workflow_pin}"]
+                    continue
+
+        for gpu in active_gpus:
+            gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True, 'supports_protenix': True})
+            force_available = _gpu_force_available(gpu.index, config)
+            quick_available = quick_enable_tokens.get(gpu.index, 0) > 0
+            availability_override = force_available or quick_available
+
+            if forced_gpu is not None and forced_gpu != gpu.index:
+                continue
+
+            if job.pinned_gpus is not None and len(job.pinned_gpus) > 0 and gpu.index not in job.pinned_gpus:
+                continue
+
+            if job.model_type == 'msa_batch' and msa_preferred_active and gpu.index not in msa_preferred_active:
+                reason_buckets.setdefault("not in MSA preferred GPU set", []).append(gpu.index)
+                continue
+
+            if is_gpu_locked(gpu.index, getattr(job, 'batch_id', None), config):
+                reason_buckets.setdefault("locked by another batch", []).append(gpu.index)
+                continue
+
+            if is_gpu_disabled(gpu.index, config) and not availability_override:
+                reason_buckets.setdefault("disabled", []).append(gpu.index)
+                continue
+
+            max_jobs = _gpu_max_concurrent_jobs(gpu.index, config)
+            if max_jobs is not None and projected_jobs_per_gpu.get(gpu.index, 0) >= max_jobs and not availability_override:
+                reason_buckets.setdefault("max concurrent jobs reached", []).append(gpu.index)
+                continue
+
+            if busy_threshold > 0 and (gpu.utilization / 100.0) >= busy_threshold and not availability_override:
+                reason_buckets.setdefault("busy threshold reached", []).append(gpu.index)
+                continue
+
+            last_launch_at = gpu_last_launch_at.get(gpu.index)
+            if cooldown_ms > 0 and last_launch_at is not None and not availability_override:
+                try:
+                    if datetime.utcnow() - last_launch_at < cooldown_delta:
+                        reason_buckets.setdefault("launch cooldown active", []).append(gpu.index)
+                        continue
+                except Exception:
+                    pass
+
+            if job.model_type in HEAVY_MODELS and not gpu_caps.get('supports_heavy', True):
+                reason_buckets.setdefault("requires heavy-capable GPU", []).append(gpu.index)
+                continue
+
+            if job.model_type in PROTENIX_MODELS and not gpu_caps.get('supports_protenix', True):
+                reason_buckets.setdefault("requires Protenix-compatible GPU", []).append(gpu.index)
+                continue
+
+            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
+            gpu_fill_target = _gpu_target_fill(gpu.index, config)
+            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
+            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+            if required > available:
+                reason_buckets.setdefault("VRAM fill cap reached", []).append(gpu.index)
+                continue
+
+            gpu_override = _gpu_override(gpu.index, config)
+            capacity_weight = global_config.get("capacity_weight", 3.0)
+            emptiness_weight = global_config.get("emptiness_weight", 5.0)
+            priority_tier = gpu_override.get("priority_tier")
+            current_utilization = projected[gpu.index] / capacity[gpu.index]
+            if priority_tier is not None:
+                base_tier = priority_tier * 10
+            else:
+                base_tier = (capacity[gpu.index] / 10000) * capacity_weight
+            emptiness_bonus = (1.0 - current_utilization) * emptiness_weight
+            score = base_tier + emptiness_bonus - gpu.index * 0.001
+            if job.model_type == 'msa_batch' and msa_avoid_heavy and non_heavy_active_ids:
+                if gpu.index in non_heavy_active_ids:
+                    score += 1000.0
+                else:
+                    score -= 1000.0
+            candidate_gpu_scores.append((score, gpu.index))
+
+        if not candidate_gpu_scores:
+            job_diag["scheduler_blockers"] = _summarize_queue_blockers(reason_buckets) or ["no eligible GPU at current packing state"]
+            continue
+
+        candidate_gpu_scores.sort(reverse=True)
+        best_gpu = candidate_gpu_scores[0][1]
+        candidate_gpu_ids = [gpu_id for _score, gpu_id in candidate_gpu_scores]
+        job_diag["scheduler_candidate_gpus"] = candidate_gpu_ids
+
+        assignments.append((job, best_gpu))
+        projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+        projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
+        projected_by_model[job.model_type] = projected_by_model.get(job.model_type, 0) + 1
+        if quick_enable_tokens.get(best_gpu, 0) > 0:
+            quick_enable_tokens[best_gpu] = 0
+
+    max_launches_per_cycle = int(global_config.get("max_launches_per_cycle", 3) or 3)
+    for assignment_index, (job, gpu_id) in enumerate(assignments):
+        job_diag = diagnostics[job.id]
+        if assignment_index < max_launches_per_cycle:
+            job_diag["scheduler_ready"] = True
+            job_diag["scheduler_blockers"] = []
+        else:
+            job_diag["scheduler_ready"] = False
+            job_diag["scheduler_blockers"] = [f"waiting for launch burst limit ({max_launches_per_cycle}/cycle)"]
+        if gpu_id not in job_diag["scheduler_candidate_gpus"]:
+            job_diag["scheduler_candidate_gpus"] = [gpu_id] + list(job_diag["scheduler_candidate_gpus"])
+
+    return diagnostics
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -959,17 +1635,20 @@ class GPUOrchestrator:
                 # Extract pinned_gpus from job params if present
                 pinned_gpus = _normalize_pinned_gpus(job_params.get('pinned_gpus'))
                 
+                effective_model = _effective_job_model_type(job)
+
                 job_infos.append(JobInfo(
                     id=job.id,
                     name=job.name,
-                    model_type=job.model_id,
+                    model_type=effective_model,
                     vram_estimate_mb=vram,
                     sequence_length=job.sequence_length or 300,
                     priority=job.priority or 0,
                     pinned_gpu=job.pinned_gpu if isinstance(job.pinned_gpu, int) else None,
                     created_at=job.created_at,
                     batch_id=getattr(job, 'batch_id', None),  # For GPU locking
-                    pinned_gpus=pinned_gpus  # Multi-GPU allowlist
+                    pinned_gpus=pinned_gpus,  # Multi-GPU allowlist
+                    scheduler_reservation_mb=vram,
                 ))
             
             # 3. Get GPU state
@@ -979,25 +1658,82 @@ class GPUOrchestrator:
                 return
 
             # ═══════════════════════════════════════════════════════════════════════
+            # Live-aware VRAM projection and running-job metadata
+            # ═══════════════════════════════════════════════════════════════════════
+            running_jobs_result = await session.execute(
+                select(Job).where(
+                    Job.queue_status == 'running',
+                    Job.assigned_gpu.isnot(None),
+                    Job.vram_estimate_mb.isnot(None)
+                )
+            )
+            running_jobs = running_jobs_result.scalars().all()
+
+            live_vram_by_job = _collect_live_vram_by_job_for_scheduler(running_jobs, gpu_stats)
+            observed_live_by_model: Dict[str, List[int]] = {}
+            running_jobs_per_gpu: Dict[int, int] = {}
+            running_by_model: Dict[str, int] = {}
+            gpu_last_launch_at: Dict[int, datetime] = {}
+            for rj in running_jobs:
+                effective_model = _effective_job_model_type(rj)
+                running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
+                if rj.assigned_gpu is not None:
+                    running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
+                    started_at = getattr(rj, "started_at", None)
+                    if isinstance(started_at, datetime):
+                        previous = gpu_last_launch_at.get(rj.assigned_gpu)
+                        if previous is None or started_at > previous:
+                            gpu_last_launch_at[rj.assigned_gpu] = started_at
+                live_vram = live_vram_by_job.get(rj.id)
+                if live_vram and live_vram > 0:
+                    observed_live_by_model.setdefault(effective_model, []).append(live_vram)
+
+            for job_info in job_infos:
+                job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
+
+            reservation_shortfall_by_gpu: Dict[int, int] = {}
+            for rj in running_jobs:
+                gpu_idx = rj.assigned_gpu
+                if gpu_idx is None:
+                    continue
+                live_vram = live_vram_by_job.get(rj.id)
+                reservation = _running_job_reservation_mb(rj, live_vram)
+                shortfall = reservation if not live_vram else max(0, reservation - live_vram)
+                if shortfall > 0:
+                    reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
+
+            if reservation_shortfall_by_gpu:
+                logger.debug(f"[ORCHESTRATOR] Reservation shortfall by GPU: {reservation_shortfall_by_gpu}")
+
+            gpu_states = []
+            for g in gpu_stats:
+                effective_used = g.memory_used_mb + reservation_shortfall_by_gpu.get(g.index, 0)
+                gpu_states.append(GPUState(
+                    index=g.index,
+                    name=g.name,
+                    memory_used_mb=effective_used,
+                    memory_total_mb=g.memory_total_mb,
+                    memory_free_mb=g.memory_total_mb - effective_used,
+                    utilization=g.utilization,
+                    temperature=g.temperature
+                ))
+
+            # ═══════════════════════════════════════════════════════════════════════
             # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
             # ═══════════════════════════════════════════════════════════════════════
             concurrency_limits = config.get("concurrency_limits", {})
             if concurrency_limits:
-                # Count running jobs per model type
-                running_by_model = {}
-                running_result = await session.execute(
-                    select(Job.model_id, func.count(Job.id)).where(
-                        Job.queue_status == "running"
-                    ).group_by(Job.model_id)
-                )
-                for model_id, count in running_result:
-                    running_by_model[model_id] = count
-
                 # Precompute auto limits
                 auto_limits = {}
                 for model_id, limit in concurrency_limits.items():
                     if isinstance(limit, str) and limit.lower() == "auto":
-                        auto_limit = _compute_auto_limit(model_id, job_infos, gpu_stats, config)
+                        auto_limit = _compute_auto_limit(
+                            model_id,
+                            job_infos,
+                            gpu_states,
+                            config,
+                            running_jobs_per_gpu=running_jobs_per_gpu,
+                        )
                         auto_limits[model_id] = auto_limit
 
                 # Filter pending jobs based on limits
@@ -1030,47 +1766,15 @@ class GPUOrchestrator:
                 if not job_infos:
                     return  # All jobs blocked by concurrency limits
             
-            # ═══════════════════════════════════════════════════════════════════════
-            # CRITICAL: Include recently-launched jobs in VRAM projection
-            # Jobs take 10-30s to actually allocate GPU memory after launching.
-            # Without this, the orchestrator keeps launching more every 3s cycle.
-            # Query running jobs and add their estimated VRAM to GPU usage.
-            # ═══════════════════════════════════════════════════════════════════════
-            running_jobs_result = await session.execute(
-                select(Job).where(
-                    Job.queue_status == 'running',
-                    Job.assigned_gpu.isnot(None),
-                    Job.vram_estimate_mb.isnot(None)
-                )
-            )
-            running_jobs = running_jobs_result.scalars().all()
-            
-            # Sum estimated VRAM per GPU from running jobs
-            pending_vram = {}  # gpu_index -> estimated VRAM from running jobs
-            for rj in running_jobs:
-                gpu_idx = rj.assigned_gpu
-                if gpu_idx is not None:
-                    pending_vram[gpu_idx] = pending_vram.get(gpu_idx, 0) + (rj.vram_estimate_mb or 0)
-            
-            if pending_vram:
-                logger.debug(f"[ORCHESTRATOR] Pending VRAM from running jobs: {pending_vram}")
-            
-            gpu_states = []
-            for g in gpu_stats:
-                # Add pending VRAM to memory_used for scheduling purposes
-                effective_used = g.memory_used_mb + pending_vram.get(g.index, 0)
-                gpu_states.append(GPUState(
-                    index=g.index,
-                    name=g.name,
-                    memory_used_mb=effective_used,  # Include pending VRAM
-                    memory_total_mb=g.memory_total_mb,
-                    memory_free_mb=g.memory_total_mb - effective_used,
-                    utilization=g.utilization,
-                    temperature=g.temperature
-                ))
-            
             # 4. Run bin-packing
-            assignments = pack_jobs_to_gpus(job_infos, gpu_states, target_fill, config)
+            assignments = pack_jobs_to_gpus(
+                job_infos,
+                gpu_states,
+                target_fill,
+                config,
+                running_jobs_per_gpu=running_jobs_per_gpu,
+                gpu_last_launch_at=gpu_last_launch_at,
+            )
             
             if not assignments:
                 return  # No jobs could be packed
@@ -1086,8 +1790,9 @@ class GPUOrchestrator:
             
             if len(assignments) < len(job_infos):
                 logger.info(f"[ORCHESTRATOR] Throttled to {len(assignments)}/{len(job_infos)} launches this cycle")
-            
+
             # 5. Launch assigned jobs with stagger to prevent GPU initialization OOM
+            used_quick_enable_gpu_ids = set()
             for i, (job_info, gpu_id) in enumerate(assignments):
                 # Find the actual Job object
                 job = next((j for j in pending_jobs if j.id == job_info.id), None)
@@ -1114,6 +1819,9 @@ class GPUOrchestrator:
                     job.assigned_gpu = gpu_id
                     job.started_at = datetime.utcnow()
                     job.vram_estimate_mb = job_info.vram_estimate_mb
+
+                    if _gpu_quick_enable(gpu_id, config):
+                        used_quick_enable_gpu_ids.add(gpu_id)
                     
                     logger.info(f"[LAUNCH] {job.name} on GPU {gpu_id}")
                     
@@ -1121,6 +1829,12 @@ class GPUOrchestrator:
                     logger.error(f"[LAUNCH FAILED] {job.name}: {e}")
                     job.queue_status = "failed"
                     job.error_message = str(e)
+
+            if used_quick_enable_gpu_ids:
+                for gpu_id in used_quick_enable_gpu_ids:
+                    gpu_override = config.setdefault("overrides", {}).setdefault(str(gpu_id), {})
+                    gpu_override["quick_enable"] = False
+                write_scheduler_config(config)
             
             await session.commit()
     
@@ -1302,11 +2016,11 @@ class GPUOrchestrator:
                                 job.error_message = None
                                 job.completed_at = datetime.utcnow()
 
-                                # Best-effort safety net: if a top-level workflow completed but
-                                # launch task finalization was missed, ingest outputs so Data Viewer
-                                # is populated instead of showing an empty completed job.
-                                if job.parent_job_id is None and job.output_dir:
-                                    try:
+                                try:
+                                    # Best-effort safety net: if a top-level workflow completed but
+                                    # launch task finalization was missed, ingest outputs so Data Viewer
+                                    # is populated instead of showing an empty completed job.
+                                    if job.parent_job_id is None and job.output_dir:
                                         existing_designs = (
                                             await session.execute(
                                                 select(func.count(Design.id)).where(Design.job_id == job.id)
@@ -1320,10 +2034,16 @@ class GPUOrchestrator:
                                                 f"[COMPLETION] Ingested {created} designs "
                                                 f"for reconciled top-level job {job.name}"
                                             )
-                                    except Exception as ingest_err:
-                                        logger.warning(
-                                            f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
-                                        )
+                                    from services.nextflow import (
+                                        maybe_trigger_batch_frustrampnn,
+                                        maybe_trigger_mutation_seed_refinement,
+                                    )
+                                    await maybe_trigger_batch_frustrampnn(job, session)
+                                    await maybe_trigger_mutation_seed_refinement(job, session)
+                                except Exception as ingest_err:
+                                    logger.warning(
+                                        f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
+                                    )
                                 if history_note:
                                     logger.info(
                                         f"[COMPLETION] {job.name} completed (no process found, "
@@ -1346,20 +2066,33 @@ class GPUOrchestrator:
                                     f"{interrupted_after_child_wait_reason}"
                                 )
                             else:
-                                if age_seconds >= stale_fail_after_seconds:
-                                    unresolved_reason = (
-                                        "Reconciled as failed: no active process and no terminal "
-                                        ".nextflow/history status (expected OK/ERR)"
+                                history_status = nextflow_history_status(job)
+                                gate_present = has_stage_gate(job)
+                                if history_status == "OK" or gate_present or job.awaiting_input:
+                                    job.status = "awaiting_input"
+                                    job.queue_status = "paused"
+                                    job.error_message = None
+                                    if job.awaiting_stage:
+                                        job.current_stage = job.awaiting_stage
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} reconciled as awaiting input "
+                                        f"(no process found, age: {age_seconds:.0f}s, "
+                                        f"history_status={history_status or 'n/a'}, gate={gate_present})"
                                     )
+                                elif age_seconds >= stale_fail_after_seconds:
                                     if job.status == "running":
+                                        unresolved_reason = (
+                                            "Reconciled as failed: no active process and no terminal "
+                                            ".nextflow/history status (expected OK/ERR)"
+                                        )
                                         job.status = "failed"
-                                    job.queue_status = "failed"
-                                    job.error_message = unresolved_reason
-                                    job.completed_at = datetime.utcnow()
-                                    logger.warning(
-                                        f"[COMPLETION] {job.name} reconciled as failed "
-                                        f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
-                                    )
+                                        job.queue_status = "failed"
+                                        job.error_message = unresolved_reason
+                                        job.completed_at = datetime.utcnow()
+                                        logger.warning(
+                                            f"[COMPLETION] {job.name} reconciled as failed "
+                                            f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
+                                        )
                                 else:
                                     logger.info(
                                         f"[COMPLETION] {job.name} remains running while waiting "
