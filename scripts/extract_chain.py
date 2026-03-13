@@ -16,8 +16,9 @@ import sys
 from pathlib import Path
 
 
-def extract_chains(input_pdb: str, output_pdb: str, chains: list[str], 
-                   renumber: bool = False, new_chain_id: str = None) -> dict:
+def extract_chains(input_pdb: str, output_pdb: str, chains: list[str],
+                   renumber: bool = False, new_chain_id: str = None,
+                   model_number: int | None = None) -> dict:
     """
     Extract specified chain(s) from a PDB file.
     
@@ -39,10 +40,36 @@ def extract_chains(input_pdb: str, output_pdb: str, chains: list[str],
     current_new_resnum = 0
     last_resnum = None
     last_chain = None
+    inside_model = False
+    saw_model_records = False
+    keep_current_model = model_number is None
+    selected_model_found = model_number is None
     
     with open(input_pdb, 'r') as f:
         for line in f:
             record_type = line[:6].strip()
+
+            if record_type == 'MODEL':
+                saw_model_records = True
+                inside_model = True
+                try:
+                    current_model_number = int(line[10:].strip())
+                except ValueError:
+                    current_model_number = None
+                keep_current_model = model_number is None or current_model_number == model_number
+                if keep_current_model:
+                    selected_model_found = True
+                continue
+
+            if record_type == 'ENDMDL':
+                inside_model = False
+                if model_number is not None and keep_current_model:
+                    break
+                keep_current_model = model_number is None
+                continue
+
+            if inside_model and not keep_current_model:
+                continue
             
             # Keep REMARK, CRYST1, etc. header lines
             if record_type in ['REMARK', 'HEADER', 'TITLE', 'COMPND', 'SOURCE', 
@@ -96,6 +123,9 @@ def extract_chains(input_pdb: str, output_pdb: str, chains: list[str],
                     # TER without chain info - keep if last line was from our chain
                     extracted_lines.append(line)
     
+    if model_number is not None and saw_model_records and not selected_model_found:
+        raise ValueError(f"Requested model {model_number} not found in {input_pdb}")
+
     # Add END record
     if extracted_lines and not extracted_lines[-1].startswith('END'):
         extracted_lines.append('END\n')
@@ -114,7 +144,8 @@ def extract_chains(input_pdb: str, output_pdb: str, chains: list[str],
         'atom_count': atom_count,
         'residue_count': unique_residues or 'unknown',
         'renumbered': renumber,
-        'chain_renamed_to': new_chain_id
+        'chain_renamed_to': new_chain_id,
+        'model_number': model_number,
     }
 
 
@@ -132,6 +163,8 @@ def main():
                         help="Renumber residues starting from 1")
     parser.add_argument("--rename-chain", dest="new_chain_id",
                         help="Rename extracted chain(s) to this ID (e.g., T for target)")
+    parser.add_argument("--model-number", type=int,
+                        help="Specific MODEL number to extract before chain filtering")
     
     args = parser.parse_args()
     
@@ -153,7 +186,8 @@ def main():
         args.output_pdb, 
         chains,
         renumber=args.renumber,
-        new_chain_id=args.new_chain_id
+        new_chain_id=args.new_chain_id,
+        model_number=args.model_number
     )
     
     print(f"Extracted {result['atom_count']} atoms from chain(s) {result['chains_extracted']}")

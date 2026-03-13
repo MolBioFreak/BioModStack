@@ -43,23 +43,43 @@ def parse_chain_set(chains_arg: str | None) -> set[str]:
     return {token.strip().upper() for token in chains_arg.split(",") if token.strip()}
 
 
-def normalize_pdb(input_path: Path, output_path: Path, keep_chains: set[str], first_model_only: bool) -> dict:
+def normalize_pdb(
+    input_path: Path,
+    output_path: Path,
+    keep_chains: set[str],
+    first_model_only: bool,
+    model_number: int | None = None,
+) -> dict:
     header_lines: list[str] = []
     body_lines: list[str] = []
     atom_count = 0
     kept_models = 0
 
     inside_model = False
-    keep_current_model = not first_model_only
+    keep_current_model = not first_model_only and model_number is None
     first_model_seen = False
+    saw_model_records = False
+    selected_model_found = model_number is None
 
     with input_path.open("r") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n")
 
             if line.startswith("MODEL"):
+                saw_model_records = True
                 inside_model = True
-                if not first_model_only:
+                parsed_model_number = None
+                try:
+                    parsed_model_number = int(line[10:].strip())
+                except ValueError:
+                    parsed_model_number = None
+
+                if model_number is not None:
+                    keep_current_model = parsed_model_number == model_number
+                    if keep_current_model:
+                        selected_model_found = True
+                        kept_models = 1
+                elif not first_model_only:
                     keep_current_model = True
                 elif not first_model_seen:
                     keep_current_model = True
@@ -71,10 +91,12 @@ def normalize_pdb(input_path: Path, output_path: Path, keep_chains: set[str], fi
 
             if line.startswith("ENDMDL"):
                 inside_model = False
+                if model_number is not None and keep_current_model:
+                    break
                 if first_model_only and keep_current_model:
                     # Stop after the first model to avoid carrying later models.
                     break
-                keep_current_model = not first_model_only
+                keep_current_model = not first_model_only and model_number is None
                 continue
 
             if line.startswith(HEADER_PREFIXES):
@@ -105,6 +127,11 @@ def normalize_pdb(input_path: Path, output_path: Path, keep_chains: set[str], fi
     if not body_lines:
         raise ValueError("No coordinate records remained after normalization")
 
+    if model_number is not None and saw_model_records and not selected_model_found:
+        raise ValueError(f"Requested model {model_number} not found")
+    if model_number is not None and not saw_model_records:
+        kept_models = 1
+
     if first_model_only and not first_model_seen:
         kept_models = 1
 
@@ -122,6 +149,7 @@ def normalize_pdb(input_path: Path, output_path: Path, keep_chains: set[str], fi
         "atom_count": atom_count,
         "kept_models": kept_models,
         "first_model_only": first_model_only,
+        "model_number": model_number,
     }
 
 
@@ -134,6 +162,12 @@ def main() -> int:
         "--first-model-only",
         action="store_true",
         help="Collapse multi-model PDBs to the first model",
+    )
+    parser.add_argument(
+        "--model-number",
+        type=int,
+        default=None,
+        help="Select a specific MODEL number before stripping MODEL/ENDMDL records",
     )
     args = parser.parse_args()
 
@@ -149,6 +183,7 @@ def main() -> int:
             output_path=output_path,
             keep_chains=parse_chain_set(args.chains),
             first_model_only=args.first_model_only,
+            model_number=args.model_number,
         )
     except Exception as exc:
         print(f"Failed to normalize {input_path}: {exc}", file=sys.stderr)

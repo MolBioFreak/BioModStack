@@ -5,6 +5,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { ThemeSelector } from './ThemeSelector';
+import { InfraTelemetryCollector } from './InfraLiveTelemetry';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -43,6 +44,7 @@ export function Layout({ children }: LayoutProps) {
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
+            <InfraTelemetryCollector />
             {/* Top Navigation Bar */}
             <nav
                 className="backdrop-blur-sm border-b flex-shrink-0 z-50 transition-colors duration-300"
