@@ -135,17 +135,18 @@ process RFANTIBODY {
     // Number of designs - use per-GPU allocation from input (supports multi-GPU splitting)
     def num_designs = num_designs_for_this_gpu ?: params.rfantibody_num_designs ?: 10
 
-    // Quality parameters — clamped to literature-backed maximums
-    // Ref: RFdiffusion (Watson et al. 2023, Nature), RFantibody base.yaml
-    // T=50 is the trained inference default; T>50 stretches the beta schedule
-    // beyond what the model expects, increasing degenerate-frame probability.
-    def requested_diffusion_steps = (params.rfantibody_diffusion_steps ?: 50) as int
-    def diffusion_steps = Math.min(requested_diffusion_steps, 50)
-    // noise_scale: 0 = best binder success rate, 1 = max diversity (paper default)
-    def noise_scale_ca = Math.min((params.rfantibody_noise_scale_ca ?: 1.0) as double, 1.0)
-    def noise_scale_frame = Math.min((params.rfantibody_noise_scale_frame ?: 1.0) as double, 1.0)
-    // guide_scale: 2-10 typical, 20 upper bound for strong hotspot guidance
-    def guide_scale = Math.min((params.rfantibody_guide_scale ?: 10) as int, 20)
+    // Quality parameters — honor the UI contract while still guarding against
+    // pathological values arriving from stale clients or direct API callers.
+    def clampInt = { value, minValue, maxValue ->
+        Math.max(minValue, Math.min(value as int, maxValue))
+    }
+    def clampDouble = { value, minValue, maxValue ->
+        Math.max(minValue, Math.min(value as double, maxValue))
+    }
+    def diffusion_steps = clampInt(params.rfantibody_diffusion_steps ?: 50, 20, 200)
+    def noise_scale_ca = clampDouble(params.rfantibody_noise_scale_ca ?: 1.0, 0.5d, 2.0d)
+    def noise_scale_frame = clampDouble(params.rfantibody_noise_scale_frame ?: 1.0, 0.5d, 2.0d)
+    def guide_scale = clampInt(params.rfantibody_guide_scale ?: 10, 1, 50)
 
     def presetFrameworks = [
         'standard-fv': '/opt/RFantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb',

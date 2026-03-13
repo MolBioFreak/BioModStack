@@ -149,3 +149,7 @@ platform/api/inputs/
 # Scratch test scripts
 test_*.nf
 spawn_result.json
+
+# Recovery artifacts (local only)
+inputs/recovered_rfantibody/
+*.trb

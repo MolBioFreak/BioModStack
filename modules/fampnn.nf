@@ -24,6 +24,7 @@ process PrepFAMPNN {
         customCdrPositions = customLoopSpec.replace('[', '').replace(']', '')
     }
     def customCdrFlag = customCdrPositions ? "--cdr_positions \"${customCdrPositions}\"" : ""
+    def extraFixedJson = params.manual_mutation_fixed_positions_json ? " \\\\\n        --extra_fixed_positions_json \\\"${params.manual_mutation_fixed_positions_json}\\\"" : ""
 
     def constraintCmd = useAntibodyConstraints
         ? """
@@ -38,7 +39,7 @@ process PrepFAMPNN {
         --protect_tetrad "${protectTetrad}" \\
         --antibody_chains "${antibodyChains}" \\
         --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
-        --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}"
+        --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}"${extraFixedJson}
     """
         : """
     # Generate generic constraints (no fixed residues)
