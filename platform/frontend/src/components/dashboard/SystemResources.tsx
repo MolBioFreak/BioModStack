@@ -9,6 +9,10 @@ import {
 } from '../../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../../lib/api';
 
+const SYSTEM_POLL_INTERVAL_MS = 1000;
+const POWER_CONTROL_POLL_INTERVAL_MS = 3000;
+const SCHEDULER_POLL_INTERVAL_MS = 3000;
+
 // --- Helper Components ---
 
 function Sparkline({ data, color, height = 24 }: { data: number[]; color: string; height?: number }) {
@@ -314,6 +318,97 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
     );
 }
 
+function GpuPowerControlCard({
+    gpu,
+    currentLimit,
+    onSetLimit,
+    isPending,
+    disabled,
+    onToggleDisable,
+}: {
+    gpu: GPUStatus;
+    currentLimit: number;
+    onSetLimit: (watts: number) => void;
+    isPending: boolean;
+    disabled: boolean;
+    onToggleDisable: () => void;
+}) {
+    const [inputValue, setInputValue] = useState(String(Math.round(currentLimit)));
+    const powerPercent = currentLimit > 0 ? (gpu.power_draw_w / currentLimit) * 100 : 0;
+
+    const handleApply = () => {
+        const watts = parseInt(inputValue, 10);
+        if (!Number.isNaN(watts) && watts >= gpu.min_power_watts && watts <= gpu.max_power_watts) {
+            onSetLimit(watts);
+        }
+    };
+
+    const handleIncrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        setInputValue(String(Math.min(current + 5, gpu.max_power_watts)));
+    };
+
+    const handleDecrement = () => {
+        const current = parseInt(inputValue, 10) || currentLimit;
+        setInputValue(String(Math.max(current - 5, gpu.min_power_watts)));
+    };
+
+    const parsedValue = parseInt(inputValue, 10);
+    const isOutOfRange = !Number.isNaN(parsedValue) && (parsedValue < gpu.min_power_watts || parsedValue > gpu.max_power_watts);
+    const isDirty = parsedValue !== currentLimit;
+
+    return (
+        <div className={`rounded-xl border bg-slate-900/80 p-3 transition-colors ${disabled ? 'border-red-500/40' : 'border-slate-800 hover:border-accent/40'}`}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-100">{gpu.name}</div>
+                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                        <span>{gpu.power_draw_w.toFixed(1)}W draw</span>
+                        <span>{currentLimit}W cap</span>
+                    </div>
+                </div>
+                <button
+                    onClick={onToggleDisable}
+                    className={`rounded px-2 py-1 text-xs font-medium transition-colors ${disabled ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
+                    title={disabled ? 'Enable GPU for inference' : 'Disable GPU from inference'}
+                >
+                    {disabled ? 'Enable' : 'Disable'}
+                </button>
+            </div>
+
+            <div className="mb-3 h-1.5 rounded-full bg-slate-800">
+                <div
+                    className={`h-1.5 rounded-full ${powerPercent > 90 ? 'bg-red-500' : powerPercent > 70 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+                    style={{ width: `${Math.min(powerPercent, 100)}%` }}
+                />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+                <button onClick={handleDecrement} className="h-7 w-7 rounded bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">−</button>
+                <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                    className={`w-16 rounded border bg-slate-800 px-2 py-1.5 text-center text-sm text-slate-100 ${isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-slate-700'}`}
+                />
+                <button onClick={handleIncrement} className="h-7 w-7 rounded bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">+</button>
+                <span className="ml-1 text-xs text-slate-500">W</span>
+                {isDirty && (
+                    <button
+                        onClick={handleApply}
+                        disabled={isPending || isOutOfRange}
+                        className="ml-auto rounded bg-accent/15 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/25 disabled:opacity-50"
+                    >
+                        Apply
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // GPU Names for dropdown
 const GPU_NAMES: Record<number, string> = {
     0: 'RTX 5090',
@@ -586,6 +681,7 @@ interface SchedulerConfig {
         target_vram_fill: number;
         capacity_weight: number;
         emptiness_weight: number;
+        max_launches_per_cycle: number;
         msa_concurrency_limit: number;
     };
     overrides: Record<string, {
@@ -603,9 +699,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [config, setConfig] = useState<SchedulerConfig | null>(null);
     const [loading, setLoading] = useState(false);
     const [localThreshold, setLocalThreshold] = useState(75);
+    const [localBusyThreshold, setLocalBusyThreshold] = useState(50);
     const [localCooldown, setLocalCooldown] = useState(10);
     const [localCapacityWeight, setLocalCapacityWeight] = useState(3.0);
     const [localEmptinessWeight, setLocalEmptinessWeight] = useState(5.0);
+    const [localMaxLaunchesPerCycle, setLocalMaxLaunchesPerCycle] = useState(3);
     const [expanded, setExpanded] = useState(false);
     const [debugExpanded, setDebugExpanded] = useState(false);
 
@@ -621,6 +719,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [localGpuOverrides, setLocalGpuOverrides] = useState<Record<string, {
         vramLimitMb: number;
         priorityTier: number | null;
+        maxConcurrentJobs: number | null;
     }>>({});
 
     // Fetch config on mount
@@ -630,9 +729,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             .then(data => {
                 setConfig(data);
                 setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
+                setLocalBusyThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
                 setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
                 setLocalCapacityWeight(data.global?.capacity_weight ?? 3.0);
                 setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
+                setLocalMaxLaunchesPerCycle(data.global?.max_launches_per_cycle ?? 3);
 
                 // Initialize per-GPU local state from config
                 const gpuStates: typeof localGpuOverrides = {};
@@ -646,6 +747,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     gpuStates[gpuIdStr] = {
                         vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
                         priorityTier: override.priority_tier ?? null,
+                        maxConcurrentJobs: override.max_concurrent_jobs ?? null,
                     };
                 }
                 setLocalGpuOverrides(gpuStates);
@@ -664,6 +766,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             threshold?: number | null;
             vram_safety_margin_mb?: number;
             priority_tier?: number | null;
+            max_concurrent_jobs?: number | null;
         };
 
         // Calculate vramLimit from threshold and safety margin
@@ -673,6 +776,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         return {
             vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
             priorityTier: override.priority_tier ?? null,
+            maxConcurrentJobs: (config?.overrides[gpuId] || {}).max_concurrent_jobs ?? null,
         };
     };
 
@@ -708,8 +812,8 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: thresholdPct,
                     disabled: existing.disabled ?? false,
                     priority_tier: local.priorityTier,
-                    vram_safety_margin_mb: 0, // No longer using separate safety margin
-                    max_concurrent_jobs: existing.max_concurrent_jobs ?? null,
+                    vram_safety_margin_mb: existing.vram_safety_margin_mb ?? 0,
+                    max_concurrent_jobs: local.maxConcurrentJobs,
                 })
             });
             if (res.ok) {
@@ -742,16 +846,20 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                         quick_enable: existing.quick_enable ?? false,
                         threshold: thresholdPct,
                         disabled: existing.disabled ?? false,
-                        priority_tier: null,
-                        vram_safety_margin_mb: 0,
-                        max_concurrent_jobs: null,
+                        priority_tier: existing.priority_tier ?? null,
+                        vram_safety_margin_mb: existing.vram_safety_margin_mb ?? 0,
+                        max_concurrent_jobs: existing.max_concurrent_jobs ?? null,
                     })
                 });
 
                 // Update local state
                 setLocalGpuOverrides(prev => ({
                     ...prev,
-                    [gpuId]: { vramLimitMb, priorityTier: null }
+                    [gpuId]: {
+                        vramLimitMb,
+                        priorityTier: existing.priority_tier ?? null,
+                        maxConcurrentJobs: existing.max_concurrent_jobs ?? null,
+                    }
                 }));
             } catch (error) {
                 console.error(`Failed to set preset for GPU ${gpuId}:`, error);
@@ -774,12 +882,13 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    busy_threshold: config?.global?.busy_threshold ?? 0.5,
+                    busy_threshold: localBusyThreshold / 100,
                     cooldown_ms: localCooldown * 1000,
                     enabled: config?.global?.enabled ?? true,
                     target_vram_fill: localThreshold / 100,
                     capacity_weight: localCapacityWeight,
                     emptiness_weight: localEmptinessWeight,
+                    max_launches_per_cycle: localMaxLaunchesPerCycle,
                     msa_concurrency_limit: config?.global?.msa_concurrency_limit ?? 1,
                 })
             });
@@ -805,7 +914,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 body: JSON.stringify({
                     force_available: config.overrides[gpuId]?.force_available ?? false,
                     quick_enable: !current,  // Toggle
-                    threshold: null
+                    threshold: config.overrides[gpuId]?.threshold ?? null,
+                    disabled: config.overrides[gpuId]?.disabled ?? false,
+                    priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? 0,
+                    max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });
             if (res.ok) {
@@ -827,8 +940,12 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     force_available: !current,
-                    quick_enable: false,
-                    threshold: null
+                    quick_enable: config.overrides[gpuId]?.quick_enable ?? false,
+                    threshold: config.overrides[gpuId]?.threshold ?? null,
+                    disabled: config.overrides[gpuId]?.disabled ?? false,
+                    priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? 0,
+                    max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });
             if (res.ok) {
@@ -844,9 +961,11 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
     const isDirty =
         localThreshold !== Math.round((config.global.target_vram_fill ?? 0.75) * 100) ||
+        localBusyThreshold !== Math.round((config.global.busy_threshold ?? 0.5) * 100) ||
         localCooldown !== Math.round(config.global.cooldown_ms / 1000) ||
         localCapacityWeight !== (config.global.capacity_weight ?? 3.0) ||
-        localEmptinessWeight !== (config.global.emptiness_weight ?? 5.0);
+        localEmptinessWeight !== (config.global.emptiness_weight ?? 5.0) ||
+        localMaxLaunchesPerCycle !== (config.global.max_launches_per_cycle ?? 3);
 
     return (
         <div className="bg-slate-800/30 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-4">
@@ -868,6 +987,88 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
             {expanded && (
                 <div className="mt-4 space-y-4">
+                    <div className="border-t border-slate-700 pt-4">
+                        <div className="text-xs text-slate-400 mb-3">Global Packing Controls</div>
+
+                        <div className="mb-4">
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Target Fill</span>
+                                <span className="text-cyan-400 font-medium">{localThreshold}%</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="50"
+                                max="95"
+                                step="1"
+                                value={localThreshold}
+                                onChange={(e) => setLocalThreshold(parseInt(e.target.value, 10) || 50)}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>50%</span>
+                                <span>95%</span>
+                            </div>
+                        </div>
+
+                        <div className="mb-4">
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Busy Threshold</span>
+                                <span className="text-violet-400 font-medium">{localBusyThreshold}% util</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="5"
+                                value={localBusyThreshold}
+                                onChange={(e) => setLocalBusyThreshold(parseInt(e.target.value, 10) || 0)}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>0% (ignore)</span>
+                                <span>100% (block only at max)</span>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                    <span>Launch Cooldown</span>
+                                    <span className="text-amber-400 font-medium">{localCooldown}s</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="30"
+                                    step="1"
+                                    value={localCooldown}
+                                    onChange={(e) => setLocalCooldown(parseInt(e.target.value, 10) || 0)}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                />
+                            </div>
+
+                            <div>
+                                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                    <span>Launch Burst</span>
+                                    <span className="text-emerald-400 font-medium">{localMaxLaunchesPerCycle}/cycle</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="20"
+                                    step="1"
+                                    value={localMaxLaunchesPerCycle}
+                                    onChange={(e) => setLocalMaxLaunchesPerCycle(parseInt(e.target.value, 10) || 1)}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                                />
+                            </div>
+                        </div>
+
+                        <p className="text-xs text-slate-500 mt-3">
+                            A cycle is one scheduler pass, currently about every 3 seconds. Launch burst limits how many queued jobs can start per pass.
+                        </p>
+                    </div>
+
                     {/* VRAM Preset Buttons - Set all GPUs at once */}
                     <div className="flex items-center justify-between">
                         <span className="text-sm text-slate-400">VRAM Presets</span>
@@ -999,10 +1200,12 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                     const serverSafetyMb = serverOverride.vram_safety_margin_mb ?? 0;
                                     const serverVramLimitMb = Math.round(maxVram * serverThreshold - serverSafetyMb);
                                     const serverPriorityTier = serverOverride.priority_tier ?? null;
+                                    const serverMaxConcurrentJobs = serverOverride.max_concurrent_jobs ?? null;
 
                                     const hasUnsavedChanges =
                                         localOverride.vramLimitMb !== serverVramLimitMb ||
-                                        localOverride.priorityTier !== serverPriorityTier;
+                                        localOverride.priorityTier !== serverPriorityTier ||
+                                        localOverride.maxConcurrentJobs !== serverMaxConcurrentJobs;
 
                                     return (
                                         <div key={gpu.index} className={`bg-slate-800/50 rounded-lg px-4 py-4 ${isDisabled ? 'opacity-50' : ''}`}>
@@ -1094,6 +1297,34 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                                 </div>
                                             </div>
 
+                                            <div className="mt-3 text-xs">
+                                                <div className="flex justify-between text-slate-500 mb-1">
+                                                    <span>Max Concurrent Jobs</span>
+                                                    <span className="text-slate-300">
+                                                        {localOverride.maxConcurrentJobs ?? 'Unlimited'}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        placeholder="Unlimited"
+                                                        value={localOverride.maxConcurrentJobs ?? ''}
+                                                        onChange={(e) => {
+                                                            const raw = e.target.value.trim();
+                                                            updateLocalGpuOverride(gpuId, 'maxConcurrentJobs', raw === '' ? null : Math.max(1, parseInt(raw, 10) || 1));
+                                                        }}
+                                                        className="w-32 bg-slate-800/60 border border-slate-600/50 rounded px-2 py-1 text-xs text-slate-200"
+                                                    />
+                                                    <button
+                                                        onClick={() => updateLocalGpuOverride(gpuId, 'maxConcurrentJobs', null)}
+                                                        className="px-2 py-1 rounded text-xs font-medium bg-slate-700/60 text-slate-200 hover:bg-slate-600/60"
+                                                    >
+                                                        Unlimited
+                                                    </button>
+                                                </div>
+                                            </div>
+
                                             {/* Save Button for this GPU */}
                                             {hasUnsavedChanges && (
                                                 <button
@@ -1109,7 +1340,8 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
                                 <p className="text-xs text-slate-500">
                                     <span className="text-emerald-400">Priority</span>: Higher = preferred for jobs (Auto uses GPU capacity).<br />
-                                    <span className="text-cyan-400">VRAM Limit</span>: Maximum VRAM the scheduler will use on this GPU.
+                                    <span className="text-cyan-400">VRAM Limit</span>: Per-GPU packing cap used instead of the global fill target.<br />
+                                    <span className="text-slate-300">Max Concurrent</span>: Hard cap on launches assigned to that GPU.
                                 </p>
                             </div>
                         )}
@@ -1117,6 +1349,101 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 </div>
             )}
         </div>
+    );
+}
+
+export function GpuSchedulerControls() {
+    const { data: systemData } = useQuery({
+        queryKey: ['system'],
+        queryFn: fetchSystemStatus,
+        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const gpus = systemData?.data.gpus ?? [];
+
+    return (
+        <section className="mb-6">
+            <GPUSchedulerSettings gpus={gpus} />
+        </section>
+    );
+}
+
+export function GpuPowerControls() {
+    const queryClient = useQueryClient();
+
+    const { data: systemData } = useQuery({
+        queryKey: ['system'],
+        queryFn: fetchSystemStatus,
+        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const { data: powerControlData } = useQuery({
+        queryKey: ['powerControl'],
+        queryFn: fetchPowerControl,
+        refetchInterval: POWER_CONTROL_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const { data: schedulerConfigData } = useQuery({
+        queryKey: ['schedulerConfig'],
+        queryFn: fetchSchedulerConfig,
+        refetchInterval: SCHEDULER_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    const manualMutation = useMutation({
+        mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
+            setPowerControlManual(gpuIndex, limitWatts),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
+            queryClient.invalidateQueries({ queryKey: ['system'] });
+        },
+    });
+
+    const toggleDisableMutation = useMutation({
+        mutationFn: (gpuId: number) => toggleGpuDisabled(gpuId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['schedulerConfig'] });
+        },
+    });
+
+    const currentLimits = powerControlData?.data.limits ?? {};
+    const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
+    const gpus = systemData?.data.gpus ?? [];
+
+    if (gpus.length === 0) return null;
+
+    return (
+        <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-2xl shadow-black/20">
+            <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-lg font-semibold text-slate-100">GPU Power Controls</h2>
+                    <p className="mt-1 text-sm text-slate-400">
+                        Manual power caps and enable state for each GPU.
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-2">
+                {gpus.map((gpu) => (
+                    <GpuPowerControlCard
+                        key={gpu.index}
+                        gpu={gpu}
+                        currentLimit={currentLimits[gpu.index] ?? gpu.power_limit_w}
+                        onSetLimit={(watts) => manualMutation.mutate({ gpuIndex: gpu.index, limitWatts: watts })}
+                        isPending={manualMutation.isPending}
+                        disabled={gpuOverrides[String(gpu.index)]?.disabled ?? false}
+                        onToggleDisable={() => toggleDisableMutation.mutate(gpu.index)}
+                    />
+                ))}
+            </div>
+        </section>
     );
 }
 
@@ -1128,7 +1455,7 @@ export function SystemResources() {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: 5000,
+        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1136,7 +1463,7 @@ export function SystemResources() {
     const { data: powerControlData } = useQuery({
         queryKey: ['powerControl'],
         queryFn: fetchPowerControl,
-        refetchInterval: 10000,
+        refetchInterval: POWER_CONTROL_POLL_INTERVAL_MS,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1154,7 +1481,7 @@ export function SystemResources() {
     const { data: schedulerConfigData } = useQuery({
         queryKey: ['schedulerConfig'],
         queryFn: fetchSchedulerConfig,
-        refetchInterval: 10000,
+        refetchInterval: SCHEDULER_POLL_INTERVAL_MS,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -1203,7 +1530,7 @@ export function SystemResources() {
                             {/* Total System Power (GPU + CPU) */}
                             <span
                                 className="text-sm text-slate-400 cursor-help"
-                                title={`GPU: ${gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(0)}W${cpu?.power_watts ? ` + CPU: ${cpu.power_watts.toFixed(0)}W` : ''}`}
+                                title={`GPU: ${gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(0)}W${cpu?.power_watts != null ? ` + CPU: ${cpu.power_watts.toFixed(0)}W` : ''}`}
                             >
                                 Total: {(gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0) + (cpu?.power_watts ?? 0)).toFixed(0)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0) + 350}W
                             </span>

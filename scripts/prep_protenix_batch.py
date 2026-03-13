@@ -38,7 +38,7 @@ AA_CODES = {
 }
 
 
-def extract_chain_sequences(pdb_path: Path) -> list[str]:
+def extract_chain_sequences(pdb_path: Path) -> list[tuple[str, str]]:
     chain_sequences: "OrderedDict[str, list[str]]" = OrderedDict()
     seen_residues: dict[str, set[tuple[int, str]]] = {}
 
@@ -72,7 +72,7 @@ def extract_chain_sequences(pdb_path: Path) -> list[str]:
             seen_residues[chain_id].add(residue_key)
             chain_sequences[chain_id].append(aa)
 
-    return ["".join(seq) for seq in chain_sequences.values() if seq]
+    return [(chain_id, "".join(seq)) for chain_id, seq in chain_sequences.items() if seq]
 
 
 def build_entry(pdb_path: Path, seeds: list[int]) -> dict:
@@ -86,11 +86,12 @@ def build_entry(pdb_path: Path, seeds: list[int]) -> dict:
         "sequences": [
             {
                 "proteinChain": {
+                    "id": [chain_id],
                     "sequence": sequence,
                     "count": 1,
                 }
             }
-            for sequence in chain_sequences
+            for chain_id, sequence in chain_sequences
         ],
     }
 

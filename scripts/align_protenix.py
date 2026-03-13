@@ -197,7 +197,7 @@ def parse_design_name(json_file: Path) -> tuple[str, Path]:
 
 
 def align_structure(args):
-    design_path, json_path, output_dir, design_type, binder_chains_arg, target_chains_arg = args
+    design_path, json_path, output_dir, design_type, binder_chains_arg, target_chains_arg, geometry_mode, strict_target_rmsd = args
 
     try:
         design_name, cif_path = parse_design_name(json_path)
@@ -285,6 +285,10 @@ def align_structure(args):
                 "protenix_target_rmsd": round(rmsd_target, 2),
                 "protenix_binder_rmsd": round(rmsd_binder, 2),
             }
+            if strict_target_rmsd is not None and rmsd_target > strict_target_rmsd:
+                raise ValueError(
+                    f"anchored target drift {rmsd_target:.2f}A exceeded threshold {strict_target_rmsd:.2f}A"
+                )
         else:
             renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains=None)
             ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None)
@@ -311,6 +315,9 @@ def align_structure(args):
         metrics["validator"] = "protenix"
         metrics["aligned_pdb"] = out_pdb.name
         metrics["source_cif"] = out_cif.name
+        metrics["validation_geometry_mode"] = geometry_mode
+        metrics["target_anchor_enabled"] = geometry_mode == "anchored"
+        metrics["target_anchor_strict"] = strict_target_rmsd is not None
 
         with out_json.open("w") as handle:
             json.dump(metrics, handle, indent=2)
@@ -330,6 +337,8 @@ def main() -> None:
     parser.add_argument("--design_type", choices=["binder", "monomer"], required=True)
     parser.add_argument("--binder_chains", default="", help="Comma-separated binder chains")
     parser.add_argument("--target_chains", default="", help="Comma-separated target chains")
+    parser.add_argument("--geometry_mode", choices=["flexible", "anchored"], default="flexible")
+    parser.add_argument("--strict_target_rmsd", type=float, default=None)
     parser.add_argument("--ncpus", type=int, default=1, help="Parallel worker count")
     args = parser.parse_args()
 
@@ -370,6 +379,8 @@ def main() -> None:
                 args.design_type,
                 args.binder_chains,
                 args.target_chains,
+                args.geometry_mode,
+                args.strict_target_rmsd,
             )
         )
 

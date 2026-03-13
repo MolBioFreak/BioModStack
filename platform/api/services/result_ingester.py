@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from database import Design, Job
 from paths import get_data_root
@@ -174,10 +174,19 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
     """
     import re
     
-    # Pattern: job_X, input_X, design_X
-    match = re.search(r'(?:job|input|design)[_-](\d+)', design_name)
-    if match:
-        return int(match.group(1))
+    normalized = str(design_name or "").strip()
+    while re.match(r'^\d+_', normalized):
+        normalized = normalized.split('_', 1)[1]
+
+    patterns = (
+        r"(?:^|[_-])rfantibody[_-]?child[_-]?(\d+)(?=[_-]|$)",
+        r"(?:^|[_-])child[_-]?(\d+)(?=[_-]|$)",
+        r"(?:^|[_-])(?:job|input|design)[_-]?(\d+)(?=[_-]|$)",
+    )
+    for pattern in patterns:
+        matches = re.findall(pattern, normalized)
+        if matches:
+            return int(matches[-1])
     return None
 
 
@@ -280,12 +289,24 @@ async def ingest_job_results(
     designs_created = 0
 
     designs_created = 0
+
+    # Stage-review rows are ephemeral parent-review artifacts. Remove them before
+    # real final-stage ingestion so completed jobs don't double-count review rows.
+    await session.execute(
+        delete(Design).where(
+            Design.job_id == job_id,
+            Design.source_stage.is_not(None),
+        )
+    )
     
     # Only try to process CSV if it exists
     if csv_path.exists():
         # Check if designs already ingested for this job
         existing = await session.execute(
-            select(Design).where(Design.job_id == job_id).limit(1)
+            select(Design).where(
+                Design.job_id == job_id,
+                Design.source_stage.is_(None),
+            ).limit(1)
         )
         if existing.scalar_one_or_none():
             print(f"[Ingester] Designs already ingested for job {job_id}")
@@ -511,11 +532,55 @@ def _apply_screening_row(design: "Design", row: dict) -> bool:
     changed = False
     ecc = safe_int(row.get("epitope_contact_count"))
     emd = safe_float(row.get("epitope_min_distance"))
+    emad = safe_float(row.get("epitope_min_atom_distance"))
+    tcc = safe_int(row.get("target_contact_count"))
+    tmd = safe_float(row.get("target_min_distance"))
+    tmad = safe_float(row.get("target_min_atom_distance"))
+    screening_reason = row.get("screening_reason")
     if ecc is not None and design.epitope_contact_count is None:
         design.epitope_contact_count = ecc
         changed = True
     if emd is not None and design.epitope_min_distance is None:
         design.epitope_min_distance = emd
+        changed = True
+    if emad is not None and getattr(design, "epitope_min_atom_distance", None) is None:
+        design.epitope_min_atom_distance = emad
+        changed = True
+    if row.get("epitope_nearest_antibody_residue") and getattr(design, "epitope_nearest_antibody_residue", None) is None:
+        design.epitope_nearest_antibody_residue = str(row.get("epitope_nearest_antibody_residue"))
+        changed = True
+    if row.get("epitope_nearest_target_residue") and getattr(design, "epitope_nearest_target_residue", None) is None:
+        design.epitope_nearest_target_residue = str(row.get("epitope_nearest_target_residue"))
+        changed = True
+    if row.get("epitope_nearest_antibody_atom") and getattr(design, "epitope_nearest_antibody_atom", None) is None:
+        design.epitope_nearest_antibody_atom = str(row.get("epitope_nearest_antibody_atom"))
+        changed = True
+    if row.get("epitope_nearest_target_atom") and getattr(design, "epitope_nearest_target_atom", None) is None:
+        design.epitope_nearest_target_atom = str(row.get("epitope_nearest_target_atom"))
+        changed = True
+    if tcc is not None and design.target_contact_count is None:
+        design.target_contact_count = tcc
+        changed = True
+    if tmd is not None and getattr(design, "target_min_distance", None) is None:
+        design.target_min_distance = tmd
+        changed = True
+    if tmad is not None and getattr(design, "target_min_atom_distance", None) is None:
+        design.target_min_atom_distance = tmad
+        changed = True
+    if row.get("target_nearest_antibody_residue") and getattr(design, "target_nearest_antibody_residue", None) is None:
+        design.target_nearest_antibody_residue = str(row.get("target_nearest_antibody_residue"))
+        changed = True
+    if row.get("target_nearest_target_residue") and getattr(design, "target_nearest_target_residue", None) is None:
+        design.target_nearest_target_residue = str(row.get("target_nearest_target_residue"))
+        changed = True
+    if row.get("target_nearest_antibody_atom") and getattr(design, "target_nearest_antibody_atom", None) is None:
+        design.target_nearest_antibody_atom = str(row.get("target_nearest_antibody_atom"))
+        changed = True
+    if row.get("target_nearest_target_atom") and getattr(design, "target_nearest_target_atom", None) is None:
+        design.target_nearest_target_atom = str(row.get("target_nearest_target_atom"))
+        changed = True
+    if screening_reason and not design.screening_reason:
+        design.screening_reason = str(screening_reason)
         changed = True
     return changed
 
@@ -900,6 +965,7 @@ async def ingest_loose_files(
                 num_recycles = metrics.get('num_recycles')
                 rmsd_overall = metrics.get('rmsd_overall') or metrics.get('boltz_overall_rmsd')
                 rmsd_binder = metrics.get('rmsd_binder') or metrics.get('boltz_binder_rmsd')
+                rmsd_target = metrics.get('rmsd_target') or metrics.get('protenix_target_rmsd') or metrics.get('boltz_target_rmsd')
 
                 # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
                 pae = metrics.get('complex_pae') or metrics.get('pae')
@@ -965,6 +1031,7 @@ async def ingest_loose_files(
                     ligand_iptm=safe_float(ligand_iptm),
                     rmsd_overall=safe_float(rmsd_overall),
                     rmsd_binder=safe_float(rmsd_binder),
+                    rmsd_target=safe_float(rmsd_target),
                     affinity_score=safe_float(affinity_score),
                     binder_probability=safe_float(binder_probability),
                     residue_plddt=residue_plddt,
@@ -1191,6 +1258,7 @@ async def ingest_loose_files(
                 num_recycles = metrics.get('num_recycles')
                 rmsd_overall = metrics.get('rmsd_overall') or metrics.get('protenix_overall_rmsd')
                 rmsd_binder = metrics.get('rmsd_binder') or metrics.get('protenix_binder_rmsd')
+                rmsd_target = metrics.get('rmsd_target') or metrics.get('protenix_target_rmsd') or metrics.get('boltz_target_rmsd')
 
                 pae = metrics.get('complex_pae') or metrics.get('pae') or metrics.get('gpde')
                 if pae is None:
@@ -1242,6 +1310,7 @@ async def ingest_loose_files(
                     protein_iptm=safe_float(protein_iptm),
                     rmsd_overall=safe_float(rmsd_overall),
                     rmsd_binder=safe_float(rmsd_binder),
+                    rmsd_target=safe_float(rmsd_target),
                     conf_score=safe_float(conf_score),
                     ligand_iptm=safe_float(ligand_iptm),
                     complex_iplddt=safe_float(complex_iplddt),

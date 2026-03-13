@@ -18,6 +18,7 @@ import logging
 import time
 import re
 import shutil
+import threading
 from urllib import request as urlrequest, error as urlerror
 from urllib.parse import quote as urlquote
 
@@ -112,8 +113,9 @@ class CPUStatus(BaseModel):
 
 
 # RAPL power tracking (for computing instantaneous power from energy delta)
-_last_rapl_energy_uj: Optional[float] = None
-_last_rapl_time: Optional[float] = None
+_rapl_package_sources: Optional[List[Dict[str, Any]]] = None
+_rapl_sample_state: Dict[str, Dict[str, float]] = {}
+_rapl_state_lock = threading.Lock()
 
 
 class RAMStatus(BaseModel):
@@ -142,11 +144,11 @@ class SystemStatusResponse(BaseModel):
 _gpu_status_cache: List[GPUStatusEnhanced] = []
 _gpu_status_error: Optional[str] = None
 _gpu_status_cache_time: float = 0.0
-_GPU_STATUS_CACHE_TTL_SECONDS = 5.0
+_GPU_STATUS_CACHE_TTL_SECONDS = 0.75
 
 _power_control_cache: Optional[Dict[str, Any]] = None
 _power_control_cache_time: float = 0.0
-_POWER_CONTROL_CACHE_TTL_SECONDS = 5.0
+_POWER_CONTROL_CACHE_TTL_SECONDS = 2.0
 
 _fan_control_cache: Optional[Dict[str, Any]] = None
 _fan_control_cache_time: float = 0.0
@@ -1840,6 +1842,10 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
 
                 # Order matters: more specific first to avoid false matches
                 patterns = [
+                    ("dorado_basecall_server", "Dorado Basecall Server"),
+                    ("dorado-basecall-server", "Dorado Basecall Server"),
+                    ("dorado_basecall", "Dorado Basecall Server"),
+                    ("basecall_manager", "Basecall Manager"),
                     ("fampnn", "FAMPNN"),
                     ("seq_design.py", "FAMPNN"),
                     ("thermompnn", "ThermoMPNN"),
@@ -1882,7 +1888,8 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
                         script = os.path.basename(cmdline_list[script_idx])
                         if script:
                             return script
-                return base_name
+                pretty_name = re.sub(r"[_-]+", " ", base_name).strip()
+                return pretty_name or base_name
 
             # Processes
             processes = []
@@ -1998,10 +2005,135 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
     return get_gpu_stats_with_error()[0]
 
 
+def _discover_rapl_package_sources() -> List[Dict[str, Any]]:
+    """Find readable package-level RAPL energy counters."""
+    powercap_root = Path("/sys/class/powercap")
+    sources: List[Dict[str, Any]] = []
+
+    if powercap_root.exists():
+        for domain_path in sorted(powercap_root.glob("*-rapl:*")):
+            name_path = domain_path / "name"
+            energy_path = domain_path / "energy_uj"
+            if not name_path.exists() or not energy_path.exists():
+                continue
+
+            try:
+                domain_name = name_path.read_text().strip().lower()
+            except OSError:
+                continue
+
+            if not domain_name.startswith("package-"):
+                continue
+
+            max_energy_uj = float(2**32)
+            max_range_path = domain_path / "max_energy_range_uj"
+            try:
+                if max_range_path.exists():
+                    max_energy_uj = float(max_range_path.read_text().strip())
+            except (OSError, ValueError):
+                pass
+
+            sources.append({
+                "energy_path": energy_path,
+                "max_energy_uj": max_energy_uj,
+            })
+
+    fallback_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+    if fallback_path.exists() and not any(source["energy_path"] == fallback_path for source in sources):
+        max_energy_uj = float(2**32)
+        max_range_path = fallback_path.parent / "max_energy_range_uj"
+        try:
+            if max_range_path.exists():
+                max_energy_uj = float(max_range_path.read_text().strip())
+        except (OSError, ValueError):
+            pass
+
+        sources.append({
+            "energy_path": fallback_path,
+            "max_energy_uj": max_energy_uj,
+        })
+
+    return sources
+
+
+def _get_rapl_package_sources() -> List[Dict[str, Any]]:
+    global _rapl_package_sources
+
+    if _rapl_package_sources is None:
+        _rapl_package_sources = _discover_rapl_package_sources()
+
+    return _rapl_package_sources
+
+
+def _sample_cpu_package_power_watts() -> Optional[float]:
+    """Sample package power directly from RAPL energy counters."""
+    sources = _get_rapl_package_sources()
+    if not sources:
+        return None
+
+    total_power_watts = 0.0
+    valid_samples = 0
+
+    with _rapl_state_lock:
+        for source in sources:
+            energy_path = source["energy_path"]
+            max_energy_uj = float(source["max_energy_uj"])
+
+            try:
+                current_energy = float(energy_path.read_text().strip())
+            except (PermissionError, FileNotFoundError, ValueError, OSError):
+                continue
+
+            current_time = time.monotonic()
+            cache_key = str(energy_path)
+            previous = _rapl_sample_state.get(cache_key)
+
+            if not previous:
+                # Prime a first real delta instead of returning a fake value.
+                time.sleep(0.05)
+                try:
+                    primed_energy = float(energy_path.read_text().strip())
+                except (PermissionError, FileNotFoundError, ValueError, OSError):
+                    _rapl_sample_state[cache_key] = {
+                        "energy_uj": current_energy,
+                        "time_s": current_time,
+                    }
+                    continue
+                primed_time = time.monotonic()
+                previous = {
+                    "energy_uj": current_energy,
+                    "time_s": current_time,
+                }
+                current_energy = primed_energy
+                current_time = primed_time
+
+            _rapl_sample_state[cache_key] = {
+                "energy_uj": current_energy,
+                "time_s": current_time,
+            }
+
+            time_delta_s = current_time - previous["time_s"]
+            if time_delta_s <= 0.01:
+                continue
+
+            energy_delta_uj = current_energy - previous["energy_uj"]
+            if energy_delta_uj < 0:
+                energy_delta_uj += max_energy_uj
+
+            power_watts = energy_delta_uj / (time_delta_s * 1_000_000)
+            if power_watts >= 0:
+                total_power_watts += power_watts
+                valid_samples += 1
+
+    if valid_samples == 0:
+        return None
+
+    return round(total_power_watts, 1)
+
+
 def get_cpu_stats() -> CPUStatus:
     """Get CPU statistics using psutil."""
     import psutil
-    global _last_rapl_energy_uj, _last_rapl_time
     
     # Get CPU name from /proc/cpuinfo on Linux
     cpu_name = "Unknown CPU"
@@ -2029,40 +2161,26 @@ def get_cpu_stats() -> CPUStatus:
     except:
         pass
     
-    # Get CPU package power via RAPL (works for Intel and AMD)
-    cpu_power = None
-    try:
-        rapl_energy_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
-        if rapl_energy_path.exists():
-            current_energy = float(rapl_energy_path.read_text().strip())
-            current_time = time.time()
-            
-            if _last_rapl_energy_uj is not None and _last_rapl_time is not None:
-                # Calculate power from energy delta
-                energy_delta_uj = current_energy - _last_rapl_energy_uj
-                time_delta_s = current_time - _last_rapl_time
-                
-                # Handle counter rollover (32-bit counter rolls over at ~4294967296)
-                if energy_delta_uj < 0:
-                    energy_delta_uj += 2**32
-                
-                if time_delta_s > 0.01:  # Avoid division by zero
-                    cpu_power = round(energy_delta_uj / (time_delta_s * 1_000_000), 1)  # uJ to W
-            
-            _last_rapl_energy_uj = current_energy
-            _last_rapl_time = current_time
-    except (PermissionError, FileNotFoundError, ValueError):
-        # RAPL requires read permission - may need to configure group access
-        pass
+    per_core_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
+    overall_utilization = round(
+        sum(per_core_utilization) / max(1, len(per_core_utilization)),
+        1,
+    )
+    frequency_current_mhz = freq.current if freq else 0.0
+    frequency_max_mhz = freq.max if freq else 0.0
+
+    # Get CPU package power via RAPL only. If powercap is unreadable, return null
+    # so the UI does not fabricate a wattage value.
+    cpu_power = _sample_cpu_package_power_watts()
     
     return CPUStatus(
         name=cpu_name,
         cores_physical=psutil.cpu_count(logical=False) or 0,
         cores_logical=psutil.cpu_count(logical=True) or 0,
-        utilization=psutil.cpu_percent(interval=0.1),
-        per_core_utilization=psutil.cpu_percent(interval=0.1, percpu=True),
-        frequency_current_mhz=freq.current if freq else 0,
-        frequency_max_mhz=freq.max if freq else 0,
+        utilization=overall_utilization,
+        per_core_utilization=per_core_utilization,
+        frequency_current_mhz=frequency_current_mhz,
+        frequency_max_mhz=frequency_max_mhz,
         temperature=cpu_temp,
         power_watts=cpu_power
     )
@@ -2445,6 +2563,7 @@ class SchedulerGlobalConfig(BaseModel):
     target_vram_fill: float = DEFAULT_SCHEDULER_CONFIG["global"]["target_vram_fill"]
     capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
     emptiness_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["emptiness_weight"]
+    max_launches_per_cycle: int = DEFAULT_SCHEDULER_CONFIG["global"]["max_launches_per_cycle"]
     msa_concurrency_limit: int = DEFAULT_SCHEDULER_CONFIG["global"]["msa_concurrency_limit"]
     msa_preferred_gpu_ids: List[int] = DEFAULT_SCHEDULER_CONFIG["global"]["msa_preferred_gpu_ids"]
     msa_avoid_heavy_gpus: bool = DEFAULT_SCHEDULER_CONFIG["global"]["msa_avoid_heavy_gpus"]
@@ -2492,6 +2611,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "target_vram_fill": max(0.5, min(0.95, global_config.target_vram_fill)),
         "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),
         "emptiness_weight": max(0.0, min(10.0, global_config.emptiness_weight)),
+        "max_launches_per_cycle": max(1, min(20, global_config.max_launches_per_cycle)),
         "msa_concurrency_limit": max(1, min(4, global_config.msa_concurrency_limit)),
         "msa_preferred_gpu_ids": sorted({int(g) for g in global_config.msa_preferred_gpu_ids if isinstance(g, int) and g >= 0}),
         "msa_avoid_heavy_gpus": bool(global_config.msa_avoid_heavy_gpus),

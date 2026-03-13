@@ -38,6 +38,13 @@ def _normalize_pinned_gpus(raw_value):
     return normalized or None
 
 
+def _child_display_name(display_prefix: str, stage_label: str, index: int, total: int) -> str:
+    prefix = (display_prefix or "").strip() or "Antibody"
+    if total > 1:
+        return f"{prefix} - {stage_label} {index + 1}/{total}"
+    return f"{prefix} - {stage_label}"
+
+
 def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
     """
     Check if completed children already exist for this parent job and stage.
@@ -128,6 +135,7 @@ def spawn_rfantibody_jobs(
     framework_type: str,
     framework_pdb: str | None,
     batch_name: str,
+    display_prefix: str = "",
     params_json: str = None,
     api_url: str = DEFAULT_API_URL
 ):
@@ -253,7 +261,7 @@ def spawn_rfantibody_jobs(
         designs_assigned += job_designs
         
         job_data = {
-            "name": f"{batch_name}_rfa_{i}",
+            "name": _child_display_name(display_prefix, "RFA", i, num_jobs),
             "model_id": "rfantibody_child",
             "mode": "antibody_backbone",
             "params": {
@@ -323,6 +331,7 @@ def main():
     parser.add_argument("--framework_type", default="standard-fv", help="Framework type")
     parser.add_argument("--framework_pdb", default=None, help="Optional custom framework PDB path")
     parser.add_argument("--batch_name", required=True, help="Batch name for display")
+    parser.add_argument("--display_prefix", default="", help="Human-readable prefix for child job names")
     parser.add_argument("--params_json", default=None, help="Additional params as JSON")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--output", default="spawn_result.json", help="Output JSON file")
@@ -338,6 +347,7 @@ def main():
         framework_type=args.framework_type,
         framework_pdb=args.framework_pdb,
         batch_name=args.batch_name,
+        display_prefix=args.display_prefix,
         params_json=args.params_json,
         api_url=args.api_url
     )
