@@ -25,6 +25,7 @@ params.framework_pdb = null
 params.framework_type = params.framework_type ?: 'standard-fv'
 params.sequence_name = 'rfantibody_child'
 params.antigen_chains = params.antigen_chains ?: ''
+params.target_model_number = params.containsKey('target_model_number') ? params.target_model_number : null
 params.rfantibody_design_loops_custom = params.containsKey('rfantibody_design_loops_custom') ? params.rfantibody_design_loops_custom : null
 params.rfantibody_loop_length_ranges = params.containsKey('rfantibody_loop_length_ranges') ? params.rfantibody_loop_length_ranges : null
 
@@ -39,11 +40,14 @@ process NormalizeTargetPDB {
 
     script:
         def chainArg = params.antigen_chains ? "--chains \"${params.antigen_chains}\" \\\n        " : ""
+        def modelArg = params.target_model_number ? "--model-number ${params.target_model_number} \\\n        " : ""
+        def firstModelArg = params.target_model_number ? "" : "--first-model-only \\\n        "
         """
         python3 ${params.code_root}/scripts/normalize_target_pdb.py \\
             --input "\$(readlink -f ${target_pdb})" \\
             --output normalized_target.pdb \\
-            --first-model-only \\
+            ${firstModelArg}\
+            ${modelArg}\
             ${chainArg}\
             2>&1 | tee normalize_target.log
         """

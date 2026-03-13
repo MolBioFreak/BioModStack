@@ -268,7 +268,8 @@ async def serve_pdb(file_path: str):
 async def extract_chain(
     input_path: str = Form(...),
     chain_id: str = Form(...),
-    rename_to: str = Form(None)
+    rename_to: str = Form(None),
+    model_number: int | None = Form(None),
 ):
     """
     Extract a single chain from a multi-chain PDB file.
@@ -308,7 +309,8 @@ async def extract_chain(
             str(output_path),
             [chain_id],
             renumber=False,
-            new_chain_id=rename_to
+            new_chain_id=rename_to,
+            model_number=model_number,
         )
         
         return {
