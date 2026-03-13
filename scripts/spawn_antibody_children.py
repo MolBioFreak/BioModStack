@@ -28,6 +28,13 @@ import re
 from collections import defaultdict
 
 
+def _child_display_name(display_prefix: str, stage_label: str, index: int, total: int) -> str:
+    prefix = (display_prefix or "").strip() or "Antibody"
+    if total > 1:
+        return f"{prefix} · {stage_label} {index + 1}/{total}"
+    return f"{prefix} · {stage_label}"
+
+
 def _normalize_pinned_gpus(raw_value):
     if raw_value in (None, "", []):
         return None
@@ -128,6 +135,7 @@ def spawn_children(
     parent_job_id: str,
     pdb_dir: str,
     batch_name: str,
+    display_prefix: str = "",
     msa_path: str = None,
     params_json: str = None,
     seqs_per_validation_job: int = 10,
@@ -240,7 +248,7 @@ def spawn_children(
             seq_length = len(sequence)
             
             job_data = {
-                "name": f"{batch_name}_{structure_validator}_batch_{job_idx}",
+                "name": _child_display_name(display_prefix, validator_label, job_idx, num_jobs),
                 "model_id": "antibody_child",
                 "mode": "validation_batch",
                 "params": {
@@ -292,6 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--parent_job_id", required=True, help="Parent job ID")
     parser.add_argument("--pdb_dir", required=True, help="Directory with FAMPNN PDB outputs")
     parser.add_argument("--batch_name", required=True, help="Batch name for dashboard")
+    parser.add_argument("--display_prefix", default="", help="Human-readable prefix for child job names")
     parser.add_argument("--msa_path", default="", help="Path to shared MSA file")
     parser.add_argument("--params_json", default="", help="JSON string with quality settings from parent")
     parser.add_argument("--seqs_per_validation_job", type=int, default=None, help="Sequences per validation job (1=no batch, higher=more batch)")
@@ -304,6 +313,7 @@ if __name__ == "__main__":
         parent_job_id=args.parent_job_id,
         pdb_dir=args.pdb_dir,
         batch_name=args.batch_name,
+        display_prefix=args.display_prefix,
         msa_path=args.msa_path,
         params_json=args.params_json if args.params_json else None,
         seqs_per_validation_job=args.seqs_per_validation_job or args.seqs_per_boltz_job or 10,

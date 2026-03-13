@@ -20,6 +20,7 @@ import sys
 import json
 import subprocess
 import warnings
+import os
 from pathlib import Path
 from Bio import PDB
 from Bio import SeqUtils
@@ -73,18 +74,36 @@ def get_seq_from_chain(chain):
     return seq, residues
 
 def run_anarcii(seq, chain_id):
+    env = os.environ.copy()
+    env["OMP_NUM_THREADS"] = "1"
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env["MKL_NUM_THREADS"] = "1"
+    env["NUMEXPR_NUM_THREADS"] = "1"
     try:
         result = subprocess.run(
-            [sys.executable, "-c", ANARCII_SUBPROCESS, seq],
+            [
+                "timeout",
+                "--kill-after=5",
+                str(chain_timeout),
+                sys.executable,
+                "-c",
+                ANARCII_SUBPROCESS,
+                seq,
+            ],
             capture_output=True,
             text=True,
-            timeout=chain_timeout,
+            timeout=chain_timeout + 10,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print(f"ANARCII timed out for chain {chain_id} after {chain_timeout}s")
         return None
     except Exception as exc:
         print(f"ANARCII subprocess failed for chain {chain_id}: {exc}")
+        return None
+
+    if result.returncode == 124:
+        print(f"ANARCII timed out for chain {chain_id} after {chain_timeout}s")
         return None
 
     if result.returncode != 0:
