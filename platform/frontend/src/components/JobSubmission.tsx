@@ -77,9 +77,9 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
                         <button
                             onClick={handleUploadClick}
                             disabled={uploadMutation.isPending}
-                            className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-md transition-colors"
+                            className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-700"
                         >
-                            {uploadMutation.isPending ? 'Uploading...' : '☁️ Upload'}
+                            {uploadMutation.isPending ? 'Uploading...' : 'Upload'}
                         </button>
                         <button onClick={onCancel} className="text-slate-400 hover:text-white">✕</button>
                     </div>
@@ -88,10 +88,10 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
                 <div className="p-2 border-b border-slate-700 bg-slate-800/30 flex items-center gap-2">
                     <button
                         onClick={handleUp}
-                        className="px-2 py-1 bg-slate-700 rounded text-sm text-slate-300 hover:bg-slate-600 disabled:opacity-50"
+                        className="rounded border border-slate-600 bg-slate-800 px-2.5 py-1 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:opacity-50"
                         disabled={path === '/'}
                     >
-                        ↑ Up
+                        Up
                     </button>
                     <input
                         type="text"
@@ -111,7 +111,13 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
                                 : 'text-slate-300 hover:bg-slate-700'
                                 }`}
                         >
-                            <span className="text-lg">{entry.is_directory ? '📁' : '📄'}</span>
+                            <span className={`inline-flex h-7 min-w-10 items-center justify-center rounded border text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                entry.is_directory
+                                    ? 'border-blue-500/30 bg-blue-500/10 text-blue-300'
+                                    : 'border-slate-600 bg-slate-800 text-slate-300'
+                            }`}>
+                                {entry.is_directory ? 'Dir' : 'File'}
+                            </span>
                             <span className="flex-1 truncate">{entry.name}</span>
                             {!entry.is_directory && (
                                 <span className="text-xs text-slate-500">
@@ -216,9 +222,9 @@ function ParamField({
                             setActiveSequenceField(param.name);
                             setShowSequenceManager(true);
                         }}
-                        className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-sm transition-colors border border-emerald-600/30"
+                        className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
                     >
-                        📚 Sequence Library
+                        Sequence Library
                     </button>
                     <textarea
                         value={params[param.name] || ''}
@@ -608,9 +614,9 @@ export function JobSubmission() {
                 <header className="mb-8 flex items-center gap-4">
                     <Link
                         to="/"
-                        className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                        className="inline-flex items-center rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
                     >
-                        &lt; Back
+                        Back
                     </Link>
                     <div>
                         <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-accent bg-clip-text text-transparent">
@@ -628,9 +634,9 @@ export function JobSubmission() {
                     <div className="flex gap-2 mb-4">
                         <button
                             onClick={() => { setWizardMode('templates'); setSelectedModelId(null); setSelectedModeId(null); }}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${wizardMode === 'templates'
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                            className={`min-w-[9.5rem] rounded-lg border px-4 py-2.5 text-sm font-medium transition-all ${wizardMode === 'templates'
+                                ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
+                                : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
                                 }`}
                         >
                             Workflows
@@ -641,9 +647,9 @@ export function JobSubmission() {
                                 setSelectedTemplateId(null);
                                 setClonedValues(undefined);
                             }}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${wizardMode === 'manual'
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                            className={`min-w-[9.5rem] rounded-lg border px-4 py-2.5 text-sm font-medium transition-all ${wizardMode === 'manual'
+                                ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
+                                : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
                                 }`}
                         >
                             Advanced (Models)
@@ -893,7 +899,7 @@ export function JobSubmission() {
                                                 style={{ backgroundColor: `${model.ui_color}20`, color: model.ui_color }}
                                             >
                                                 {/* Simple icon fallback */}
-                                                {model.ui_icon === 'dna' ? '🧬' : model.ui_icon === 'cube' ? '🧊' : '⚡'}
+                                                {model.ui_icon === 'dna' ? 'DNA' : model.ui_icon === 'cube' ? '3D' : 'ML'}
                                             </div>
                                             {model.experimental && (
                                                 <span className="text-[10px] uppercase font-bold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded-full">
@@ -1003,9 +1009,9 @@ export function JobSubmission() {
                                                                 setActiveSequenceField(param.name);
                                                                 setShowSequenceManager(true);
                                                             }}
-                                                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-sm rounded-lg transition-colors flex items-center gap-2"
+                                                            className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700"
                                                         >
-                                                            📚 Sequence Library
+                                                            Sequence Library
                                                         </button>
                                                         {/* Character count */}
                                                         <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
@@ -1020,9 +1026,9 @@ export function JobSubmission() {
                                                                     setActiveSequenceField(param.name);
                                                                     setShowSequenceManager(true);
                                                                 }}
-                                                                className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-600/30"
+                                                                className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
                                                             >
-                                                                💾 Save to Library
+                                                                Save to Library
                                                             </button>
                                                         )}
                                                         {/* Clear Button */}
@@ -1175,17 +1181,17 @@ export function JobSubmission() {
                         {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
                                 onClick={() => setShowTemplateManager(true)}
-                                className="px-6 py-4 rounded-xl font-semibold text-accent bg-accent/20 hover:bg-accent/30 border border-accent/30 transition-all flex items-center gap-2"
+                                className="inline-flex min-w-[12rem] items-center justify-center rounded-xl border border-slate-600 bg-slate-900/60 px-6 py-3.5 text-sm font-semibold text-slate-100 transition-all hover:bg-slate-800"
                             >
-                                📋 Template Manager
+                                Template Manager
                             </button>
                         )}
                         <button
                             onClick={handleSubmit}
                             disabled={!isReady || submitMutation.isPending}
-                            className={`px-8 py-4 rounded-xl font-semibold text-white shadow-xl transition-all ${isReady
-                                ? 'bg-gradient-to-r from-blue-600 to-accent-secondary hover:scale-[1.02] active:scale-[0.98] shadow-blue-500/25'
-                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                            className={`inline-flex min-w-[12rem] items-center justify-center rounded-xl border px-6 py-3.5 text-sm font-semibold transition-all ${isReady
+                                ? 'border-blue-500/40 bg-blue-500/15 text-blue-200 hover:bg-blue-500/20'
+                                : 'border-slate-700 bg-slate-900/60 text-slate-500 cursor-not-allowed'
                                 }`}
                         >
                             {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment'}
