@@ -382,7 +382,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
         if (xVals.length === 0) return [];
 
         return [{
-            type: 'scattergl',
+            type: 'scatter',
             mode: 'markers',
             x: xVals,
             y: yVals,
