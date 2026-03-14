@@ -107,7 +107,7 @@ export function Dashboard() {
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
         queryFn: () => fetchJobs(),
-        refetchInterval: 10000,
+        refetchInterval: 3000,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
