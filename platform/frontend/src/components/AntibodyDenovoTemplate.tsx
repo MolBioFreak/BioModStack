@@ -121,10 +121,52 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         refinementMode?: boolean;
         sourceJobId?: string;
         selectedDesignIds?: string[];
+        sourceSavedFilterSetId?: string | null;
+        sourceSavedFilterSetName?: string | null;
+        sourceSavedFilterSetCreatedAt?: string | null;
+        sourceSavedFilterSetDesignCount?: number | null;
+        reviewFilterSetId?: string | null;
+        reviewFilterSetName?: string | null;
+        reviewFilterSetCreatedAt?: string | null;
+        reviewFilterSetDesignCount?: number | null;
+        sourceArtifactGroup?: string | null;
+        sourceOutputSourceFilter?: string | null;
+        sourceSortField?: string | null;
+        sourceSortDir?: 'asc' | 'desc' | null;
+        sourceVisibleCount?: number | null;
+        sourceTotalCount?: number | null;
     } | null;
     const isRefinementMode = !!refinementState?.refinementMode;
     const refinementParentJobId = refinementState?.sourceJobId;
     const refinementDesignIds = refinementState?.selectedDesignIds;
+    const refinementSavedFilterSetId = refinementState?.reviewFilterSetId || refinementState?.sourceSavedFilterSetId || undefined;
+    const refinementSavedFilterSetName = refinementState?.reviewFilterSetName || refinementState?.sourceSavedFilterSetName || undefined;
+    const refinementSavedFilterSetCreatedAt = refinementState?.reviewFilterSetCreatedAt || refinementState?.sourceSavedFilterSetCreatedAt || undefined;
+    const refinementSavedFilterSetDesignCount = refinementState?.reviewFilterSetDesignCount ?? refinementState?.sourceSavedFilterSetDesignCount ?? undefined;
+    const refinementSourceArtifactGroup = refinementState?.sourceArtifactGroup;
+    const refinementSourceOutputSourceFilter = refinementState?.sourceOutputSourceFilter;
+    const refinementSourceSortField = refinementState?.sourceSortField;
+    const refinementSourceSortDir = refinementState?.sourceSortDir;
+    const refinementSourceVisibleCount = refinementState?.sourceVisibleCount;
+    const refinementSourceTotalCount = refinementState?.sourceTotalCount;
+    const refinementInputCount = refinementDesignIds?.length ?? refinementSavedFilterSetDesignCount ?? 0;
+    const refinementReviewFilterSetId = refinementDesignIds?.length ? undefined : refinementSavedFilterSetId;
+    const refinementHasLaunchSource = refinementInputCount > 0 && (!!refinementDesignIds?.length || !!refinementReviewFilterSetId);
+    const refinementSourceLabel = refinementSourceArtifactGroup === 'raw'
+        ? 'Raw RF review set'
+        : refinementSourceArtifactGroup === 'filtered'
+            ? 'Screened RF review set'
+            : refinementSavedFilterSetName
+                ? `saved dataset '${refinementSavedFilterSetName}'`
+            : refinementSourceOutputSourceFilter && refinementSourceOutputSourceFilter !== 'all'
+                ? `${refinementSourceOutputSourceFilter} output set`
+                : 'selected output set';
+    const refinementSavedFilterSetCreatedLabel = useMemo(() => {
+        if (!refinementSavedFilterSetCreatedAt) return null;
+        const parsed = new Date(refinementSavedFilterSetCreatedAt);
+        if (Number.isNaN(parsed.getTime())) return refinementSavedFilterSetCreatedAt;
+        return parsed.toLocaleString();
+    }, [refinementSavedFilterSetCreatedAt]);
 
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
@@ -1288,7 +1330,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 }
             };
 
-            if (isRefinementMode && refinementParentJobId && refinementDesignIds) {
+            if (isRefinementMode && refinementParentJobId && (refinementDesignIds?.length || refinementReviewFilterSetId)) {
                 // Determine action based on UI settings
                 // Nextflow determines the correct start based on skip flags which jobs.py injects
                 const refinementOverrides = { ...jobData.params } as Record<string, any>;
@@ -1329,7 +1371,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: mutagenesisLaunchMode === 'seeded_refinement' ? 'mutation_seeded_refinement' : 'cdr_indel_round',
-                            design_ids: refinementDesignIds,
+                            design_ids: refinementDesignIds ?? [],
+                            review_filter_set_id: refinementReviewFilterSetId,
                             cdr_indel_config: cdrIndelConfig,
                             param_overrides: refinementOverrides,
                         });
@@ -1351,7 +1394,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: 'mutation_seeded_refinement',
-                            design_ids: refinementDesignIds,
+                            design_ids: refinementDesignIds ?? [],
+                            review_filter_set_id: refinementReviewFilterSetId,
                             manual_mutagenesis_config: {
                                 chain_id: manualMutagenesisConfig.chain_id.trim() || undefined,
                                 mutation_sets: mutationSets,
@@ -1367,7 +1411,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                     await launchMutagenesisMutation.mutateAsync({
                         source_job_id: refinementParentJobId,
-                        design_ids: refinementDesignIds,
+                        design_ids: refinementDesignIds ?? [],
+                        review_filter_set_id: refinementReviewFilterSetId,
                         config: {
                             chain_id: manualMutagenesisConfig.chain_id.trim() || undefined,
                             mutation_sets: mutationSets,
@@ -1382,7 +1427,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 await launchAntibodyIteration({
                     source_job_id: refinementParentJobId,
                     action: 'ui_refinement',
-                    design_ids: refinementDesignIds,
+                    design_ids: refinementDesignIds ?? [],
+                    review_filter_set_id: refinementReviewFilterSetId,
                     param_overrides: refinementOverrides,
                 });
                 queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -1425,10 +1471,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </button>
                     <div>
                         <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-                            {isRefinementMode ? 'Custom Refinement Round' : 'De Novo Antibody Design'}
+                            {isRefinementMode ? 'Pipeline Re-orchestration' : 'De Novo Antibody Design'}
                         </h2>
                         <p className="text-sm text-[var(--text-secondary)]">
-                            {isRefinementMode ? `Configuring a downstream orchestrator run for ${refinementDesignIds?.length} designs.` : 'Generate novel antibodies targeting an antigen'}
+                            {isRefinementMode ? `Configuring a downstream orchestrator run for ${refinementInputCount} locked outputs.` : 'Generate novel antibodies targeting an antigen'}
                         </p>
                     </div>
                 </div>
@@ -1443,10 +1489,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <svg className="w-5 h-5 text-[var(--accent-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Target & Epitope configuration disabled</h3>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Pipeline source set locked</h3>
                     </div>
                     <p className="max-w-3xl text-xs leading-relaxed text-[var(--text-secondary)]">
-                        You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The structural targets and complexes are fixed to the selected designs. Configure exactly how you want your {refinementDesignIds?.length} selections to be processed below.
+                        You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The pipeline input set is locked to {refinementSavedFilterSetName ? `saved dataset '${refinementSavedFilterSetName}'` : 'the selected structures'}. Configure exactly how you want these {refinementInputCount} outputs to be re-orchestrated below.
+                    </p>
+                    <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+                        Source set: <span className="font-medium text-[var(--text-primary)]">{refinementSourceLabel}</span>
+                        {refinementSavedFilterSetName ? ` • frozen dataset membership` : ''}
+                        {refinementSavedFilterSetCreatedLabel ? ` • saved ${refinementSavedFilterSetCreatedLabel}` : ''}
+                        {typeof refinementSourceVisibleCount === 'number' ? ` • ${refinementSourceVisibleCount} visible when launched` : ''}
+                        {typeof refinementSourceTotalCount === 'number' ? ` • ${refinementSourceTotalCount} total after filters` : ''}
+                        {refinementSourceSortField ? ` • sorted by ${refinementSourceSortField} ${refinementSourceSortDir || 'asc'}` : ''}
                     </p>
                 </div>
             )}
@@ -1458,7 +1512,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <h3 className="text-sm font-medium text-[var(--text-primary)]">Workflow Pipeline</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">
                             {isRefinementMode
-                                ? 'Selected designs are re-queued through the workflow UI only. Choose which stages to rerun below.'
+                                ? 'Selected outputs are re-queued through the workflow UI. Choose which stages to rerun below.'
                                 : 'Backbone generation, sequence design, optional maturation, structural validation, then optional review/QC.'}
                         </p>
                     </div>
@@ -2010,13 +2064,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                                             <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-400">
                                                 <div className="text-slate-200 font-medium mb-1">Launch summary</div>
-                                                <div>{refinementDesignIds?.length || 0} selected design{(refinementDesignIds?.length || 0) === 1 ? '' : 's'}</div>
+                                                <div>{refinementInputCount} input design{refinementInputCount === 1 ? '' : 's'}</div>
                                                 <div>{cdrIndelConfig.variants_per_design} variant{cdrIndelConfig.variants_per_design === 1 ? '' : 's'} per design</div>
                                                 <div>{cdrIndelConfig.loop_ids.join(', ') || 'No loops selected'}</div>
                                                 <div className="mt-1 text-fuchsia-200">
-                                                    {(refinementDesignIds?.length || 0) * cdrIndelConfig.variants_per_design} total variant predictions
+                                                    {refinementInputCount * cdrIndelConfig.variants_per_design} total variant predictions
                                                 </div>
-                                                {cdrIndelConfig.msa_provider === 'colabfold_api' && (refinementDesignIds?.length || 0) * cdrIndelConfig.variants_per_design > 1 && (
+                                                {cdrIndelConfig.msa_provider === 'colabfold_api' && refinementInputCount * cdrIndelConfig.variants_per_design > 1 && (
                                                     <div className="mt-2 text-amber-300">
                                                         Multi-variant indel rounds are automatically downgraded to local MSA.
                                                     </div>
@@ -3448,6 +3502,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         submitMutation.isPending ||
                         launchMutagenesisMutation.isPending ||
                         isUploading ||
+                        (isRefinementMode && !refinementHasLaunchSource) ||
                         // Refinement mode and skip modes don't require target PDB or hotspots
                         (!(isRefinementMode || skipRFantibody || skipFampnn) && (!targetPdb || selectedResidues.size === 0)) ||
                         // When skipping, require the skip paths
@@ -3468,8 +3523,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     ) : isRefinementMode ? (
                         <>
                             {useManualMutagenesis
-                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
-                                : 'Launch Refinement'} ({refinementDesignIds?.length ?? 0} designs)
+                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Re-orchestration' : 'Launch Exact Mutant Evaluation')
+                                : 'Launch Pipeline Re-orchestration'} ({refinementInputCount} outputs)
                         </>
                     ) : (skipRFantibody || skipFampnn) ? (
                         <>
