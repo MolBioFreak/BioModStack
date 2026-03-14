@@ -195,6 +195,7 @@ process StageRFantibodyBackbones {
     label 'process_low'
 
     publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "staged_output/*.pdb", saveAs: { fn -> fn.replace('staged_output/', '') }
+    publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "staged_output/*.trb", saveAs: { fn -> fn.replace('staged_output/', '') }
 
     input:
     path pdb_files
@@ -202,6 +203,7 @@ process StageRFantibodyBackbones {
     output:
     path "staged_output", emit: dir
     path "staged_output/*.pdb", emit: pdbs, optional: true
+    path "staged_output/*.trb", emit: trbs, optional: true
     path "rfantibody_stage_summary.json", emit: summary
 
     script:
@@ -217,6 +219,15 @@ process StageRFantibodyBackbones {
             dest="staged_output/\${count}_\$base"
         fi
         cp "\$pdb" "\$dest"
+        trb="\${pdb%.pdb}.trb"
+        if [ -f "\$trb" ]; then
+            trb_base="\$(basename "\$trb")"
+            trb_dest="staged_output/\$trb_base"
+            if [ -e "\$trb_dest" ]; then
+                trb_dest="staged_output/\${count}_\$trb_base"
+            fi
+            cp "\$trb" "\$trb_dest"
+        fi
         count=\$((count + 1))
     done
     cat > rfantibody_stage_summary.json <<EOF
@@ -233,6 +244,7 @@ process ScreenRFantibodyBackbones {
     publishDir "${params.out_dir}/run/rfantibody_screen", mode: 'copy', pattern: '*.log'
     publishDir "${params.out_dir}/run/rfantibody_screen", mode: 'copy', pattern: 'screening_summary.json'
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.pdb', saveAs: { fn -> fn.replace('screened_output/', '') }
+    publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.trb', saveAs: { fn -> fn.replace('screened_output/', '') }
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.json', saveAs: { fn -> fn.replace('screened_output/', '') }
     publishDir "${params.out_dir}/collected/rfantibody_filtered", mode: 'copy', pattern: 'screened_output/*.csv', saveAs: { fn -> fn.replace('screened_output/', '') }
 
@@ -246,6 +258,7 @@ process ScreenRFantibodyBackbones {
     output:
     path "screened_output", emit: dir
     path "screened_output/*.pdb", emit: pdbs, optional: true
+    path "screened_output/*.trb", emit: trbs, optional: true
     path "screened_output/*.json", emit: jsons, optional: true
     path "screened_output/*.csv", emit: csvs, optional: true
     path "screening_summary.json", emit: summary
@@ -423,6 +436,8 @@ process CollectChildOutputs {
     label 'process_low'
     
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.trb"
+    publishDir "${params.out_dir}/collected/${stage_name}/traj", mode: 'copy', pattern: "traj/*.pdb", saveAs: { fn -> fn.replace('traj/', '') }
     
     input:
     path child_outputs_json
@@ -430,6 +445,8 @@ process CollectChildOutputs {
     
     output:
     path "*.pdb", emit: pdbs, optional: true
+    path "*.trb", emit: trbs, optional: true
+    path "traj/*.pdb", emit: trajs, optional: true
     path "collection_manifest.json", emit: manifest
     
     script:
@@ -444,6 +461,10 @@ process CollectChildOutputs {
     
     output_dirs = data.get("child_output_dirs", [])
     collected = []
+    collected_trbs = []
+    collected_trajs = []
+    traj_dir = Path("traj")
+    traj_dir.mkdir(exist_ok=True)
     
     for job_idx, output_dir in enumerate(output_dirs):
         dir_path = Path(output_dir)
@@ -452,7 +473,7 @@ process CollectChildOutputs {
             continue
         
         # Look for PDBs in standard locations
-        for subdir in ["pdb_files", "run/rfantibody/output", "run/fampnn/results", ""]:
+        for subdir in ["pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""]:
             search_path = dir_path / subdir if subdir else dir_path
             if not search_path.exists():
                 continue
@@ -463,11 +484,28 @@ process CollectChildOutputs {
                     shutil.copy(pdb, dest)
                     collected.append(str(dest))
                     print(f"Collected: {pdb} -> {dest}")
+                trb = pdb.with_suffix(".trb")
+                if trb.exists():
+                    trb_dest = Path(f"job{job_idx}_{trb.name}")
+                    if not trb_dest.exists():
+                        shutil.copy(trb, trb_dest)
+                        collected_trbs.append(str(trb_dest))
+                        print(f"Collected: {trb} -> {trb_dest}")
+            traj_search = search_path / "traj"
+            if traj_search.exists():
+                for traj in traj_search.glob("*.pdb"):
+                    traj_dest = traj_dir / f"job{job_idx}_{traj.name}"
+                    if not traj_dest.exists():
+                        shutil.copy(traj, traj_dest)
+                        collected_trajs.append(str(traj_dest))
+                        print(f"Collected trajectory: {traj} -> {traj_dest}")
     
     manifest = {
         "stage": "${stage_name}",
         "source_dirs": output_dirs,
         "collected_pdbs": collected,
+        "collected_trbs": collected_trbs,
+        "collected_trajectories": collected_trajs,
         "count": len(collected)
     }
     
@@ -890,6 +928,7 @@ process OpenInteractiveGate {
     input:
     val job_id
     val stage_name
+    val gate_trigger
     val candidate_dir
     val raw_dir
     val filtered_dir
@@ -904,6 +943,7 @@ process OpenInteractiveGate {
     def filteredArg = filtered_dir ? "--filtered_dir \"${filtered_dir}\"" : ""
     def rawArg = raw_dir ? "--raw_dir \"${raw_dir}\"" : ""
     """
+    echo "Gate trigger ready: ${gate_trigger}" >&2
     python3 ${params.code_root}/scripts/open_stage_gate.py \\
         --job_id "${job_id}" \\
         --stage "${stage_name}" \\
@@ -1465,7 +1505,7 @@ workflow ANTIBODY_DENOVO {
     } // End of skip_rfantibody else block
 
     def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
-    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody" : null
     def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
     def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
     def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
@@ -1522,6 +1562,7 @@ workflow ANTIBODY_DENOVO {
         OpenInteractiveGate(
             params.job_id ?: "unknown",
             "post_rfantibody",
+            rfantibody_candidate_count,
             rfantibodyCandidateDir,
             rfantibodyRawDir ?: "",
             shouldScreenRFantibody ? (rfantibodyFilteredDir ?: "") : "",
@@ -1721,6 +1762,9 @@ workflow ANTIBODY_DENOVO {
         params.interactive_gate_continue != true &&
         run_fampnn &&
         fampnnCandidateDir
+    def fampnn_gate_trigger = fampnn_seqs.map { meta, pdbs ->
+        (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
+    }
 
     if (shouldPauseAfterFampnn) {
         log.info("Interactive SWA gate: pausing after FAMPNN candidate collection at ${fampnnCandidateDir}")
@@ -1736,6 +1780,7 @@ workflow ANTIBODY_DENOVO {
         OpenInteractiveGate(
             params.job_id ?: "unknown",
             "post_fampnn",
+            fampnn_gate_trigger,
             fampnnCandidateDir,
             fampnnRawDir ?: "",
             fampnnFilteredDir ?: "",
@@ -2193,6 +2238,7 @@ workflow ANTIBODY_DENOVO {
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
+                validation_gate_candidate_dir.map { _dir -> 1 },
                 validation_gate_candidate_dir,
                 "",
                 "",
