@@ -4,7 +4,7 @@ import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
 import { buildFileDownloadUrl, buildFileStreamUrl, type Design, type Job, type StructureAnalysis, type ChainMetric } from '../lib/api';
-import { inferDesignOutputSource } from './designOutputSource';
+import { inferDesignAnalysisLens, inferDesignOutputSource } from './designOutputSource';
 
 interface Selection {
     chain_id?: string;
@@ -23,6 +23,7 @@ interface Props {
     setColorMode: (mode: 'default' | 'plddt' | 'cdr' | 'frustration') => void;
     structureFormat: 'pdb' | 'cif';
     antibodySelections?: Selection[];
+    antibodyStructureUrl?: string;
     structureAnalysis: StructureAnalysis | null | undefined;
     activeJob: Job | null | undefined;
     getMetricColor: (field: string, value: number | null) => string;
@@ -36,6 +37,12 @@ interface ReferenceWindowState {
     y: number;
     width: number;
     height: number;
+}
+
+interface StructureMetricCard {
+    label: string;
+    value: string;
+    accentClass: string;
 }
 
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
@@ -65,6 +72,11 @@ function frustrationColor(value: number): { r: number; g: number; b: number } {
     return { r: 148, g: 163, b: 184 };
 }
 
+function formatMetricValue(value: number | null | undefined, digits = 1, suffix = ''): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    return `${value.toFixed(digits)}${suffix}`;
+}
+
 export default function StructureViewerPane({
     selectedDesignId,
     setSelectedDesignId,
@@ -74,6 +86,7 @@ export default function StructureViewerPane({
     setColorMode,
     structureFormat,
     antibodySelections,
+    antibodyStructureUrl,
     structureAnalysis,
     activeJob,
     getMetricColor,
@@ -107,6 +120,7 @@ export default function StructureViewerPane({
     // Theme-aware colors for Molstar viewer
     const themeColors = useThemeColors();
     const designOrigin = getDesignOriginLabel(selectedDesign);
+    const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
 
     const clampReferenceWindow = useCallback((next: ReferenceWindowState): ReferenceWindowState => {
         const bounds = viewerAreaRef.current?.getBoundingClientRect();
@@ -196,8 +210,188 @@ export default function StructureViewerPane({
         fetchAllMetrics();
     }, [selectedDesignId]);
 
+    const hasResidueConfidence = plddtProfile.length > 0 || Object.keys(chainMetrics).length > 0;
+    const hasPae = Array.isArray(paeMatrix) && paeMatrix.length > 0;
+    const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence ? 'default' : colorMode;
+    const viewerStructureUrl = effectiveColorMode === 'cdr' && antibodyStructureUrl
+        ? antibodyStructureUrl
+        : (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined);
+    const viewerStructureFormat = effectiveColorMode === 'cdr' && antibodyStructureUrl ? 'pdb' : structureFormat;
+
+    useEffect(() => {
+        if (colorMode === 'plddt' && !hasResidueConfidence) {
+            setColorMode('default');
+            return;
+        }
+        if (colorMode === 'frustration' && !selectedDesign?.frustration_residues?.length) {
+            setColorMode('default');
+        }
+    }, [colorMode, hasResidueConfidence, selectedDesign?.frustration_residues?.length, setColorMode]);
+
+    useEffect(() => {
+        if ((overlayView === 'plddt' && !hasResidueConfidence) || (overlayView === 'pae' && !hasPae)) {
+            setOverlayView('metrics');
+        }
+    }, [hasPae, hasResidueConfidence, overlayView]);
+
+    const metricSectionTitle = (() => {
+        if (designLens === 'rfantibody') return 'RFantibody Screen Metrics';
+        if (designLens === 'fampnn') return 'FAMPNN Metrics';
+        if (designLens === 'frustrampnn') return 'FrustraMPNN Metrics';
+        if (designLens === 'ppiflow') return 'PPIFlow Metrics';
+        return 'Confidence Metrics';
+    })();
+
+    const stageGuidance =
+        designLens === 'rfantibody' && !hasResidueConfidence
+            ? 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.'
+            : null;
+
+    const structureMetricCards = (() => {
+        if (!selectedDesign) return [] as StructureMetricCard[];
+
+        if (designLens === 'rfantibody') {
+            return [
+                {
+                    label: 'Any-Target Contacts',
+                    value: formatMetricValue(selectedDesign.target_contact_count ?? null, 0),
+                    accentClass: 'text-emerald-300',
+                },
+                {
+                    label: 'Epitope Contacts',
+                    value: formatMetricValue(selectedDesign.epitope_contact_count ?? null, 0),
+                    accentClass: 'text-cyan-300',
+                },
+                {
+                    label: 'Any-Target Dist',
+                    value: formatMetricValue(selectedDesign.target_min_distance ?? null, 1, ' A'),
+                    accentClass: 'text-amber-300',
+                },
+                {
+                    label: 'Epitope Dist',
+                    value: formatMetricValue(selectedDesign.epitope_min_distance ?? null, 1, ' A'),
+                    accentClass: 'text-violet-300',
+                },
+                {
+                    label: 'Hotspots Covered',
+                    value: formatMetricValue(selectedDesign.rfa_hotspot_covered_count ?? null, 0),
+                    accentClass: 'text-rose-300',
+                },
+                {
+                    label: 'Backbone ID',
+                    value: formatMetricValue(selectedDesign.backbone_id ?? null, 0),
+                    accentClass: 'text-slate-200',
+                },
+            ] satisfies StructureMetricCard[];
+        }
+
+        if (designLens === 'fampnn') {
+            return [
+                {
+                    label: 'PSCE',
+                    value: formatMetricValue(selectedDesign.fampnn_psce ?? null, 3),
+                    accentClass: 'text-emerald-300',
+                },
+                {
+                    label: 'MPNN Score',
+                    value: formatMetricValue(selectedDesign.mpnn_score ?? null, 3),
+                    accentClass: 'text-cyan-300',
+                },
+                {
+                    label: 'Binder Length',
+                    value: formatMetricValue(selectedDesign.binder_length ?? null, 0),
+                    accentClass: 'text-amber-300',
+                },
+                {
+                    label: 'H3 Length',
+                    value: formatMetricValue(selectedDesign.cdr_h3_length ?? null, 0),
+                    accentClass: 'text-violet-300',
+                },
+            ] satisfies StructureMetricCard[];
+        }
+
+        if (designLens === 'frustrampnn') {
+            return [
+                {
+                    label: 'High Frustration',
+                    value: formatMetricValue(selectedDesign.frustration_high_count ?? null, 0),
+                    accentClass: 'text-rose-300',
+                },
+                {
+                    label: 'High Frust. %',
+                    value: formatMetricValue(selectedDesign.frustration_pct_high ?? null, 1, '%'),
+                    accentClass: 'text-amber-300',
+                },
+                {
+                    label: 'Minimal Frust.',
+                    value: formatMetricValue(selectedDesign.frustration_min_count ?? null, 0),
+                    accentClass: 'text-emerald-300',
+                },
+                {
+                    label: 'Binder Length',
+                    value: formatMetricValue(selectedDesign.binder_length ?? null, 0),
+                    accentClass: 'text-slate-200',
+                },
+            ] satisfies StructureMetricCard[];
+        }
+
+        if (designLens === 'ppiflow') {
+            return [
+                {
+                    label: 'Delta Interface',
+                    value: formatMetricValue(selectedDesign.maturation_delta_interface ?? null, 3),
+                    accentClass: 'text-emerald-300',
+                },
+                {
+                    label: 'Interface Score',
+                    value: formatMetricValue(selectedDesign.maturation_interface_score ?? null, 3),
+                    accentClass: 'text-cyan-300',
+                },
+                {
+                    label: 'Maturation RMSD',
+                    value: formatMetricValue(selectedDesign.maturation_rmsd ?? null, 2, ' A'),
+                    accentClass: 'text-amber-300',
+                },
+                {
+                    label: 'iPTM',
+                    value: formatMetricValue(selectedDesign.iptm ?? null, 3),
+                    accentClass: 'text-violet-300',
+                },
+            ] satisfies StructureMetricCard[];
+        }
+
+        return [
+            {
+                label: bfactorLabel,
+                value: formatMetricValue(selectedDesign.plddt_overall ?? null, 1),
+                accentClass: getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null),
+            },
+            {
+                label: 'PAE',
+                value: formatMetricValue(selectedDesign.pae_overall ?? null, 2),
+                accentClass: getMetricColor('pae_overall', selectedDesign.pae_overall ?? null),
+            },
+            {
+                label: 'pTM',
+                value: formatMetricValue(selectedDesign.ptm ?? null, 3),
+                accentClass: 'text-violet-400',
+            },
+            {
+                label: 'iPTM',
+                value: formatMetricValue(selectedDesign.iptm ?? null, 3),
+                accentClass: 'text-amber-400',
+            },
+        ] satisfies StructureMetricCard[];
+    })();
+
+    const overlayTabs = [
+        { id: 'metrics', label: 'Metrics' },
+        ...(hasResidueConfidence ? [{ id: 'plddt', label: bfactorLabel }] : []),
+        ...(hasPae ? [{ id: 'pae', label: 'PAE' }] : []),
+    ] as Array<{ id: OverlayView; label: string }>;
+
     const plddtResidueColors = (() => {
-        if (colorMode !== 'plddt') return undefined;
+        if (effectiveColorMode !== 'plddt') return undefined;
         const colorMap = new Map<string, { r: number; g: number; b: number }>();
         for (const [chainId, metric] of Object.entries(chainMetrics)) {
             const plddt = metric?.plddt || [];
@@ -212,7 +406,7 @@ export default function StructureViewerPane({
     })();
 
     const frustrationResidueColors = (() => {
-        if (colorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
+        if (effectiveColorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
         const colorMap = new Map<string, { r: number; g: number; b: number }>();
         for (const residue of selectedDesign.frustration_residues) {
             const chainId = residue.chain;
@@ -378,11 +572,7 @@ export default function StructureViewerPane({
         <div className="w-80 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 overflow-hidden">
             {/* Tab Header */}
             <div className="flex border-b border-slate-700/50">
-                {[
-                    { id: 'metrics', label: 'Metrics' },
-                    { id: 'plddt', label: bfactorLabel },
-                    { id: 'pae', label: 'PAE' },
-                ].map(tab => (
+                {overlayTabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setOverlayView(tab.id as OverlayView)}
@@ -417,32 +607,26 @@ export default function StructureViewerPane({
 
                         {/* Key Metrics Grid */}
                         {selectedDesign && (
-                            <div className="grid grid-cols-2 gap-2">
-                                <div className="bg-slate-800/40 rounded p-2 text-center">
-                                    <div className={`text-lg font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
-                                        {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
+                            <>
+                                {stageGuidance && (
+                                    <div className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-2 text-[11px] leading-5 text-slate-300">
+                                        {stageGuidance}
                                     </div>
-                                    <div className="text-[10px] text-slate-500">{bfactorLabel}</div>
+                                )}
+                                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                                    {metricSectionTitle}
                                 </div>
-                                <div className="bg-slate-800/40 rounded p-2 text-center">
-                                    <div className={`text-lg font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
-                                        {selectedDesign.pae_overall?.toFixed(2) ?? '—'}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500">PAE</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {structureMetricCards.map((metric) => (
+                                        <div key={metric.label} className="bg-slate-800/40 rounded p-2 text-center">
+                                            <div className={`text-lg font-bold ${metric.accentClass}`}>
+                                                {metric.value}
+                                            </div>
+                                            <div className="text-[10px] text-slate-500">{metric.label}</div>
+                                        </div>
+                                    ))}
                                 </div>
-                                <div className="bg-slate-800/40 rounded p-2 text-center">
-                                    <div className="text-lg font-bold text-violet-400">
-                                        {selectedDesign.ptm?.toFixed(3) ?? '—'}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500">pTM</div>
-                                </div>
-                                <div className="bg-slate-800/40 rounded p-2 text-center">
-                                    <div className="text-lg font-bold text-amber-400">
-                                        {selectedDesign.iptm?.toFixed(3) ?? '—'}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500">iPTM</div>
-                                </div>
-                            </div>
+                            </>
                         )}
 
                         {/* Structure Analysis */}
@@ -703,32 +887,21 @@ export default function StructureViewerPane({
             {/* Key Metrics */}
             {selectedDesign && (
                 <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
-                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Confidence Metrics</h4>
+                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">{metricSectionTitle}</h4>
+                    {stageGuidance && (
+                        <div className="mb-3 rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2 text-[11px] leading-5 text-slate-300">
+                            {stageGuidance}
+                        </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                            <div className={`text-2xl font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
-                                {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
+                        {structureMetricCards.map((metric) => (
+                            <div key={metric.label} className="bg-slate-900/50 rounded-lg p-3 text-center">
+                                <div className={`text-2xl font-bold ${metric.accentClass}`}>
+                                    {metric.value}
+                                </div>
+                                <div className="text-xs text-slate-500 mt-1">{metric.label}</div>
                             </div>
-                            <div className="text-xs text-slate-500 mt-1">{bfactorLabel}</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                            <div className={`text-2xl font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
-                                {selectedDesign.pae_overall?.toFixed(2) ?? '—'}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1">PAE</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                            <div className="text-2xl font-bold text-violet-400">
-                                {selectedDesign.ptm?.toFixed(3) ?? '—'}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1">pTM</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                            <div className="text-2xl font-bold text-amber-400">
-                                {selectedDesign.iptm?.toFixed(3) ?? '—'}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1">iPTM</div>
-                        </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -763,7 +936,7 @@ export default function StructureViewerPane({
             )}
 
             {/* Chain Details Panel (for multi-chain complexes) */}
-            {selectedDesign && (
+            {selectedDesign && Object.keys(chainMetrics).length > 0 && (
                 <ChainDetailsPanel
                     design={selectedDesign}
                     chainMetrics={chainMetrics as Record<string, ChainMetric> | null}
@@ -894,7 +1067,7 @@ export default function StructureViewerPane({
                     onChange={(e) => setSelectedDesignId(e.target.value)}
                     className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px] ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
                 >
-                    {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
+                    {designs.map(d => (
                         <option key={d.id} value={d.id}>
                             {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
@@ -905,22 +1078,22 @@ export default function StructureViewerPane({
 
             {/* Color Mode */}
             <select
-                value={colorMode}
+                value={effectiveColorMode}
                 onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration')}
                 className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
             >
                 <option value="default">Chain Colors</option>
-                <option value="plddt">{bfactorLabel}</option>
+                <option value="plddt" disabled={!hasResidueConfidence}>{bfactorLabel}</option>
                 <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
                     Frustration
                 </option>
-                <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
+                <option value="cdr" disabled={!antibodySelections?.length}>
                     CDR Regions
                 </option>
             </select>
 
             {/* Color Legend */}
-            {colorMode === 'plddt' && !isCompact && (
+            {effectiveColorMode === 'plddt' && !isCompact && (
                 <div className="flex items-center gap-1 text-xs text-slate-400">
                     <span className="text-blue-400">■</span>≥90
                     <span className="text-cyan-400 ml-1">■</span>≥70
@@ -928,7 +1101,7 @@ export default function StructureViewerPane({
                     <span className="text-orange-400 ml-1">■</span>&lt;50
                 </div>
             )}
-            {colorMode === 'frustration' && !isCompact && (
+            {effectiveColorMode === 'frustration' && !isCompact && (
                 <div className="flex items-center gap-1 text-xs text-slate-400">
                     <span className="text-red-400">■</span>high
                     <span className="text-slate-400 ml-1">■</span>neutral
@@ -993,15 +1166,15 @@ export default function StructureViewerPane({
                         style={isFullscreen ? undefined : { height: 450 }}
                     >
                         <MolstarViewer
-                            key={selectedDesignId + '_' + colorMode}
-                            structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                            format={structureFormat}
-                            alphafoldView={colorMode === 'plddt' && !plddtResidueColors}
-                            selections={colorMode === 'cdr' ? antibodySelections : undefined}
+                            key={selectedDesignId + '_' + effectiveColorMode}
+                            structureUrl={viewerStructureUrl}
+                            format={viewerStructureFormat}
+                            alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
+                            selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                             residueColors={
-                                colorMode === 'plddt'
+                                effectiveColorMode === 'plddt'
                                     ? plddtResidueColors
-                                    : colorMode === 'frustration'
+                                    : effectiveColorMode === 'frustration'
                                         ? frustrationResidueColors
                                         : undefined
                             }

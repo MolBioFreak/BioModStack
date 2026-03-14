@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 import path from 'path'
 
+const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -36,6 +37,8 @@ export default defineConfig(({ mode }) => ({
       string_decoder: path.resolve(__dirname, 'node_modules/string_decoder/lib/string_decoder.js'),
       'string_decoder/': path.resolve(__dirname, 'node_modules/string_decoder'),
       events: path.resolve(__dirname, 'node_modules/events/events.js'),
+      util: utilShimPath,
+      'node:util': utilShimPath,
     }
   },
   server: {
@@ -75,4 +78,3 @@ export default defineConfig(({ mode }) => ({
     }
   }
 }))
-
