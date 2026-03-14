@@ -275,6 +275,7 @@ export interface AntibodyCdrIndelConfig {
 export interface LaunchAntibodyIterationRequest {
     source_job_id: string;
     design_ids: string[];
+    review_filter_set_id?: string;
     action: AntibodyIterationAction;
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
@@ -305,6 +306,7 @@ export interface ManualMutagenesisConfig {
 export interface LaunchManualMutagenesisRequest {
     source_job_id: string;
     design_ids: string[];
+    review_filter_set_id?: string;
     config: ManualMutagenesisConfig;
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
@@ -320,6 +322,41 @@ export interface LaunchManualMutagenesisResponse {
 
 export const launchManualMutagenesis = (request: LaunchManualMutagenesisRequest) =>
     api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request);
+
+export interface SavedReviewFilterSet {
+    id: string;
+    name: string;
+    created_at: string;
+    visible_count?: number | null;
+    source_total_count?: number | null;
+    design_ids?: string[];
+    filter_state: Record<string, unknown>;
+}
+
+export interface SaveReviewFilterSetRequest {
+    name?: string;
+    visible_count?: number | null;
+    source_total_count?: number | null;
+    design_ids?: string[];
+    filter_state: Record<string, unknown>;
+}
+
+export interface SaveReviewFilterSetResponse {
+    message: string;
+    filter_set: SavedReviewFilterSet;
+    filter_sets: SavedReviewFilterSet[];
+}
+
+export interface DeleteReviewFilterSetResponse {
+    message: string;
+    filter_sets: SavedReviewFilterSet[];
+}
+
+export const saveReviewFilterSet = (jobId: string, request: SaveReviewFilterSetRequest) =>
+    api.post<SaveReviewFilterSetResponse>(`/api/jobs/${jobId}/review-filter-sets`, request);
+
+export const deleteReviewFilterSet = (jobId: string, filterSetId: string) =>
+    api.delete<DeleteReviewFilterSetResponse>(`/api/jobs/${jobId}/review-filter-sets/${filterSetId}`);
 
 export interface MsaCacheEntry {
     name: string;
@@ -465,6 +502,8 @@ export interface Design {
     epitope_nearest_target_residue?: string | null;
     epitope_nearest_antibody_atom?: string | null;
     epitope_nearest_target_atom?: string | null;
+    epitope_mapping_mode?: string | null;
+    epitope_centroid_distance?: number | null;
     target_contact_count?: number | null;
     target_min_distance?: number | null;
     target_min_atom_distance?: number | null;
@@ -472,7 +511,32 @@ export interface Design {
     target_nearest_target_residue?: string | null;
     target_nearest_antibody_atom?: string | null;
     target_nearest_target_atom?: string | null;
+    target_centroid_distance?: number | null;
+    detected_antibody_chains?: string | null;
+    detected_target_chain?: string | null;
+    antibody_residue_count?: number | null;
+    target_residue_count?: number | null;
+    epitope_residue_count?: number | null;
+    passed_screen?: boolean | null;
     screening_reason?: string | null;
+    source_stage?: string | null;
+    artifact_group?: string | null;
+    rfa_loop_metrics?: Record<string, unknown> | null;
+    rfa_hotspot_metrics?: Record<string, unknown> | null;
+    rfa_hotspot_covered_count?: number | null;
+    rfa_hotspot_min_distance?: number | null;
+    rfa_hotspot_avg_min_distance?: number | null;
+    rfa_runtime_seconds?: number | null;
+    rfa_device?: string | null;
+    rfa_diffusion_steps?: number | null;
+    rfa_noise_scale_ca?: number | null;
+    rfa_noise_scale_frame?: number | null;
+    rfa_guide_scale?: number | null;
+    rfa_plddt_initial?: number | null;
+    rfa_plddt_final?: number | null;
+    rfa_plddt_delta?: number | null;
+    rfa_design_loops?: string[] | null;
+    rfa_hotspots?: string[] | null;
     // Antibody annotation
     binder_length: number | null;
     antibody_type: string | null;
@@ -517,20 +581,80 @@ export interface DesignListResponse {
 export interface DesignFilters {
     job_id?: string;
     include_children?: boolean;
+    design_ids?: string[];
+    q?: string;
     backbone_id?: number;
     plddt_min?: number;
     pae_max?: number;
     iptm_min?: number;
+    epitope_contacts_min?: number;
+    target_contacts_min?: number;
+    epitope_max_dist?: number;
+    target_max_dist?: number;
+    binder_length_min?: number;
+    binder_length_max?: number;
+    cdr_h1_min?: number;
+    cdr_h1_max?: number;
+    cdr_h2_min?: number;
+    cdr_h2_max?: number;
+    cdr_h3_min?: number;
+    cdr_h3_max?: number;
     rog_min?: number;
     rog_max?: number;
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'name' | 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
+    artifact_group?: string;
+    sort_by?: DesignSortField;
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
 }
+
+export type DesignSortField =
+    | 'name'
+    | 'plddt'
+    | 'plddt_overall'
+    | 'plddt_binder'
+    | 'plddt_target'
+    | 'iptm'
+    | 'ptm'
+    | 'pae'
+    | 'pae_overall'
+    | 'pae_interaction'
+    | 'conf_score'
+    | 'rog'
+    | 'rfd_rog'
+    | 'backbone'
+    | 'backbone_id'
+    | 'binder_length'
+    | 'cdr_h1_length'
+    | 'cdr_h2_length'
+    | 'cdr_h3_length'
+    | 'epitope_contact_count'
+    | 'target_contact_count'
+    | 'epitope_min_distance'
+    | 'target_min_distance'
+    | 'epitope_min_atom_distance'
+    | 'target_min_atom_distance'
+    | 'epitope_centroid_distance'
+    | 'target_centroid_distance'
+    | 'affinity_score'
+    | 'binder_probability'
+    | 'fampnn_psce'
+    | 'rfa_hotspot_covered_count'
+    | 'rfa_hotspot_min_distance'
+    | 'rfa_hotspot_avg_min_distance'
+    | 'rfa_runtime_seconds'
+    | 'rfa_plddt_final'
+    | 'rfa_plddt_delta'
+    | 'frustration_high_count'
+    | 'frustration_pct_high'
+    | 'maturation_delta_interface'
+    | 'maturation_rmsd'
+    | 'fr2_contacts'
+    | 'binding_tier'
+    | 'is_favorite';
 
 export const buildFileDownloadUrl = (relativePath: string) =>
     `/api/files/download/${encodeURIComponent(relativePath)}`;
@@ -550,8 +674,18 @@ export interface BackboneSummary {
         avg_iptm: number | null;
         avg_ptm: number | null;
         min_pae: number | null;
+        avg_target_contacts?: number | null;
+        min_target_contacts?: number | null;
+        max_target_contacts?: number | null;
+        avg_epitope_contacts?: number | null;
+        min_epitope_contacts?: number | null;
         max_epitope_contacts?: number | null;
+        avg_target_distance?: number | null;
+        min_target_distance?: number | null;
+        max_target_distance?: number | null;
+        avg_epitope_distance?: number | null;
         min_epitope_distance?: number | null;
+        max_epitope_distance?: number | null;
         avg_cdr_h1_length?: number | null;
         avg_cdr_h2_length?: number | null;
         avg_cdr_h3_length?: number | null;
@@ -562,6 +696,9 @@ export interface BackboneSummary {
             plddt_overall: number | null;
             epitope_contact_count: number | null;
             epitope_min_distance: number | null;
+            target_contact_count?: number | null;
+            target_min_distance?: number | null;
+            rfa_hotspot_covered_count?: number | null;
         } | null;
     }>;
 }
@@ -569,8 +706,10 @@ export interface BackboneSummary {
 export const fetchDesigns = (filters: DesignFilters = {}) =>
     api.get<DesignListResponse>('/api/designs', { params: filters });
 
-export const fetchBackboneSummary = (jobId: string) =>
-    api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`);
+export const fetchBackboneSummary = (jobId: string, artifactGroup?: string) =>
+    api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`, {
+        params: artifactGroup ? { artifact_group: artifactGroup } : undefined,
+    });
 
 export const toggleDesignFavorite = (designId: string, isFavorite: boolean) =>
     api.post(`/api/designs/${designId}/favorite`, { is_favorite: isFavorite });
@@ -832,6 +971,7 @@ export interface SchedulerConfig {
     global: {
         busy_threshold: number;
         cooldown_ms: number;
+        cpu_threads_per_job: number;
         enabled: boolean;
         target_vram_fill: number;
         capacity_weight: number;
@@ -1138,9 +1278,22 @@ export const fetchChainPairIptm = (designId: string) =>
 
 export const fetchDesignPlotlyMetrics = (
     jobId: string,
-    params?: { include_children?: boolean; limit?: number; offset?: number }
+    params?: { include_children?: boolean; limit?: number; offset?: number; design_ids?: string[] }
 ) =>
-    api.get<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, { params });
+    params?.design_ids?.length
+        ? api.post<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, {
+            include_children: params.include_children ?? true,
+            limit: params.limit,
+            offset: params.offset,
+            design_ids: params.design_ids,
+        })
+        : api.get<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, {
+            params: {
+                include_children: params?.include_children,
+                limit: params?.limit,
+                offset: params?.offset,
+            },
+        });
 
 // PAE (Predicted Aligned Error) data
 export interface PAEData {

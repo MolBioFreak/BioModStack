@@ -43,6 +43,7 @@ from services.stage_review import (
     has_stage_gate,
     infer_antibody_stage_state,
     nextflow_history_status,
+    resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
 
@@ -90,17 +91,21 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
 
     stale = [
         child for child in children
-        if child.status in {JobStatus.RUNNING.value, JobStatus.QUEUED.value}
+        if child.status in {
+            JobStatus.RUNNING.value,
+            JobStatus.QUEUED.value,
+            JobStatus.AWAITING_INPUT.value,
+        }
     ]
     if not stale:
         return 0
 
     updated = 0
     for child in stale:
-        output_dir = resolve_output_dir(child.output_dir) if child.output_dir else None
-        if not output_dir:
+        run_dir = resolve_nextflow_run_dir(child.child_output_dir or child.output_dir)
+        if not run_dir:
             continue
-        history_path = output_dir / ".nextflow" / "history"
+        history_path = run_dir / ".nextflow" / "history"
         if not history_path.exists():
             continue
         try:
@@ -114,6 +119,12 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
         if status_token == "OK":
             child.status = JobStatus.COMPLETED.value
             child.queue_status = "completed"
+            child.awaiting_input = False
+            child.awaiting_stage = None
+            child.awaiting_payload = {}
+            resolved_output_dir = str(run_dir)
+            if child.child_output_dir != resolved_output_dir:
+                child.child_output_dir = resolved_output_dir
             if not child.completed_at:
                 child.completed_at = datetime.utcnow()
             child.current_stage = "Complete"
@@ -121,6 +132,12 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
         elif status_token == "ERR":
             child.status = JobStatus.FAILED.value
             child.queue_status = "failed"
+            child.awaiting_input = False
+            child.awaiting_stage = None
+            child.awaiting_payload = {}
+            resolved_output_dir = str(run_dir)
+            if child.child_output_dir != resolved_output_dir:
+                child.child_output_dir = resolved_output_dir
             if not child.completed_at:
                 child.completed_at = datetime.utcnow()
             if not child.error_message:
@@ -139,6 +156,37 @@ class ResumeJobRequest(BaseModel):
 class OpenStageGateRequest(BaseModel):
     """Internal workflow request to mark a job as awaiting user input."""
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SaveReviewFilterSetRequest(BaseModel):
+    """Persist a named frozen review dataset on the parent job."""
+    name: Optional[str] = None
+    visible_count: Optional[int] = None
+    source_total_count: Optional[int] = None
+    design_ids: List[str] = Field(default_factory=list)
+    filter_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SavedReviewFilterSet(BaseModel):
+    """Saved review dataset stored in awaiting_payload."""
+    id: str
+    name: str
+    created_at: str
+    visible_count: Optional[int] = None
+    source_total_count: Optional[int] = None
+    design_ids: List[str] = Field(default_factory=list)
+    filter_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SaveReviewFilterSetResponse(BaseModel):
+    message: str
+    filter_set: SavedReviewFilterSet
+    filter_sets: List[SavedReviewFilterSet]
+
+
+class DeleteReviewFilterSetResponse(BaseModel):
+    message: str
+    filter_sets: List[SavedReviewFilterSet]
 
 
 class AntibodyCdrIndelConfig(BaseModel):
@@ -167,6 +215,7 @@ class AntibodyIterationLaunchRequest(BaseModel):
     """Launch a new antibody round from selected design structures."""
     source_job_id: str = Field(..., min_length=1)
     design_ids: List[str] = Field(default_factory=list)
+    review_filter_set_id: Optional[str] = None
     action: str = Field(..., min_length=1)
     name_suffix: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
@@ -189,6 +238,7 @@ class ManualMutagenesisLaunchRequest(BaseModel):
     """Launch explicit manual mutation sets from selected structures."""
     source_job_id: str = Field(..., min_length=1)
     design_ids: List[str] = Field(default_factory=list)
+    review_filter_set_id: Optional[str] = None
     config: ManualMutagenesisConfig
     name_suffix: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
@@ -254,6 +304,49 @@ def _infer_gate_stage_from_files(job: Job) -> Optional[str]:
 def _repair_job_for_response(job: Job) -> bool:
     changed = False
 
+    if job.parent_job_id and job.child_stage:
+        history_status = nextflow_history_status(job)
+        if history_status == "OK":
+            if job.status != JobStatus.COMPLETED.value:
+                job.status = JobStatus.COMPLETED.value
+                changed = True
+            if job.queue_status != "completed":
+                job.queue_status = "completed"
+                changed = True
+            if job.awaiting_input:
+                job.awaiting_input = False
+                changed = True
+            if job.awaiting_stage is not None:
+                job.awaiting_stage = None
+                changed = True
+            if job.awaiting_payload:
+                job.awaiting_payload = {}
+                changed = True
+            if not job.completed_at:
+                job.completed_at = datetime.utcnow()
+                changed = True
+            return changed
+        if history_status == "ERR":
+            if job.status != JobStatus.FAILED.value:
+                job.status = JobStatus.FAILED.value
+                changed = True
+            if job.queue_status != "failed":
+                job.queue_status = "failed"
+                changed = True
+            if job.awaiting_input:
+                job.awaiting_input = False
+                changed = True
+            if job.awaiting_stage is not None:
+                job.awaiting_stage = None
+                changed = True
+            if job.awaiting_payload:
+                job.awaiting_payload = {}
+                changed = True
+            if not job.completed_at:
+                job.completed_at = datetime.utcnow()
+                changed = True
+            return changed
+
     if job.awaiting_payload:
         repaired_payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
         if repaired_payload != (job.awaiting_payload or {}):
@@ -297,6 +390,23 @@ def _review_candidate_count(job: Job) -> Optional[int]:
     if stage not in REVIEWABLE_STAGES:
         return None
     payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
+    if stage == "post_fampnn":
+        filtered_count = payload.get("filtered_candidate_count")
+        if isinstance(filtered_count, int) and filtered_count > 0:
+            return filtered_count
+    candidate_count = payload.get("candidate_count")
+    if isinstance(candidate_count, int) and candidate_count >= 0:
+        return candidate_count
+    return None
+
+
+def _review_candidate_count_cached(job: Job) -> Optional[int]:
+    if not job.awaiting_input:
+        return None
+    stage = str(job.awaiting_stage or "").strip().lower()
+    if stage not in REVIEWABLE_STAGES:
+        return None
+    payload = job.awaiting_payload if isinstance(job.awaiting_payload, dict) else {}
     if stage == "post_fampnn":
         filtered_count = payload.get("filtered_candidate_count")
         if isinstance(filtered_count, int) and filtered_count > 0:
@@ -554,6 +664,78 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
             detail="Selected job is not part of an antibody workflow lineage.",
         )
     return source_job, root_job
+
+
+def _normalize_design_ids(values: List[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        design_id = value.strip()
+        if not design_id or design_id in seen:
+            continue
+        seen.add(design_id)
+        normalized.append(design_id)
+    return normalized
+
+
+def _iter_saved_review_filter_sets(job: Optional[Job]) -> List[SavedReviewFilterSet]:
+    if job is None or not isinstance(job.awaiting_payload, dict):
+        return []
+    raw_sets = job.awaiting_payload.get("review_filter_sets")
+    if not isinstance(raw_sets, list):
+        return []
+
+    saved_sets: List[SavedReviewFilterSet] = []
+    for entry in raw_sets:
+        try:
+            saved_sets.append(SavedReviewFilterSet.model_validate(entry))
+        except Exception:
+            continue
+    return saved_sets
+
+
+def _resolve_saved_review_filter_set(
+    review_filter_set_id: Optional[str],
+    candidate_jobs: List[Optional[Job]],
+) -> Optional[SavedReviewFilterSet]:
+    filter_set_id = str(review_filter_set_id or "").strip()
+    if not filter_set_id:
+        return None
+
+    seen_job_ids: set[str] = set()
+    for job in candidate_jobs:
+        if job is None or job.id in seen_job_ids:
+            continue
+        seen_job_ids.add(job.id)
+        for saved_set in _iter_saved_review_filter_sets(job):
+            if saved_set.id == filter_set_id:
+                return saved_set
+
+    raise HTTPException(status_code=404, detail="Saved review dataset not found.")
+
+
+def _resolve_launch_design_ids(
+    requested_design_ids: List[str],
+    saved_filter_set: Optional[SavedReviewFilterSet],
+) -> List[str]:
+    design_ids = _normalize_design_ids(requested_design_ids)
+    if design_ids:
+        return design_ids
+    if saved_filter_set is None:
+        return []
+
+    saved_design_ids = _normalize_design_ids(saved_filter_set.design_ids)
+    if not saved_design_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Saved review dataset '{saved_filter_set.name}' does not have frozen design membership. "
+                "Re-save the dataset from the review UI before launching it."
+            ),
+        )
+    return saved_design_ids
 
 
 def _resolve_design_structure_path(raw_path: str) -> Path:
@@ -2412,19 +2594,12 @@ async def list_jobs(
 
     
     job_responses = []
-    jobs_changed = False
     for job, design_count in rows:
-        if _repair_job_for_response(job):
-            jobs_changed = True
-        completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
-        review_count = _review_candidate_count(job)
+        completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
+        stage_outputs = dict(job.stage_outputs or {})
+        review_count = _review_candidate_count_cached(job)
         if (design_count or 0) == 0 and review_count is not None:
             design_count = review_count
-        # Fallback for structure/PDB jobs that don't have Design entries
-        if design_count == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
-            # Note: This file system check is still "slow" per job, but only runs for 
-            # jobs with 0 designs in DB. For pure design jobs, it's skipped.
-            design_count = count_structure_files(job.output_dir)
         
         job_responses.append(JobResponse(
             id=job.id,
@@ -2452,9 +2627,6 @@ async def list_jobs(
             awaiting_payload=job.awaiting_payload,
             decision_history=job.decision_history,
         ))
-
-    if jobs_changed:
-        await session.commit()
     
     return JobList(jobs=job_responses, total=total)
 
@@ -2940,11 +3112,17 @@ async def launch_antibody_iteration_from_designs(
     session: AsyncSession = Depends(get_session),
 ):
     """Launch a focused antibody iteration round from selected design structures."""
-    design_ids = [design_id.strip() for design_id in request.design_ids if isinstance(design_id, str) and design_id.strip()]
-    if not design_ids:
-        raise HTTPException(status_code=422, detail="At least one design must be selected.")
-
     source_job, root_job = await _resolve_antibody_root_job(session, request.source_job_id)
+    saved_filter_set = _resolve_saved_review_filter_set(
+        request.review_filter_set_id,
+        [source_job, root_job],
+    )
+    design_ids = _resolve_launch_design_ids(request.design_ids, saved_filter_set)
+    if not design_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="Select at least one design or load a saved review dataset before launching a new round.",
+        )
 
     result = await session.execute(select(Design).where(Design.id.in_(design_ids)))
     found_designs = result.scalars().all()
@@ -3008,10 +3186,15 @@ async def launch_antibody_iteration_from_designs(
         )
     launch_selection_dir = str(launch_request.params.get("iteration_selection_dir") or selection_dir)
     launched_job = await create_job(launch_request, background_tasks, session)
+    selection_source_note = (
+        f" using saved dataset '{saved_filter_set.name}'"
+        if saved_filter_set is not None and not _normalize_design_ids(request.design_ids)
+        else ""
+    )
 
     return AntibodyIterationLaunchResponse(
         message=(
-            f"Launched antibody iteration action '{action}' from {len(ordered_designs)} selected designs."
+            f"Launched antibody iteration action '{action}' from {len(ordered_designs)} selected designs{selection_source_note}."
             + (f" Generated {variant_count} indel variants." if action == "cdr_indel_round" else "")
             + variant_note
         ),
@@ -3031,13 +3214,26 @@ async def launch_manual_mutagenesis_from_designs(
     session: AsyncSession = Depends(get_session),
 ):
     """Launch an explicit manual mutation batch from selected structure designs."""
-    design_ids = [design_id.strip() for design_id in request.design_ids if isinstance(design_id, str) and design_id.strip()]
-    if not design_ids:
-        raise HTTPException(status_code=422, detail="At least one design must be selected.")
-
     source_job = await session.get(Job, request.source_job_id)
     if source_job is None:
         raise HTTPException(status_code=404, detail="Source job not found.")
+
+    root_job: Optional[Job] = None
+    try:
+        _, root_job = await _resolve_antibody_root_job(session, request.source_job_id)
+    except HTTPException:
+        root_job = None
+
+    saved_filter_set = _resolve_saved_review_filter_set(
+        request.review_filter_set_id,
+        [source_job, root_job],
+    )
+    design_ids = _resolve_launch_design_ids(request.design_ids, saved_filter_set)
+    if not design_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="Select at least one design or load a saved review dataset before launching a new round.",
+        )
 
     result = await session.execute(select(Design).where(Design.id.in_(design_ids)))
     found_designs = result.scalars().all()
@@ -3058,10 +3254,15 @@ async def launch_manual_mutagenesis_from_designs(
         param_overrides=request.param_overrides,
     )
     launched_job = await create_job(launch_request, background_tasks, session)
+    selection_source_note = (
+        f" using saved dataset '{saved_filter_set.name}'"
+        if saved_filter_set is not None and not _normalize_design_ids(request.design_ids)
+        else ""
+    )
 
     return ManualMutagenesisLaunchResponse(
         message=(
-            f"Launched manual mutagenesis from {len(ordered_designs)} selected designs."
+            f"Launched manual mutagenesis from {len(ordered_designs)} selected designs{selection_source_note}."
             f" Generated {variant_count} explicit variants."
             + variant_note
         ),
@@ -3618,6 +3819,76 @@ async def get_stage_gates(
         "awaiting_payload": job.awaiting_payload or {},
         "decision_history": job.decision_history or [],
     }
+
+
+@router.post("/{job_id}/review-filter-sets", response_model=SaveReviewFilterSetResponse)
+async def save_review_filter_set(
+    job_id: str,
+    request: SaveReviewFilterSetRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist a named frozen review dataset for paused review workflows."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    payload = dict(job.awaiting_payload or {})
+    existing_sets = payload.get("review_filter_sets")
+    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+
+    filter_name = str(request.name or "").strip() or f"Saved dataset {len(filter_sets) + 1}"
+    saved_entry = {
+        "id": str(uuid.uuid4()),
+        "name": filter_name,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "visible_count": request.visible_count,
+        "source_total_count": request.source_total_count,
+        "design_ids": _normalize_design_ids(request.design_ids),
+        "filter_state": dict(request.filter_state or {}),
+    }
+    filter_sets.insert(0, saved_entry)
+    payload["review_filter_sets"] = filter_sets[:50]
+    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+    await session.commit()
+
+    saved_models = [SavedReviewFilterSet.model_validate(entry) for entry in payload["review_filter_sets"]]
+    return SaveReviewFilterSetResponse(
+        message=f"Saved review dataset '{filter_name}'.",
+        filter_set=SavedReviewFilterSet.model_validate(saved_entry),
+        filter_sets=saved_models,
+    )
+
+
+@router.delete("/{job_id}/review-filter-sets/{filter_set_id}", response_model=DeleteReviewFilterSetResponse)
+async def delete_review_filter_set(
+    job_id: str,
+    filter_set_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Remove a saved review dataset from a paused parent job."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    payload = dict(job.awaiting_payload or {})
+    existing_sets = payload.get("review_filter_sets")
+    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+    next_sets = [entry for entry in filter_sets if str(entry.get("id") or "") != filter_set_id]
+    if len(next_sets) == len(filter_sets):
+        raise HTTPException(status_code=404, detail="Saved review dataset not found")
+
+    payload["review_filter_sets"] = next_sets
+    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+    await session.commit()
+
+    return DeleteReviewFilterSetResponse(
+        message="Deleted saved review dataset.",
+        filter_sets=[SavedReviewFilterSet.model_validate(entry) for entry in next_sets],
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

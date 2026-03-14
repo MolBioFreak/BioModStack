@@ -7,9 +7,10 @@ stored in the SQLite database after pipeline ingestion.
 
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, case
+from sqlalchemy.orm import load_only
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel
 from datetime import datetime
@@ -22,6 +23,46 @@ from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows
 
 
 router = APIRouter()
+
+_TWO_LETTER_ELEMENTS = {
+    "BR", "CL", "NA", "MG", "AL", "SI", "CA", "SC", "TI", "CR", "MN", "FE", "CO", "NI", "CU",
+    "ZN", "GA", "GE", "AS", "SE", "SR", "ZR", "MO", "RU", "RH", "PD", "AG", "CD", "IN", "SN",
+    "SB", "TE", "CS", "BA", "LA", "CE", "PR", "ND", "SM", "EU", "GD", "TB", "DY", "HO", "ER",
+    "TM", "YB", "LU", "HF", "TA", "RE", "OS", "IR", "PT", "AU", "HG", "TL", "PB", "BI",
+}
+
+
+def _guess_pdb_element(atom_name: str) -> str:
+    letters = "".join(char for char in atom_name if char.isalpha()).upper()
+    if not letters:
+        return ""
+    if len(letters) >= 2 and letters[:2] in _TWO_LETTER_ELEMENTS:
+        return letters[:2].title()
+    return letters[0]
+
+
+def _normalize_pdb_for_viewer(pdb_text: str) -> str:
+    normalized_lines: list[str] = []
+    for raw_line in pdb_text.splitlines():
+        line = raw_line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        record = line[:6].strip().upper()
+        if record in {"ATOM", "HETATM"}:
+            padded = line.ljust(80)
+            element = padded[76:78].strip() or _guess_pdb_element(padded[12:16].strip())
+            charge = padded[78:80].strip()
+            normalized_lines.append(f"{padded[:76]}{element:>2}{charge:>2}")
+            continue
+        if record in {"ANISOU", "TER"}:
+            normalized_lines.append(line.ljust(80))
+            continue
+        normalized_lines.append(line)
+
+    if not normalized_lines or normalized_lines[-1].strip().upper() != "END":
+        normalized_lines.append("END")
+
+    return "\n".join(normalized_lines) + "\n"
 
 
 # --- Pydantic Schemas ---
@@ -117,6 +158,8 @@ class DesignResponse(BaseModel):
     epitope_nearest_target_residue: Optional[str] = None
     epitope_nearest_antibody_atom: Optional[str] = None
     epitope_nearest_target_atom: Optional[str] = None
+    epitope_mapping_mode: Optional[str] = None
+    epitope_centroid_distance: Optional[float] = None
     target_contact_count: Optional[int] = None
     target_min_distance: Optional[float] = None
     target_min_atom_distance: Optional[float] = None
@@ -124,7 +167,32 @@ class DesignResponse(BaseModel):
     target_nearest_target_residue: Optional[str] = None
     target_nearest_antibody_atom: Optional[str] = None
     target_nearest_target_atom: Optional[str] = None
+    target_centroid_distance: Optional[float] = None
+    detected_antibody_chains: Optional[str] = None
+    detected_target_chain: Optional[str] = None
+    antibody_residue_count: Optional[int] = None
+    target_residue_count: Optional[int] = None
+    epitope_residue_count: Optional[int] = None
+    passed_screen: Optional[bool] = None
     screening_reason: Optional[str] = None
+    source_stage: Optional[str] = None
+    artifact_group: Optional[str] = None
+    rfa_loop_metrics: Optional[Dict[str, Any]] = None
+    rfa_hotspot_metrics: Optional[Dict[str, Any]] = None
+    rfa_hotspot_covered_count: Optional[int] = None
+    rfa_hotspot_min_distance: Optional[float] = None
+    rfa_hotspot_avg_min_distance: Optional[float] = None
+    rfa_runtime_seconds: Optional[float] = None
+    rfa_device: Optional[str] = None
+    rfa_diffusion_steps: Optional[int] = None
+    rfa_noise_scale_ca: Optional[float] = None
+    rfa_noise_scale_frame: Optional[float] = None
+    rfa_guide_scale: Optional[float] = None
+    rfa_plddt_initial: Optional[float] = None
+    rfa_plddt_final: Optional[float] = None
+    rfa_plddt_delta: Optional[float] = None
+    rfa_design_loops: Optional[List[str]] = None
+    rfa_hotspots: Optional[List[str]] = None
     
     # Frustration analysis (FrustraMPNN)
     frustration_high_count: Optional[int] = None
@@ -169,6 +237,71 @@ class PlotlyMetricsResponse(BaseModel):
     metric_keys: List[str]
     points: List[PlotlyMetricPoint]
     total: int
+
+
+class PlotlyMetricsRequest(BaseModel):
+    include_children: bool = True
+    design_ids: Optional[List[str]] = None
+    limit: int = 10000
+    offset: int = 0
+
+
+ANALYTICS_LOAD_ONLY_COLUMNS = (
+    Design.id,
+    Design.name,
+    Design.created_at,
+    Design.plddt_overall,
+    Design.plddt_binder,
+    Design.plddt_target,
+    Design.pae_interaction,
+    Design.pae_overall,
+    Design.rmsd_overall,
+    Design.rmsd_binder,
+    Design.rmsd_target,
+    Design.fampnn_psce,
+    Design.conf_score,
+    Design.ptm,
+    Design.iptm,
+    Design.protein_iptm,
+    Design.ligand_iptm,
+    Design.complex_iplddt,
+    Design.complex_ipde,
+    Design.disorder,
+    Design.num_recycles,
+    Design.affinity_score,
+    Design.binder_probability,
+    Design.rog,
+    Design.rfd_rog,
+    Design.mpnn_score,
+    Design.cdr_h1_length,
+    Design.cdr_h2_length,
+    Design.cdr_h3_length,
+    Design.binder_length,
+    Design.epitope_contact_count,
+    Design.epitope_min_distance,
+    Design.epitope_min_atom_distance,
+    Design.epitope_centroid_distance,
+    Design.target_contact_count,
+    Design.target_min_distance,
+    Design.target_min_atom_distance,
+    Design.target_centroid_distance,
+    Design.rfa_hotspot_covered_count,
+    Design.rfa_hotspot_min_distance,
+    Design.rfa_hotspot_avg_min_distance,
+    Design.rfa_runtime_seconds,
+    Design.rfa_plddt_initial,
+    Design.rfa_plddt_final,
+    Design.rfa_plddt_delta,
+    Design.frustration_high_count,
+    Design.frustration_min_count,
+    Design.frustration_pct_high,
+    Design.maturation_delta_interface,
+    Design.maturation_interface_score,
+    Design.maturation_rmsd,
+    Design.screening_reason,
+    Design.has_clash,
+    Design.confidence_metrics,
+)
 
 
 def _append_numeric_values(value: Any, out: List[float]) -> None:
@@ -247,9 +380,18 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "epitope_contact_count": design.epitope_contact_count,
         "epitope_min_distance": design.epitope_min_distance,
         "epitope_min_atom_distance": design.epitope_min_atom_distance,
+        "epitope_centroid_distance": design.epitope_centroid_distance,
         "target_contact_count": design.target_contact_count,
         "target_min_distance": design.target_min_distance,
         "target_min_atom_distance": design.target_min_atom_distance,
+        "target_centroid_distance": design.target_centroid_distance,
+        "rfa_hotspot_covered_count": design.rfa_hotspot_covered_count,
+        "rfa_hotspot_min_distance": design.rfa_hotspot_min_distance,
+        "rfa_hotspot_avg_min_distance": design.rfa_hotspot_avg_min_distance,
+        "rfa_runtime_seconds": design.rfa_runtime_seconds,
+        "rfa_plddt_initial": design.rfa_plddt_initial,
+        "rfa_plddt_final": design.rfa_plddt_final,
+        "rfa_plddt_delta": design.rfa_plddt_delta,
         "frustration_high_count": design.frustration_high_count,
         "frustration_min_count": design.frustration_min_count,
         "frustration_pct_high": design.frustration_pct_high,
@@ -380,22 +522,94 @@ def _design_to_response(design: Design) -> DesignResponse:
     return DesignResponse.model_validate(data)
 
 
+async def _collect_plotly_metrics(
+    job_id: str,
+    include_children: bool,
+    requested_design_ids: Optional[List[str]],
+    limit: int,
+    offset: int,
+    session: AsyncSession,
+) -> PlotlyMetricsResponse:
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    if not job_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_ids = [job_id]
+    if include_children:
+        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
+        job_ids.extend([row[0] for row in child_result.all()])
+
+    clean_design_ids = [design_id.strip() for design_id in (requested_design_ids or []) if design_id and design_id.strip()]
+
+    query = (
+        select(Design)
+        .options(load_only(*ANALYTICS_LOAD_ONLY_COLUMNS))
+        .where(Design.job_id.in_(job_ids))
+        .order_by(Design.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    count_query = select(func.count(Design.id)).where(Design.job_id.in_(job_ids))
+    if clean_design_ids:
+        query = query.where(Design.id.in_(clean_design_ids))
+        count_query = count_query.where(Design.id.in_(clean_design_ids))
+
+    result = await session.execute(query)
+    designs = result.scalars().all()
+    total = (await session.execute(count_query)).scalar() or 0
+
+    points: List[PlotlyMetricPoint] = []
+    metric_keys: set[str] = set()
+    for design in designs:
+        metrics = _build_plotly_metrics(design)
+        metric_keys.update(metrics.keys())
+        points.append(
+            PlotlyMetricPoint(
+                id=design.id,
+                name=design.name,
+                metrics=metrics,
+            )
+        )
+
+    return PlotlyMetricsResponse(
+        job_id=job_id,
+        metric_keys=sorted(metric_keys),
+        points=points,
+        total=int(total),
+    )
+
+
 # --- Endpoints ---
 
 @router.get("", response_model=DesignList)
 async def list_designs(
     job_id: Optional[str] = None,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
+    design_ids: Optional[List[str]] = Query(None, description="Restrict to explicit design ids"),
+    q: Optional[str] = Query(None, description="Case-insensitive name search"),
     backbone_id: Optional[int] = Query(None, description="Filter by backbone ID"),
     plddt_min: Optional[float] = Query(None, description="Minimum pLDDT score"),
     pae_max: Optional[float] = Query(None, description="Maximum pAE score"),
     iptm_min: Optional[float] = Query(None, description="Minimum iPTM score"),
+    epitope_contacts_min: Optional[int] = Query(None, description="Minimum selected-epitope contact count"),
+    target_contacts_min: Optional[int] = Query(None, description="Minimum whole-target contact count"),
+    epitope_max_dist: Optional[float] = Query(None, description="Maximum nearest CA distance to selected epitope residues"),
+    target_max_dist: Optional[float] = Query(None, description="Maximum nearest CA distance to any target residue"),
+    binder_length_min: Optional[int] = Query(None, description="Minimum binder length"),
+    binder_length_max: Optional[int] = Query(None, description="Maximum binder length"),
+    cdr_h1_min: Optional[int] = Query(None, description="Minimum CDR-H1 length"),
+    cdr_h1_max: Optional[int] = Query(None, description="Maximum CDR-H1 length"),
+    cdr_h2_min: Optional[int] = Query(None, description="Minimum CDR-H2 length"),
+    cdr_h2_max: Optional[int] = Query(None, description="Maximum CDR-H2 length"),
+    cdr_h3_min: Optional[int] = Query(None, description="Minimum CDR-H3 length"),
+    cdr_h3_max: Optional[int] = Query(None, description="Maximum CDR-H3 length"),
     rog_min: Optional[float] = Query(None, description="Minimum radius of gyration"),
     rog_max: Optional[float] = Query(None, description="Maximum radius of gyration"),
     rfd_rog_min: Optional[float] = Query(None, description="Minimum RFdiffusion radius of gyration"),
     rfd_rog_max: Optional[float] = Query(None, description="Maximum RFdiffusion radius of gyration"),
     favorites_only: bool = Query(False, description="Show only favorites"),
-    sort_by: Optional[str] = Query(None, description="Sort field: plddt, iptm, ptm, pae, conf_score, rog, rfd_rog, backbone"),
+    artifact_group: Optional[str] = Query(None, description="Filter by review artifact group"),
+    sort_by: Optional[str] = Query(None, description="Sort field for table ordering"),
     sort_desc: bool = Query(True, description="Sort descending"),
     limit: int = Query(100, le=10000),
     offset: int = Query(0),
@@ -407,6 +621,7 @@ async def list_designs(
     Filters:
     - job_id: Filter by specific job (if include_children=True, also includes child job designs)
     - include_children: When job_id is specified, also fetch designs from child jobs
+    - q: Case-insensitive substring match on design name
     - backbone_id: Filter by backbone number
     - plddt_min: Minimum pLDDT threshold
     - pae_max: Maximum pAE threshold
@@ -431,17 +646,52 @@ async def list_designs(
     # Build base query with optional sorting
     sort_field_map = {
         'plddt': Design.plddt_overall,
+        'plddt_overall': Design.plddt_overall,
+        'plddt_binder': Design.plddt_binder,
+        'plddt_target': Design.plddt_target,
         'name': Design.name,
         'iptm': Design.iptm,
         'ptm': Design.ptm,
         'pae': Design.pae_overall,
+        'pae_overall': Design.pae_overall,
+        'pae_interaction': Design.pae_interaction,
         'conf_score': Design.conf_score,
         'confidence': Design.conf_score,
         'backbone': Design.backbone_id,
+        'backbone_id': Design.backbone_id,
         'rog': Design.rog,
         'rfd_rog': Design.rfd_rog,
+        'binder_length': Design.binder_length,
+        'cdr_h1_length': Design.cdr_h1_length,
+        'cdr_h2_length': Design.cdr_h2_length,
+        'cdr_h3_length': Design.cdr_h3_length,
+        'epitope_contact_count': Design.epitope_contact_count,
+        'target_contact_count': Design.target_contact_count,
+        'epitope_min_distance': Design.epitope_min_distance,
+        'target_min_distance': Design.target_min_distance,
+        'epitope_min_atom_distance': Design.epitope_min_atom_distance,
+        'target_min_atom_distance': Design.target_min_atom_distance,
+        'epitope_centroid_distance': Design.epitope_centroid_distance,
+        'target_centroid_distance': Design.target_centroid_distance,
+        'affinity_score': Design.affinity_score,
+        'binder_probability': Design.binder_probability,
+        'fampnn_psce': Design.fampnn_psce,
+        'rfa_hotspot_covered_count': Design.rfa_hotspot_covered_count,
+        'rfa_hotspot_min_distance': Design.rfa_hotspot_min_distance,
+        'rfa_hotspot_avg_min_distance': Design.rfa_hotspot_avg_min_distance,
+        'rfa_runtime_seconds': Design.rfa_runtime_seconds,
+        'rfa_plddt_final': Design.rfa_plddt_final,
+        'rfa_plddt_delta': Design.rfa_plddt_delta,
         'frustration_high_count': Design.frustration_high_count,
         'frustration_pct_high': Design.frustration_pct_high,
+        'maturation_delta_interface': Design.maturation_delta_interface,
+        'maturation_rmsd': Design.maturation_rmsd,
+        'fr2_contacts': Design.fr2_contacts,
+        'is_favorite': Design.is_favorite,
+        'binding_tier': func.coalesce(Design.iptm, 0.0) + case(
+            (Design.epitope_contact_count >= 5, 0.05),
+            else_=0.0,
+        ),
     }
     
     order_col = sort_field_map.get(sort_by, Design.created_at)
@@ -472,6 +722,11 @@ async def list_designs(
         conditions.append(Design.source_stage.is_(None))
     elif not job_id:
         conditions.append(Design.source_stage.is_(None))
+    clean_design_ids = [design_id.strip() for design_id in (design_ids or []) if design_id and design_id.strip()]
+    if clean_design_ids:
+        conditions.append(Design.id.in_(clean_design_ids))
+    if q and q.strip():
+        conditions.append(Design.name.ilike(f"%{q.strip()}%"))
     if backbone_id is not None:
         conditions.append(Design.backbone_id == backbone_id)
     if plddt_min is not None:
@@ -480,6 +735,30 @@ async def list_designs(
         conditions.append(Design.pae_overall <= pae_max)
     if iptm_min is not None:
         conditions.append(Design.iptm >= iptm_min)
+    if epitope_contacts_min is not None:
+        conditions.append(Design.epitope_contact_count >= epitope_contacts_min)
+    if target_contacts_min is not None:
+        conditions.append(Design.target_contact_count >= target_contacts_min)
+    if epitope_max_dist is not None:
+        conditions.append(Design.epitope_min_distance <= epitope_max_dist)
+    if target_max_dist is not None:
+        conditions.append(Design.target_min_distance <= target_max_dist)
+    if binder_length_min is not None:
+        conditions.append(Design.binder_length >= binder_length_min)
+    if binder_length_max is not None:
+        conditions.append(Design.binder_length <= binder_length_max)
+    if cdr_h1_min is not None:
+        conditions.append(Design.cdr_h1_length >= cdr_h1_min)
+    if cdr_h1_max is not None:
+        conditions.append(Design.cdr_h1_length <= cdr_h1_max)
+    if cdr_h2_min is not None:
+        conditions.append(Design.cdr_h2_length >= cdr_h2_min)
+    if cdr_h2_max is not None:
+        conditions.append(Design.cdr_h2_length <= cdr_h2_max)
+    if cdr_h3_min is not None:
+        conditions.append(Design.cdr_h3_length >= cdr_h3_min)
+    if cdr_h3_max is not None:
+        conditions.append(Design.cdr_h3_length <= cdr_h3_max)
     if rog_min is not None:
         conditions.append(Design.rog >= rog_min)
     if rog_max is not None:
@@ -490,6 +769,8 @@ async def list_designs(
         conditions.append(Design.rfd_rog <= rfd_rog_max)
     if favorites_only:
         conditions.append(Design.is_favorite == True)
+    if artifact_group:
+        conditions.append(Design.artifact_group == artifact_group)
     
     if conditions:
         query = query.where(and_(*conditions))
@@ -514,6 +795,7 @@ async def list_designs(
 @router.get("/by-job/{job_id}/backbone-summary")
 async def get_backbone_summary(
     job_id: str,
+    artifact_group: Optional[str] = Query(None, description="Filter stage-review summary by artifact group"),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -532,12 +814,17 @@ async def get_backbone_summary(
         review_stage = str(job.awaiting_stage or "").strip().lower()
         await ensure_stage_review_rows(session, job)
 
+    summary_conditions = [Design.job_id == job_id]
+    if review_stage:
+        summary_conditions.append(Design.source_stage == review_stage)
+    else:
+        summary_conditions.append(Design.source_stage.is_(None))
+    if artifact_group:
+        summary_conditions.append(Design.artifact_group == artifact_group)
+
     result = await session.execute(
         select(Design)
-        .where(
-            Design.job_id == job_id,
-            Design.source_stage == review_stage if review_stage else Design.source_stage.is_(None),
-        )
+        .where(and_(*summary_conditions))
         .order_by(Design.created_at.asc())
     )
     designs = result.scalars().all()
@@ -555,7 +842,9 @@ async def get_backbone_summary(
                 "iptm_values": [],
                 "ptm_values": [],
                 "pae_values": [],
+                "target_contact_values": [],
                 "epitope_contact_values": [],
+                "target_distance_values": [],
                 "epitope_distance_values": [],
                 "cdr_h1_length_values": [],
                 "cdr_h2_length_values": [],
@@ -570,7 +859,9 @@ async def get_backbone_summary(
             ("iptm_values", design.iptm),
             ("ptm_values", design.ptm),
             ("pae_values", design.pae_overall),
+            ("target_contact_values", design.target_contact_count),
             ("epitope_contact_values", design.epitope_contact_count),
+            ("target_distance_values", design.target_min_distance),
             ("epitope_distance_values", design.epitope_min_distance),
             ("cdr_h1_length_values", design.cdr_h1_length),
             ("cdr_h2_length_values", design.cdr_h2_length),
@@ -595,7 +886,9 @@ async def get_backbone_summary(
         iptm_values = entry["iptm_values"]
         ptm_values = entry["ptm_values"]
         pae_values = entry["pae_values"]
+        target_contact_values = entry["target_contact_values"]
         contact_values = entry["epitope_contact_values"]
+        target_distance_values = entry["target_distance_values"]
         distance_values = entry["epitope_distance_values"]
         h1_values = entry["cdr_h1_length_values"]
         h2_values = entry["cdr_h2_length_values"]
@@ -609,8 +902,18 @@ async def get_backbone_summary(
             "avg_iptm": _round_nullable(sum(iptm_values) / len(iptm_values), 3) if iptm_values else None,
             "avg_ptm": _round_nullable(sum(ptm_values) / len(ptm_values), 3) if ptm_values else None,
             "min_pae": _round_nullable(min(pae_values), 1) if pae_values else None,
+            "avg_target_contacts": _round_nullable(sum(target_contact_values) / len(target_contact_values), 1) if target_contact_values else None,
+            "min_target_contacts": int(min(target_contact_values)) if target_contact_values else None,
+            "max_target_contacts": int(max(target_contact_values)) if target_contact_values else None,
+            "avg_epitope_contacts": _round_nullable(sum(contact_values) / len(contact_values), 1) if contact_values else None,
+            "min_epitope_contacts": int(min(contact_values)) if contact_values else None,
             "max_epitope_contacts": int(max(contact_values)) if contact_values else None,
+            "avg_target_distance": _round_nullable(sum(target_distance_values) / len(target_distance_values), 2) if target_distance_values else None,
+            "min_target_distance": _round_nullable(min(target_distance_values), 2) if target_distance_values else None,
+            "max_target_distance": _round_nullable(max(target_distance_values), 2) if target_distance_values else None,
+            "avg_epitope_distance": _round_nullable(sum(distance_values) / len(distance_values), 2) if distance_values else None,
             "min_epitope_distance": _round_nullable(min(distance_values), 2) if distance_values else None,
+            "max_epitope_distance": _round_nullable(max(distance_values), 2) if distance_values else None,
             "avg_cdr_h1_length": _round_nullable(sum(h1_values) / len(h1_values), 1) if h1_values else None,
             "avg_cdr_h2_length": _round_nullable(sum(h2_values) / len(h2_values), 1) if h2_values else None,
             "avg_cdr_h3_length": _round_nullable(sum(h3_values) / len(h3_values), 1) if h3_values else None,
@@ -622,6 +925,9 @@ async def get_backbone_summary(
                     "plddt_overall": _round_nullable(representative.plddt_overall, 1),
                     "epitope_contact_count": representative.epitope_contact_count,
                     "epitope_min_distance": _round_nullable(representative.epitope_min_distance, 2),
+                    "target_contact_count": representative.target_contact_count,
+                    "target_min_distance": _round_nullable(representative.target_min_distance, 2),
+                    "rfa_hotspot_covered_count": representative.rfa_hotspot_covered_count,
                 }
                 if representative
                 else None
@@ -673,10 +979,19 @@ async def get_design_pdb(
     pdb_path = Path(design.pdb_path)
     if not pdb_path.exists():
         raise HTTPException(status_code=404, detail="PDB file not found on disk")
-    
+
+    if pdb_path.suffix.lower() == ".pdb":
+        normalized_pdb = _normalize_pdb_for_viewer(pdb_path.read_text(errors="ignore"))
+        filename = f"{design.name}{pdb_path.suffix or '.pdb'}"
+        return Response(
+            content=normalized_pdb,
+            media_type="text/plain",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
     return FileResponse(
         path=pdb_path,
-        filename=f"{design.name}.pdb",
+        filename=f"{design.name}{pdb_path.suffix or '.pdb'}",
         media_type="text/plain"  # Changed from chemical/x-pdb for Mol* compatibility
     )
 
@@ -834,51 +1149,37 @@ async def get_designs_for_job(
 async def get_plotly_metrics_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include child jobs when collecting metrics"),
+    design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analytics payload"),
     limit: int = Query(10000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
     """Return flattened numeric metrics for Plotly charting (including raw confidence metrics)."""
-    job_result = await session.execute(select(Job).where(Job.id == job_id))
-    if not job_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job_ids = [job_id]
-    if include_children:
-        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
-        job_ids.extend([row[0] for row in child_result.all()])
-
-    query = (
-        select(Design)
-        .where(Design.job_id.in_(job_ids))
-        .order_by(Design.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
-    result = await session.execute(query)
-    designs = result.scalars().all()
-
-    count_query = select(func.count(Design.id)).where(Design.job_id.in_(job_ids))
-    total = (await session.execute(count_query)).scalar() or 0
-
-    points: List[PlotlyMetricPoint] = []
-    metric_keys: set[str] = set()
-    for design in designs:
-        metrics = _build_plotly_metrics(design)
-        metric_keys.update(metrics.keys())
-        points.append(
-            PlotlyMetricPoint(
-                id=design.id,
-                name=design.name,
-                metrics=metrics
-            )
-        )
-
-    return PlotlyMetricsResponse(
+    requested_design_ids = [part.strip() for part in (design_ids or "").split(",") if part.strip()]
+    return await _collect_plotly_metrics(
         job_id=job_id,
-        metric_keys=sorted(metric_keys),
-        points=points,
-        total=int(total)
+        include_children=include_children,
+        requested_design_ids=requested_design_ids,
+        limit=limit,
+        offset=offset,
+        session=session,
+    )
+
+
+@router.post("/by-job/{job_id}/plotly-metrics", response_model=PlotlyMetricsResponse)
+async def post_plotly_metrics_for_job(
+    job_id: str,
+    request: PlotlyMetricsRequest,
+    session: AsyncSession = Depends(get_session)
+):
+    """Return flattened numeric metrics for a specific design subset without overloading query strings."""
+    return await _collect_plotly_metrics(
+        job_id=job_id,
+        include_children=request.include_children,
+        requested_design_ids=request.design_ids,
+        limit=max(1, min(request.limit, 50000)),
+        offset=max(0, request.offset),
+        session=session,
     )
 
 
