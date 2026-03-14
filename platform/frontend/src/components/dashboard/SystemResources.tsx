@@ -9,10 +9,6 @@ import {
 } from '../../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../../lib/api';
 
-const SYSTEM_POLL_INTERVAL_MS = 1000;
-const POWER_CONTROL_POLL_INTERVAL_MS = 3000;
-const SCHEDULER_POLL_INTERVAL_MS = 3000;
-
 // --- Helper Components ---
 
 function Sparkline({ data, color, height = 24 }: { data: number[]; color: string; height?: number }) {
@@ -1356,9 +1352,8 @@ export function GpuSchedulerControls() {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const gpus = systemData?.data.gpus ?? [];
@@ -1376,25 +1371,22 @@ export function GpuPowerControls() {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const { data: powerControlData } = useQuery({
         queryKey: ['powerControl'],
         queryFn: fetchPowerControl,
-        refetchInterval: POWER_CONTROL_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const { data: schedulerConfigData } = useQuery({
         queryKey: ['schedulerConfig'],
         queryFn: fetchSchedulerConfig,
-        refetchInterval: SCHEDULER_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const manualMutation = useMutation({
@@ -1455,17 +1447,15 @@ export function SystemResources() {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: SYSTEM_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const { data: powerControlData } = useQuery({
         queryKey: ['powerControl'],
         queryFn: fetchPowerControl,
-        refetchInterval: POWER_CONTROL_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const manualMutation = useMutation({
@@ -1481,9 +1471,8 @@ export function SystemResources() {
     const { data: schedulerConfigData } = useQuery({
         queryKey: ['schedulerConfig'],
         queryFn: fetchSchedulerConfig,
-        refetchInterval: SCHEDULER_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const toggleDisableMutation = useMutation({

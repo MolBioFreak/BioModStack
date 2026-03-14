@@ -16,8 +16,12 @@ import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 const MAX_WINDOW_RETENTION_MS = 60 * 60 * 1000;
 const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
-const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 3000;
+const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const MIN_GAP_BREAK_MS = 12000;
+export const SHARED_SYSTEM_QUERY_KEY = ['system'];
+export const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
+export const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
+export const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
 const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
 const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
 
@@ -1022,7 +1026,7 @@ function TimeSeriesPlot({
     yAxis,
     series,
     showXAxisLabels = true,
-    traceType = 'scattergl',
+    traceType = 'scatter',
     compact = false,
     redrawKey,
 }: TimeSeriesPlotProps) {
@@ -1092,7 +1096,7 @@ function CpuPanel({
     samples,
     showXAxisLabels,
     compact = false,
-    traceType = 'scattergl',
+    traceType = 'scatter',
     gapBreakMs,
     redrawKey,
 }: {
@@ -1185,7 +1189,7 @@ function RamPanel({
     samples,
     showXAxisLabels,
     compact = false,
-    traceType = 'scattergl',
+    traceType = 'scatter',
     gapBreakMs,
     redrawKey,
 }: {
@@ -1270,7 +1274,7 @@ function GpuPanel({
     samples,
     showXAxisLabels,
     compact = false,
-    traceType = 'scattergl',
+    traceType = 'scatter',
     powerControls,
     gapBreakMs,
     redrawKey,
@@ -1421,6 +1425,7 @@ export function InfraTelemetryCollector({
                 if (cancelled) return;
 
                 queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
+                queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, response);
                 queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
                     lastUpdatedMs: Date.now(),
                     error: null,
@@ -1464,6 +1469,34 @@ export function InfraTelemetryCollector({
     return null;
 }
 
+export function InfraControlStateCollector() {
+    useQuery({
+        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
+        queryFn: fetchPowerControl,
+        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    useQuery({
+        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
+        queryFn: fetchFanControl,
+        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    useQuery({
+        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
+        queryFn: fetchSchedulerConfig,
+        refetchInterval: SHARED_CONTROL_POLL_INTERVAL_MS,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
+
+    return null;
+}
+
 export function InfraLiveTelemetry({
     showXAxisLabels = true,
     defaultPollIntervalMs = 1000,
@@ -1471,7 +1504,9 @@ export function InfraLiveTelemetry({
     variant = 'infra',
 }: InfraLiveTelemetryProps = {}) {
     const compact = variant === 'dashboard';
-    const traceType: 'scatter' | 'scattergl' = compact ? 'scatter' : 'scattergl';
+    // Use SVG scatter everywhere here. The dashboard/infra charts are modest in size,
+    // and avoiding Plotly's WebGL path is materially more stable under heavy browser load.
+    const traceType: 'scatter' | 'scattergl' = 'scatter';
     const queryClient = useQueryClient();
     const [restoredState] = useState<RestoredInfraTelemetryState>(() =>
         loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes),
@@ -1497,46 +1532,39 @@ export function InfraLiveTelemetry({
     const payload = data?.data;
 
     const { data: powerControlData } = useQuery({
-        queryKey: ['powerControl'],
+        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
         queryFn: fetchPowerControl,
-        refetchInterval: DASHBOARD_CONTROL_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-        enabled: compact,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const { data: fanControlData } = useQuery({
-        queryKey: ['fanControl'],
+        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
         queryFn: fetchFanControl,
-        refetchInterval: DASHBOARD_CONTROL_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-        enabled: compact,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const { data: schedulerConfigData } = useQuery({
-        queryKey: ['schedulerConfig'],
+        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
         queryFn: fetchSchedulerConfig,
-        refetchInterval: DASHBOARD_CONTROL_POLL_INTERVAL_MS,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-        enabled: compact,
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const manualMutation = useMutation({
         mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
             setPowerControlManual(gpuIndex, limitWatts),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['powerControl'] });
-            queryClient.invalidateQueries({ queryKey: ['infra-live-telemetry'] });
-            queryClient.invalidateQueries({ queryKey: ['system'] });
+            queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
         },
     });
 
     const toggleDisableMutation = useMutation({
         mutationFn: (gpuId: number) => toggleGpuDisabled(gpuId),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['schedulerConfig'] });
+            queryClient.invalidateQueries({ queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY });
         },
     });
 
@@ -1551,7 +1579,7 @@ export function InfraLiveTelemetry({
             targetPercent?: number;
         }) => setFanControl(gpuIndex, mode, targetPercent),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['fanControl'] });
+            queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
         },
     });
 
