@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Config, Data, Layout } from 'plotly.js';
 import {
@@ -24,6 +24,14 @@ export const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
 export const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
 const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
 const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
+let sharedTelemetryCollectorSubscribers = 0;
+let sharedTelemetryCollectorTimerId: number | undefined;
+let sharedTelemetryCollectorRunning = false;
+let sharedTelemetryCollectorQueryClient: QueryClient | null = null;
+let sharedTelemetryCollectorDefaults: { pollIntervalMs: PollPreset; windowMinutes: WindowPreset } = {
+    pollIntervalMs: 1000,
+    windowMinutes: 3,
+};
 
 type PollPreset = 1000 | 2000 | 5000;
 type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
@@ -109,6 +117,101 @@ export interface InfraLiveTelemetryProps {
     defaultPollIntervalMs?: PollPreset;
     defaultWindowMinutes?: WindowPreset;
     variant?: 'infra' | 'dashboard';
+}
+
+
+function stopSharedTelemetryCollector() {
+    sharedTelemetryCollectorRunning = false;
+    if (sharedTelemetryCollectorTimerId != null && typeof window !== 'undefined') {
+        window.clearTimeout(sharedTelemetryCollectorTimerId);
+    }
+    sharedTelemetryCollectorTimerId = undefined;
+    sharedTelemetryCollectorQueryClient = null;
+}
+
+
+function startSharedTelemetryCollector(
+    queryClient: QueryClient,
+    defaultPollIntervalMs: PollPreset,
+    defaultWindowMinutes: WindowPreset,
+) {
+    sharedTelemetryCollectorSubscribers += 1;
+    sharedTelemetryCollectorQueryClient = queryClient;
+    sharedTelemetryCollectorDefaults = {
+        pollIntervalMs: defaultPollIntervalMs,
+        windowMinutes: defaultWindowMinutes,
+    };
+
+    if (sharedTelemetryCollectorRunning || typeof window === 'undefined') {
+        return;
+    }
+
+    sharedTelemetryCollectorRunning = true;
+
+    const scheduleNext = (delayMs: number) => {
+        if (!sharedTelemetryCollectorRunning || typeof window === 'undefined') return;
+        if (sharedTelemetryCollectorTimerId != null) {
+            window.clearTimeout(sharedTelemetryCollectorTimerId);
+        }
+        sharedTelemetryCollectorTimerId = window.setTimeout(run, delayMs);
+    };
+
+    const run = async () => {
+        if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) {
+            return;
+        }
+
+        const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const defaults = sharedTelemetryCollectorDefaults;
+        const persisted = loadPersistedTelemetryState(defaults.pollIntervalMs, defaults.windowMinutes);
+
+        try {
+            const response = await fetchSystemStatus();
+            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) return;
+
+            sharedTelemetryCollectorQueryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
+            sharedTelemetryCollectorQueryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, response);
+            sharedTelemetryCollectorQueryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
+                lastUpdatedMs: Date.now(),
+                error: null,
+            });
+
+            const nextSample = buildSample(response.data, persisted.pollIntervalMs);
+            const nextSamples = mergeTelemetrySample(persisted.samples, nextSample);
+            persistTelemetryState({
+                version: 3,
+                pollIntervalMs: persisted.pollIntervalMs,
+                windowMinutes: persisted.windowMinutes,
+                samples: nextSamples,
+            });
+        } catch (error) {
+            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient) return;
+            const message = error instanceof Error ? error.message : 'Unknown telemetry error';
+            const previousStatus = readSharedTelemetryStatus(sharedTelemetryCollectorQueryClient);
+            sharedTelemetryCollectorQueryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
+                lastUpdatedMs: previousStatus.lastUpdatedMs,
+                error: message,
+            });
+        }
+
+        const nextPersisted = loadPersistedTelemetryState(defaults.pollIntervalMs, defaults.windowMinutes);
+        const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const elapsedMs = Math.max(0, endedAt - startedAt);
+        const nextDelayMs = Math.max(0, nextPersisted.pollIntervalMs - elapsedMs);
+        scheduleNext(nextDelayMs);
+    };
+
+    // Start on the next macrotask so StrictMode's mount/unmount probe can cancel
+    // the first pass before it emits a duplicate request.
+    scheduleNext(0);
+}
+
+
+function releaseSharedTelemetryCollector() {
+    sharedTelemetryCollectorSubscribers = Math.max(0, sharedTelemetryCollectorSubscribers - 1);
+    if (sharedTelemetryCollectorSubscribers === 0) {
+        stopSharedTelemetryCollector();
+    }
 }
 
 function formatClock(timestamp: string): string {
@@ -1406,63 +1509,10 @@ export function InfraTelemetryCollector({
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
-
-        let cancelled = false;
-        let timeoutId: number | undefined;
-
-        const scheduleNext = (delayMs: number) => {
-            if (cancelled) return;
-            timeoutId = window.setTimeout(run, delayMs);
-        };
-
-        const run = async () => {
-            const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-            const persisted = loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes);
-            let nextDelayMs = persisted.pollIntervalMs;
-
-            try {
-                const response = await fetchSystemStatus();
-                if (cancelled) return;
-
-                queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
-                queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, response);
-                queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
-                    lastUpdatedMs: Date.now(),
-                    error: null,
-                });
-
-                const nextSample = buildSample(response.data, persisted.pollIntervalMs);
-                const nextSamples = mergeTelemetrySample(persisted.samples, nextSample);
-                persistTelemetryState({
-                    version: 3,
-                    pollIntervalMs: persisted.pollIntervalMs,
-                    windowMinutes: persisted.windowMinutes,
-                    samples: nextSamples,
-                });
-            } catch (error) {
-                if (cancelled) return;
-                const message = error instanceof Error ? error.message : 'Unknown telemetry error';
-                const previousStatus = readSharedTelemetryStatus(queryClient);
-                queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
-                    lastUpdatedMs: previousStatus.lastUpdatedMs,
-                    error: message,
-                });
-            }
-
-            const nextPersisted = loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes);
-            const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-            const elapsedMs = Math.max(0, endedAt - startedAt);
-            nextDelayMs = Math.max(0, nextPersisted.pollIntervalMs - elapsedMs);
-            scheduleNext(nextDelayMs);
-        };
-
-        run();
+        startSharedTelemetryCollector(queryClient, defaultPollIntervalMs, defaultWindowMinutes);
 
         return () => {
-            cancelled = true;
-            if (timeoutId != null) {
-                window.clearTimeout(timeoutId);
-            }
+            releaseSharedTelemetryCollector();
         };
     }, [defaultPollIntervalMs, defaultWindowMinutes, queryClient]);
 
