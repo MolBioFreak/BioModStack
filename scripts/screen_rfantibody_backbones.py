@@ -94,6 +94,28 @@ def format_atom_label(atom) -> str:
     return f"{residue_label}:{atom_name}" if atom_name else residue_label
 
 
+def parse_hlt_loop_residue_ids(pdb_path: Path) -> dict[str, set[int]]:
+    loop_residues: dict[str, set[int]] = {}
+    try:
+        with open(pdb_path, "r") as handle:
+            for line in handle:
+                if not line.startswith("REMARK PDBinfo-LABEL:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                try:
+                    residue_id = int(parts[2])
+                except ValueError:
+                    continue
+                loop_id = parts[3].strip().upper()
+                if loop_id in {"H1", "H2", "H3", "L1", "L2", "L3"}:
+                    loop_residues.setdefault(loop_id, set()).add(residue_id)
+    except Exception:
+        return {}
+    return loop_residues
+
+
 def nearest_pair_details(query_atoms, target_atoms) -> dict[str, Any]:
     if len(query_atoms) == 0 or len(target_atoms) == 0:
         return {
@@ -118,6 +140,122 @@ def nearest_pair_details(query_atoms, target_atoms) -> dict[str, Any]:
         "query_atom": format_atom_label(query_atom),
         "target_atom": format_atom_label(target_atom),
     }
+
+
+def per_loop_geometry_metrics(
+    antibody_ca,
+    antibody_atoms,
+    epitope_ca,
+    epitope_atoms,
+    target_ca,
+    target_atoms,
+    antibody_chain_ids: list[str],
+    loop_residue_ids: dict[str, set[int]],
+    epitope_contact_distance_threshold: float,
+    target_contact_distance_threshold: float,
+) -> dict[str, dict[str, Any]]:
+    loop_metrics: dict[str, dict[str, Any]] = {}
+    heavy_chain_id = antibody_chain_ids[0] if antibody_chain_ids else "H"
+    light_chain_id = antibody_chain_ids[1] if len(antibody_chain_ids) > 1 else heavy_chain_id
+    for loop_id, residue_ids in loop_residue_ids.items():
+        if not residue_ids:
+            continue
+        loop_chain = light_chain_id if loop_id.startswith("L") else heavy_chain_id
+        loop_ca = antibody_ca[(antibody_ca.chain_id == loop_chain) & np.isin(antibody_ca.res_id, list(residue_ids))]
+        loop_atoms = antibody_atoms[(antibody_atoms.chain_id == loop_chain) & np.isin(antibody_atoms.res_id, list(residue_ids))]
+        if len(loop_ca) == 0:
+            continue
+
+        loop_coords = loop_ca.coord
+        target_pairwise = np.linalg.norm(
+            loop_coords[:, None, :] - target_ca.coord[None, :, :],
+            axis=2,
+        )
+        min_target_distances = np.min(target_pairwise, axis=1)
+        target_ca_nearest = nearest_pair_details(loop_ca, target_ca)
+        target_atom_nearest = nearest_pair_details(loop_atoms, target_atoms)
+
+        epitope_contact_count = 0
+        epitope_min_distance: float | None = None
+        epitope_ca_nearest = {
+            "distance": None,
+            "query_residue": None,
+            "target_residue": None,
+            "query_atom": None,
+            "target_atom": None,
+        }
+        epitope_atom_nearest = {
+            "distance": None,
+            "query_residue": None,
+            "target_residue": None,
+            "query_atom": None,
+            "target_atom": None,
+        }
+        if len(epitope_ca) > 0:
+            epitope_pairwise = np.linalg.norm(
+                loop_coords[:, None, :] - epitope_ca.coord[None, :, :],
+                axis=2,
+            )
+            min_epitope_distances = np.min(epitope_pairwise, axis=1)
+            epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
+            epitope_min_distance = float(np.min(min_epitope_distances))
+            epitope_ca_nearest = nearest_pair_details(loop_ca, epitope_ca)
+            if len(epitope_atoms) > 0:
+                epitope_atom_nearest = nearest_pair_details(loop_atoms, epitope_atoms)
+
+        loop_metrics[loop_id] = {
+            "residue_count": int(len(loop_ca)),
+            "epitope_contact_count": epitope_contact_count,
+            "epitope_min_distance": epitope_min_distance,
+            "epitope_min_atom_distance": epitope_atom_nearest["distance"],
+            "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
+            "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
+            "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
+            "target_min_distance": float(np.min(min_target_distances)),
+            "target_min_atom_distance": target_atom_nearest["distance"],
+            "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
+            "target_nearest_target_residue": target_ca_nearest["target_residue"],
+        }
+    return loop_metrics
+
+
+def per_hotspot_metrics(
+    antibody_ca,
+    antibody_atoms,
+    target_ca,
+    target_atoms,
+    epitope_residue_numbers: set[int],
+    epitope_contact_distance_threshold: float,
+) -> tuple[dict[str, dict[str, Any]], int]:
+    hotspot_metrics: dict[str, dict[str, Any]] = {}
+    covered_count = 0
+    if not epitope_residue_numbers:
+        return hotspot_metrics, covered_count
+
+    for residue_id in sorted(epitope_residue_numbers):
+        hotspot_ca = target_ca[target_ca.res_id == residue_id]
+        hotspot_atoms = target_atoms[target_atoms.res_id == residue_id]
+        if len(hotspot_ca) == 0:
+            continue
+        label = format_residue_label(hotspot_ca[0])
+        ca_nearest = nearest_pair_details(antibody_ca, hotspot_ca)
+        atom_nearest = nearest_pair_details(antibody_atoms, hotspot_atoms) if len(hotspot_atoms) > 0 else {
+            "distance": None,
+            "query_residue": None,
+            "target_residue": None,
+            "query_atom": None,
+            "target_atom": None,
+        }
+        ca_min = ca_nearest["distance"]
+        if ca_min is not None and float(ca_min) < float(epitope_contact_distance_threshold):
+            covered_count += 1
+        hotspot_metrics[label] = {
+            "ca_min_distance": ca_min,
+            "atom_min_distance": atom_nearest["distance"],
+            "nearest_antibody_residue": ca_nearest["query_residue"],
+            "nearest_antibody_atom": atom_nearest["query_atom"],
+        }
+    return hotspot_metrics, covered_count
 
 
 def infer_antibody_chains(all_chains: list[str], antibody_chain_hint: str | None) -> list[str]:
@@ -254,6 +392,8 @@ def compute_geometry_metrics(
     if len(target_ca) == 0:
         raise ValueError(f"No target CA atoms found in chain {target_chain_id}")
 
+    loop_residue_ids = parse_hlt_loop_residue_ids(pdb_path)
+
     antibody_coords = antibody_ca.coord
     target_coords = target_ca.coord
     pairwise_target_distances = np.linalg.norm(
@@ -289,6 +429,8 @@ def compute_geometry_metrics(
         "query_atom": None,
         "target_atom": None,
     }
+    epitope_ca = target_ca[:0]
+    epitope_atoms = target_atoms[:0]
     if epitope_residue_numbers:
         epitope_ca = target_ca[np.isin(target_ca.res_id, list(epitope_residue_numbers))]
         epitope_residue_count = int(len(epitope_ca))
@@ -308,6 +450,27 @@ def compute_geometry_metrics(
             epitope_atoms = target_atoms[np.isin(target_atoms.res_id, list(epitope_residue_numbers))]
             if len(epitope_atoms) > 0:
                 epitope_atom_nearest = nearest_pair_details(antibody_atoms, epitope_atoms)
+
+    loop_metrics = per_loop_geometry_metrics(
+        antibody_ca=antibody_ca,
+        antibody_atoms=antibody_atoms,
+        epitope_ca=epitope_ca,
+        epitope_atoms=epitope_atoms,
+        target_ca=target_ca,
+        target_atoms=target_atoms,
+        antibody_chain_ids=antibody_chain_ids,
+        loop_residue_ids=loop_residue_ids,
+        epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+        target_contact_distance_threshold=target_contact_distance_threshold,
+    )
+    hotspot_metrics, hotspot_covered_count = per_hotspot_metrics(
+        antibody_ca=antibody_ca,
+        antibody_atoms=antibody_atoms,
+        target_ca=target_ca,
+        target_atoms=target_atoms,
+        epitope_residue_numbers=epitope_residue_numbers,
+        epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+    )
 
     antibody_target_centroid_distance = float(
         np.linalg.norm(np.mean(antibody_coords, axis=0) - np.mean(target_coords, axis=0))
@@ -337,6 +500,9 @@ def compute_geometry_metrics(
         "target_contact_distance_threshold": float(target_contact_distance_threshold),
         "epitope_centroid_distance": epitope_centroid_distance,
         "target_centroid_distance": antibody_target_centroid_distance,
+        "rfa_loop_metrics": loop_metrics,
+        "rfa_hotspot_metrics": hotspot_metrics,
+        "rfa_hotspot_covered_count": int(hotspot_covered_count),
     }
 
 
@@ -528,6 +694,9 @@ def main() -> int:
         if result["passed_screen"]:
             passed_count += 1
             shutil.copy2(pdb_path, output_dir / pdb_path.name)
+            trb_path = pdb_path.with_suffix(".trb")
+            if trb_path.exists():
+                shutil.copy2(trb_path, output_dir / trb_path.name)
         else:
             failed_count += 1
 
@@ -555,6 +724,9 @@ def main() -> int:
                 "epitope_centroid_distance",
                 "target_centroid_distance",
                 "target_contact_distance_threshold",
+                "rfa_hotspot_covered_count",
+                "rfa_loop_metrics",
+                "rfa_hotspot_metrics",
                 "detected_antibody_chains",
                 "detected_target_chain",
                 "antibody_residue_count",
@@ -566,7 +738,12 @@ def main() -> int:
             ],
         )
         writer.writeheader()
-        writer.writerows(results)
+        for row in results:
+            serialized = dict(row)
+            for json_key in ("rfa_loop_metrics", "rfa_hotspot_metrics"):
+                if serialized.get(json_key) is not None:
+                    serialized[json_key] = json.dumps(serialized.get(json_key))
+            writer.writerow(serialized)
 
     summary = {
         "screening_applied": screening_applied,
