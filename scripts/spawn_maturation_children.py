@@ -10,6 +10,14 @@ from pathlib import Path
 import requests
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
+from child_job_utils import (
+    apply_child_resume_params,
+    child_status_kind,
+    fetch_children_status,
+    find_existing_child,
+    preferred_child_gpu,
+)
+
 
 def _child_display_name(display_prefix, stage_label, index, total):
     prefix = (display_prefix or "").strip() or "Antibody"
@@ -49,26 +57,9 @@ def _normalize_pinned_gpus(raw_value):
 
 def check_existing_children(parent_job_id, stage, api_url, batch_name=None):
     try:
-        params = {"stage": stage}
-        if batch_name:
-            params["batch_name"] = batch_name
-        resp = requests.get(
-            f"{api_url}/api/jobs/{parent_job_id}/children/status",
-            params=params,
-            timeout=10
-        )
-        if not resp.ok:
-            return False, [], {}
-        data = resp.json()
+        data = fetch_children_status(parent_job_id, stage, api_url=api_url, batch_name=batch_name)
         all_done = data.get("all_done", False)
-        child_output_dirs = data.get("child_output_dirs", [])
-        completed_children = []
-        for i, output_dir in enumerate(child_output_dirs):
-            completed_children.append({
-                "job_id": f"completed_{i}",
-                "output_dir": output_dir,
-                "index": i
-            })
+        completed_children = data.get("children", [])
         data["completed_children"] = completed_children
         return all_done, completed_children, data
     except Exception as e:
@@ -90,29 +81,16 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
     all_done, existing_children, child_status = check_existing_children(
         parent_job_id, stage, api_url, batch_name=batch_name
     )
-    existing_count = len(existing_children)
+    existing_count = child_status.get("total", len(existing_children))
     if existing_count > 0:
-        if all_done:
-            print(f"[SPAWN-MAT] RESUME: All {existing_count} children already completed.")
-            return {
-                "status": "resumed",
-                "spawned_jobs": 0,
-                "reused_jobs": existing_count,
-                "child_jobs": existing_children,
-                "resumed": True
-            }
-
-        running = child_status.get("running", 0)
-        pending = child_status.get("pending", 0)
-        if running > 0 or pending > 0:
-            print(f"[SPAWN-MAT] RESUME: {running + pending} children still in progress.")
-            return {
-                "status": "in_progress",
-                "spawned_jobs": 0,
-                "reused_jobs": existing_count,
-                "child_jobs": existing_children,
-                "resumed": True
-            }
+        print(
+            f"[SPAWN-MAT] Existing children status: "
+            f"{child_status.get('completed', 0)} completed, "
+            f"{child_status.get('running', 0)} running, "
+            f"{child_status.get('pending', 0)} pending, "
+            f"{child_status.get('failed', 0)} failed, "
+            f"{child_status.get('cancelled', 0)} cancelled"
+        )
 
     extra_params = {}
     if params_json:
@@ -136,6 +114,8 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
 
     created = []
     failed = 0
+    reused = 0
+    resumed = 0
     designs_assigned = 0
 
     for i in range(num_jobs):
@@ -145,9 +125,36 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
         designs_assigned += job_designs
 
         pdb_paths = ",".join(str(p.resolve()) for p in batch_slice)
+        child_name = _child_display_name(display_prefix, stage_label, i, num_jobs)
+        existing_child = find_existing_child(
+            child_status,
+            child_name=child_name,
+            job_index=i,
+        )
+        existing_kind = child_status_kind(existing_child)
+
+        if existing_kind == "completed":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-MAT] RESUME: Reusing completed child {child_name}")
+            continue
+
+        if existing_kind == "active":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-MAT] RESUME: Child still active, leaving in place: {child_name}")
+            continue
 
         job_data = {
-            "name": _child_display_name(display_prefix, stage_label, i, num_jobs),
+            "name": child_name,
             "model_id": "template_antibody_denovo",
             "mode": "maturation_child",
             "params": {
@@ -163,8 +170,13 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
             "child_stage": stage,
             "sequence_length": 300,
         }
-        if pinned_gpu is not None:
-            job_data["pinned_gpu"] = pinned_gpu
+        effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+        if effective_pinned_gpu is not None:
+            job_data["pinned_gpu"] = effective_pinned_gpu
+        if existing_kind == "failed":
+            job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
+            resumed += 1
+            print(f"[SPAWN-MAT] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
 
         try:
             resp = requests.post(
@@ -185,7 +197,9 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
 
     return {
         "status": "spawned",
-        "spawned_jobs": len(created),
+        "spawned_jobs": len([child for child in created if not child.get("reused")]),
+        "reused_jobs": reused,
+        "resumed_jobs": resumed,
         "failed_spawns": failed,
         "total_designs": total_designs,
         "designs_per_job": designs_per_job,

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet } from '../lib/api';
 import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Design, DesignFilters, DesignSortField, Job, ManualMutagenesisConfig, SavedReviewFilterSet as ApiSavedReviewFilterSet } from '../lib/api';
 import {
     getOutputSourceBadgeClass,
@@ -593,11 +593,28 @@ export function ResultsViewer() {
     });
 
     // Fetch jobs list (include children for aggregation)
-    const { data: jobsData } = useQuery({
+    const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs', 'include_children'],
-        queryFn: () => fetchJobs({ include_children: true }),
+        queryFn: () => fetchJobs({ include_children: true, limit: 2000 }),
     });
-    const jobs = jobsData?.data.jobs ?? [];
+    const jobFromList = useMemo(
+        () => (jobId ? (jobsData?.data.jobs ?? []).find((job: Job) => job.id === jobId) : undefined),
+        [jobId, jobsData?.data.jobs],
+    );
+    const { data: routedJobData, isLoading: routedJobLoading } = useQuery({
+        queryKey: ['job', jobId, 'direct'],
+        queryFn: () => fetchJobById(jobId!),
+        enabled: Boolean(jobId) && !jobFromList,
+        retry: false,
+    });
+    const routedJob = routedJobData?.data;
+    const jobs = useMemo(() => {
+        const baseJobs = jobsData?.data.jobs ?? [];
+        if (!routedJob || baseJobs.some((job: Job) => job.id === routedJob.id)) {
+            return baseJobs;
+        }
+        return [routedJob, ...baseJobs];
+    }, [jobsData?.data.jobs, routedJob]);
     const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
     const activeJob = useMemo(
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
@@ -606,6 +623,12 @@ export function ResultsViewer() {
     const activeParentJob = useMemo(
         () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
         [nonNgsJobs, activeJob?.parent_job_id]
+    );
+    const activeChildJobs = useMemo(
+        () => activeJob
+            ? nonNgsJobs.filter((job: Job) => job.parent_job_id === activeJob.id)
+            : [],
+        [activeJob, nonNgsJobs],
     );
     const isAntibodyContext = useMemo(() => {
         if (!activeJob) return false;
@@ -662,6 +685,9 @@ export function ResultsViewer() {
     // Sync URL with selection
     useEffect(() => {
         if (nonNgsJobs.length === 0) {
+            if (jobsLoading || (jobId && routedJobLoading)) {
+                return;
+            }
             if (selectedJobId) {
                 setSelectedJobId('');
                 setSelectedDesignId('');
@@ -682,6 +708,10 @@ export function ResultsViewer() {
                 return;
             }
 
+            if (jobsLoading || routedJobLoading) {
+                return;
+            }
+
             if (selectedJobId) {
                 setSelectedJobId('');
                 setSelectedDesignId('');
@@ -694,7 +724,7 @@ export function ResultsViewer() {
             setSelectedJobId('');
             setSelectedDesignId('');
         }
-    }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate]);
+    }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate, jobsLoading, routedJobLoading]);
 
     useEffect(() => {
         if (!activeJob?.parent_job_id || !activeParentJob) return;
@@ -706,6 +736,28 @@ export function ResultsViewer() {
         setCurrentPage(1);
         navigate(`/designs/${activeParentJob.id}`, { replace: true });
     }, [activeJob?.id, activeJob?.parent_job_id, activeParentJob?.id, navigate, selectedJobId]);
+
+    useEffect(() => {
+        if (!activeJob) return;
+        if (Boolean(activeJob.awaiting_input) || activeJob.status === 'awaiting_input') return;
+        if ((activeJob.design_count || 0) > 0) return;
+
+        const designBearingChildren = activeChildJobs.filter((job) => (job.design_count || 0) > 0);
+        if (designBearingChildren.length !== 1) return;
+
+        const childJob = designBearingChildren[0];
+        if (!childJob?.id || selectedJobId === childJob.id) return;
+
+        setSelectedJobId(childJob.id);
+        setSelectedDesignId('');
+        setCurrentPage(1);
+        navigate(`/designs/${childJob.id}`, { replace: true });
+    }, [
+        activeChildJobs,
+        activeJob,
+        navigate,
+        selectedJobId,
+    ]);
 
     const handleJobChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newId = e.target.value;
@@ -954,68 +1006,28 @@ export function ResultsViewer() {
     });
     const antibodyData = antibodyDataWrapper?.data;
 
-    // Antibody selections for Molstar - prefer IMGT-standard chain/range overlays when available.
+    // Antibody selections for Molstar are sourced from backend-issued chain/range overlays.
+    // Do not synthesize them from parent workflow hints.
     const antibodySelections = useMemo(() => {
-        const design = designs.find(d => d.id === selectedDesignId) as any;
-        if (!design) return undefined;
+        const overlaySelections = antibodyData?.overlay_selections;
+        if (!overlaySelections?.length) return undefined;
 
-        const selections = [];
-        const hasImgT = Boolean(antibodyData?.imgt_pdb_url);
-        const heavyChainId = hasImgT ? 'H' : 'A';
-        const lightChainId = hasImgT ? 'L' : 'C';
-        const cdrH1Length = design.cdr_h1_length ?? antibodyData?.cdrs?.H1?.length ?? null;
-        const cdrH2Length = design.cdr_h2_length ?? antibodyData?.cdrs?.H2?.length ?? null;
-        const cdrH3Length = design.cdr_h3_length ?? antibodyData?.cdrs?.H3?.length ?? null;
-        const cdrL1Length = design.cdr_l1_length ?? antibodyData?.cdrs?.L1?.length ?? null;
-        const cdrL2Length = design.cdr_l2_length ?? antibodyData?.cdrs?.L2?.length ?? null;
-        const cdrL3Length = design.cdr_l3_length ?? antibodyData?.cdrs?.L3?.length ?? null;
+        const regionColors: Record<string, { r: number; g: number; b: number }> = {
+            H1: { r: 255, g: 50, b: 50 },
+            H2: { r: 50, g: 255, b: 50 },
+            H3: { r: 50, g: 100, b: 255 },
+            L1: { r: 255, g: 255, b: 50 },
+            L2: { r: 50, g: 255, b: 255 },
+            L3: { r: 255, g: 50, b: 255 },
+        };
 
-        if (cdrH1Length || cdrH2Length || cdrH3Length) {
-            if (hasImgT) {
-                selections.push(
-                    { chain_id: heavyChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 50, b: 50 } },
-                    { chain_id: heavyChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 50 } },
-                    { chain_id: heavyChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 50, g: 100, b: 255 } },
-                );
-            } else {
-                const h1Start = 27;
-                const h1End = 26 + (cdrH1Length || 12);
-                const h2Start = h1End + 17;
-                const h2End = h2Start + (cdrH2Length || 10) - 1;
-                const h3Start = h2End + 39;
-                const h3End = h3Start + (cdrH3Length || 12) - 1;
-                selections.push(
-                    { chain_id: heavyChainId, start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } },
-                    { chain_id: heavyChainId, start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } },
-                    { chain_id: heavyChainId, start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } },
-                );
-            }
-        }
-
-        if (cdrL1Length || cdrL2Length || cdrL3Length) {
-            if (hasImgT) {
-                selections.push(
-                    { chain_id: lightChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 255, b: 50 } },
-                    { chain_id: lightChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 255 } },
-                    { chain_id: lightChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 255, g: 50, b: 255 } },
-                );
-            } else {
-                const l1Start = 27;
-                const l1End = 26 + (cdrL1Length || 11);
-                const l2Start = l1End + 16;
-                const l2End = l2Start + (cdrL2Length || 7) - 1;
-                const l3Start = l2End + 33;
-                const l3End = l3Start + (cdrL3Length || 9) - 1;
-                selections.push(
-                    { chain_id: lightChainId, start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } },
-                    { chain_id: lightChainId, start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } },
-                    { chain_id: lightChainId, start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } },
-                );
-            }
-        }
-
-        return selections.length > 0 ? selections : undefined;
-    }, [designs, selectedDesignId, antibodyData?.imgt_pdb_url]);
+        return overlaySelections.map((selection) => ({
+            chain_id: selection.chain_id,
+            start_residue_number: selection.start_residue_number,
+            end_residue_number: selection.end_residue_number,
+            color: regionColors[selection.region] ?? { r: 148, g: 163, b: 184 },
+        }));
+    }, [antibodyData?.overlay_selections]);
 
     const orderedDesigns = designs;
     const analyticsChartDesigns = useMemo(
@@ -1212,6 +1224,7 @@ export function ResultsViewer() {
             selectedDesign.cdr_l3_length
         )
     );
+    const hasCdrOverlay = Boolean(antibodySelections?.length);
     const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
         if (selectedDesign) {
             return inferDesignAnalysisLens(selectedDesign as any);
@@ -1233,12 +1246,12 @@ export function ResultsViewer() {
             setColorMode('plddt');
             return;
         }
-        if (hasCdrAnnotation) {
+        if (hasCdrAnnotation && hasCdrOverlay) {
             setColorMode('cdr');
             return;
         }
         setColorMode('default');
-    }, [hasCdrAnnotation, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
+    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
         const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], validation: [] };
         for (const design of orderedDesigns) {

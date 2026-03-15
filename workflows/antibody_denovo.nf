@@ -1361,12 +1361,12 @@ workflow ANTIBODY_DENOVO {
     def remainder = total_designs % num_gpus
     def designs_per_job = params.designs_per_job ?: 5
     def planned_child_jobs = Math.ceil(total_designs / (double) designs_per_job).intValue()
-    // Use a per-run unique batch key to prevent accidental cross-run child reuse.
-    // Reusing a static name (e.g., "antibody_batch") can make fresh jobs skip RFantibody
-    // by attaching to completed children from older runs.
-    def orchestrator_batch_name = params.job_id
-        ? "${params.name ?: 'antibody_batch'}_${params.job_id}"
-        : "${params.name ?: 'antibody_batch'}_${workflow.runName}"
+    // Resume must preserve the original child batch key so orchestrated child
+    // stages can rediscover or resume prior attempts instead of starting over.
+    def orchestrator_batch_name = params.batch_name
+        ?: (params.job_id
+            ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
+            : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
     
     // =========================================================================
     // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating

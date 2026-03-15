@@ -16,6 +16,14 @@ import sys
 import requests
 from pathlib import Path
 
+from child_job_utils import (
+    apply_child_resume_params,
+    child_status_kind,
+    fetch_children_status,
+    find_existing_child,
+    preferred_child_gpu,
+)
+
 
 def _normalize_pinned_gpus(raw_value):
     if raw_value in (None, "", []):
@@ -59,20 +67,7 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         tuple: (bool all_done, list completed_children, dict child_status)
     """
     try:
-        params = {"stage": stage}
-        if batch_name:
-            params["batch_name"] = batch_name
-        
-        resp = requests.get(
-            f"{api_url}/api/jobs/{parent_job_id}/children/status",
-            params=params,
-            timeout=10
-        )
-        
-        if not resp.ok:
-            return False, [], {}
-        
-        data = resp.json()
+        data = fetch_children_status(parent_job_id, stage, api_url=api_url, batch_name=batch_name)
         all_done = data.get("all_done", False)
         children = data.get("children", [])
         child_output_dirs = data.get("child_output_dirs", [])
@@ -164,64 +159,17 @@ def spawn_rfantibody_jobs(
     all_done, existing_children, child_status = check_existing_children(
         parent_job_id, "rfantibody", api_url, batch_name=batch_name
     )
-    
     existing_count = child_status.get("total", len(existing_children))
     if existing_count > 0:
         print(f"[SPAWN-RFA] Found {existing_count} existing children for parent {parent_job_id}")
-        completed = child_status.get("completed", len(existing_children))
-        running = child_status.get("running", 0)
-        pending = child_status.get("pending", 0)
-        failed = child_status.get("failed", 0)
-        cancelled = child_status.get("cancelled", 0)
-
         print(
             f"[SPAWN-RFA] Existing children status: "
-            f"{completed} completed, {running} running, {pending} pending, "
-            f"{failed} failed, {cancelled} cancelled"
+            f"{child_status.get('completed', 0)} completed, "
+            f"{child_status.get('running', 0)} running, "
+            f"{child_status.get('pending', 0)} pending, "
+            f"{child_status.get('failed', 0)} failed, "
+            f"{child_status.get('cancelled', 0)} cancelled"
         )
-        
-        if all_done:
-            if completed > 0:
-                print(f"[SPAWN-RFA] RESUME: Reusing {completed} completed child job(s); skipping spawn.")
-                return {
-                    "status": "resumed",
-                    "spawned_jobs": 0,
-                    "reused_jobs": completed,
-                    "failed_spawns": 0,
-                    "total_designs": total_designs,
-                    "designs_per_job": designs_per_job,
-                    "child_jobs": existing_children,
-                    "resumed": True
-                }
-
-            print("[SPAWN-RFA] Existing children are all failed/cancelled; starting a fresh spawn.")
-        else:
-            # If any are still running/pending, do not spawn duplicates.
-            if running > 0 or pending > 0:
-                print(f"[SPAWN-RFA] RESUME: {running + pending} children still in progress. Not spawning duplicates.")
-                return {
-                    "status": "in_progress",
-                    "spawned_jobs": 0,
-                    "reused_jobs": completed,
-                    "failed_spawns": 0,
-                    "total_designs": total_designs,
-                    "designs_per_job": designs_per_job,
-                    "child_jobs": existing_children,
-                    "resumed": True
-                }
-
-            if completed > 0:
-                print("[SPAWN-RFA] RESUME: Completed children already exist; skipping duplicate spawn.")
-                return {
-                    "status": "partial_complete",
-                    "spawned_jobs": 0,
-                    "reused_jobs": completed,
-                    "failed_spawns": 0,
-                    "total_designs": total_designs,
-                    "designs_per_job": designs_per_job,
-                    "child_jobs": existing_children,
-                    "resumed": True
-                }
     
     # =========================================================================
     # No existing children or all failed - proceed with fresh spawn
@@ -252,6 +200,8 @@ def spawn_rfantibody_jobs(
     
     created = []
     failed = 0
+    reused = 0
+    resumed = 0
     designs_assigned = 0
     
     for i in range(num_jobs):
@@ -259,9 +209,38 @@ def spawn_rfantibody_jobs(
         remaining = total_designs - designs_assigned
         job_designs = min(designs_per_job, remaining)
         designs_assigned += job_designs
+        child_name = _child_display_name(display_prefix, "RFA", i, num_jobs)
+        existing_child = find_existing_child(
+            child_status,
+            child_name=child_name,
+            job_index=i,
+        )
+        existing_kind = child_status_kind(existing_child)
+
+        if existing_kind == "completed":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "designs": job_designs,
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-RFA] RESUME: Reusing completed child {child_name}")
+            continue
+
+        if existing_kind == "active":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "designs": job_designs,
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-RFA] RESUME: Child still active, leaving in place: {child_name}")
+            continue
         
         job_data = {
-            "name": _child_display_name(display_prefix, "RFA", i, num_jobs),
+            "name": child_name,
             "model_id": "rfantibody_child",
             "mode": "antibody_backbone",
             "params": {
@@ -279,10 +258,15 @@ def spawn_rfantibody_jobs(
             "child_stage": "rfantibody",
             "sequence_length": 250,  # Approximate for VRAM estimation
         }
-        if pinned_gpu is not None:
-            job_data["pinned_gpu"] = pinned_gpu
+        effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+        if effective_pinned_gpu is not None:
+            job_data["pinned_gpu"] = effective_pinned_gpu
         if framework_pdb:
             job_data["params"]["framework_pdb"] = framework_pdb
+        if existing_kind == "failed":
+            job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
+            resumed += 1
+            print(f"[SPAWN-RFA] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
         
         try:
             resp = requests.post(
@@ -309,7 +293,9 @@ def spawn_rfantibody_jobs(
     
     result = {
         "status": "complete" if failed == 0 else "partial",
-        "spawned_jobs": len(created),
+        "spawned_jobs": len([child for child in created if not child.get("reused")]),
+        "reused_jobs": reused,
+        "resumed_jobs": resumed,
         "failed_spawns": failed,
         "total_designs": total_designs,
         "designs_per_job": designs_per_job,
