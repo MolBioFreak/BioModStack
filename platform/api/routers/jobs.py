@@ -34,7 +34,8 @@ from paths import (
     to_allowed_relative,
 )
 from schemas import JobCreate, JobResponse, JobList, JobStatus
-from services.nextflow import launch_nextflow_job, cancel_nextflow_job
+from services.nextflow import launch_nextflow_job
+from services.job_control import cancel_job_lineage
 
 from model_registry import get_registry
 from services.stage_review import (
@@ -42,7 +43,9 @@ from services.stage_review import (
     gate_file_for_stage,
     has_stage_gate,
     infer_antibody_stage_state,
+    load_review_gate_snapshot,
     nextflow_history_status,
+    nextflow_history_status_for_run_dir,
     resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
@@ -53,6 +56,9 @@ router = APIRouter()
 CODE_ROOT = get_code_root()
 DEFAULT_FAMPNN_CHECKPOINT = "fampnn_0_0.pt"
 DEFAULT_PPIFLOW_CHECKPOINT = "nanobody"
+UUID_SUFFIX_RE = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -78,6 +84,128 @@ def _resolve_requested_design_count(job: Job) -> Optional[int]:
     return None
 
 
+def _coerce_nonempty_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _job_uses_child_batches(model_id: str, mode: str, params: dict) -> bool:
+    if not isinstance(params, dict):
+        return False
+
+    parallel_mode = _coerce_nonempty_text(params.get("parallel_mode"))
+    if parallel_mode and parallel_mode.lower() == "full_orchestrator":
+        return True
+
+    if mode == "antibody_denovo_pipeline":
+        return True
+
+    if model_id == "bindcraft" and bool(params.get("bindcraft_use_swa")):
+        return True
+
+    if model_id == "boltzgen" and bool(params.get("boltzgen_parallel_mode")):
+        return True
+
+    return False
+
+
+def _ensure_job_resume_identity(
+    *,
+    job_name: str,
+    job_id: str,
+    model_id: str,
+    mode: str,
+    params: dict,
+) -> dict:
+    normalized = dict(params or {})
+    normalized.setdefault("job_name", job_name)
+
+    if not _job_uses_child_batches(model_id, mode, normalized):
+        return normalized
+
+    root_job_id = _coerce_nonempty_text(normalized.get("resume_root_job_id")) or job_id
+    normalized["resume_root_job_id"] = root_job_id
+
+    if not _coerce_nonempty_text(normalized.get("batch_name")):
+        batch_prefix = _coerce_nonempty_text(normalized.get("job_name")) or job_name or "job"
+        normalized["batch_name"] = f"{batch_prefix}_{root_job_id}"
+
+    return normalized
+
+
+def _canonical_child_batch_key(batch_name: Any, parent_job_id: Any = None) -> str:
+    batch_text = _coerce_nonempty_text(batch_name)
+    if batch_text:
+        match = UUID_SUFFIX_RE.search(batch_text)
+        if match:
+            return match.group(1).lower()
+        return batch_text
+
+    parent_text = _coerce_nonempty_text(parent_job_id)
+    if parent_text:
+        return parent_text.lower()
+    return ""
+
+
+def _logical_child_key(child: Job) -> tuple[str, str, str]:
+    batch_key = _canonical_child_batch_key(child.batch_name, child.parent_job_id) or child.id
+    stage_key = _coerce_nonempty_text(child.child_stage) or ""
+    params = child.params if isinstance(child.params, dict) else {}
+    for key_name in ("job_index", "batch_index"):
+        raw_value = params.get(key_name)
+        if raw_value in (None, ""):
+            continue
+        return batch_key, stage_key, f"{key_name}:{raw_value}"
+    name_key = _coerce_nonempty_text(child.name) or child.id
+    return batch_key, stage_key, name_key
+
+
+def _child_progress_rank(child: Job) -> tuple[int, int]:
+    progress = _coerce_nonempty_text(getattr(child, "stage_progress", None)) or ""
+    match = re.search(r"(\d+)\s*/\s*(\d+)", progress)
+    if not match:
+        return (0, 0)
+    try:
+        completed = int(match.group(1))
+        total = int(match.group(2))
+    except (TypeError, ValueError):
+        return (0, 0)
+    return (completed, total if total > 0 else 0)
+
+
+def _child_attempt_rank(child: Job) -> tuple[int, int, int, datetime]:
+    status = str(getattr(child, "status", "") or "").strip().lower()
+    status_rank = {
+        "completed": 5,
+        "running": 4,
+        "awaiting_input": 4,
+        "queued": 3,
+        "pending": 3,
+        "failed": 2,
+        "cancelled": 1,
+    }.get(status, 0)
+    completed, total = _child_progress_rank(child)
+    created_at = child.created_at or datetime.min
+    return status_rank, completed, total, created_at
+
+
+def _dedupe_child_attempts(children: List[Job]) -> List[Job]:
+    latest_by_key: Dict[tuple[str, str, str], Job] = {}
+    for child in children:
+        key = _logical_child_key(child)
+        current = latest_by_key.get(key)
+        if current is None:
+            latest_by_key[key] = child
+            continue
+
+        if _child_attempt_rank(child) >= _child_attempt_rank(current):
+            latest_by_key[key] = child
+
+    return list(latest_by_key.values())
+
+
 def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
     """
     Opportunistically reconcile stale child-job statuses from Nextflow history.
@@ -93,7 +221,6 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
         child for child in children
         if child.status in {
             JobStatus.RUNNING.value,
-            JobStatus.QUEUED.value,
             JobStatus.AWAITING_INPUT.value,
         }
     ]
@@ -105,17 +232,7 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
         run_dir = resolve_nextflow_run_dir(child.child_output_dir or child.output_dir)
         if not run_dir:
             continue
-        history_path = run_dir / ".nextflow" / "history"
-        if not history_path.exists():
-            continue
-        try:
-            lines = history_path.read_text(errors="ignore").splitlines()
-        except Exception:
-            continue
-        if not lines:
-            continue
-        parts = lines[-1].split("\t")
-        status_token = parts[3].strip().upper() if len(parts) > 3 else ""
+        status_token = nextflow_history_status_for_run_dir(run_dir, str(child.id))
         if status_token == "OK":
             child.status = JobStatus.COMPLETED.value
             child.queue_status = "completed"
@@ -303,6 +420,14 @@ def _infer_gate_stage_from_files(job: Job) -> Optional[str]:
 
 def _repair_job_for_response(job: Job) -> bool:
     changed = False
+
+    gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
+    if gate_stage and job.awaiting_stage != gate_stage:
+        job.awaiting_stage = gate_stage
+        changed = True
+    if gate_payload and gate_payload != (job.awaiting_payload or {}):
+        job.awaiting_payload = gate_payload
+        changed = True
 
     if job.parent_job_id and job.child_stage:
         history_status = nextflow_history_status(job)
@@ -607,6 +732,143 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def _candidate_child_batch_aliases(
+    *,
+    job: Optional[Job],
+    root_job_id: str,
+    provided_batch_name: Optional[str] = None,
+) -> List[str]:
+    aliases: List[str] = []
+
+    def add(value: Any) -> None:
+        text = _coerce_nonempty_text(value)
+        if text and text not in aliases:
+            aliases.append(text)
+
+    add(provided_batch_name)
+
+    if job is None:
+        return aliases
+
+    params = job.params if isinstance(job.params, dict) else {}
+    add(job.batch_name)
+    add(params.get("batch_name"))
+
+    job_name = _coerce_nonempty_text(params.get("job_name")) or _coerce_nonempty_text(job.name)
+    if job_name:
+        add(f"{job_name}_{root_job_id}")
+
+    model_id_normalized = (job.model_id or "").strip().lower()
+    if _is_antibody_launch(job.model_id, params):
+        add(f"antibody_batch_{root_job_id}")
+    elif model_id_normalized == "bindcraft":
+        add(f"bindcraft_{root_job_id}")
+    elif model_id_normalized == "boltzgen":
+        add(_coerce_nonempty_text(params.get("name")) or "boltzgen_campaign")
+
+    return aliases
+
+
+async def _resolve_child_lineage_context(
+    session: AsyncSession,
+    parent_id: str,
+    batch_name: Optional[str] = None,
+) -> tuple[Optional[Job], List[str], List[str], str]:
+    """
+    Resolve the full parent lineage and child batch aliases for resume-aware
+    child lookups.
+
+    Legacy antibody runs stored child jobs under ``antibody_batch_<root_id>``,
+    while newer resumes reconstruct ``<job_name>_<root_id>``. Querying only the
+    current batch_name misses the original children entirely. Use the stored
+    resume root plus any observed child batch names across that lineage.
+    """
+    from sqlalchemy import or_
+
+    parent_job = await session.get(Job, parent_id)
+    if parent_job is None:
+        return None, [parent_id], _dedupe_preserve_order([batch_name] if batch_name else []), parent_id
+
+    parent_params = parent_job.params if isinstance(parent_job.params, dict) else {}
+    root_job_id = _coerce_nonempty_text(parent_params.get("resume_root_job_id")) or parent_id
+
+    lineage_result = await session.execute(
+        select(Job.id).where(
+            or_(
+                Job.id == root_job_id,
+                func.json_extract(Job.params, "$.resume_root_job_id") == root_job_id,
+            )
+        )
+    )
+    parent_ids = _dedupe_preserve_order(
+        [parent_id, root_job_id]
+        + [str(job_id) for job_id in lineage_result.scalars().all() if _coerce_nonempty_text(job_id)]
+    )
+
+    batch_aliases = _candidate_child_batch_aliases(
+        job=parent_job,
+        root_job_id=root_job_id,
+        provided_batch_name=batch_name,
+    )
+    if parent_ids:
+        batch_rows = await session.execute(
+            select(Job.batch_name)
+            .where(
+                Job.parent_job_id.in_(parent_ids),
+                Job.batch_name.isnot(None),
+            )
+            .order_by(Job.created_at.asc())
+        )
+        batch_aliases = _dedupe_preserve_order(
+            batch_aliases
+            + [batch for batch in batch_rows.scalars().all() if _coerce_nonempty_text(batch)]
+        )
+
+    return parent_job, parent_ids, batch_aliases, root_job_id
+
+
+async def _resolve_resume_child_batch_name(
+    session: AsyncSession,
+    job: Job,
+    root_job_id: str,
+) -> Optional[str]:
+    parent_ids = _dedupe_preserve_order([root_job_id, job.id])
+    original_rows = await session.execute(
+        select(Job.batch_name)
+        .where(
+            Job.parent_job_id == root_job_id,
+            Job.batch_name.isnot(None),
+        )
+        .order_by(Job.created_at.asc())
+    )
+    original_batch_names = [
+        batch_name
+        for batch_name in original_rows.scalars().all()
+        if _coerce_nonempty_text(batch_name)
+    ]
+    if original_batch_names:
+        return original_batch_names[0]
+
+    lineage_rows = await session.execute(
+        select(Job.batch_name)
+        .where(
+            Job.parent_job_id.in_(parent_ids),
+            Job.batch_name.isnot(None),
+        )
+        .order_by(Job.created_at.asc())
+    )
+    lineage_batch_names = [
+        batch_name
+        for batch_name in lineage_rows.scalars().all()
+        if _coerce_nonempty_text(batch_name)
+    ]
+    if lineage_batch_names:
+        return lineage_batch_names[0]
+
+    aliases = _candidate_child_batch_aliases(job=job, root_job_id=root_job_id)
+    return aliases[0] if aliases else None
 
 
 def _looks_like_antibody_job(job: Optional[Job]) -> bool:
@@ -2678,10 +2940,13 @@ async def create_job(
                 Job.child_stage == job_data.child_stage,
                 Job.name == job_data.name,
             )
-            .order_by(Job.created_at.asc())
+            .order_by(Job.created_at.desc())
         )
         existing_child = existing_child_result.scalars().first()
-        if existing_child is not None:
+        if existing_child is not None and existing_child.status not in {
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        }:
             logger.info(
                 "[QUEUE] Reusing existing child job %s for parent=%s stage=%s name=%s",
                 existing_child.id,
@@ -2710,6 +2975,15 @@ async def create_job(
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
                 decision_history=existing_child.decision_history,
+            )
+        elif existing_child is not None:
+            logger.info(
+                "[QUEUE] Existing child job %s for parent=%s stage=%s name=%s is %s; creating a new attempt",
+                existing_child.id,
+                job_data.parent_job_id,
+                job_data.child_stage,
+                job_data.name,
+                existing_child.status,
             )
     
     # Detect complex components for logging (info level)
@@ -3008,6 +3282,18 @@ async def create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = job_data.params
+
+        if isinstance(job_params, dict):
+            job_params = _ensure_job_resume_identity(
+                job_name=job_name,
+                job_id=job_id,
+                model_id=job_data.model_id,
+                mode=job_data.mode,
+                params=job_params,
+            )
+            resume_source_dir = _coerce_nonempty_text(job_params.get("resume_source_dir"))
+            if resume_source_dir and num_jobs == 1:
+                output_dir = str(Path(resume_source_dir).expanduser())
 
         if msa_job:
             sequence_for_hash = str(job_params.get('sequence') or job_params.get('sequence_input') or '')
@@ -3333,28 +3619,14 @@ async def cancel_job(
     job_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """Cancel a running or queued job."""
-    result = await session.execute(select(Job).where(Job.id == job_id))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status not in [JobStatus.QUEUED.value, JobStatus.RUNNING.value]:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Cannot cancel job with status: {job.status}"
-        )
-    
-    # Cancel the Nextflow process if running
-    if job.nextflow_run_id:
-        await cancel_nextflow_job(job.nextflow_run_id)
-    
-    job.status = JobStatus.CANCELLED.value
-    job.completed_at = datetime.utcnow()
-    await session.commit()
-    
-    return {"message": "Job cancelled", "job_id": job_id}
+    """Cancel a job and any active descendant jobs it spawned."""
+    job, lineage = await cancel_job_lineage(job_id, session)
+    return {
+        "message": "Job cancelled",
+        "job_id": job_id,
+        "jobs_cancelled": len(lineage),
+        "root_job_name": job.name,
+    }
 
 
 @router.delete("/{job_id}/permanent")
@@ -3382,12 +3654,12 @@ async def delete_job_permanently(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Cancel if running
-    if job.status == JobStatus.RUNNING.value and job.nextflow_run_id:
-        try:
-            await cancel_nextflow_job(job.nextflow_run_id)
-        except:
-            pass  # Continue with deletion even if cancel fails
+    # Cancel any active lineage members before removing their DB rows/files.
+    try:
+        await cancel_job_lineage(job_id, session, error_message="Deleted by user")
+    except HTTPException as exc:
+        if exc.status_code not in {400, 404}:
+            raise
     
     job_name = job.name
     output_dir = job.output_dir
@@ -3925,21 +4197,30 @@ async def get_children_status(
         - child_output_dirs: List of output directories for aggregation
         - success_rate: Percentage of children that completed successfully
     """
-    # Prefer exact parent matches. Only fall back to batch_name for resume cases
-    # where the current parent has no children of its own yet.
-    query = select(Job).where(Job.parent_job_id == parent_id)
+    from sqlalchemy import or_
+
+    _, parent_ids, batch_aliases, _ = await _resolve_child_lineage_context(
+        session,
+        parent_id,
+        batch_name=batch_name,
+    )
+
+    filters = []
+    if parent_ids:
+        filters.append(Job.parent_job_id.in_(parent_ids))
+    if batch_aliases:
+        filters.append(Job.batch_name.in_(batch_aliases))
+
+    query = select(Job)
+    if filters:
+        query = query.where(or_(*filters))
+    else:
+        query = query.where(Job.parent_job_id == parent_id)
     if stage:
         query = query.where(Job.child_stage == stage)
 
     result = await session.execute(query)
     children = result.scalars().all()
-
-    if not children and batch_name:
-        fallback_query = select(Job).where(Job.batch_name == batch_name)
-        if stage:
-            fallback_query = fallback_query.where(Job.child_stage == stage)
-        fallback_result = await session.execute(fallback_query)
-        children = fallback_result.scalars().all()
 
     reconciled = _reconcile_child_jobs_from_history(children)
     if reconciled:
@@ -3961,9 +4242,9 @@ async def get_children_status(
             "success_rate": 100.0
         }
 
-    # Guard against duplicate records and make resume behavior deterministic.
-    child_map = {child.id: child for child in children}
-    deduped_children = list(child_map.values())
+    # Collapse multiple attempts for the same logical child slot down to the
+    # latest attempt so resume/retry bookkeeping stays deterministic.
+    deduped_children = _dedupe_child_attempts(children)
 
     completed = [c for c in deduped_children if c.status == "completed"]
     failed = [c for c in deduped_children if c.status == "failed"]
@@ -3989,14 +4270,22 @@ async def get_children_status(
             if (c.child_output_dir or c.output_dir)
         ]
     )
-    # Default collection set excludes already-aggregated children.
-    output_dirs = _dedupe_preserve_order(
-        [
-            c.child_output_dir or c.output_dir
-            for c in completed
-            if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
-        ]
+    resumed_lineage_has_foreign_completions = bool(
+        batch_name and any((c.parent_job_id or "") != parent_id for c in completed)
     )
+    if resumed_lineage_has_foreign_completions:
+        # A resumed parent must be able to recollect outputs from completed
+        # children that belong to an earlier parent attempt in the same batch.
+        output_dirs = list(all_output_dirs)
+    else:
+        # Default collection set excludes already-aggregated children.
+        output_dirs = _dedupe_preserve_order(
+            [
+                c.child_output_dir or c.output_dir
+                for c in completed
+                if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
+            ]
+        )
 
     total = len(deduped_children)
     success_rate = (len(completed) / total * 100) if total > 0 else 0
@@ -4018,9 +4307,20 @@ async def get_children_status(
         "children": [
             {
                 "job_id": c.id,
+                "name": c.name,
                 "status": c.status,
+                "parent_job_id": c.parent_job_id,
+                "batch_name": c.batch_name,
                 "output_dir": c.child_output_dir or c.output_dir,
+                "stage_work_dir": c.stage_work_dir,
+                "stage_progress": c.stage_progress,
                 "aggregated_by_parent": bool(c.aggregated_by_parent),
+                "created_at": c.created_at.isoformat() + "Z" if c.created_at else None,
+                "completed_at": c.completed_at.isoformat() + "Z" if c.completed_at else None,
+                "job_index": (c.params or {}).get("job_index") if isinstance(c.params, dict) else None,
+                "batch_index": (c.params or {}).get("batch_index") if isinstance(c.params, dict) else None,
+                "assigned_gpu": c.assigned_gpu,
+                "pinned_gpu": c.pinned_gpu,
             }
             for c in deduped_children
         ],
@@ -4040,21 +4340,25 @@ async def mark_children_aggregated(
     """
     from sqlalchemy import or_
 
-    if batch_name:
-        query = select(Job).where(
-            or_(
-                Job.parent_job_id == parent_id,
-                Job.batch_name == batch_name
-            ),
-            Job.status == "completed",
-            Job.aggregated_by_parent == False
-        )
+    _, parent_ids, batch_aliases, _ = await _resolve_child_lineage_context(
+        session,
+        parent_id,
+        batch_name=batch_name,
+    )
+    filters = []
+    if parent_ids:
+        filters.append(Job.parent_job_id.in_(parent_ids))
+    if batch_aliases:
+        filters.append(Job.batch_name.in_(batch_aliases))
+
+    query = select(Job).where(
+        Job.status == "completed",
+        Job.aggregated_by_parent == False
+    )
+    if filters:
+        query = query.where(or_(*filters))
     else:
-        query = select(Job).where(
-            Job.parent_job_id == parent_id,
-            Job.status == "completed",
-            Job.aggregated_by_parent == False
-        )
+        query = query.where(Job.parent_job_id == parent_id)
     
     if stage:
         query = query.where(Job.child_stage == stage)
@@ -4279,7 +4583,7 @@ async def resume_job(
     requested_name_suffix = request.name_suffix if request else None
 
     # Prevent callers from overriding resume control fields directly.
-    reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir"}
+    reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir", "resume_stage_work_dir"}
     param_overrides = {
         key: value
         for key, value in requested_overrides.items()
@@ -4317,15 +4621,29 @@ async def resume_job(
         suffix = f"_{suffix}"
     new_name = f"{base_name}{suffix}"
     
-    # Generate output directory for the resumed job
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
+    # True resume should keep the original execution directory so Nextflow can
+    # reuse cached task hashes that depend on params.out_dir/publishDir paths.
+    output_dir = job.output_dir
     os.makedirs(output_dir, exist_ok=True)
     
     merged_params = {
         **_normalize_antibody_job_params(job.params or {}),
         **param_overrides,
     }
+    merged_params = _ensure_job_resume_identity(
+        job_name=(job.params or {}).get("job_name") or base_name,
+        job_id=_coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+        model_id=job.model_id,
+        mode=job.mode,
+        params=merged_params,
+    )
+    resolved_child_batch_name = await _resolve_resume_child_batch_name(
+        session,
+        job,
+        _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+    )
+    if resolved_child_batch_name:
+        merged_params["batch_name"] = resolved_child_batch_name
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
     _validate_antibody_runtime_paths(job.model_id, merged_params)
@@ -4347,6 +4665,8 @@ async def resume_job(
         output_dir=output_dir,
         batch_id=job.batch_id,
         batch_name=job.batch_name,
+        parent_job_id=job.parent_job_id,
+        child_stage=job.child_stage,
         # Don't copy completed_stages/stage_outputs - they will be re-populated
         # as the resumed workflow re-emits cached results
         completed_stages=[], 
@@ -4356,6 +4676,7 @@ async def resume_job(
         queue_status='queued',
         vram_estimate_mb=job.vram_estimate_mb,
         sequence_length=job.sequence_length,
+        pinned_gpu=job.pinned_gpu,
         priority=job.priority,
     )
 

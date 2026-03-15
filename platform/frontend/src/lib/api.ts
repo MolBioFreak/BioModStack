@@ -1163,6 +1163,13 @@ export const deleteSequenceFeature = (sequenceId: string, featureId: string) =>
     api.delete(`/api/sequences/${sequenceId}/features/${featureId}`);
 
 // Antibody API
+export interface AntibodyOverlaySelection {
+    region: 'H1' | 'H2' | 'H3' | 'L1' | 'L2' | 'L3';
+    chain_id: string;
+    start_residue_number: number;
+    end_residue_number: number;
+}
+
 export interface AntibodyData {
     design_id: string;
     cdrs: {
@@ -1172,6 +1179,8 @@ export interface AntibodyData {
     humanness_score?: number;
     stability_data?: Record<string, Record<string, number>>; // chain -> pos -> ddG
     imgt_pdb_url?: string;
+    detected_antibody_chains?: string | null;
+    overlay_selections?: AntibodyOverlaySelection[];
 }
 
 export const fetchAntibodyData = (designId: string) =>

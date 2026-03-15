@@ -79,6 +79,7 @@ export default function MolstarViewer({
             // Convert our selection format to pdbe-molstar format
             const selectData = selections.map(sel => ({
                 struct_asym_id: sel.chain_id,
+                auth_asym_id: sel.chain_id,
                 start_residue_number: sel.start_residue_number,
                 end_residue_number: sel.end_residue_number,
                 color: sel.color ? rgbToHex(sel.color.r, sel.color.g, sel.color.b) : undefined,
@@ -139,6 +140,7 @@ export default function MolstarViewer({
                 }
                 return {
                     struct_asym_id: match[1],
+                    auth_asym_id: match[1],
                     start_residue_number: parseInt(match[2]),
                     end_residue_number: parseInt(match[2]),
                     color: rgbToHex(color.r, color.g, color.b),

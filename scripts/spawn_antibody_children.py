@@ -23,6 +23,14 @@ from pathlib import Path
 from math import ceil
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
+from child_job_utils import (
+    apply_child_resume_params,
+    child_status_kind,
+    fetch_children_status,
+    find_existing_child,
+    preferred_child_gpu,
+)
+
 
 import re
 from collections import defaultdict
@@ -70,32 +78,9 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         tuple: (bool all_done, list completed_children, dict child_status)
     """
     try:
-        params = {"stage": stage}
-        if batch_name:
-            params["batch_name"] = batch_name
-        
-        resp = requests.get(
-            f"{api_url}/api/jobs/{parent_job_id}/children/status",
-            params=params,
-            timeout=10
-        )
-        
-        if not resp.ok:
-            return False, [], {}
-        
-        data = resp.json()
+        data = fetch_children_status(parent_job_id, stage, api_url=api_url, batch_name=batch_name)
         all_done = data.get("all_done", False)
-        child_output_dirs = data.get("child_output_dirs", [])
-        
-        # Build list of completed children with their output directories
-        # Note: child_output_dirs only contains directories for COMPLETED children
-        completed_children = []
-        for i, output_dir in enumerate(child_output_dirs):
-            completed_children.append({
-                "job_id": f"completed_{i}",  # We don't need actual IDs for resume
-                "output_dir": output_dir,
-                "index": i
-            })
+        completed_children = data.get("children", [])
         
         return all_done, completed_children, data
         
@@ -199,25 +184,17 @@ def spawn_children(
     all_done, existing_children, child_status = check_existing_children(
         parent_job_id, child_stage, api_url, batch_name=batch_name
     )
-    
-    existing_count = len(existing_children)
+    existing_count = child_status.get("total", len(existing_children))
     if existing_count > 0:
         print(f"[SPAWN] Found {existing_count} existing {validator_label} validation children for parent {parent_job_id}")
-        
-        if all_done:
-            print(f"[SPAWN] RESUME: All {existing_count} {validator_label} validation children already completed. Skipping spawn.")
-            return
-        else:
-            completed = child_status.get("completed", 0)
-            running = child_status.get("running", 0)
-            pending = child_status.get("pending", 0)
-            failed = child_status.get("failed", 0)
-            
-            print(f"[SPAWN] Existing: {completed} completed, {running} running, {pending} pending, {failed} failed")
-            
-            if running > 0 or pending > 0:
-                print(f"[SPAWN] RESUME: {running + pending} children still in progress. Not spawning duplicates.")
-                return
+        print(
+            f"[SPAWN] Existing: "
+            f"{child_status.get('completed', 0)} completed, "
+            f"{child_status.get('running', 0)} running, "
+            f"{child_status.get('pending', 0)} pending, "
+            f"{child_status.get('failed', 0)} failed, "
+            f"{child_status.get('cancelled', 0)} cancelled"
+        )
     
     # =========================================================================
     # No existing children or all failed - proceed with fresh spawn
@@ -226,6 +203,8 @@ def spawn_children(
     
     created = 0
     failed = 0
+    reused = 0
+    resumed = 0
     
     for job_idx in range(num_jobs):
         try:
@@ -233,6 +212,23 @@ def spawn_children(
             start_idx = job_idx * chunk_size
             end_idx = min((job_idx + 1) * chunk_size, total_seqs)
             chunk_pdbs = pdbs[start_idx:end_idx]
+            child_name = _child_display_name(display_prefix, validator_label, job_idx, num_jobs)
+            existing_child = find_existing_child(
+                child_status,
+                child_name=child_name,
+                batch_index=job_idx,
+            )
+            existing_kind = child_status_kind(existing_child)
+
+            if existing_kind == "completed":
+                reused += 1
+                print(f"[SPAWN] RESUME: Reusing completed child {child_name}")
+                continue
+
+            if existing_kind == "active":
+                reused += 1
+                print(f"[SPAWN] RESUME: Child still active, leaving in place: {child_name}")
+                continue
             
             if not chunk_pdbs:
                 continue
@@ -248,7 +244,7 @@ def spawn_children(
             seq_length = len(sequence)
             
             job_data = {
-                "name": _child_display_name(display_prefix, validator_label, job_idx, num_jobs),
+                "name": child_name,
                 "model_id": "antibody_child",
                 "mode": "validation_batch",
                 "params": {
@@ -267,8 +263,13 @@ def spawn_children(
                 "child_stage": child_stage,
                 "sequence_length": seq_length,  # Single sequence, not multiplied!
             }
-            if pinned_gpu is not None:
-                job_data["pinned_gpu"] = pinned_gpu
+            effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+            if effective_pinned_gpu is not None:
+                job_data["pinned_gpu"] = effective_pinned_gpu
+            if existing_kind == "failed":
+                job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
+                resumed += 1
+                print(f"[SPAWN] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
 
             
             resp = requests.post(
@@ -289,7 +290,10 @@ def spawn_children(
             print(f"[SPAWN] Error creating batch {job_idx}: {e}", file=sys.stderr)
             failed += 1
     
-    print(f"[SPAWN] Complete: {created} {validator_label} batches created, {failed} failed")
+    print(
+        f"[SPAWN] Complete: {created} {validator_label} batches created, "
+        f"{reused} reused, {resumed} resumed, {failed} failed"
+    )
     
     if failed > 0:
         sys.exit(1)
