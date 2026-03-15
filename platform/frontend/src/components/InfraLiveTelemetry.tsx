@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useState } from 'react';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
-import type { Config, Data, Layout } from 'plotly.js';
+import type { Config, Data, Layout, PlotData } from 'plotly.js';
 import {
     fetchFanControl,
     fetchPowerControl,
@@ -50,15 +50,6 @@ const WINDOW_PRESETS: ReadonlyArray<{ value: WindowPreset; label: string }> = [
     { value: 60, label: '1h' },
 ];
 
-interface SummaryItem {
-    key: string;
-    label: string;
-    value: string;
-    accent: string;
-    progress?: number | null;
-    detail?: string;
-    compactValue?: boolean;
-}
 interface LiveSample {
     timestamp: string;
     timestampMs: number;
@@ -257,7 +248,6 @@ const PLOT_CONFIG: Partial<Config> = {
 };
 
 const UI_ACCENT = 'var(--accent-primary)';
-const UI_ACCENT_SECONDARY = 'var(--accent-secondary)';
 const UI_SUCCESS = 'var(--success)';
 const UI_WARNING = 'var(--warning)';
 const UI_LINK = 'var(--link)';
@@ -540,118 +530,6 @@ function toPercent(value: number, maxValue: number): number {
 
 function legendName(label: string, value: string): string {
     return `${label} ${value}`;
-}
-
-function buildCpuSummaryItems(cpu: SystemStatus['cpu']): SummaryItem[] {
-    const currentGhz = cpu.frequency_current_mhz / 1000;
-    const maxGhz = cpu.frequency_max_mhz > 0 ? cpu.frequency_max_mhz / 1000 : null;
-    const frequencyProgress =
-        cpu.frequency_max_mhz > 0 ? clamp01(cpu.frequency_current_mhz / cpu.frequency_max_mhz) : null;
-    const powerScale = getCpuPowerScale(cpu);
-
-    return [
-        {
-            key: 'freq',
-            label: 'Freq',
-            value: `${currentGhz.toFixed(2)} GHz`,
-            detail: maxGhz != null ? `max ${maxGhz.toFixed(2)} GHz` : undefined,
-            accent: UI_LINK,
-            progress: frequencyProgress,
-        },
-        {
-            key: 'util',
-            label: 'Util',
-            value: `${cpu.utilization.toFixed(1)}%`,
-            accent: UI_SUCCESS,
-            progress: clamp01(cpu.utilization / 100),
-        },
-        {
-            key: 'power',
-            label: 'Package Power',
-            value: cpu.power_watts != null ? `${cpu.power_watts.toFixed(0)} W` : 'n/a',
-            detail: powerScale != null ? `scale ${powerScale} W` : undefined,
-            accent: UI_WARNING,
-            progress: cpu.power_watts != null && powerScale != null ? clamp01(cpu.power_watts / powerScale) : null,
-        },
-        {
-            key: 'temp',
-            label: 'Temp',
-            value: cpu.temperature != null ? `${cpu.temperature.toFixed(1)} C` : 'n/a',
-            accent: UI_ACCENT_SECONDARY,
-            progress: cpu.temperature != null ? clamp01(cpu.temperature / 100) : null,
-        },
-    ];
-}
-
-function buildRamSummaryItems(ram: SystemStatus['ram']): SummaryItem[] {
-    return [
-        {
-            key: 'used',
-            label: 'Used',
-            value: `${ram.used_gb.toFixed(1)} GB`,
-            accent: UI_LINK,
-            progress: clamp01(ram.used_gb / Math.max(ram.total_gb, 1)),
-        },
-        {
-            key: 'free',
-            label: 'Free',
-            value: `${ram.available_gb.toFixed(1)} GB`,
-            accent: UI_SUCCESS,
-            progress: clamp01(ram.available_gb / Math.max(ram.total_gb, 1)),
-        },
-        {
-            key: 'util',
-            label: 'Util',
-            value: `${ram.utilization.toFixed(1)}%`,
-            accent: UI_WARNING,
-            progress: clamp01(ram.utilization / 100),
-        },
-        {
-            key: 'swap',
-            label: 'Swap',
-            value: `${ram.swap_percent.toFixed(1)}%`,
-            accent: UI_ACCENT,
-            progress: clamp01(ram.swap_percent / 100),
-        },
-    ];
-}
-
-function buildGpuSummaryItems(gpu: GPUStatus): SummaryItem[] {
-    const vramUsedMb = gpu.memory_used_mb + gpu.reserved_memory_mb;
-    const vramGb = vramUsedMb / 1024;
-    const totalGb = gpu.memory_total_mb / 1024;
-    const powerLimit = gpu.power_limit_w > 0 ? gpu.power_limit_w : Math.max(gpu.max_power_watts, 1);
-
-    return [
-        {
-            key: 'util',
-            label: 'Util',
-            value: `${gpu.utilization.toFixed(0)}%`,
-            accent: UI_SUCCESS,
-            progress: clamp01(gpu.utilization / 100),
-        },
-        {
-            key: 'vram',
-            label: 'VRAM',
-            value: `${vramGb.toFixed(1)} / ${totalGb.toFixed(0)} GB`,
-            accent: UI_LINK,
-            progress: clamp01(vramUsedMb / Math.max(gpu.memory_total_mb, 1)),
-        },
-        {
-            key: 'power',
-            label: 'Power',
-            value: `${gpu.power_draw_w.toFixed(1)} W`,
-            accent: UI_WARNING,
-            progress: clamp01(gpu.power_draw_w / powerLimit),
-        },
-        {
-            key: 'temp',
-            label: 'Temp',
-            value: `${gpu.temperature.toFixed(0)} C`,
-            accent: UI_ACCENT_SECONDARY,
-            progress: clamp01(gpu.temperature / 100),
-        },
-    ];
 }
 
 function formatGpuProcessMemory(memoryMb: number): string {
@@ -1092,37 +970,6 @@ function GpuInlinePowerControl({
     );
 }
 
-function SummaryStrip({ items }: { items: SummaryItem[] }) {
-    return (
-        <div className="mb-4 grid gap-3 md:grid-cols-4">
-            {items.map((item) => (
-                <div key={item.key} className="rounded-xl border border-slate-800 bg-slate-900/85 px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                        <span className="text-sm font-medium text-slate-300">{item.label}</span>
-                        <span className={`font-semibold text-slate-100 text-right ${item.compactValue ? 'max-w-[72%] text-sm leading-snug' : 'text-base'}`}>
-                            {item.value}
-                        </span>
-                    </div>
-                    {item.detail && (
-                        <div className="mt-2 text-xs text-slate-500">{item.detail}</div>
-                    )}
-                    {item.progress != null && (
-                        <div className="mt-3 h-1.5 rounded-full bg-slate-800">
-                            <div
-                                className="h-1.5 rounded-full"
-                                style={{
-                                    width: `${(item.progress * 100).toFixed(1)}%`,
-                                    backgroundColor: item.accent,
-                                }}
-                            />
-                        </div>
-                    )}
-                </div>
-            ))}
-        </div>
-    );
-}
-
 function TimeSeriesPlot({
     height,
     samples,
@@ -1179,11 +1026,16 @@ function TimeSeriesPlot({
         },
         yaxis: buildAxis(yAxis, 'left'),
     };
+    const plotData: Data[] = series.map((item) => ({
+        ...(item as Partial<PlotData>),
+        type: traceType,
+        connectgaps: false,
+    }));
 
     return (
         <Plot
             key={redrawKey != null ? String(redrawKey) : undefined}
-            data={series.map((item) => ({ ...item, type: traceType, connectgaps: false }))}
+            data={plotData}
             layout={layout}
             config={PLOT_CONFIG}
             style={{ width: '100%', height: '100%' }}
