@@ -698,6 +698,8 @@ export function ResultsViewer() {
 
     useEffect(() => {
         if (!activeJob?.parent_job_id || !activeParentJob) return;
+        const parentOwnsInteractiveReview = Boolean(activeParentJob.awaiting_input) || activeParentJob.status === 'awaiting_input';
+        if (!parentOwnsInteractiveReview) return;
         if (selectedJobId === activeParentJob.id) return;
         setSelectedJobId(activeParentJob.id);
         setSelectedDesignId('');
