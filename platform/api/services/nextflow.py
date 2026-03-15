@@ -2229,20 +2229,81 @@ def build_nextflow_command(
     return cmd
 
 
-async def cancel_nextflow_job(nextflow_run_id: str) -> bool:
-    """Cancel a running Nextflow job."""
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
+    """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
     try:
         pid = int(nextflow_run_id)
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"Could not parse Nextflow PID {nextflow_run_id!r}: {exc}")
+        return False
+
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError as exc:
+        logger.warning(f"Could not find Nextflow process {pid}: {exc}")
+        return False
+
+    terminated = False
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        logger.info(f"Sent SIGTERM to Nextflow process group led by {pid}")
+        terminated = True
+    except Exception as group_exc:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-            logger.info(f"Sent SIGTERM to Nextflow process group led by {pid}")
-        except Exception:
             os.kill(pid, signal.SIGTERM)
             logger.info(f"Sent SIGTERM to Nextflow process {pid}")
-        return True
-    except (ValueError, ProcessLookupError) as e:
-        logger.warning(f"Could not cancel Nextflow process: {e}")
+            terminated = True
+        except Exception as pid_exc:
+            logger.warning(
+                "Could not cancel Nextflow process %s (group error: %s, pid error: %s)",
+                pid,
+                group_exc,
+                pid_exc,
+            )
+            return False
+
+    if not terminated:
         return False
+
+    deadline = asyncio.get_running_loop().time() + max(graceful_timeout_seconds, 0.0)
+    while asyncio.get_running_loop().time() < deadline:
+        if not _pid_is_alive(pid):
+            return True
+        await asyncio.sleep(0.25)
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        logger.warning(f"Escalated to SIGKILL for Nextflow process group led by {pid}")
+    except Exception as group_exc:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            logger.warning(f"Escalated to SIGKILL for Nextflow process {pid}")
+        except Exception as pid_exc:
+            logger.warning(
+                "Failed to SIGKILL Nextflow process %s (group error: %s, pid error: %s)",
+                pid,
+                group_exc,
+                pid_exc,
+            )
+            return False
+
+    for _ in range(20):
+        if not _pid_is_alive(pid):
+            return True
+        await asyncio.sleep(0.25)
+
+    logger.warning("Nextflow process %s still appears alive after SIGKILL", pid)
+    return False
 
 
 def get_running_jobs() -> Dict[str, int]:

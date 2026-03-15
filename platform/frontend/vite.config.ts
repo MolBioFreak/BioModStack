@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
+const stablePdbeMolstarPath = path.resolve(__dirname, 'node_modules/.ignored/pdbe-molstar')
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -39,6 +40,10 @@ export default defineConfig(({ mode }) => ({
       events: path.resolve(__dirname, 'node_modules/events/events.js'),
       util: utilShimPath,
       'node:util': utilShimPath,
+      // The newer 3.9.x PDBe bundle has been causing Chromium renderer crashes
+      // on local structure views. Pin the frontend to the older, already-vendored
+      // 3.3.0 build until we can safely re-upgrade Molstar.
+      'pdbe-molstar': stablePdbeMolstarPath,
     }
   },
   server: {

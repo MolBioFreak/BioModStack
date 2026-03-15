@@ -13,6 +13,14 @@ import sys
 import requests
 from pathlib import Path
 
+from child_job_utils import (
+    apply_child_resume_params,
+    child_status_kind,
+    fetch_children_status,
+    find_existing_child,
+    preferred_child_gpu,
+)
+
 
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
@@ -47,17 +55,7 @@ def _normalize_pinned_gpus(raw_value):
 
 def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
     try:
-        params = {"stage": stage}
-        if batch_name:
-            params["batch_name"] = batch_name
-        resp = requests.get(
-            f"{api_url}/api/jobs/{parent_job_id}/children/status",
-            params=params,
-            timeout=10,
-        )
-        if not resp.ok:
-            return False, [], {}
-        data = resp.json()
+        data = fetch_children_status(parent_job_id, stage, api_url=api_url, batch_name=batch_name)
         children = data.get("children", [])
         return data.get("all_done", False), children, data
     except Exception as e:
@@ -98,71 +96,17 @@ def spawn_fampnn_jobs(
     all_done, existing_children, child_status = check_existing_children(
         parent_job_id, "fampnn", api_url, batch_name=batch_name
     )
-    existing_count = len(existing_children)
+    existing_count = child_status.get("total", len(existing_children))
     if existing_count > 0:
-        if all_done:
-            print(f"[SPAWN-FAMPNN] RESUME: All {existing_count} children already completed.")
-            return {
-                "status": "resumed",
-                "spawned_jobs": 0,
-                "reused_jobs": existing_count,
-                "child_jobs": existing_children,
-                "resumed": True,
-            }
-
-        running = child_status.get("running", 0)
-        pending = child_status.get("pending", 0)
-        if running > 0 or pending > 0:
-            print(f"[SPAWN-FAMPNN] RESUME: {running + pending} children already in progress.")
-            return {
-                "status": "in_progress",
-                "spawned_jobs": 0,
-                "reused_jobs": existing_count,
-                "child_jobs": existing_children,
-                "resumed": True,
-            }
-    
-    # Check for already-completed FAMPNN jobs for this parent
-    # This prevents re-spawning on resume
-    already_done_pdbs = set()
-    try:
-        resp = requests.get(
-            f"{api_url}/api/jobs",
-            params={"parent_job_id": parent_job_id},
-            timeout=10
+        print(
+            f"[SPAWN-FAMPNN] Existing children status: "
+            f"{child_status.get('completed', 0)} completed, "
+            f"{child_status.get('running', 0)} running, "
+            f"{child_status.get('pending', 0)} pending, "
+            f"{child_status.get('failed', 0)} failed, "
+            f"{child_status.get('cancelled', 0)} cancelled"
         )
-        if resp.ok:
-            payload = resp.json()
-            existing_jobs = payload.get("jobs", payload) if isinstance(payload, dict) else payload
-            for job in existing_jobs:
-                # Check if this is a completed FAMPNN child job
-                if (job.get("status") == "completed" and 
-                    "fampnn" in job.get("name", "").lower() and
-                    job.get("params", {}).get("pdb_paths")):
-                    # Get PDB basenames from this completed job
-                    pdb_paths_str = job["params"].get("pdb_paths", "")
-                    for pdb_path_str in pdb_paths_str.split(","):
-                        if pdb_path_str:
-                            already_done_pdbs.add(Path(pdb_path_str).name)
-            if already_done_pdbs:
-                print(f"[SPAWN-FAMPNN] Found {len(already_done_pdbs)} PDBs already processed")
-    except Exception as e:
-        print(f"[SPAWN-FAMPNN] Warning: Could not check existing jobs: {e}", file=sys.stderr)
-    
-    # Filter out already-processed PDBs
-    if already_done_pdbs:
-        original_count = len(pdbs)
-        pdbs = [p for p in pdbs if p.name not in already_done_pdbs]
-        skipped = original_count - len(pdbs)
-        if skipped > 0:
-            print(f"[SPAWN-FAMPNN] Skipping {skipped} already-processed PDBs")
-    
-    if not pdbs:
-        print(f"[SPAWN-FAMPNN] All PDBs already processed, nothing to spawn")
-        return {"status": "complete", "spawned_jobs": 0, "failed_spawns": 0, 
-                "total_pdbs": 0, "pdbs_per_job": pdbs_per_job, "child_jobs": [],
-                "skipped_pdbs": len(already_done_pdbs)}
-    
+
     total_pdbs = len(pdbs)
     num_jobs = (total_pdbs + pdbs_per_job - 1) // pdbs_per_job
     
@@ -192,11 +136,42 @@ def spawn_fampnn_jobs(
     
     created = []
     failed = 0
+    reused = 0
+    resumed = 0
     
     for i in range(num_jobs):
         start_idx = i * pdbs_per_job
         end_idx = min(start_idx + pdbs_per_job, total_pdbs)
         job_pdbs = pdbs[start_idx:end_idx]
+        child_name = _child_display_name(display_prefix, "FA-MPNN", i, num_jobs)
+        existing_child = find_existing_child(
+            child_status,
+            child_name=child_name,
+            job_index=i,
+        )
+        existing_kind = child_status_kind(existing_child)
+
+        if existing_kind == "completed":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "pdb_count": len(job_pdbs),
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-FAMPNN] RESUME: Reusing completed child {child_name}")
+            continue
+
+        if existing_kind == "active":
+            reused += 1
+            created.append({
+                "job_id": existing_child.get("job_id"),
+                "pdb_count": len(job_pdbs),
+                "index": i,
+                "reused": True,
+            })
+            print(f"[SPAWN-FAMPNN] RESUME: Child still active, leaving in place: {child_name}")
+            continue
         
         # Convert to absolute paths
         pdb_paths = [str(p.absolute()) for p in job_pdbs]
@@ -207,7 +182,7 @@ def spawn_fampnn_jobs(
         estimated_seq_len = 40 if is_vhh else 80
         
         job_data = {
-            "name": _child_display_name(display_prefix, "FA-MPNN", i, num_jobs),
+            "name": child_name,
             "model_id": "fampnn_child",
             "mode": "sequence_design",
             "params": {
@@ -225,8 +200,13 @@ def spawn_fampnn_jobs(
             "child_stage": "fampnn",
             "sequence_length": estimated_seq_len,
         }
-        if pinned_gpu is not None:
-            job_data["pinned_gpu"] = pinned_gpu
+        effective_pinned_gpu = preferred_child_gpu(existing_child, pinned_gpu)
+        if effective_pinned_gpu is not None:
+            job_data["pinned_gpu"] = effective_pinned_gpu
+        if existing_kind == "failed":
+            job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
+            resumed += 1
+            print(f"[SPAWN-FAMPNN] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
         
         try:
             resp = requests.post(
@@ -253,7 +233,9 @@ def spawn_fampnn_jobs(
     
     result = {
         "status": "complete" if failed == 0 else "partial",
-        "spawned_jobs": len(created),
+        "spawned_jobs": len([child for child in created if not child.get("reused")]),
+        "reused_jobs": reused,
+        "resumed_jobs": resumed,
         "failed_spawns": failed,
         "total_pdbs": total_pdbs,
         "pdbs_per_job": pdbs_per_job,

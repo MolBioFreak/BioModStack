@@ -197,6 +197,28 @@ process RFANTIBODY {
     
     mkdir -p output
 
+    RESUME_STAGE_DIR="${params.resume_stage_work_dir ?: ''}"
+    EXISTING_DESIGNS=0
+    REMAINING_DESIGNS=${num_designs}
+    DESIGN_STARTNUM=0
+
+    if [ -n "\$RESUME_STAGE_DIR" ] && [ "\$RESUME_STAGE_DIR" != "\$WORK_DIR" ] && [ -d "\$RESUME_STAGE_DIR/output" ]; then
+        echo "Resume stage work dir: \$RESUME_STAGE_DIR" | tee -a "\${LOG_FILE}"
+        cp -an "\$RESUME_STAGE_DIR"/output/. output/ 2>/dev/null || true
+        EXISTING_DESIGNS=\$(find output -maxdepth 1 -type f -name "${meta.id}_*.pdb" | wc -l | tr -d '[:space:]')
+        echo "Found \$EXISTING_DESIGNS existing RFantibody designs in prior task output" | tee -a "\${LOG_FILE}"
+        if [ "\$EXISTING_DESIGNS" -ge "${num_designs}" ]; then
+            echo "Resume already has all ${num_designs} requested designs; skipping inference." | tee -a "\${LOG_FILE}"
+            ls -la output/ | tee -a "\${LOG_FILE}"
+            exit 0
+        fi
+        if [ "\$EXISTING_DESIGNS" -gt 0 ]; then
+            REMAINING_DESIGNS=\$(( ${num_designs} - EXISTING_DESIGNS ))
+            DESIGN_STARTNUM=-1
+            echo "Resuming RFantibody from design index \$EXISTING_DESIGNS with \$REMAINING_DESIGNS remaining" | tee -a "\${LOG_FILE}"
+        fi
+    fi
+
     if [ "${framework_pdb.name}" != "NO_FRAMEWORK" ]; then
         python3 - <<'PY' "${frameworkArgPath}" 2>&1 | tee -a "\${LOG_FILE}"
 import sys
@@ -299,7 +321,8 @@ PY
         inference.ckpt_override_path=\${CKPT_PATH} \\
         'ppi.hotspot_res=${hotspots}' \\
         'antibody.design_loops=${design_loops}' \\
-        inference.num_designs=${num_designs} \\
+        inference.num_designs=\${REMAINING_DESIGNS} \\
+        inference.design_startnum=\${DESIGN_STARTNUM} \\
         diffuser.T=${diffusion_steps} \\
         denoiser.noise_scale_ca=${noise_scale_ca} \\
         denoiser.noise_scale_frame=${noise_scale_frame} \\
