@@ -676,12 +676,6 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         }
         return 'Validation jobs still lead with structural confidence and agreement metrics.';
     })();
-    const rfaBackboneQualityKey = firstAvailableKey(
-        'target_contact_count',
-        'epitope_contact_count',
-        'rfa_hotspot_covered_count',
-        'rfd_rog',
-    );
     const rfaHotspotDistanceKey = firstAvailableKey(
         'rfa_hotspot_min_distance',
         'rfa_hotspot_avg_min_distance',
@@ -768,7 +762,6 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const scatterCache = new Map<string, Data[]>();
     const categoryScatterCache = new Map<string, Data[]>();
     const histogramCache = new Map<string, Data[]>();
-    const boxCache = new Map<string, Data[]>();
     const correlationCache = new Map<string, { labels: string[]; matrix: number[][] } | null>();
     const scatter3dCache = new Map<string, Data[]>();
 
@@ -913,37 +906,6 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             hovertemplate: `${getMetricLabel(key)}: %{x:.3f}<br>Count: %{y}<extra></extra>`,
         } as Data];
         histogramCache.set(key, result);
-        return result;
-    };
-
-    const buildBoxByCategory = (categoryKey: string, valueKey: string): Data[] => {
-        const cacheKey = `${categoryKey}::${valueKey}`;
-        const cached = boxCache.get(cacheKey);
-        if (cached) return cached;
-        const grouped = new Map<string, number[]>();
-
-        for (const design of designs) {
-            const categoryValue = getMetricValue(design, categoryKey);
-            const metricValue = getMetricValue(design, valueKey);
-            if (categoryValue == null || metricValue == null) continue;
-            const label = `${getMetricLabel(categoryKey)} ${Math.round(categoryValue)}`;
-            const existing = grouped.get(label) || [];
-            existing.push(metricValue);
-            grouped.set(label, existing);
-        }
-
-        const result = Array.from(grouped.entries())
-            .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-            .map(([label, values]) => ({
-                type: 'box' as const,
-                name: label,
-                y: values,
-                boxpoints: false as const,
-                marker: { color: metricLookup.get(valueKey)?.color || '#60a5fa' },
-                line: { color: metricLookup.get(valueKey)?.color || '#60a5fa' },
-                hovertemplate: `${label}<br>${getMetricLabel(valueKey)}: %{y:.3f}<extra></extra>`,
-            }));
-        boxCache.set(cacheKey, result);
         return result;
     };
 
