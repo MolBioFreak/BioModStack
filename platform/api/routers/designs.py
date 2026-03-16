@@ -255,6 +255,39 @@ class DesignList(BaseModel):
     total: int
 
 
+class DesignQueryRequest(BaseModel):
+    job_id: Optional[str] = None
+    include_children: Optional[bool] = True
+    design_ids: Optional[List[str]] = None
+    q: Optional[str] = None
+    backbone_id: Optional[int] = None
+    plddt_min: Optional[float] = None
+    pae_max: Optional[float] = None
+    iptm_min: Optional[float] = None
+    epitope_contacts_min: Optional[int] = None
+    target_contacts_min: Optional[int] = None
+    epitope_max_dist: Optional[float] = None
+    target_max_dist: Optional[float] = None
+    binder_length_min: Optional[int] = None
+    binder_length_max: Optional[int] = None
+    cdr_h1_min: Optional[int] = None
+    cdr_h1_max: Optional[int] = None
+    cdr_h2_min: Optional[int] = None
+    cdr_h2_max: Optional[int] = None
+    cdr_h3_min: Optional[int] = None
+    cdr_h3_max: Optional[int] = None
+    rog_min: Optional[float] = None
+    rog_max: Optional[float] = None
+    rfd_rog_min: Optional[float] = None
+    rfd_rog_max: Optional[float] = None
+    favorites_only: Optional[bool] = False
+    artifact_group: Optional[str] = None
+    sort_by: Optional[str] = None
+    sort_desc: Optional[bool] = True
+    limit: Optional[int] = 100
+    offset: Optional[int] = 0
+
+
 class FavoriteUpdate(BaseModel):
     is_favorite: bool
 
@@ -823,6 +856,47 @@ async def list_designs(
     return DesignList(
         designs=[_design_to_response(d) for d in designs],
         total=total
+    )
+
+
+@router.post("/query", response_model=DesignList)
+async def query_designs(
+    request: DesignQueryRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """List designs via POST for large explicit design-id subsets."""
+    return await list_designs(
+        job_id=request.job_id,
+        include_children=True if request.include_children is None else request.include_children,
+        design_ids=request.design_ids,
+        q=request.q,
+        backbone_id=request.backbone_id,
+        plddt_min=request.plddt_min,
+        pae_max=request.pae_max,
+        iptm_min=request.iptm_min,
+        epitope_contacts_min=request.epitope_contacts_min,
+        target_contacts_min=request.target_contacts_min,
+        epitope_max_dist=request.epitope_max_dist,
+        target_max_dist=request.target_max_dist,
+        binder_length_min=request.binder_length_min,
+        binder_length_max=request.binder_length_max,
+        cdr_h1_min=request.cdr_h1_min,
+        cdr_h1_max=request.cdr_h1_max,
+        cdr_h2_min=request.cdr_h2_min,
+        cdr_h2_max=request.cdr_h2_max,
+        cdr_h3_min=request.cdr_h3_min,
+        cdr_h3_max=request.cdr_h3_max,
+        rog_min=request.rog_min,
+        rog_max=request.rog_max,
+        rfd_rog_min=request.rfd_rog_min,
+        rfd_rog_max=request.rfd_rog_max,
+        favorites_only=bool(request.favorites_only),
+        artifact_group=request.artifact_group,
+        sort_by=request.sort_by,
+        sort_desc=True if request.sort_desc is None else request.sort_desc,
+        limit=100 if request.limit is None else request.limit,
+        offset=0 if request.offset is None else request.offset,
+        session=session,
     )
 
 
