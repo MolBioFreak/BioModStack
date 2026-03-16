@@ -142,6 +142,14 @@ def nearest_pair_details(query_atoms, target_atoms) -> dict[str, Any]:
     }
 
 
+def calculate_radius_of_gyration(coords: np.ndarray) -> float | None:
+    if coords.size == 0:
+        return None
+    centroid = np.mean(coords, axis=0)
+    squared_distances = np.sum((coords - centroid) ** 2, axis=1)
+    return float(np.sqrt(np.mean(squared_distances)))
+
+
 def per_loop_geometry_metrics(
     antibody_ca,
     antibody_atoms,
@@ -396,6 +404,7 @@ def compute_geometry_metrics(
 
     antibody_coords = antibody_ca.coord
     target_coords = target_ca.coord
+    antibody_ca_rog = calculate_radius_of_gyration(antibody_coords)
     pairwise_target_distances = np.linalg.norm(
         antibody_coords[:, None, :] - target_coords[None, :, :],
         axis=2,
@@ -500,6 +509,7 @@ def compute_geometry_metrics(
         "target_contact_distance_threshold": float(target_contact_distance_threshold),
         "epitope_centroid_distance": epitope_centroid_distance,
         "target_centroid_distance": antibody_target_centroid_distance,
+        "antibody_ca_rog": antibody_ca_rog,
         "rfa_loop_metrics": loop_metrics,
         "rfa_hotspot_metrics": hotspot_metrics,
         "rfa_hotspot_covered_count": int(hotspot_covered_count),
@@ -680,6 +690,7 @@ def main() -> int:
                 "target_nearest_target_atom": None,
                 "epitope_centroid_distance": None,
                 "target_centroid_distance": None,
+                "antibody_ca_rog": None,
                 "detected_antibody_chains": "",
                 "detected_target_chain": "",
                 "antibody_residue_count": 0,
@@ -725,6 +736,7 @@ def main() -> int:
                 "target_centroid_distance",
                 "target_contact_distance_threshold",
                 "rfa_hotspot_covered_count",
+                "antibody_ca_rog",
                 "rfa_loop_metrics",
                 "rfa_hotspot_metrics",
                 "detected_antibody_chains",

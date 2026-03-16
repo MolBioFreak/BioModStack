@@ -13,6 +13,12 @@ import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
+import {
+    clearAntibodyRefinementLaunchState,
+    loadAntibodyRefinementLaunchState,
+    saveAntibodyRefinementLaunchState,
+    type AntibodyRefinementLaunchState,
+} from '../lib/refinementLaunchState';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -117,25 +123,31 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const location = useLocation();
-    const refinementState = location.state as {
-        refinementMode?: boolean;
-        sourceJobId?: string;
-        selectedDesignIds?: string[];
-        sourceSavedFilterSetId?: string | null;
-        sourceSavedFilterSetName?: string | null;
-        sourceSavedFilterSetCreatedAt?: string | null;
-        sourceSavedFilterSetDesignCount?: number | null;
-        reviewFilterSetId?: string | null;
-        reviewFilterSetName?: string | null;
-        reviewFilterSetCreatedAt?: string | null;
-        reviewFilterSetDesignCount?: number | null;
-        sourceArtifactGroup?: string | null;
-        sourceOutputSourceFilter?: string | null;
-        sourceSortField?: string | null;
-        sourceSortDir?: 'asc' | 'desc' | null;
-        sourceVisibleCount?: number | null;
-        sourceTotalCount?: number | null;
-    } | null;
+    const refinementQueryEnabled = useMemo(
+        () => new URLSearchParams(location.search).get('refinement') === '1',
+        [location.search]
+    );
+    const routeRefinementState = (location.state as AntibodyRefinementLaunchState | null) ?? null;
+    const storedRefinementState = useMemo(
+        () => (refinementQueryEnabled ? loadAntibodyRefinementLaunchState() : null),
+        [refinementQueryEnabled]
+    );
+    const refinementState = useMemo<AntibodyRefinementLaunchState | null>(() => {
+        if (!refinementQueryEnabled && !routeRefinementState?.refinementMode) {
+            return null;
+        }
+        const merged = {
+            ...(storedRefinementState || {}),
+            ...(routeRefinementState || {}),
+            refinementMode: true,
+        };
+        const hasLaunchSource = Boolean(merged.sourceJobId) && (
+            Boolean(merged.selectedDesignIds?.length)
+            || Boolean(merged.reviewFilterSetId)
+            || Boolean(merged.sourceSavedFilterSetId)
+        );
+        return hasLaunchSource ? merged : null;
+    }, [refinementQueryEnabled, routeRefinementState, storedRefinementState]);
     const isRefinementMode = !!refinementState?.refinementMode;
     const refinementParentJobId = refinementState?.sourceJobId;
     const refinementDesignIds = refinementState?.selectedDesignIds;
@@ -167,6 +179,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (Number.isNaN(parsed.getTime())) return refinementSavedFilterSetCreatedAt;
         return parsed.toLocaleString();
     }, [refinementSavedFilterSetCreatedAt]);
+
+    useEffect(() => {
+        if (refinementState?.refinementMode) {
+            saveAntibodyRefinementLaunchState(refinementState);
+            return;
+        }
+        if (refinementQueryEnabled) {
+            clearAntibodyRefinementLaunchState();
+        }
+    }, [refinementQueryEnabled, refinementState]);
 
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
@@ -596,6 +618,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const submitMutation = useMutation({
         mutationFn: async (data: any) => submitJob(data),
         onSuccess: () => {
+            clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
         }
@@ -604,6 +627,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: any) => launchManualMutagenesis(data),
         onSuccess: () => {
+            clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
         },
@@ -1376,6 +1400,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             cdr_indel_config: cdrIndelConfig,
                             param_overrides: refinementOverrides,
                         });
+                        clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
                         navigate('/');
                         return;
@@ -1404,6 +1429,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             },
                             param_overrides: refinementOverrides,
                         });
+                        clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
                         navigate('/');
                         return;
@@ -1431,6 +1457,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     review_filter_set_id: refinementReviewFilterSetId,
                     param_overrides: refinementOverrides,
                 });
+                clearAntibodyRefinementLaunchState();
                 queryClient.invalidateQueries({ queryKey: ['jobs'] });
                 navigate('/');
                 return;
