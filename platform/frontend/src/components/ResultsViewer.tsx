@@ -21,6 +21,10 @@ import { DesignComparePane } from './DesignComparePane';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
+import {
+    saveAntibodyRefinementLaunchState,
+    type AntibodyRefinementLaunchState,
+} from '../lib/refinementLaunchState';
 
 // Tab definitions
 const TABS = [
@@ -34,7 +38,6 @@ const TABS = [
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
-const ANALYTICS_CHART_DESIGN_CAP = 1500;
 const MAX_BULK_SELECTION_DESIGNS = 10000;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
@@ -568,6 +571,8 @@ export function ResultsViewer() {
     const [topSelectionCount, setTopSelectionCount] = useState<string>('25');
     const [savedFilterSetName, setSavedFilterSetName] = useState<string>('');
     const [appliedSavedFilterSetId, setAppliedSavedFilterSetId] = useState<string | null>(null);
+    const [selectedSavedFilterSetId, setSelectedSavedFilterSetId] = useState<string>('');
+    const [savedReviewFilterSetsOverride, setSavedReviewFilterSetsOverride] = useState<SavedReviewFilterSet[] | null>(null);
     const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000, 0]; // 0 = All
     const [filterDraft, setFilterDraft] = useState<FilterDraftState>({
         sortField: 'name',
@@ -647,15 +652,25 @@ export function ResultsViewer() {
     const showBinderTargetConfidence = useMemo(() => hasExplicitBinderTargetRoles(activeJob), [activeJob]);
     const rfRawCount = Number(activeJob?.awaiting_payload?.raw_candidate_count || 0);
     const rfFilteredCount = Number(activeJob?.awaiting_payload?.filtered_candidate_count || 0);
-    const savedReviewFilterSets = useMemo(
+    const persistedSavedReviewFilterSets = useMemo(
         () => coerceSavedReviewFilterSets(activeJob?.awaiting_payload?.review_filter_sets),
         [activeJob?.awaiting_payload?.review_filter_sets],
+    );
+    const savedReviewFilterSets = useMemo(
+        () => savedReviewFilterSetsOverride ?? persistedSavedReviewFilterSets,
+        [persistedSavedReviewFilterSets, savedReviewFilterSetsOverride],
     );
     const appliedSavedReviewFilterSet = useMemo(
         () => (appliedSavedFilterSetId
             ? savedReviewFilterSets.find((filterSet) => filterSet.id === appliedSavedFilterSetId) ?? null
             : null),
         [appliedSavedFilterSetId, savedReviewFilterSets],
+    );
+    const selectedSavedReviewFilterSet = useMemo(
+        () => (selectedSavedFilterSetId
+            ? savedReviewFilterSets.find((filterSet) => filterSet.id === selectedSavedFilterSetId) ?? null
+            : null),
+        [selectedSavedFilterSetId, savedReviewFilterSets],
     );
     const availableCdrLoopIds = useMemo(() => getAvailableCdrLoopIds(activeJob), [activeJob]);
 
@@ -1030,10 +1045,7 @@ export function ResultsViewer() {
     }, [antibodyData?.overlay_selections]);
 
     const orderedDesigns = designs;
-    const analyticsChartDesigns = useMemo(
-        () => (designs.length > ANALYTICS_CHART_DESIGN_CAP ? designs.slice(0, ANALYTICS_CHART_DESIGN_CAP) : designs),
-        [designs],
-    );
+    const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
         if (outputSourceFilter !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === outputSourceFilter)) {
             return outputSourceFilter;
@@ -1165,6 +1177,21 @@ export function ResultsViewer() {
 
     useEffect(() => {
         setAppliedSavedFilterSetId(null);
+    }, [selectedJobId]);
+
+    useEffect(() => {
+        if (appliedSavedReviewFilterSet?.id) {
+            setSelectedSavedFilterSetId(appliedSavedReviewFilterSet.id);
+            return;
+        }
+        if (savedReviewFilterSets.some((filterSet) => filterSet.id === selectedSavedFilterSetId)) {
+            return;
+        }
+        setSelectedSavedFilterSetId(savedReviewFilterSets[0]?.id ?? '');
+    }, [appliedSavedReviewFilterSet?.id, savedReviewFilterSets, selectedSavedFilterSetId]);
+
+    useEffect(() => {
+        setSavedReviewFilterSetsOverride(null);
     }, [selectedJobId]);
 
     useEffect(() => {
@@ -1609,6 +1636,11 @@ export function ResultsViewer() {
         setIterationMessage({ kind: 'success', text: `Loaded saved dataset '${filterSet.name}'.` });
     };
 
+    const clearLoadedSavedReviewFilterSet = () => {
+        setAppliedSavedFilterSetId(null);
+        setIterationMessage({ kind: 'success', text: 'Returned to the live filtered dataset.' });
+    };
+
     const clearRfaFilters = () => {
         setFilterText('');
         setPlddtMin(0);
@@ -1727,7 +1759,10 @@ export function ResultsViewer() {
             });
         },
         onSuccess: (response) => {
+            const nextFilterSets = coerceSavedReviewFilterSets(response.data.filter_sets);
+            setSavedReviewFilterSetsOverride(nextFilterSets);
             setSavedFilterSetName('');
+            setSelectedSavedFilterSetId(response.data.filter_set.id);
             setAppliedSavedFilterSetId(response.data.filter_set.id);
             setIterationMessage({ kind: 'success', text: response.data.message });
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -1746,6 +1781,7 @@ export function ResultsViewer() {
             return deleteReviewFilterSet(selectedJobId, filterSetId);
         },
         onSuccess: (response, filterSetId) => {
+            setSavedReviewFilterSetsOverride(coerceSavedReviewFilterSets(response.data.filter_sets));
             if (appliedSavedFilterSetId === filterSetId) {
                 setAppliedSavedFilterSetId(null);
             }
@@ -1808,26 +1844,46 @@ export function ResultsViewer() {
         const savedDatasetCount = resolvedSavedFilterSet?.design_ids?.length
             ?? resolvedSavedFilterSet?.visible_count
             ?? null;
+        const refinementLaunchState: AntibodyRefinementLaunchState = {
+            refinementMode: true,
+            sourceJobId: activeJob.id,
+            sourceArtifactGroup: resolvedSavedFilterSet ? savedSourceArtifactGroup : activeRfArtifactGroup,
+            sourceOutputSourceFilter: resolvedSavedFilterSet ? savedSourceOutputFilter : outputSourceFilter,
+            sourceSortField: resolvedSavedFilterSet ? savedSourceSortField : sortField,
+            sourceSortDir: resolvedSavedFilterSet ? savedSourceSortDir : sortDir,
+            sourceVisibleCount: resolvedSavedFilterSet ? savedDatasetCount : tableDesigns.length,
+            sourceTotalCount: resolvedSavedFilterSet ? savedDatasetCount : totalDesigns,
+            selectedDesignIds: launchDesignIds.length > 0 ? launchDesignIds : undefined,
+            sourceSavedFilterSetId: resolvedSavedFilterSet?.id,
+            sourceSavedFilterSetName: resolvedSavedFilterSet?.name,
+            sourceSavedFilterSetCreatedAt: resolvedSavedFilterSet?.created_at,
+            sourceSavedFilterSetDesignCount: savedDatasetCount,
+            reviewFilterSetId: resolvedSavedFilterSet?.id,
+            reviewFilterSetName: resolvedSavedFilterSet?.name,
+            reviewFilterSetCreatedAt: resolvedSavedFilterSet?.created_at,
+            reviewFilterSetDesignCount: savedDatasetCount,
+        };
 
-        navigate('/submit?template=antibody_denovo', {
+        saveAntibodyRefinementLaunchState(refinementLaunchState);
+
+        navigate('/submit?template=antibody_denovo&refinement=1', {
             state: {
                 refinementMode: true,
                 sourceJobId: activeJob.id,
-                sourceArtifactGroup: resolvedSavedFilterSet ? savedSourceArtifactGroup : activeRfArtifactGroup,
-                sourceOutputSourceFilter: resolvedSavedFilterSet ? savedSourceOutputFilter : outputSourceFilter,
-                sourceSortField: resolvedSavedFilterSet ? savedSourceSortField : sortField,
-                sourceSortDir: resolvedSavedFilterSet ? savedSourceSortDir : sortDir,
-                sourceVisibleCount: resolvedSavedFilterSet ? savedDatasetCount : tableDesigns.length,
-                sourceTotalCount: resolvedSavedFilterSet ? savedDatasetCount : totalDesigns,
-                selectedDesignIds: launchDesignIds.length > 0 ? launchDesignIds : undefined,
-                sourceSavedFilterSetId: resolvedSavedFilterSet?.id,
-                sourceSavedFilterSetName: resolvedSavedFilterSet?.name,
-                sourceSavedFilterSetCreatedAt: resolvedSavedFilterSet?.created_at,
-                sourceSavedFilterSetDesignCount: savedDatasetCount,
-                reviewFilterSetId: resolvedSavedFilterSet?.id,
-                reviewFilterSetName: resolvedSavedFilterSet?.name,
-                reviewFilterSetCreatedAt: resolvedSavedFilterSet?.created_at,
-                reviewFilterSetDesignCount: savedDatasetCount,
+                sourceArtifactGroup: refinementLaunchState.sourceArtifactGroup,
+                sourceOutputSourceFilter: refinementLaunchState.sourceOutputSourceFilter,
+                sourceSortField: refinementLaunchState.sourceSortField,
+                sourceSortDir: refinementLaunchState.sourceSortDir,
+                sourceVisibleCount: refinementLaunchState.sourceVisibleCount,
+                sourceTotalCount: refinementLaunchState.sourceTotalCount,
+                sourceSavedFilterSetId: refinementLaunchState.sourceSavedFilterSetId,
+                sourceSavedFilterSetName: refinementLaunchState.sourceSavedFilterSetName,
+                sourceSavedFilterSetCreatedAt: refinementLaunchState.sourceSavedFilterSetCreatedAt,
+                sourceSavedFilterSetDesignCount: refinementLaunchState.sourceSavedFilterSetDesignCount,
+                reviewFilterSetId: refinementLaunchState.reviewFilterSetId,
+                reviewFilterSetName: refinementLaunchState.reviewFilterSetName,
+                reviewFilterSetCreatedAt: refinementLaunchState.reviewFilterSetCreatedAt,
+                reviewFilterSetDesignCount: refinementLaunchState.reviewFilterSetDesignCount,
             }
         });
     };
@@ -2273,6 +2329,43 @@ export function ResultsViewer() {
                                             >
                                                 {saveFilterSetMutation.isPending ? 'Saving…' : 'Save Dataset'}
                                             </button>
+                                            <select
+                                                value={selectedSavedFilterSetId}
+                                                onChange={(event) => setSelectedSavedFilterSetId(event.target.value)}
+                                                disabled={savedReviewFilterSets.length === 0}
+                                                className="min-w-[220px] rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {savedReviewFilterSets.length === 0 ? (
+                                                    <option value="">No saved datasets yet</option>
+                                                ) : (
+                                                    savedReviewFilterSets.map((filterSet) => (
+                                                        <option key={filterSet.id} value={filterSet.id}>
+                                                            {filterSet.name}
+                                                        </option>
+                                                    ))
+                                                )}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (!selectedSavedReviewFilterSet) return;
+                                                    setIterationMessage(null);
+                                                    applySavedReviewFilterSet(selectedSavedReviewFilterSet);
+                                                }}
+                                                disabled={!selectedSavedReviewFilterSet}
+                                                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 transition-colors hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {selectedSavedReviewFilterSet && appliedSavedFilterSetId === selectedSavedReviewFilterSet.id ? 'Loaded' : 'Load Dataset'}
+                                            </button>
+                                            {loadedSavedReviewFilterSet && (
+                                                <button
+                                                    type="button"
+                                                    onClick={clearLoadedSavedReviewFilterSet}
+                                                    className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors hover:border-slate-600"
+                                                >
+                                                    Use Live Set
+                                                </button>
+                                            )}
                                         </div>
                                         {savedReviewFilterSets.length > 0 && (
                                             <div className="mt-3 flex flex-wrap gap-2">

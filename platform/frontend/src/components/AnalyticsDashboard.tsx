@@ -12,7 +12,19 @@ import {
 import { inferDesignAnalysisLens, type AnalysisLens } from './designOutputSource';
 
 type MetricFamily = AnalysisLens | 'dynamic';
-type ColorScaleName = 'Viridis' | 'Plasma' | 'Cividis' | 'Turbo';
+type ColorScaleName =
+    | 'Viridis'
+    | 'Plasma'
+    | 'Cividis'
+    | 'Turbo'
+    | 'Inferno'
+    | 'Magma'
+    | 'Electric'
+    | 'Portland'
+    | 'Bluered'
+    | 'RdBu'
+    | 'YlGnBu'
+    | 'Earth';
 
 interface MetricOption {
     key: string;
@@ -69,6 +81,14 @@ const COLOR_SCALE_OPTIONS: Array<{ value: ColorScaleName; label: string }> = [
     { value: 'Plasma', label: 'Plasma' },
     { value: 'Cividis', label: 'Cividis' },
     { value: 'Turbo', label: 'Turbo' },
+    { value: 'Inferno', label: 'Inferno' },
+    { value: 'Magma', label: 'Magma' },
+    { value: 'Electric', label: 'Electric' },
+    { value: 'Portland', label: 'Portland' },
+    { value: 'Bluered', label: 'Bluered' },
+    { value: 'RdBu', label: 'RdBu' },
+    { value: 'YlGnBu', label: 'YlGnBu' },
+    { value: 'Earth', label: 'Earth' },
 ];
 
 const CORE_METRICS: MetricOption[] = [
@@ -130,7 +150,9 @@ const PLOT_BG = '#0f172a';
 const FONT_COLOR = '#e2e8f0';
 const GRID_COLOR = '#334155';
 const AXIS_COLOR = '#94a3b8';
-const MAX_ANALYTICS_DESIGNS = 1500;
+const MIN_POINT_SIZE = 2;
+const MAX_POINT_SIZE = 12;
+const DEFAULT_POINT_SIZE = 7;
 
 const DEFAULT_PLOT_CONFIG = {
     responsive: true,
@@ -364,6 +386,8 @@ function pearson(valuesX: number[], valuesY: number[]): number {
 
 export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLens = 'auto', loadedDesignCount }: AnalyticsDashboardProps) {
     const [colorScale, setColorScale] = useState<ColorScaleName>('Viridis');
+    const [reverseColorScale, setReverseColorScale] = useState(false);
+    const [pointSize, setPointSize] = useState(DEFAULT_POINT_SIZE);
     const [analysisLensOverride, setAnalysisLensOverride] = useState<AnalysisLens | 'auto'>('auto');
     const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
     const sourceDesignCount = loadedDesignCount ?? designs.length;
@@ -373,6 +397,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         [designs],
     );
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
+    const [designPickerQuery, setDesignPickerQuery] = useState('');
     const [custom2dX, setCustom2dX] = useState<string>('plddt_overall');
     const [custom2dY, setCustom2dY] = useState<string>('pae_overall');
     const [custom2dColor, setCustom2dColor] = useState<string>('iptm');
@@ -389,7 +414,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             jobId && analyticsDesignIds.length
                 ? fetchDesignPlotlyMetrics(jobId, {
                     include_children: true,
-                    limit: Math.min(analyticsDesignIds.length, MAX_ANALYTICS_DESIGNS),
+                    limit: analyticsDesignIds.length,
                     design_ids: analyticsDesignIds,
                 }).then((response) => response.data)
                 : null
@@ -532,6 +557,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     }, [familyDesignCounts, familyMetricKeys, preferredAnalysisLens, rankedAvailableAnalysisLenses]);
 
     const resolvedAnalysisLens = analysisLensOverride === 'auto' ? autoDetectedAnalysisLens : analysisLensOverride;
+    const resolvedColorScale = reverseColorScale ? `${colorScale}_r` : colorScale;
 
     const orderedLensSummary = useMemo(() => {
         if (!rankedAvailableAnalysisLenses.includes(resolvedAnalysisLens)) {
@@ -552,6 +578,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     useEffect(() => {
         setAnalysisLensOverride('auto');
         setShowAdvancedCharts(false);
+        setDesignPickerQuery('');
     }, [jobId, preferredAnalysisLens]);
 
     useEffect(() => {
@@ -567,6 +594,21 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     }, [baseSortedDesigns, lensPrioritizedDesigns, selectedDesignId]);
 
     const activeDesignId = selectedDesignId || lensPrioritizedDesigns[0]?.id || baseSortedDesigns[0]?.id || '';
+    const normalizedDesignPickerQuery = designPickerQuery.trim().toLowerCase();
+    const matchedLensDesigns = useMemo(() => {
+        if (!normalizedDesignPickerQuery) return lensPrioritizedDesigns;
+        return lensPrioritizedDesigns.filter((design) => {
+            const haystack = `${design.name} ${design.id}`.toLowerCase();
+            return haystack.includes(normalizedDesignPickerQuery);
+        });
+    }, [lensPrioritizedDesigns, normalizedDesignPickerQuery]);
+    const designPickerOptions = useMemo(() => {
+        if (matchedLensDesigns.length > 0 || !activeDesignId) return matchedLensDesigns;
+        const activeDesign = lensPrioritizedDesigns.find((design) => design.id === activeDesignId);
+        return activeDesign ? [activeDesign] : [];
+    }, [activeDesignId, lensPrioritizedDesigns, matchedLensDesigns]);
+    const designPickerMatchCount = normalizedDesignPickerQuery ? matchedLensDesigns.length : lensPrioritizedDesigns.length;
+    const formattedPointSize = Number.isInteger(pointSize) ? pointSize.toFixed(0) : pointSize.toFixed(1);
 
     const { data: chainMetrics, isLoading: chainLoading } = useQuery({
         queryKey: ['analytics-chain-metrics', activeDesignId],
@@ -752,7 +794,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         font: { color: FONT_COLOR, size: 11 },
         margin: { l: 0, r: 0, t: 18, b: 0 },
         scene: {
-            bgcolor: PLOT_BG,
+            bgcolor: CHART_BG,
             xaxis: { title: { text: getMetricLabel(xKey) }, gridcolor: GRID_COLOR, color: AXIS_COLOR },
             yaxis: { title: { text: getMetricLabel(yKey) }, gridcolor: GRID_COLOR, color: AXIS_COLOR },
             zaxis: { title: { text: getMetricLabel(zKey) }, gridcolor: GRID_COLOR, color: AXIS_COLOR },
@@ -766,7 +808,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const scatter3dCache = new Map<string, Data[]>();
 
     const buildScatter = (xKey: string, yKey: string, colorKey?: string | null): Data[] => {
-        const cacheKey = `${xKey}::${yKey}::${colorKey || ''}::${colorScale}`;
+        const cacheKey = `${xKey}::${yKey}::${colorKey || ''}::${resolvedColorScale}::${pointSize}`;
         const cached = scatterCache.get(cacheKey);
         if (cached) return cached;
 
@@ -808,10 +850,10 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                 '<extra></extra>',
             ].filter(Boolean).join('<br>'),
             marker: {
-                size: 9,
+                size: pointSize,
                 opacity: 0.82,
                 color: markerColor,
-                colorscale: colorScale,
+                colorscale: resolvedColorScale,
                 showscale: !!colorKey,
                 colorbar: colorKey ? { title: { text: getMetricLabel(colorKey), font: { color: FONT_COLOR } }, tickfont: { color: AXIS_COLOR } } : undefined,
                 line: { color: '#ffffff18', width: 0.8 },
@@ -827,7 +869,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         colorKey?: string | null,
         categoryLabelFormatter?: (value: number) => string,
     ): Data[] => {
-        const cacheKey = `${categoryKey}::${yKey}::${colorKey || ''}::${colorScale}::${categoryLabelFormatter ? 'fmt' : 'raw'}`;
+        const cacheKey = `${categoryKey}::${yKey}::${colorKey || ''}::${resolvedColorScale}::${pointSize}::${categoryLabelFormatter ? 'fmt' : 'raw'}`;
         const cached = categoryScatterCache.get(cacheKey);
         if (cached) return cached;
 
@@ -873,10 +915,10 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                 '<extra></extra>',
             ].filter(Boolean).join('<br>'),
             marker: {
-                size: 8,
+                size: pointSize,
                 opacity: 0.78,
                 color: colorKey ? points.map((point) => point.colorValue ?? 0) : (metricLookup.get(yKey)?.color || '#60a5fa'),
-                colorscale: colorScale,
+                colorscale: resolvedColorScale,
                 showscale: !!colorKey,
                 colorbar: colorKey ? { title: { text: getMetricLabel(colorKey), font: { color: FONT_COLOR } }, tickfont: { color: AXIS_COLOR } } : undefined,
                 line: { color: '#ffffff18', width: 0.6 },
@@ -939,7 +981,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     };
 
     const build3DScatter = (xKey: string, yKey: string, zKey: string, colorKey: string): Data[] => {
-        const cacheKey = `${xKey}::${yKey}::${zKey}::${colorKey}::${colorScale}`;
+        const cacheKey = `${xKey}::${yKey}::${zKey}::${colorKey}::${resolvedColorScale}::${pointSize}`;
         const cached = scatter3dCache.get(cacheKey);
         if (cached) return cached;
         const xValues: number[] = [];
@@ -980,16 +1022,16 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                 '<extra></extra>',
             ].join('<br>'),
             marker: {
-                size: 5.5,
+                size: pointSize,
                 opacity: 0.84,
                 color: colorValues,
-                colorscale: colorScale,
+                colorscale: resolvedColorScale,
                 showscale: true,
                 colorbar: {
                     title: { text: getMetricLabel(colorKey), font: { color: FONT_COLOR } },
                     tickfont: { color: AXIS_COLOR },
                 },
-                line: { color: '#ffffff10', width: 0.5 },
+                line: { width: 0 },
             },
         } as Data];
         scatter3dCache.set(cacheKey, result);
@@ -1006,15 +1048,21 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     ].filter(Boolean)) : null;
 
     const crossFamilyCorrelation = showAdvancedCharts ? buildCorrelationMatrix([
+        'binder_length',
+        'cdr_h1_length',
+        'cdr_h2_length',
+        'cdr_h3_length',
+        'cdr_l1_length',
+        'cdr_l2_length',
+        'cdr_l3_length',
+        'rog',
         'epitope_contact_count',
-        'fampnn_psce',
-        'maturation_delta_interface',
-        'frustration_pct_high',
-        'disorder',
-        validatorAgreementKey || '',
-        validatorRmsdKey || '',
-        'plddt_overall',
-    ].filter(Boolean)) : null;
+        'epitope_min_distance',
+        'target_contact_count',
+        'target_min_distance',
+        'epitope_centroid_distance',
+        'rfa_hotspot_covered_count',
+    ]) : null;
 
     const focusMeta = FAMILY_META[resolvedAnalysisLens];
     const focusDescription = analysisLensOverride === 'auto'
@@ -1047,7 +1095,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             Existing RFA, FAMPNN, PPIFlow, FrustraMPNN, and Protenix signals render directly, and new numeric keys from stage outputs will appear in the custom lab without another dashboard rewrite.
                         </p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                         <button
                             type="button"
                             onClick={() => setShowAdvancedCharts((current) => !current)}
@@ -1072,6 +1120,31 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                                 <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
                         </select>
+                        <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                            <input
+                                type="checkbox"
+                                checked={reverseColorScale}
+                                onChange={(event) => setReverseColorScale(event.target.checked)}
+                                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                            />
+                            Reverse
+                        </label>
+                        <label className="text-xs font-medium uppercase tracking-wide text-slate-500" htmlFor="analytics-point-size">
+                            Point Size
+                        </label>
+                        <input
+                            id="analytics-point-size"
+                            type="range"
+                            min={MIN_POINT_SIZE}
+                            max={MAX_POINT_SIZE}
+                            step={0.5}
+                            value={pointSize}
+                            onChange={(event) => setPointSize(Number(event.target.value))}
+                            className="h-2 w-28 cursor-pointer accent-violet-400"
+                        />
+                        <span className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
+                            {formattedPointSize}px
+                        </span>
                     </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -1117,18 +1190,30 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                         count={chainMetrics ? Object.keys(chainMetrics).length : 0}
                         accentClass="border-slate-700 bg-slate-800/70 text-slate-200"
                     />
-                    <select
-                        value={activeDesignId}
-                        onChange={(event) => setSelectedDesignId(event.target.value)}
-                        className="min-w-[18rem] rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    >
-                        {lensPrioritizedDesigns.slice(0, 200).map((design) => (
-                            <option key={design.id} value={design.id}>
-                                {design.name}
-                                {getLensPickerMetricLabel(design) ? ` (${getLensPickerMetricLabel(design)})` : ''}
-                            </option>
-                        ))}
-                    </select>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <input
+                            type="search"
+                            value={designPickerQuery}
+                            onChange={(event) => setDesignPickerQuery(event.target.value)}
+                            placeholder="Search designs by name or ID"
+                            className="min-w-[18rem] rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                        />
+                        <span className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs font-medium text-slate-300">
+                            {designPickerMatchCount.toLocaleString()} matches
+                        </span>
+                        <select
+                            value={activeDesignId}
+                            onChange={(event) => setSelectedDesignId(event.target.value)}
+                            className="min-w-[22rem] rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                        >
+                            {designPickerOptions.map((design) => (
+                                <option key={design.id} value={design.id}>
+                                    {design.name}
+                                    {getLensPickerMetricLabel(design) ? ` (${getLensPickerMetricLabel(design)})` : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
                 <PlotCard
@@ -1870,10 +1955,10 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                     </div>
 
                     <PlotCard
-                        title="Cross-Family Correlation Matrix"
-                        description="Summarizes how the major output families move together once metrics exist for more than one stage."
+                        title="CDR + Geometry Correlation Matrix"
+                        description="Correlates CDR lengths, binder size, RoG, and RF placement metrics inside the current review set."
                         hasData={!!crossFamilyCorrelation}
-                        emptyMessage="Not enough overlapping cross-family metrics are available yet."
+                        emptyMessage="Not enough overlapping CDR and geometry metrics are available yet."
                     >
                         {crossFamilyCorrelation ? (
                             <Plot
