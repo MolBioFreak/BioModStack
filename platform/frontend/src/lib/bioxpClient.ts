@@ -51,6 +51,11 @@ export interface AxisStatus {
     };
 }
 
+export interface AxisStatusBatchResponse {
+    axes: AxisName[];
+    rows: Partial<Record<AxisName, AxisStatus>>;
+}
+
 export interface MotionPowerStatus {
     hardware_connected?: boolean;
     board_status?: Record<string, any> | null;
@@ -137,6 +142,8 @@ const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
     queryClient.invalidateQueries({ queryKey: ['bioxp'] });
 };
 
+const bioxpHardwareMutationKey = (...parts: string[]) => ['bioxp', 'hardware', ...parts] as const;
+
 export const useGetLinkage = () =>
     useQuery<LinkageStatus, Error>({
         queryKey: ['bioxp', 'linkage'],
@@ -216,6 +223,7 @@ export const useBioXpStatus = (enabled = true, refetchIntervalMs: number | false
 export const useReconnectRuntime = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('runtime', 'reconnect'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/reconnect');
             return res.data;
@@ -236,10 +244,24 @@ export const useAxisStatus = (axis: AxisName | null, enabled = true, refetchInte
         retry: false,
     });
 
+export const useAxisStatusBatch = (axes: AxisName[], enabled = true, refetchIntervalMs: number | false = 3000) =>
+    useQuery<AxisStatusBatchResponse, Error>({
+        queryKey: ['bioxp', 'axis-batch', axes.join(',')],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/axes/status', {
+                params: { axes: axes.join(',') },
+            });
+            return res.data;
+        },
+        enabled: enabled && axes.length > 0,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
 export const usePrepareInterlock = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'interlock', 'prepare'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/interlock/prepare');
             return res.data;
@@ -263,7 +285,7 @@ export const useMotionPowerStatus = (enabled = true, refetchIntervalMs: number |
 export const useMotionPowerEnable = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'power', 'enable'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/power/enable');
             return res.data;
@@ -275,7 +297,7 @@ export const useMotionPowerEnable = () => {
 export const useMotionPowerDiag = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'power', 'diag'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/power/diag');
             return res.data;
@@ -287,7 +309,7 @@ export const useMotionPowerDiag = () => {
 export const useMotionHardReset = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'hard-reset'),
         mutationFn: async ({ rounds }: { rounds: number }) => {
             const res = await api.post('/api/bioxp/motion/hard_reset', { rounds });
             return res.data;
@@ -299,7 +321,7 @@ export const useMotionHardReset = () => {
 export const useClearLock = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'clear-lock'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/motion/clear_lock');
             return res.data;
@@ -311,13 +333,14 @@ export const useClearLock = () => {
 export const useMoveRelative = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
-        mutationFn: async ({ axis, steps }: { axis: AxisName; steps: number }) => {
-            const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s: 15.0 });
+        mutationKey: bioxpHardwareMutationKey('motion', 'relative'),
+        mutationFn: async ({ axis, steps, wait_timeout_s = 15.0 }: { axis: AxisName; steps: number; wait_timeout_s?: number }) => {
+            const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s });
             return res.data;
         },
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', variables.axis] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
         }
     });
@@ -326,13 +349,14 @@ export const useMoveRelative = () => {
 export const useMoveAbsolute = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'absolute'),
         mutationFn: async ({ axis, position_steps }: { axis: AxisName; position_steps: number }) => {
             const res = await api.post('/api/bioxp/motion/axis/absolute', { axis, position_steps, wait_timeout_s: 60.0 });
             return res.data;
         },
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', variables.axis] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
         }
     });
@@ -341,13 +365,14 @@ export const useMoveAbsolute = () => {
 export const useHomeAxis = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationKey: ['bioxp', 'motion'],
+        mutationKey: bioxpHardwareMutationKey('motion', 'home'),
         mutationFn: async ({ axis }: { axis: AxisName }) => {
             const res = await api.post('/api/bioxp/motion/axis/home', { axis, timeout_s: 20.0 });
             return res.data;
         },
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', variables.axis] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
             queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
         }
     });
@@ -368,6 +393,7 @@ export const useLatchStatus = (enabled = true) =>
 export const useLatchLock = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('latch', 'lock'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/latch/lock');
             return res.data;
@@ -379,6 +405,7 @@ export const useLatchLock = () => {
 export const useLatchUnlock = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('latch', 'unlock'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/latch/unlock');
             return res.data;
@@ -390,6 +417,7 @@ export const useLatchUnlock = () => {
 export const useLedRgb = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('led', 'rgb'),
         mutationFn: async (payload: { r: number; g: number; b: number }) => {
             const res = await api.post('/api/bioxp/led/rgb', payload);
             return res.data;
@@ -401,6 +429,7 @@ export const useLedRgb = () => {
 export const useLedPct = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('led', 'pct'),
         mutationFn: async (pct: number) => {
             const res = await api.post('/api/bioxp/led/pct', { pct });
             return res.data;
@@ -412,6 +441,7 @@ export const useLedPct = () => {
 export const useLedOff = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('led', 'off'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/led/off');
             return res.data;
@@ -435,8 +465,45 @@ export const useThermalSnapshot = (enabled = true) =>
 export const useSetThermalTemp = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'set-temp'),
         mutationFn: async ({ bank, target_temp_c }: { bank: ThermalBankName; target_temp_c: number }) => {
             const res = await api.post('/api/bioxp/thermal/set_temp', { bank, target_temp_c });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetThermalFan = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'fan'),
+        mutationFn: async ({ speed }: { speed: number }) => {
+            const res = await api.post('/api/bioxp/thermal/fan', { speed });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetThermalPwm = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'pwm'),
+        mutationFn: async ({ bank, pwm }: { bank: ThermalBankName; pwm: number }) => {
+            const res = await api.post('/api/bioxp/thermal/pwm', { bank, pwm });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetThermalRates = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'rates'),
+        mutationFn: async ({ bank, cool_rate_c_s, heat_rate_c_s }: { bank: ThermalBankName; cool_rate_c_s: number; heat_rate_c_s: number }) => {
+            const res = await api.post('/api/bioxp/thermal/rates', { bank, cool_rate_c_s, heat_rate_c_s });
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
@@ -446,6 +513,7 @@ export const useSetThermalTemp = () => {
 export const useThermalBaseline = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'baseline'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/thermal/baseline');
             return res.data;
@@ -457,6 +525,7 @@ export const useThermalBaseline = () => {
 export const useThermalFastProfile = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'fast-profile'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/thermal/fast_profile');
             return res.data;
@@ -468,6 +537,7 @@ export const useThermalFastProfile = () => {
 export const useThermalHardReset = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('thermal', 'hard-reset'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/thermal/hard_reset');
             return res.data;
@@ -491,8 +561,45 @@ export const useChillerSnapshot = (enabled = true) =>
 export const useSetChillerTemp = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'set-temp'),
         mutationFn: async ({ bank, target_temp_c }: { bank: ChillerBankName; target_temp_c: number }) => {
             const res = await api.post('/api/bioxp/chiller/set_temp', { bank, target_temp_c });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetChillerFan = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'fan'),
+        mutationFn: async ({ bank, speed }: { bank: ChillerBankName; speed: number }) => {
+            const res = await api.post('/api/bioxp/chiller/fan', { bank, speed });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetChillerPwm = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'pwm'),
+        mutationFn: async ({ bank, pwm }: { bank: ChillerBankName; pwm: number }) => {
+            const res = await api.post('/api/bioxp/chiller/pwm', { bank, pwm });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetChillerRates = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'rates'),
+        mutationFn: async ({ bank, cool_rate_c_s, heat_rate_c_s }: { bank: ChillerBankName; cool_rate_c_s: number; heat_rate_c_s: number }) => {
+            const res = await api.post('/api/bioxp/chiller/rates', { bank, cool_rate_c_s, heat_rate_c_s });
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
@@ -502,6 +609,7 @@ export const useSetChillerTemp = () => {
 export const useChillerBaseline = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'baseline'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/chiller/baseline');
             return res.data;
@@ -513,6 +621,7 @@ export const useChillerBaseline = () => {
 export const useChillerHardReset = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: bioxpHardwareMutationKey('chiller', 'hard-reset'),
         mutationFn: async () => {
             const res = await api.post('/api/bioxp/chiller/hard_reset');
             return res.data;
