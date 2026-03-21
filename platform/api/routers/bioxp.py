@@ -358,6 +358,10 @@ async def reconnect_runtime():
 async def get_axis_status(axis: str):
     return await proxy_request("GET", f"/motion/axis/{axis}/status")
 
+@router.get("/motion/axes/status")
+async def get_axes_status(axes: str = "x,y,z"):
+    return await proxy_request("GET", "/motion/axes/status", params={"axes": axes})
+
 @router.post("/motion/interlock/prepare")
 async def prepare_interlock():
     return await proxy_request("POST", "/motion/interlock/prepare")
