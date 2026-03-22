@@ -9,6 +9,33 @@ workflow MATURATION_CHILD_CORE {
     pdb_list
 
     main:
+    def normalizeLoopSpec = { raw ->
+        if (raw == null) {
+            return null
+        }
+        def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
+        def normalized = values.collect { it.toString().trim().toUpperCase() }.findAll { it }
+        normalized ? normalized.join(',') : null
+    }
+    def normalizeRegionMode = { raw ->
+        def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
+        if (value in ['all_cdrs']) return 'all_cdrs'
+        if (value in ['framework', 'framework_only']) return 'framework_only'
+        if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
+        return 'selected_cdrs'
+    }
+    def selectedLoopsSpec = normalizeLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
+    def ppiflowRegionMode = normalizeRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
+    params.ppiflow_region_mode = ppiflowRegionMode
+    if (selectedLoopsSpec) {
+        params.ppiflow_selected_loops = selectedLoopsSpec
+    }
+    def selectedLoopSet = (ppiflowRegionMode == 'selected_cdrs' && selectedLoopsSpec)
+        ? selectedLoopsSpec.split(',')*.trim().findAll { it }.collect { it.toUpperCase() } as Set
+        : [] as Set
+    def ppiflowMode = (params.ppiflow_mode ?: params.maturation_stage_name ?: 'maturation').toString().toLowerCase()
+    def runRedesign = (params.maturation_redesign_enabled != false) && ppiflowMode != 'backbone_refine'
+
     def anchor_inputs = Channel
         .from(pdb_list)
         .map { pdb ->
@@ -19,11 +46,11 @@ workflow MATURATION_CHILD_CORE {
     IdentifyAnchorResidues(anchor_inputs)
     RunPartialFlow(IdentifyAnchorResidues.out.anchor_inputs)
 
-    def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs.map { meta, original_pdb, anchors_json, cdr_positions ->
-        tuple(meta, original_pdb, anchors_json, cdr_positions)
+    def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs.map { meta, original_pdb, anchors_json, ppiflow_positions, cdr_positions ->
+        tuple(meta, original_pdb, anchors_json, ppiflow_positions, cdr_positions)
     }
-    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _anchors_json, _cdr_positions -> tuple(meta.id, original_pdb) }
-    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, anchors_json, cdr_positions -> tuple(meta.id, anchors_json, cdr_positions) }
+    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _anchors_json, _ppiflow_positions, _cdr_positions -> tuple(meta.id, original_pdb) }
+    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, anchors_json, _ppiflow_positions, cdr_positions -> tuple(meta.id, anchors_json, cdr_positions) }
 
     // Fan out multi-sample PPIFlow outputs so downstream tasks operate on one
     // matured backbone at a time instead of a space-joined file list.
@@ -46,8 +73,26 @@ workflow MATURATION_CHILD_CORE {
 
     ScorePartialFlowImprovement(partial_score_inputs)
 
-    ANARCII(partial_backbones)
-    def cdr_loop_lookup = ANARCII.out.cdr_positions.map { meta, cdr_positions_by_loop -> tuple(meta.id, cdr_positions_by_loop) }
+    def cdr_loop_lookup = Channel.empty()
+    if (runRedesign) {
+        ANARCII(partial_backbones)
+        cdr_loop_lookup = ANARCII.out.cdr_positions.map { meta, cdr_positions_by_loop ->
+            def filtered = cdr_positions_by_loop
+            if (selectedLoopSet) {
+                def parsed = new groovy.json.JsonSlurper().parse(new File(cdr_positions_by_loop.toString()))
+                if (parsed instanceof Map) {
+                    parsed = parsed.findAll { loop_id, _positions ->
+                        selectedLoopSet.contains(loop_id.toString().toUpperCase())
+                    }
+                }
+                def tmpFile = File.createTempFile("${meta.id}_selected_cdr_positions_", ".json")
+                tmpFile.deleteOnExit()
+                tmpFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(parsed))
+                filtered = file(tmpFile.toString())
+            }
+            tuple(meta.id, filtered)
+        }
+    }
 
     def partial_scored = ScorePartialFlowImprovement.out.scores
         .join(partial_backbones)
@@ -78,7 +123,7 @@ workflow MATURATION_CHILD_CORE {
     def final_matured
     def final_scores
 
-    if (redesign_enabled) {
+    if (redesign_enabled && runRedesign) {
         def redesign_inputs = partial_selected
             .map { meta, backbone_pdb, _score_json, _score -> tuple(meta.parent_id ?: meta.id, meta, backbone_pdb) }
             .join(anchor_redesign_lookup)

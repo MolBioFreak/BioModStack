@@ -6,7 +6,9 @@ and populates the Design table in SQLite.
 """
 
 import csv
+import copy
 import json
+import re
 import uuid
 from pathlib import Path
 from datetime import datetime
@@ -14,10 +16,14 @@ from typing import Optional, Dict, List, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
+from sqlalchemy.orm import load_only
+from sqlalchemy.orm.attributes import flag_modified
 
 from database import Design, Job
 from paths import get_data_root
 from services.rfantibody_metadata import load_rfantibody_trb_summary
+from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
+from .ipsae import compute_ipsae_interface
 from .structure_utils import calculate_epitope_contacts
 
 
@@ -244,6 +250,519 @@ def _parse_epitope_residues(raw_value: Any) -> Optional[List[str]]:
     return None
 
 
+def _parse_chain_ids(raw_value: Any) -> List[str]:
+    import re
+
+    if not raw_value:
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        values = [str(item).strip() for item in raw_value if str(item).strip()]
+    else:
+        values = [token.strip() for token in re.split(r"[,;|\s]+", str(raw_value)) if token.strip()]
+
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _validation_role_fields(job: Optional[Job], job_params: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    if not _job_has_explicit_binder_target_roles(job):
+        return {
+            "detected_antibody_chains": None,
+            "detected_target_chain": None,
+        }
+
+    binder_chains = _parse_chain_ids(job_params.get("antibody_chains") or job_params.get("binder_chains"))
+    target_chains = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
+    return {
+        "detected_antibody_chains": ",".join(binder_chains) or None,
+        "detected_target_chain": ",".join(target_chains) or None,
+    }
+
+
+def _strict_aligned_error_fields(
+    *,
+    structure_path: Path,
+    summary_json_path: Optional[Path],
+    detected_antibody_chains: Optional[str],
+    detected_target_chain: Optional[str],
+) -> Dict[str, Any]:
+    detected = detect_aligned_error_artifact(
+        structure_path=structure_path,
+        summary_json_path=summary_json_path,
+    )
+    if not detected:
+        return {}
+
+    artifact_path, artifact_format, artifact_key = detected
+    fields: Dict[str, Any] = {
+        "aligned_error_path": str(artifact_path),
+        "aligned_error_format": artifact_format,
+        "aligned_error_key": artifact_key,
+    }
+    try:
+        artifact = load_aligned_error_artifact(
+            aligned_error_path=artifact_path,
+            aligned_error_format=artifact_format,
+            matrix_key=artifact_key,
+            structure_path=structure_path,
+        )
+        ipsae_result = compute_ipsae_interface(
+            artifact,
+            binder_chains=_parse_chain_ids(detected_antibody_chains),
+            target_chains=_parse_chain_ids(detected_target_chain),
+        )
+        fields.update(
+            {
+                "ipsae": safe_float(ipsae_result.get("ipsae")),
+                "ipsae_binder_to_target": safe_float(ipsae_result.get("ipsae_binder_to_target")),
+                "ipsae_target_to_binder": safe_float(ipsae_result.get("ipsae_target_to_binder")),
+                "ipsae_d0chn": safe_float(ipsae_result.get("ipsae_d0chn")),
+                "ipsae_d0dom": safe_float(ipsae_result.get("ipsae_d0dom")),
+                "ipsae_chain_pair": str(ipsae_result.get("ipsae_chain_pair")).strip() if ipsae_result.get("ipsae_chain_pair") else None,
+                "ipsae_pae_cutoff": safe_float(ipsae_result.get("pae_cutoff")),
+                "ipsae_dist_cutoff": safe_float(ipsae_result.get("dist_cutoff")),
+            }
+        )
+    except Exception as exc:
+        print(f"[Ingester] Failed strict aligned-error processing for {structure_path}: {exc}")
+    return fields
+
+
+def _load_json_payload(json_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if not json_path or not json_path.exists():
+        return None
+    try:
+        payload = json.loads(json_path.read_text())
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_fampnn_metrics(fam_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(fam_payload, dict):
+        return {
+            "avg_psce": None,
+            "max_residue_psce": None,
+            "min_residue_psce": None,
+            "chain_avg_psce": None,
+            "sequence": None,
+            "binder_sequence": None,
+            "binder_length": None,
+            "mpnn_score": None,
+        }
+
+    chain_avg_raw = fam_payload.get("chain_avg_psce")
+    chain_avg_psce: Optional[Dict[str, float]] = None
+    if isinstance(chain_avg_raw, dict):
+        normalized_chain_avg: Dict[str, float] = {}
+        for chain_id, raw_value in chain_avg_raw.items():
+            numeric = safe_float(raw_value)
+            if numeric is None:
+                continue
+            normalized_chain_avg[str(chain_id)] = numeric
+        chain_avg_psce = normalized_chain_avg or None
+
+    avg_psce = safe_float(fam_payload.get("fampnn_avg_psce"))
+    if avg_psce is None and chain_avg_psce:
+        avg_psce = sum(chain_avg_psce.values()) / len(chain_avg_psce)
+
+    sequence_text = fam_payload.get("sequence")
+    sequence = str(sequence_text).strip() if isinstance(sequence_text, str) and sequence_text.strip() else None
+    binder_sequence: Optional[str] = None
+    binder_length: Optional[int] = None
+    if sequence:
+        first_chain = sequence.split("|", 1)[0].strip()
+        if ":" in first_chain:
+            _, chain_sequence = first_chain.split(":", 1)
+            first_chain = chain_sequence.strip()
+        if first_chain:
+            binder_sequence = first_chain
+            binder_length = len(first_chain)
+
+    return {
+        "avg_psce": avg_psce,
+        "max_residue_psce": safe_float(fam_payload.get("fampnn_max_residue_psce")),
+        "min_residue_psce": safe_float(fam_payload.get("fampnn_min_residue_psce")),
+        "chain_avg_psce": chain_avg_psce,
+        "sequence": sequence,
+        "binder_sequence": binder_sequence,
+        "binder_length": binder_length,
+        "mpnn_score": safe_float(fam_payload.get("mpnn_score") or fam_payload.get("seq_mpnn_score")),
+    }
+
+
+def _ordered_unique(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _candidate_source_design_names(design_name: str) -> List[str]:
+    stem = Path(str(design_name or "")).stem.strip()
+    if not stem:
+        return []
+
+    candidates = [stem]
+
+    if "_ppiflow_" in stem:
+        upstream = stem.split("_ppiflow_", 1)[0].strip()
+        if upstream:
+            candidates.append(upstream)
+
+    if "_seq_" in stem:
+        prefix, suffix = stem.rsplit("_seq_", 1)
+        candidates.append(prefix)
+        if suffix.isdigit():
+            candidates.append(f"{prefix}_seq_{suffix}")
+
+    return _ordered_unique(candidates)
+
+
+def _parse_source_pdb_paths(raw_value: Any) -> List[Path]:
+    if raw_value in (None, "", [], (), {}):
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        values = list(raw_value)
+    else:
+        values = [part.strip() for part in str(raw_value).split(",") if part.strip()]
+    paths: List[Path] = []
+    for value in values:
+        try:
+            paths.append(Path(str(value)).expanduser())
+        except Exception:
+            continue
+    return paths
+
+
+def _build_source_design_index(params: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for pdb_path in _parse_source_pdb_paths(params.get("pdb_paths")):
+        payload = {
+            "pdb_path": str(pdb_path),
+            "design_name": pdb_path.stem,
+        }
+        for key in _candidate_source_design_names(pdb_path.stem):
+            index.setdefault(key, payload)
+    return index
+
+
+def _extract_stage_settings(params: Dict[str, Any], stage_family: Optional[str], stage_mode: Optional[str]) -> Optional[Dict[str, Any]]:
+    family = str(stage_family or "").strip().lower()
+    if family == "maturation":
+        family = "ppiflow"
+
+    key_groups = {
+        "fampnn": (
+            "fampnn_checkpoint",
+            "fampnn_checkpoint_path",
+            "fampnn_constraint_mode",
+            "fampnn_temperature",
+            "fampnn_num_steps",
+            "fampnn_psce_threshold",
+            "fampnn_exclude_cys",
+            "fampnn_repack_last",
+            "fampnn_seq_only",
+            "fampnn_extra_config",
+            "seqs_per_design",
+        ),
+        "ppiflow": (
+            "ppiflow_mode",
+            "ppiflow_stage_mode",
+            "ppiflow_start_t",
+            "ppiflow_samples_per_target",
+            "ppiflow_retry_limit",
+            "ppiflow_config",
+            "ppiflow_checkpoint",
+            "ppiflow_checkpoint_path",
+            "ppiflow_weights_dir",
+            "ppiflow_antigen_chain",
+            "ppiflow_heavy_chain",
+            "ppiflow_light_chain",
+            "ppiflow_selected_loops",
+            "maturation_design_mode",
+            "maturation_redesign_enabled",
+            "maturation_redesign_temp",
+            "maturation_redesign_steps",
+            "maturation_redesign_top_n",
+            "maturation_anchor_threshold",
+            "maturation_anchor_distance_cutoff",
+            "maturation_min_improvement",
+            "maturation_filter_percentile",
+        ),
+    }
+
+    settings: Dict[str, Any] = {}
+    for key in key_groups.get(family, ()):
+        value = params.get(key)
+        if value in (None, "", [], {}, ()):
+            continue
+        settings[key] = value
+
+    if stage_mode and "stage_mode" not in settings:
+        settings["stage_mode"] = stage_mode
+    return settings or None
+
+
+def _find_first_existing_path(candidates: List[Path]) -> Optional[Path]:
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _find_fampnn_sidecar_path(structure_path: Path, output_path: Optional[Path] = None) -> Optional[Path]:
+    candidates = [structure_path.with_suffix(".json")]
+    if output_path is not None:
+        candidates.extend([
+            output_path / "run" / "ppiflow" / "redesign_debug" / f"{structure_path.stem}.json",
+            output_path / "ppiflow" / "redesign_debug" / f"{structure_path.stem}.json",
+            output_path / "run" / "fampnn" / "results" / f"{structure_path.stem}.json",
+            output_path / "fampnn" / "results" / f"{structure_path.stem}.json",
+        ])
+    return _find_first_existing_path(candidates)
+
+
+def _normalize_scope_value(raw_value: Any) -> Optional[Dict[str, Any]]:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, dict):
+        cleaned = {key: value for key, value in raw_value.items() if value not in (None, "", [], {}, ())}
+        return cleaned or None
+    if isinstance(raw_value, (list, tuple, set)):
+        cleaned = [str(item).strip().upper() for item in raw_value if str(item).strip()]
+        return {"selected_loops": sorted(set(cleaned))} if cleaned else None
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return None
+        tokens = [token.strip().upper() for token in text.replace(";", ",").replace("|", ",").split(",") if token.strip()]
+        if len(tokens) > 1:
+            return {"selected_loops": sorted(set(tokens))}
+        return {"value": text}
+    return {"value": raw_value}
+
+
+def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
+    params = _parse_job_params(job.params if job else None)
+    model_id = str(job.model_id or "").strip().lower() if job else ""
+    mode = str(job.mode or "").strip().lower() if job else ""
+    stage_family = str(params.get("stage_family") or params.get("ppiflow_stage_family") or "").strip().lower() or None
+    stage_mode = str(params.get("stage_mode") or params.get("ppiflow_stage_mode") or "").strip().lower() or None
+    if not stage_family:
+        if mode == "maturation_child":
+            stage_family = "ppiflow"
+            stage_mode = stage_mode or "maturation"
+        elif "fampnn" in model_id:
+            stage_family = "fampnn"
+        elif "antibody" in model_id or "antibody" in mode:
+            stage_family = "antibody"
+
+    selected_loop_scope = _normalize_scope_value(params.get("selected_loop_scope"))
+    if selected_loop_scope is None:
+        for key in (
+            "ppiflow_selected_loops",
+            "selected_loops",
+            "loop_ids",
+            "selected_residues",
+            "antibody_design_loops",
+        ):
+            selected_loop_scope = _normalize_scope_value(params.get(key))
+            if selected_loop_scope:
+                break
+
+    lineage_root_job_id = (
+        params.get("lineage_root_job_id")
+        or params.get("iteration_source_root_job_id")
+        or params.get("resume_root_job_id")
+        or getattr(job, "parent_job_id", None)
+        or getattr(job, "id", None)
+    )
+    origin_job_id = (
+        params.get("selection_source_job_id")
+        or params.get("iteration_source_job_id")
+        or getattr(job, "parent_job_id", None)
+        or getattr(job, "id", None)
+    )
+
+    selection_manifest = None
+    selection_dir = params.get("iteration_selection_dir")
+    if selection_dir:
+        try:
+            manifest_path = Path(str(selection_dir)).expanduser() / "selection_manifest.json"
+            selection_manifest = _load_json_payload(manifest_path)
+        except Exception:
+            selection_manifest = None
+
+    selection_index: Dict[str, Dict[str, Any]] = {}
+    if selection_manifest and isinstance(selection_manifest.get("designs"), list):
+        for item in selection_manifest["designs"]:
+            if not isinstance(item, dict):
+                continue
+            for key in (
+                str(item.get("selection_pdb_path") or "").strip(),
+                Path(str(item.get("selection_pdb_path") or "")).stem if item.get("selection_pdb_path") else "",
+                str(item.get("design_id") or "").strip(),
+                str(item.get("design_name") or "").strip(),
+            ):
+                if key:
+                    selection_index.setdefault(key, item)
+
+    source_design_index = _build_source_design_index(params)
+    stage_settings = _extract_stage_settings(params, stage_family, stage_mode)
+
+    provenance = {
+        "job_id": getattr(job, "id", None),
+        "job_name": getattr(job, "name", None),
+        "model_id": getattr(job, "model_id", None),
+        "mode": getattr(job, "mode", None),
+        "stage_family": stage_family,
+        "stage_mode": stage_mode,
+        "lineage_root_job_id": lineage_root_job_id,
+        "origin_job_id": origin_job_id,
+        "selection_source_type": params.get("selection_source_type"),
+        "selection_source_job_id": params.get("selection_source_job_id") or params.get("iteration_source_job_id"),
+        "selection_dataset_name": params.get("selection_dataset_name"),
+        "selected_loop_scope": selected_loop_scope,
+        "iteration_action": params.get("iteration_action"),
+        "ppiflow_stage_target": params.get("ppiflow_stage_target"),
+        "ppiflow_stage_mode": params.get("ppiflow_stage_mode"),
+        "stage_settings": stage_settings,
+        "selection_manifest": selection_manifest,
+    }
+    return {
+        "params": params,
+        "stage_family": stage_family,
+        "stage_mode": stage_mode,
+        "lineage_root_job_id": lineage_root_job_id,
+        "origin_job_id": origin_job_id,
+        "selected_loop_scope": selected_loop_scope,
+        "provenance": provenance,
+        "selection_index": selection_index,
+        "source_design_index": source_design_index,
+    }
+
+
+async def _resolve_parent_design_lineage(
+    session: AsyncSession,
+    context: Dict[str, Any],
+    design_name: str,
+    *,
+    cache: Optional[Dict[str, Optional[Design]]] = None,
+) -> Dict[str, Optional[str]]:
+    cache = cache or {}
+    selection_index = context.get("selection_index") or {}
+    manifest_item = selection_index.get(design_name)
+    if manifest_item is None:
+        stem = Path(design_name).stem
+        manifest_item = selection_index.get(stem)
+    if manifest_item is None:
+        for key in _candidate_source_design_names(design_name):
+            match = (context.get("source_design_index") or {}).get(key)
+            if match:
+                manifest_item = match
+                break
+
+    parent_design_id = str(manifest_item.get("design_id")).strip() if manifest_item and manifest_item.get("design_id") else None
+    source_pdb_path = str(manifest_item.get("pdb_path")).strip() if manifest_item and manifest_item.get("pdb_path") else None
+    source_design_name = str(manifest_item.get("design_name")).strip() if manifest_item and manifest_item.get("design_name") else None
+    parent_design = None
+    if parent_design_id:
+        parent_design = cache.get(parent_design_id)
+        if parent_design is None and parent_design_id not in cache:
+            result = await session.execute(
+                select(Design).options(
+                    load_only(
+                        Design.id,
+                        Design.job_id,
+                        Design.origin_design_id,
+                        Design.origin_backbone_design_id,
+                        Design.stage_family,
+                        Design.stage_mode,
+                    )
+                ).where(Design.id == parent_design_id)
+            )
+            parent_design = result.scalar_one_or_none()
+            cache[parent_design_id] = parent_design
+    elif source_pdb_path:
+        cache_key = f"pdb::{source_pdb_path}"
+        parent_design = cache.get(cache_key)
+        if parent_design is None and cache_key not in cache:
+            result = await session.execute(
+                select(Design).options(
+                    load_only(
+                        Design.id,
+                        Design.job_id,
+                        Design.origin_design_id,
+                        Design.origin_backbone_design_id,
+                        Design.stage_family,
+                        Design.stage_mode,
+                        Design.pdb_path,
+                        Design.name,
+                    )
+                ).where(Design.pdb_path == source_pdb_path)
+            )
+            parent_design = result.scalars().first()
+            cache[cache_key] = parent_design
+        if parent_design is None and source_design_name:
+            cache_key = f"name::{source_design_name}"
+            parent_design = cache.get(cache_key)
+            if parent_design is None and cache_key not in cache:
+                result = await session.execute(
+                    select(Design).options(
+                        load_only(
+                            Design.id,
+                            Design.job_id,
+                            Design.origin_design_id,
+                            Design.origin_backbone_design_id,
+                            Design.stage_family,
+                            Design.stage_mode,
+                            Design.name,
+                        )
+                    ).where(Design.name == source_design_name)
+                )
+                parent_design = result.scalars().first()
+                cache[cache_key] = parent_design
+        if parent_design is not None:
+            parent_design_id = parent_design.id
+
+    origin_design_id = None
+    origin_backbone_design_id = None
+    origin_job_id = None
+    if parent_design:
+        origin_design_id = parent_design.origin_design_id or parent_design.id
+        origin_backbone_design_id = parent_design.origin_backbone_design_id or parent_design.id
+        origin_job_id = parent_design.job_id
+    elif parent_design_id:
+        origin_design_id = parent_design_id
+        origin_backbone_design_id = parent_design_id
+        origin_job_id = str(manifest_item.get("design_job_id")).strip() if manifest_item and manifest_item.get("design_job_id") else None
+
+    return {
+        "parent_design_id": parent_design_id,
+        "origin_design_id": origin_design_id,
+        "origin_backbone_design_id": origin_backbone_design_id,
+        "origin_job_id": origin_job_id,
+        "selection_manifest_item": manifest_item,
+        "source_pdb_path": source_pdb_path,
+        "source_design_name": source_design_name,
+    }
+
+
 def _parse_hlt_cdr_lengths(structure_path: Optional[Path]) -> Dict[str, int]:
     """
     Parse RFantibody-style HLT REMARK labels from a PDB and return actual
@@ -306,6 +825,8 @@ async def ingest_job_results(
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
     allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
+    job_context = _job_stage_context(current_job)
+    lineage_cache: Dict[str, Optional[Design]] = {}
     
     csv_path = output_path / "results" / "all_designs.csv"
     
@@ -356,12 +877,35 @@ async def ingest_job_results(
                     structure_path_str = find_pdb_path(output_path, design_name)
                     structure_path = Path(structure_path_str) if structure_path_str else None
                     structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
+                    fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path) if structure_path else None
+                    fam_payload = _load_json_payload(fam_json_path) if fam_json_path else None
+                    fam_metrics = _extract_fampnn_metrics(fam_payload)
+                    row_mpnn_score = safe_float(row.get('seq_mpnn_score'))
+                    row_fampnn_psce = safe_float(row.get('seq_fampnn_psce'))
+                    lineage = await _resolve_parent_design_lineage(
+                        session,
+                        job_context,
+                        design_name,
+                        cache=lineage_cache,
+                    )
+                    design_provenance = {
+                        **job_context.get("provenance", {}),
+                        "artifact_group": "rfantibody",
+                        "structure_path": str(structure_path) if structure_path else None,
+                    }
+                    if lineage.get("source_design_name"):
+                        design_provenance["source_design_name"] = lineage["source_design_name"]
+                    if lineage.get("source_pdb_path"):
+                        design_provenance["source_pdb_path"] = lineage["source_pdb_path"]
+                    if fam_payload:
+                        design_provenance["fampnn"] = fam_payload
+
                     design = Design(
                         id=str(uuid.uuid4()),
                         job_id=job_id,
                         name=design_name,
                         pdb_path=str(structure_path) if structure_path else None,
-                        json_path=None,  # Could add if needed
+                        json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
                         
                         # Backbone grouping
                         backbone_id=parse_backbone_id(design_name),
@@ -374,8 +918,9 @@ async def ingest_job_results(
                         rfd_rog=safe_float(row.get('rfd_RoG')),
                         
                         # Sequence design metrics
-                        mpnn_score=safe_float(row.get('seq_mpnn_score')),
-                        fampnn_psce=safe_float(row.get('seq_fampnn_psce')),
+                        mpnn_score=row_mpnn_score if row_mpnn_score is not None else fam_metrics.get("mpnn_score"),
+                        fampnn_psce=row_fampnn_psce if row_fampnn_psce is not None else fam_metrics.get("avg_psce"),
+                        binder_length=fam_metrics.get("binder_length"),
                         
                         # Structure prediction metrics (AF2/Boltz)
                         plddt_overall=safe_float(row.get('pr_plddt') or row.get('plddt')),
@@ -420,7 +965,29 @@ async def ingest_job_results(
                         design.rfa_plddt_delta = safe_float(rfa_trb.get("rfa_plddt_delta"))
                         design.rfa_design_loops = rfa_trb.get("rfa_design_loops")
                         design.rfa_hotspots = rfa_trb.get("rfa_hotspots")
-                        design.confidence_metrics = rfa_trb.get("rfa_metadata")
+                        design_provenance["rfantibody"] = rfa_trb
+                    combined_confidence: Dict[str, Any] = {}
+                    if fam_payload:
+                        combined_confidence["fampnn"] = fam_payload
+                    if rfa_trb:
+                        combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
+                    if combined_confidence:
+                        design.confidence_metrics = combined_confidence
+                    lineage = await _resolve_parent_design_lineage(
+                        session,
+                        job_context,
+                        design.name,
+                        cache=lineage_cache,
+                    )
+                    design.lineage_root_job_id = job_context.get("lineage_root_job_id")
+                    design.parent_design_id = lineage["parent_design_id"]
+                    design.origin_design_id = lineage["origin_design_id"]
+                    design.origin_job_id = lineage["origin_job_id"] or job_context.get("origin_job_id")
+                    design.origin_backbone_design_id = lineage["origin_backbone_design_id"]
+                    design.stage_family = job_context.get("stage_family")
+                    design.stage_mode = job_context.get("stage_mode")
+                    design.selected_loop_scope = job_context.get("selected_loop_scope")
+                    design.provenance = design_provenance
                     
                     session.add(design)
                     designs_created += 1
@@ -436,9 +1003,13 @@ async def ingest_job_results(
             # But let's allow fallback if designs_created is still 0
             pass
     
+    if designs_created == 0 and str(current_job.mode or "").strip().lower() == "maturation_child":
+        print(f"[Ingester] No CSV designs for maturation child {job_id}. Trying published PPIFlow results...")
+        designs_created = await ingest_published_maturation_structures(job_id, output_path, session, current_job=current_job)
+
     if designs_created == 0:
         print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
-        designs_created = await ingest_loose_files(job_id, output_path, session)
+        designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job)
 
     # Post-ingestion: Attach supplementary metrics from pipeline stages
     if designs_created > 0:
@@ -693,8 +1264,11 @@ async def ingest_maturation_data(
     """
     Parse PPIFlow maturation score JSONs and update matching designs.
     
-    Maturation score JSONs are in {output_dir}/run/ppiflow/results/{name}_maturation_score.json
-    Each contains: delta_interface_score, interface_score_matured, rmsd_backbone, sequence_identity, clash_count_ca
+    Parse PPIFlow score/filter JSONs and update matching designs.
+
+    Preferred inputs are *_maturation_score.json or *_partial_flow_score.json.
+    If only *_maturation_filter.json exists, the ingester can still hydrate
+    provenance and any embedded score payload from the filter report.
     """
     # Check multiple possible locations (maturation_child publishes to run/ppiflow/results/)
     maturation_dirs = [
@@ -707,6 +1281,8 @@ async def ingest_maturation_data(
     for d in maturation_dirs:
         if d.exists():
             score_files.extend(d.glob("*_maturation_score.json"))
+            score_files.extend(d.glob("*_partial_flow_score.json"))
+            score_files.extend(d.glob("*_maturation_filter.json"))
     
     if not score_files:
         return 0
@@ -723,17 +1299,35 @@ async def ingest_maturation_data(
     print(f"[Ingester] Found {len(score_files)} maturation score JSONs to process")
     
     updated_count = 0
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    current_job = job_result.scalar_one_or_none()
+    job_context = _job_stage_context(current_job)
+    lineage_cache: Dict[str, Optional[Design]] = {}
     
     for json_path in score_files:
-        # Extract design name: "designname_maturation_score.json" -> "designname"
-        design_name = json_path.stem.replace("_maturation_score", "")
-        
+        stem = json_path.stem
+        if stem.endswith("_maturation_score"):
+            design_name = stem.replace("_maturation_score", "")
+            record_kind = "maturation_score"
+        elif stem.endswith("_partial_flow_score"):
+            design_name = stem.replace("_partial_flow_score", "")
+            record_kind = "partial_flow_score"
+        elif stem.endswith("_maturation_filter"):
+            design_name = stem.replace("_maturation_filter", "")
+            record_kind = "maturation_filter"
+        else:
+            design_name = stem
+            record_kind = "unknown"
+
         try:
             import json as json_mod
             data = json_mod.loads(json_path.read_text())
         except Exception as e:
             print(f"[Ingester] Error parsing maturation JSON {json_path}: {e}")
             continue
+        score_data = data.get("score_data") if isinstance(data, dict) and isinstance(data.get("score_data"), dict) else data
+        if not isinstance(score_data, dict):
+            score_data = {}
         
         # Find matching design in DB (try both with and without job_id for child jobs)
         result = await session.execute(
@@ -745,7 +1339,6 @@ async def ingest_maturation_data(
         design = result.scalar_one_or_none()
         
         if not design:
-            from database import Job
             import sqlalchemy as sa
             # 1. Broaden search to include batch family and iteration source lineage
             job_info = await session.execute(
@@ -785,9 +1378,9 @@ async def ingest_maturation_data(
             continue
         
         # Update design with maturation metrics
-        delta = data.get("delta_interface_score")
-        matured = data.get("interface_score_matured")
-        rmsd_bb = data.get("rmsd_backbone")
+        delta = score_data.get("delta_interface_score")
+        matured = score_data.get("interface_score_matured") or score_data.get("interface_score_refined")
+        rmsd_bb = score_data.get("rmsd_backbone")
         
         if delta is not None:
             design.maturation_delta_interface = float(delta)
@@ -795,6 +1388,104 @@ async def ingest_maturation_data(
             design.maturation_interface_score = float(matured)
         if rmsd_bb is not None:
             design.maturation_rmsd = float(rmsd_bb)
+
+        fam_json_path = _find_fampnn_sidecar_path(Path(design.pdb_path), output_path)
+        fam_payload = _load_json_payload(fam_json_path)
+        fam_metrics = _extract_fampnn_metrics(fam_payload)
+        if fam_json_path and not design.json_path:
+            design.json_path = str(fam_json_path)
+        if fam_metrics.get("avg_psce") is not None:
+            design.fampnn_psce = fam_metrics["avg_psce"]
+        if fam_metrics.get("binder_length") is not None:
+            design.binder_length = fam_metrics["binder_length"]
+        if fam_metrics.get("mpnn_score") is not None:
+            design.mpnn_score = fam_metrics["mpnn_score"]
+
+        confidence_metrics = dict(design.confidence_metrics or {})
+        if fam_payload:
+            confidence_metrics["fampnn"] = fam_payload
+        design.confidence_metrics = confidence_metrics or None
+        if confidence_metrics:
+            flag_modified(design, "confidence_metrics")
+
+        lineage = await _resolve_parent_design_lineage(
+            session,
+            job_context,
+            design.name,
+            cache=lineage_cache,
+        )
+        provenance = copy.deepcopy(design.provenance or {})
+        provenance.setdefault("job", job_context.get("provenance"))
+        provenance["ppiflow"] = copy.deepcopy(provenance.get("ppiflow") or {})
+        provenance["ppiflow"].update({
+            "record_kind": record_kind,
+            "selected_loop_scope": design.selected_loop_scope or job_context.get("selected_loop_scope"),
+            "stage_settings": (job_context.get("provenance") or {}).get("stage_settings"),
+        })
+        if lineage.get("source_design_name"):
+            provenance["ppiflow"]["source_design_name"] = lineage["source_design_name"]
+        if lineage.get("source_pdb_path"):
+            provenance["ppiflow"]["source_pdb_path"] = lineage["source_pdb_path"]
+        if record_kind == "maturation_filter":
+            provenance["ppiflow"]["maturation_filter"] = data
+            provenance["ppiflow"]["maturation_filter_json"] = str(json_path)
+            if score_data:
+                provenance["ppiflow"]["maturation_score"] = score_data
+        else:
+            score_key = "partial_flow_score" if record_kind == "partial_flow_score" else "maturation_score"
+            provenance["ppiflow"][score_key] = score_data
+            provenance["ppiflow"][f"{score_key}_json"] = str(json_path)
+
+        filter_json = json_path if record_kind == "maturation_filter" else json_path.with_name(
+            json_path.name.replace("_maturation_score.json", "_maturation_filter.json").replace("_partial_flow_score.json", "_maturation_filter.json")
+        )
+        if filter_json.exists():
+            filter_payload = _load_json_payload(filter_json)
+            if filter_payload:
+                provenance["ppiflow"]["maturation_filter"] = filter_payload
+                provenance["ppiflow"]["maturation_filter_json"] = str(filter_json)
+                filter_score_data = filter_payload.get("score_data") if isinstance(filter_payload, dict) else None
+                if isinstance(filter_score_data, dict):
+                    provenance["ppiflow"]["maturation_score"] = filter_score_data
+                filter_score_json = filter_payload.get("score_json") if isinstance(filter_payload, dict) else None
+                if filter_score_json:
+                    provenance["ppiflow"]["maturation_score_json"] = str(filter_score_json)
+
+        sidecar_candidates = _ordered_unique([design.name] + _candidate_source_design_names(design.name))
+        for candidate_name in sidecar_candidates:
+            anchors_json = json_path.with_name(f"{candidate_name}_anchors.json")
+            anchors_payload = _load_json_payload(anchors_json)
+            if anchors_payload:
+                provenance["ppiflow"]["anchors"] = anchors_payload
+                provenance["ppiflow"]["anchors_json"] = str(anchors_json)
+                break
+        for candidate_name in sidecar_candidates:
+            interface_json = json_path.with_name(f"{candidate_name}_interface_score.json")
+            interface_payload = _load_json_payload(interface_json)
+            if interface_payload:
+                provenance["ppiflow"]["interface_score"] = interface_payload
+                provenance["ppiflow"]["interface_score_json"] = str(interface_json)
+                break
+        for candidate_name in sidecar_candidates:
+            cdr_positions_path = json_path.with_name(f"{candidate_name}_cdr_positions.txt")
+            if cdr_positions_path.exists():
+                provenance["ppiflow"]["cdr_positions"] = cdr_positions_path.read_text().strip()
+                provenance["ppiflow"]["cdr_positions_txt"] = str(cdr_positions_path)
+                break
+        if fam_json_path:
+            provenance["ppiflow"]["fampnn"] = fam_payload
+            provenance["ppiflow"]["fampnn_json"] = str(fam_json_path)
+
+        design.lineage_root_job_id = design.lineage_root_job_id or job_context.get("lineage_root_job_id")
+        design.parent_design_id = design.parent_design_id or lineage["parent_design_id"]
+        design.origin_design_id = design.origin_design_id or lineage["origin_design_id"]
+        design.origin_job_id = design.origin_job_id or lineage["origin_job_id"] or job_context.get("origin_job_id")
+        design.origin_backbone_design_id = design.origin_backbone_design_id or lineage["origin_backbone_design_id"]
+        design.stage_family = design.stage_family or job_context.get("stage_family") or "ppiflow"
+        design.stage_mode = design.stage_mode or job_context.get("stage_mode") or "maturation"
+        design.selected_loop_scope = design.selected_loop_scope or job_context.get("selected_loop_scope")
+        design.provenance = provenance
+        flag_modified(design, "provenance")
         
         updated_count += 1
     
@@ -803,6 +1494,138 @@ async def ingest_maturation_data(
         print(f"[Ingester] Updated {updated_count} designs with maturation metrics")
     
     return updated_count
+
+
+async def ingest_published_maturation_structures(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+    current_job: Optional[Job] = None,
+) -> int:
+    """
+    Backfill completed maturation-child outputs directly from published PDBs.
+
+    This keeps valid PPIFlow child results viewable even when richer CSV-based
+    ingestion does not run.
+    """
+    result_dirs = [
+        output_path / "run" / "ppiflow" / "results",
+        output_path / "ppiflow" / "results",
+    ]
+    published_results_dir = next((path for path in result_dirs if path.exists()), None)
+    if published_results_dir is None:
+        return 0
+
+    existing_names = set(
+        (
+            await session.execute(
+                select(Design.name).where(Design.job_id == job_id)
+            )
+        ).scalars().all()
+    )
+
+    approved_names = {
+        report.stem.replace("_maturation_filter", "")
+        for report in published_results_dir.glob("*_maturation_filter.json")
+    }
+
+    structure_paths: list[Path] = []
+    if approved_names:
+        for name in sorted(approved_names):
+            for ext in ("pdb", "cif", "mmcif"):
+                candidate = published_results_dir / f"{name}.{ext}"
+                if candidate.exists():
+                    structure_paths.append(candidate)
+                    break
+    else:
+        for ext in ("*.pdb", "*.cif", "*.mmcif"):
+            structure_paths.extend(sorted(published_results_dir.glob(ext)))
+
+    created = 0
+    job_context = _job_stage_context(current_job)
+    lineage_cache: Dict[str, Optional[Design]] = {}
+    for structure_path in structure_paths:
+        design_name = structure_path.stem
+        if design_name in existing_names:
+            continue
+
+        fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
+        fam_payload = _load_json_payload(fam_json_path)
+        fam_metrics = _extract_fampnn_metrics(fam_payload)
+        plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+        if fam_payload:
+            if plddt is not None and plddt <= 0:
+                plddt = None
+            if isinstance(residue_plddt, list) and not any((safe_float(value) or 0.0) > 0 for value in residue_plddt):
+                residue_plddt = None
+        structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
+        lineage = await _resolve_parent_design_lineage(
+            session,
+            job_context,
+            design_name,
+            cache=lineage_cache,
+        )
+        ppiflow_provenance = {
+            "source": "published_maturation_structures",
+            "structure_path": str(structure_path),
+        }
+        if lineage.get("source_design_name"):
+            ppiflow_provenance["source_design_name"] = lineage["source_design_name"]
+        if lineage.get("source_pdb_path"):
+            ppiflow_provenance["source_pdb_path"] = lineage["source_pdb_path"]
+        filter_json = structure_path.with_name(f"{design_name}_maturation_filter.json")
+        filter_payload = _load_json_payload(filter_json)
+        if filter_payload:
+            ppiflow_provenance["maturation_filter"] = filter_payload
+            ppiflow_provenance["maturation_filter_json"] = str(filter_json)
+        confidence_metrics: Dict[str, Any] = {}
+        if fam_payload:
+            ppiflow_provenance["fampnn"] = fam_payload
+            confidence_metrics["fampnn"] = fam_payload
+
+        session.add(Design(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            name=design_name,
+            pdb_path=str(structure_path),
+            json_path=str(fam_json_path) if fam_json_path else None,
+            backbone_id=parse_backbone_id(design_name),
+            lineage_root_job_id=job_context.get("lineage_root_job_id"),
+            parent_design_id=lineage["parent_design_id"],
+            origin_design_id=lineage["origin_design_id"],
+            origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
+            origin_backbone_design_id=lineage["origin_backbone_design_id"],
+            stage_family=job_context.get("stage_family") or "ppiflow",
+            stage_mode=job_context.get("stage_mode") or "maturation",
+            selected_loop_scope=job_context.get("selected_loop_scope"),
+            provenance={
+                **job_context.get("provenance", {}),
+                "artifact_group": "ppiflow",
+                "ppiflow": ppiflow_provenance,
+            },
+            plddt_overall=plddt,
+            residue_plddt=residue_plddt,
+            mpnn_score=fam_metrics.get("mpnn_score"),
+            fampnn_psce=fam_metrics.get("avg_psce"),
+            binder_length=fam_metrics.get("binder_length"),
+            confidence_metrics=confidence_metrics or None,
+            cdr_h1_length=structure_cdr_lengths.get("H1"),
+            cdr_h2_length=structure_cdr_lengths.get("H2"),
+            cdr_h3_length=structure_cdr_lengths.get("H3"),
+            cdr_l1_length=structure_cdr_lengths.get("L1"),
+            cdr_l2_length=structure_cdr_lengths.get("L2"),
+            cdr_l3_length=structure_cdr_lengths.get("L3"),
+            is_favorite=False,
+            created_at=datetime.utcnow(),
+        ))
+        existing_names.add(design_name)
+        created += 1
+
+    if created > 0:
+        await session.commit()
+        print(f"[Ingester] Backfilled {created} published maturation structures for job {job_id}")
+
+    return created
 
 
 async def ingest_frustration_data(
@@ -931,9 +1754,10 @@ async def ingest_frustration_data(
 
 
 async def ingest_loose_files(
-    job_id: str, 
-    output_path: Path, 
-    session: AsyncSession
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+    current_job: Optional[Job] = None,
 ) -> int:
     """Ingest designs from individual JSON/PDB files (fallback)."""
     
@@ -944,6 +1768,12 @@ async def ingest_loose_files(
     raw_job_params = job_row[1] if job_row else None
     job_params = _parse_job_params(raw_job_params)
     is_maturation_child = str(job_mode or "").strip().lower() == "maturation_child"
+    job_context = _job_stage_context(current_job)
+    lineage_cache: Dict[str, Optional[Design]] = {}
+    allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
+    validation_role_fields = _validation_role_fields(current_job, job_params)
+    detected_antibody_chains = validation_role_fields.get("detected_antibody_chains")
+    detected_target_chain = validation_role_fields.get("detected_target_chain")
 
     epitope_residues = _parse_epitope_residues(
         job_params.get("epitope_residues") or job_params.get("selected_residues")
@@ -1067,13 +1897,8 @@ async def ingest_loose_files(
                 rmsd_binder = metrics.get('rmsd_binder') or metrics.get('boltz_binder_rmsd')
                 rmsd_target = metrics.get('rmsd_target') or metrics.get('protenix_target_rmsd') or metrics.get('boltz_target_rmsd')
 
-                # Boltz2 uses 'complex_pde' not PAE - convert PDE to estimated PAE
+                # Only store true PAE values. PDE/IPDE-derived summaries are not interchangeable.
                 pae = metrics.get('complex_pae') or metrics.get('pae')
-                if pae is None:
-                    pde = metrics.get('complex_pde')
-                    if pde is not None:
-                        # PDE (Predicted Distance Error) is similar to PAE but different scale
-                        pae = pde  # Store as-is for now
                 
                 # Look for Affinity JSON
                 affinity_score = None
@@ -1109,15 +1934,59 @@ async def ingest_loose_files(
                     )
                 
                 # Create design
+                lineage = await _resolve_parent_design_lineage(
+                    session,
+                    job_context,
+                    design_name,
+                    cache=lineage_cache,
+                )
+                fam_json_path = _find_fampnn_sidecar_path(Path(structure_path), output_path)
+                fam_payload = _load_json_payload(fam_json_path)
+                fam_provenance: Dict[str, Any] = {
+                    "source": "fampnn" if fam_payload and "fampnn_avg_psce" in fam_payload else "loose_file",
+                    "structure_path": str(structure_path),
+                }
+                if lineage.get("source_design_name"):
+                    fam_provenance["source_design_name"] = lineage["source_design_name"]
+                if lineage.get("source_pdb_path"):
+                    fam_provenance["source_pdb_path"] = lineage["source_pdb_path"]
+                if fam_payload:
+                    fam_provenance["fampnn"] = fam_payload
+                combined_confidence = dict(metrics) if isinstance(metrics, dict) else {}
+                if fam_payload:
+                    combined_confidence["fampnn"] = fam_payload
+                aligned_error_fields = _strict_aligned_error_fields(
+                    structure_path=Path(structure_path),
+                    summary_json_path=Path(json_file) if json_file else None,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                )
+
                 design = Design(
                     id=str(uuid.uuid4()),
                     job_id=job_id,
                     name=design_name,
                     pdb_path=str(structure_path),
-                    json_path=str(json_file),
+                    json_path=str(json_file) if json_file else (str(fam_json_path) if fam_json_path.exists() else None),
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
+                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
+                    parent_design_id=lineage["parent_design_id"],
+                    origin_design_id=lineage["origin_design_id"],
+                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
+                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    stage_family=job_context.get("stage_family"),
+                    stage_mode=job_context.get("stage_mode"),
+                    selected_loop_scope=job_context.get("selected_loop_scope"),
+                    provenance={
+                        **job_context.get("provenance", {}),
+                        **fam_provenance,
+                    },
+                    confidence_metrics=combined_confidence or None,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                    **aligned_error_fields,
                     
                     # Epitope contact metrics
                     epitope_contact_count=epitope_contact_count,
@@ -1152,7 +2021,6 @@ async def ingest_loose_files(
                     cdr_l1_length=structure_cdr_lengths.get("L1"),
                     cdr_l2_length=structure_cdr_lengths.get("L2"),
                     cdr_l3_length=structure_cdr_lengths.get("L3"),
-                    confidence_metrics=metrics,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -1230,6 +2098,18 @@ async def ingest_loose_files(
                 from .structure_utils import get_residue_plddt
                 _, residue_plddt = get_residue_plddt(structure_path)
                 structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
+                lineage = await _resolve_parent_design_lineage(
+                    session,
+                    job_context,
+                    design_name,
+                    cache=lineage_cache,
+                )
+                aligned_error_fields = _strict_aligned_error_fields(
+                    structure_path=Path(structure_path),
+                    summary_json_path=Path(json_file),
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                )
                 
                 # Create design
                 design = Design(
@@ -1241,6 +2121,15 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
+                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
+                    parent_design_id=lineage["parent_design_id"],
+                    origin_design_id=lineage["origin_design_id"],
+                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
+                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    stage_family=job_context.get("stage_family"),
+                    stage_mode=job_context.get("stage_mode"),
+                    selected_loop_scope=job_context.get("selected_loop_scope"),
+                    provenance=job_context.get("provenance", {}),
                     
                     # Metrics
                     plddt_overall=safe_float(plddt),
@@ -1250,12 +2139,15 @@ async def ingest_loose_files(
                     conf_score=safe_float(conf_score),
                     residue_plddt=residue_plddt,
                     confidence_metrics=metrics,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
                     cdr_h1_length=structure_cdr_lengths.get("H1"),
                     cdr_h2_length=structure_cdr_lengths.get("H2"),
                     cdr_h3_length=structure_cdr_lengths.get("H3"),
                     cdr_l1_length=structure_cdr_lengths.get("L1"),
                     cdr_l2_length=structure_cdr_lengths.get("L2"),
                     cdr_l3_length=structure_cdr_lengths.get("L3"),
+                    **aligned_error_fields,
                     
                     # Defaults for others
                     is_favorite=False,
@@ -1360,11 +2252,9 @@ async def ingest_loose_files(
                 rmsd_binder = metrics.get('rmsd_binder') or metrics.get('protenix_binder_rmsd')
                 rmsd_target = metrics.get('rmsd_target') or metrics.get('protenix_target_rmsd') or metrics.get('boltz_target_rmsd')
 
-                pae = metrics.get('complex_pae') or metrics.get('pae') or metrics.get('gpde')
-                if pae is None:
-                    pde = metrics.get('complex_pde')
-                    if pde is not None:
-                        pae = pde
+                # Only store true PAE values. gpde/PDE are different metrics and must not be
+                # backfilled into the PAE column if we want strict downstream interface scoring.
+                pae = metrics.get('complex_pae') or metrics.get('pae')
 
                 # Extract per-residue pLDDT from CIF B-factors
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
@@ -1389,6 +2279,18 @@ async def ingest_loose_files(
                         antibody_chain="A",
                         target_chain="B",
                     )
+                lineage = await _resolve_parent_design_lineage(
+                    session,
+                    job_context,
+                    design_name,
+                    cache=lineage_cache,
+                )
+                aligned_error_fields = _strict_aligned_error_fields(
+                    structure_path=Path(structure_path),
+                    summary_json_path=Path(json_file),
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                )
 
                 design = Design(
                     id=str(uuid.uuid4()),
@@ -1398,8 +2300,19 @@ async def ingest_loose_files(
                     json_path=str(json_file),
 
                     backbone_id=parse_backbone_id(design_name),
+                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
+                    parent_design_id=lineage["parent_design_id"],
+                    origin_design_id=lineage["origin_design_id"],
+                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
+                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    stage_family=job_context.get("stage_family"),
+                    stage_mode=job_context.get("stage_mode"),
+                    selected_loop_scope=job_context.get("selected_loop_scope"),
+                    provenance=job_context.get("provenance", {}),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
 
                     plddt_overall=safe_float(plddt),
                     plddt_binder=safe_float(plddt_binder),
@@ -1428,6 +2341,7 @@ async def ingest_loose_files(
                     num_recycles=safe_int(num_recycles),
                     has_clash=(bool(has_clash) if has_clash is not None else None),
                     confidence_metrics=metrics,
+                    **aligned_error_fields,
 
                     is_favorite=False,
                     created_at=datetime.utcnow()
@@ -1599,6 +2513,16 @@ async def ingest_loose_files(
                 design_name = structure_path.stem
                 if design_name in ingested_names:
                     continue
+
+                lineage = await _resolve_parent_design_lineage(
+                    session,
+                    job_context,
+                    design_name,
+                    cache=lineage_cache,
+                )
+                fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
+                fam_payload = _load_json_payload(fam_json_path)
+                fam_metrics = _extract_fampnn_metrics(fam_payload)
                     
                 # For raw RFantibody outputs, the meaningful confidence lives in the
                 # .trb sidecar rather than the output PDB B-factors.
@@ -1608,6 +2532,11 @@ async def ingest_loose_files(
                     residue_plddt = rfa_trb.get("residue_plddt")
                 else:
                     plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                    if fam_payload and str(job_context.get("stage_family") or "").strip().lower() == "fampnn":
+                        if plddt is not None and plddt <= 0:
+                            plddt = None
+                        if isinstance(residue_plddt, list) and not any(safe_float(value) and safe_float(value) > 0 for value in residue_plddt):
+                            residue_plddt = None
                 structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 epitope_contact_count = None
                 epitope_min_distance = None
@@ -1618,20 +2547,48 @@ async def ingest_loose_files(
                         antibody_chain="A",
                         target_chain="B",
                     )
+
+                design_provenance = {
+                    **job_context.get("provenance", {}),
+                    "structure_path": str(structure_path),
+                }
+                if lineage.get("source_design_name"):
+                    design_provenance["source_design_name"] = lineage["source_design_name"]
+                if lineage.get("source_pdb_path"):
+                    design_provenance["source_pdb_path"] = lineage["source_pdb_path"]
+                combined_confidence: Dict[str, Any] = {}
+                if fam_payload:
+                    design_provenance["fampnn"] = fam_payload
+                    combined_confidence["fampnn"] = fam_payload
+                if rfa_trb:
+                    design_provenance["rfantibody"] = rfa_trb
+                    combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
                     
                 design = Design(
                     id=str(uuid.uuid4()),
                     job_id=job_id,
                     name=design_name,
                     pdb_path=str(structure_path),
-                    json_path=None,
+                    json_path=str(fam_json_path) if fam_json_path.exists() else None,
                     
                     backbone_id=parse_backbone_id(design_name),
+                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
+                    parent_design_id=lineage["parent_design_id"],
+                    origin_design_id=lineage["origin_design_id"],
+                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
+                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    stage_family=job_context.get("stage_family"),
+                    stage_mode=job_context.get("stage_mode"),
+                    selected_loop_scope=job_context.get("selected_loop_scope"),
+                    provenance=design_provenance or None,
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
                     
                     plddt_overall=plddt,
                     residue_plddt=residue_plddt,
+                    mpnn_score=fam_metrics.get("mpnn_score"),
+                    fampnn_psce=fam_metrics.get("avg_psce"),
+                    binder_length=fam_metrics.get("binder_length"),
                     rfa_hotspot_min_distance=safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
                     rfa_hotspot_avg_min_distance=safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
                     rfa_runtime_seconds=safe_float(rfa_trb.get("rfa_runtime_seconds")),
@@ -1645,7 +2602,7 @@ async def ingest_loose_files(
                     rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
                     rfa_design_loops=rfa_trb.get("rfa_design_loops"),
                     rfa_hotspots=rfa_trb.get("rfa_hotspots"),
-                    confidence_metrics=rfa_trb.get("rfa_metadata"),
+                    confidence_metrics=combined_confidence or None,
                     cdr_h1_length=structure_cdr_lengths.get("H1"),
                     cdr_h2_length=structure_cdr_lengths.get("H2"),
                     cdr_h3_length=structure_cdr_lengths.get("H3"),

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Annotations, Data, Layout, Shape } from 'plotly.js';
 
 import {
-    fetchChainMetrics,
+    fetchDesignAnalysis,
     fetchDesignPlotlyMetrics,
-    fetchPAEData,
+    triggerDesignAnalysis,
+    type ChainMetric,
     type Design,
+    type PAEData,
+    type PersistedAnalysisRun,
 } from '../lib/api';
 import { inferDesignAnalysisLens, type AnalysisLens } from './designOutputSource';
 
@@ -385,6 +388,7 @@ function pearson(valuesX: number[], valuesY: number[]): number {
 }
 
 export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLens = 'auto', loadedDesignCount }: AnalyticsDashboardProps) {
+    const queryClient = useQueryClient();
     const [colorScale, setColorScale] = useState<ColorScaleName>('Viridis');
     const [reverseColorScale, setReverseColorScale] = useState(false);
     const [pointSize, setPointSize] = useState(DEFAULT_POINT_SIZE);
@@ -610,19 +614,79 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const designPickerMatchCount = normalizedDesignPickerQuery ? matchedLensDesigns.length : lensPrioritizedDesigns.length;
     const formattedPointSize = Number.isInteger(pointSize) ? pointSize.toFixed(0) : pointSize.toFixed(1);
 
-    const { data: chainMetrics, isLoading: chainLoading } = useQuery({
+    const { data: chainMetricsRun } = useQuery({
         queryKey: ['analytics-chain-metrics', activeDesignId],
-        queryFn: () => fetchChainMetrics(activeDesignId).then((response) => response.data),
+        queryFn: () => fetchDesignAnalysis<Record<string, ChainMetric>>(activeDesignId, 'chain_metrics').then((response) => response.data),
         enabled: !!activeDesignId,
         staleTime: 60_000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const chainMetrics = chainMetricsRun?.status === 'completed'
+        ? (chainMetricsRun.result as Record<string, ChainMetric> | null)
+        : null;
+    const runChainMetrics = useMutation({
+        mutationFn: async () => {
+            if (!activeDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<Record<string, ChainMetric>>(activeDesignId, 'chain_metrics');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['analytics-chain-metrics', activeDesignId] });
+        },
+    });
+    const chainLoading = runChainMetrics.isPending
+        || chainMetricsRun?.status === 'queued'
+        || chainMetricsRun?.status === 'running';
+    const chainMetricsStatus = chainMetricsRun?.status ?? 'missing';
+    const chainMetricsStatusCopy = chainMetricsStatus === 'completed'
+        ? 'Cached'
+        : chainMetricsStatus === 'running'
+            ? 'Running'
+            : chainMetricsStatus === 'queued'
+                ? 'Queued'
+                : chainMetricsStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
 
-    const { data: paeMatrix, isLoading: paeLoading } = useQuery({
+    const { data: paeRun } = useQuery({
         queryKey: ['analytics-pae-data', activeDesignId],
-        queryFn: () => fetchPAEData(activeDesignId).then((response) => response.data),
+        queryFn: () => fetchDesignAnalysis<PAEData>(activeDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data),
         enabled: !!activeDesignId,
         staleTime: 60_000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
     });
+    const paeMatrix = paeRun?.status === 'completed'
+        ? (paeRun.result as PAEData | null)
+        : null;
+    const runPaeMatrix = useMutation({
+        mutationFn: async () => {
+            if (!activeDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<PAEData>(activeDesignId, 'pae_matrix', { max_size: 200 });
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['analytics-pae-data', activeDesignId] });
+        },
+    });
+    const paeLoading = runPaeMatrix.isPending
+        || paeRun?.status === 'queued'
+        || paeRun?.status === 'running';
+    const paeStatus = paeRun?.status ?? 'missing';
+    const paeStatusCopy = paeStatus === 'completed'
+        ? 'Cached'
+        : paeStatus === 'running'
+            ? 'Running'
+            : paeStatus === 'queued'
+                ? 'Queued'
+                : paeStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
 
     useEffect(() => {
         if (!availableMetricKeys.length) return;
@@ -1069,8 +1133,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         ? `Auto-focused on ${focusMeta.title.toLowerCase()} from the current job context and detected output mix.`
         : `Manually pinned to ${focusMeta.title.toLowerCase()}. Auto currently prefers ${FAMILY_META[autoDetectedAnalysisLens].title.toLowerCase()}.`;
     const focusMetricPreview = familyMetricKeys[resolvedAnalysisLens].slice(0, 8);
-    const structuralFollowupAvailable = (!!chainMetrics && Object.keys(chainMetrics).length > 0) || !!paeMatrix;
-    const showStructuralFollowupSection = structuralFollowupAvailable
+    const showStructuralFollowupSection = !!activeDesignId
         && (resolvedAnalysisLens === 'validation' || resolvedAnalysisLens === 'protenix');
 
     if (!designs.length) {
@@ -1216,11 +1279,56 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                     </div>
                 </div>
 
+                <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-700/60 bg-slate-900/50 p-4 shadow-xl shadow-slate-950/20 md:grid-cols-2">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chain Metrics</div>
+                            <div className="mt-1 text-sm text-slate-200">{chainMetricsStatusCopy}</div>
+                            <div className="mt-1 text-xs text-slate-500">Persisted per-chain pLDDT traces and residue numbering for this design.</div>
+                            {chainMetricsRun?.error_message && (
+                                <div className="mt-2 text-xs text-rose-300">Last error: {chainMetricsRun.error_message}</div>
+                            )}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => runChainMetrics.mutate()}
+                            disabled={chainLoading}
+                            className={`rounded border px-3 py-2 text-[11px] font-semibold uppercase tracking-wider transition-colors ${chainLoading
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                }`}
+                        >
+                            {chainLoading ? 'Running…' : chainMetrics ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">PAE Matrix</div>
+                            <div className="mt-1 text-sm text-slate-200">{paeStatusCopy}</div>
+                            <div className="mt-1 text-xs text-slate-500">Persisted aligned-error matrix for this design.</div>
+                            {paeRun?.error_message && (
+                                <div className="mt-2 text-xs text-rose-300">Last error: {paeRun.error_message}</div>
+                            )}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => runPaeMatrix.mutate()}
+                            disabled={paeLoading}
+                            className={`rounded border px-3 py-2 text-[11px] font-semibold uppercase tracking-wider transition-colors ${paeLoading
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
+                                }`}
+                        >
+                            {paeLoading ? 'Running…' : paeMatrix ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                </div>
+
                 <PlotCard
                     title="Per-Residue pLDDT Profile"
                     description="Chain-by-chain confidence curves for the selected design."
                     hasData={!!chainMetrics && Object.keys(chainMetrics).length > 0}
-                    emptyMessage="No per-chain pLDDT traces are available for the selected design."
+                    emptyMessage="No cached chain metrics are available for the selected design. Run Chain Metrics above to persist them."
                 >
                     {chainLoading ? (
                         <div className="flex h-[380px] items-center justify-center text-slate-400">Loading per-chain confidence...</div>
@@ -1288,7 +1396,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                     title="Predicted Aligned Error"
                     description="PAE matrix for the selected design. Chain region bands are derived from the per-chain pLDDT payload when available."
                     hasData={!!paeMatrix}
-                    emptyMessage="No PAE matrix is available for the selected design."
+                    emptyMessage="No cached PAE matrix is available for the selected design. Run PAE Matrix above to persist it."
                 >
                     {paeLoading ? (
                         <div className="flex h-[560px] items-center justify-center text-slate-400">Loading PAE matrix...</div>

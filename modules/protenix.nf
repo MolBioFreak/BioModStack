@@ -23,6 +23,7 @@ process ProtenixPredict {
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(sequence), val(sequence_name)
@@ -30,6 +31,7 @@ process ProtenixPredict {
     output:
     path "predictions/**/*.cif", emit: cifs, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
+    path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
@@ -42,6 +44,7 @@ process ProtenixPredict {
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
+    def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
     def normalizeGpuCsv = { raw ->
         if (raw == null) return ''
         if (raw instanceof Collection) {
@@ -56,6 +59,7 @@ process ProtenixPredict {
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
     // Auto-switch to ESM model if MSA is disabled
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
@@ -82,9 +86,9 @@ process ProtenixPredict {
     export PATH="/root/miniconda3/bin:\$PATH"
     mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
 
-    # Validate container runtime is self-contained (no runtime installs or patching).
-    if ! command -v protenix &> /dev/null; then
-        echo "[PROTENIX] ERROR: protenix CLI not found in container image"
+    # Validate the container has Python available for the repo-local wrapper.
+    if ! command -v python3 &> /dev/null; then
+        echo "[PROTENIX] ERROR: python3 not found in container image"
         exit 127
     fi
 
@@ -182,6 +186,7 @@ ENDJSON
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
@@ -190,7 +195,7 @@ ENDJSON
     # Run structure prediction
     # ═══════════════════════════════════════════════════════════════════════
     echo "[PROTENIX] Running structure prediction..."
-    protenix pred \\
+    python3 ${params.code_root}/scripts/run_protenix_inference.py \\
         --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir predictions/ \\
         --model_name ${effective_model} \\
@@ -217,6 +222,12 @@ ENDJSON
             fi
         fi
         exit 86
+    fi
+
+    first_full_data="\$(find predictions/ -type f -name '*full_data*.json' | head -n 1 || true)"
+    if [ -z "\$first_full_data" ]; then
+        echo "[PROTENIX] ERROR: Protenix returned without producing any full-data confidence JSON output" | tee -a protenix_predict.log
+        exit 85
     fi
 
     echo "[PROTENIX] Prediction complete. Listing outputs:"
@@ -316,6 +327,7 @@ process ProtenixFromComplex {
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     path complex_json
@@ -323,6 +335,7 @@ process ProtenixFromComplex {
     output:
     path "predictions/**/*.cif", emit: structures, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
+    path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
@@ -335,6 +348,7 @@ process ProtenixFromComplex {
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
+    def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
     def normalizeGpuCsv = { raw ->
         if (raw == null) return ''
         if (raw instanceof Collection) {
@@ -349,6 +363,7 @@ process ProtenixFromComplex {
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def model_aliases = [
@@ -375,8 +390,8 @@ process ProtenixFromComplex {
     mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
 
     # Validate container runtime is self-contained (no runtime installs or patching).
-    if ! command -v protenix &> /dev/null; then
-        echo "[PROTENIX-COMPLEX] ERROR: protenix CLI not found in container image"
+    if ! command -v python3 &> /dev/null; then
+        echo "[PROTENIX-COMPLEX] ERROR: python3 not found in container image"
         exit 127
     fi
 
@@ -459,13 +474,14 @@ PY
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
 
     # Run structure prediction
     echo "[PROTENIX-COMPLEX] Running structure prediction..."
-    protenix pred \\
+    python3 ${params.code_root}/scripts/run_protenix_inference.py \\
         --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir predictions/ \\
         --model_name ${effective_model} \\
@@ -492,6 +508,12 @@ PY
             fi
         fi
         exit 86
+    fi
+
+    first_full_data="\$(find predictions/ -type f -name '*full_data*.json' | head -n 1 || true)"
+    if [ -z "\$first_full_data" ]; then
+        echo "[PROTENIX-COMPLEX] ERROR: Protenix returned without producing any full-data confidence JSON output" | tee -a protenix_complex.log
+        exit 85
     fi
 
     echo "[PROTENIX-COMPLEX] Prediction complete. Listing outputs:"

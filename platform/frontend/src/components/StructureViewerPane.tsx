@@ -1,9 +1,10 @@
-import { useState, useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
-import { buildFileDownloadUrl, buildFileStreamUrl, type Design, type Job, type StructureAnalysis, type ChainMetric } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type Design, type Job, type PAEData, type PersistedAnalysisRun, type RfLoopMetric, type RfLoopMetrics, type RfScopeHeadlineMetrics, type RfScreeningScope, type StructureAnalysis } from '../lib/api';
 import { inferDesignAnalysisLens, inferDesignOutputSource } from './designOutputSource';
 
 interface Selection {
@@ -25,8 +26,13 @@ interface Props {
     antibodySelections?: Selection[];
     antibodyStructureUrl?: string;
     structureAnalysis: StructureAnalysis | null | undefined;
+    structureAnalysisRun?: PersistedAnalysisRun<StructureAnalysis> | null;
+    onRunStructureAnalysis?: () => void;
+    structureAnalysisBusy?: boolean;
     activeJob: Job | null | undefined;
     getMetricColor: (field: string, value: number | null) => string;
+    rfMetricScope?: RfScreeningScope;
+    setRfMetricScope?: (scope: RfScreeningScope) => void;
 }
 
 type OverlayView = 'metrics' | 'plddt' | 'pae';
@@ -44,6 +50,62 @@ interface StructureMetricCard {
     value: string;
     accentClass: string;
 }
+
+const normalizeRfScreeningScope = (value: unknown): RfScreeningScope | null =>
+    value === 'whole_antibody' ? 'whole_antibody' : (value === 'cdr_loops' ? 'cdr_loops' : null);
+
+const RF_SCOPE_LABELS: Record<RfScreeningScope, { short: string; target: string; epitope: string; distance: string }> = {
+    cdr_loops: {
+        short: 'CDR Loops',
+        target: 'CDR-Target Contacts',
+        epitope: 'CDR-Epitope Contacts',
+        distance: 'CDR-Target Dist',
+    },
+    whole_antibody: {
+        short: 'Whole Antibody',
+        target: 'Whole-Ab Target Contacts',
+        epitope: 'Whole-Ab Epitope Contacts',
+        distance: 'Whole-Ab Target Dist',
+    },
+};
+
+const coerceRfLoopMetrics = (value: unknown): RfLoopMetrics | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as RfLoopMetrics;
+};
+
+const getRfLoopSummary = (design: Design | null | undefined): Record<string, unknown> | null => {
+    const metrics = coerceRfLoopMetrics(design?.rfa_loop_metrics);
+    const summary = metrics?._screening;
+    return summary && typeof summary === 'object' && !Array.isArray(summary) ? summary as Record<string, unknown> : null;
+};
+
+const getRfHeadlineMetricValue = (
+    design: Design | null | undefined,
+    scope: RfScreeningScope,
+    key: keyof RfScopeHeadlineMetrics,
+): number | null => {
+    const summary = getRfLoopSummary(design);
+    const headlineMetrics = summary?.headline_metrics_by_scope;
+    if (headlineMetrics && typeof headlineMetrics === 'object' && !Array.isArray(headlineMetrics)) {
+        const scopedMetrics = (headlineMetrics as Record<string, unknown>)[scope];
+        if (scopedMetrics && typeof scopedMetrics === 'object' && !Array.isArray(scopedMetrics)) {
+            const value = (scopedMetrics as RfScopeHeadlineMetrics)[key];
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+        }
+    }
+    const fallback = design ? (design as unknown as Record<string, unknown>)[key] : null;
+    return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : null;
+};
+
+const getRfLoopEntries = (design: Design | null | undefined): Array<{ loopId: string; metrics: RfLoopMetric }> => {
+    const metrics = coerceRfLoopMetrics(design?.rfa_loop_metrics);
+    if (!metrics) return [];
+    return Object.entries(metrics)
+        .filter(([loopId, value]) => /^[HL][123]$/.test(loopId) && value && typeof value === 'object' && !Array.isArray(value))
+        .map(([loopId, value]) => ({ loopId, metrics: value as RfLoopMetric }))
+        .sort((a, b) => a.loopId.localeCompare(b.loopId));
+};
 
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
     const source = inferDesignOutputSource(design || {});
@@ -88,8 +150,13 @@ export default function StructureViewerPane({
     antibodySelections,
     antibodyStructureUrl,
     structureAnalysis,
+    structureAnalysisRun,
+    onRunStructureAnalysis,
+    structureAnalysisBusy,
     activeJob,
     getMetricColor,
+    rfMetricScope,
+    setRfMetricScope,
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
@@ -105,12 +172,9 @@ export default function StructureViewerPane({
 
     // For oligo_design jobs: B-factors are NA-MPNN design confidence, not AlphaFold pLDDT
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
-    const bfactorLabel = isOligoJob ? 'Design Conf.' : 'pLDDT';
+    const queryClient = useQueryClient();
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
-    const [paeMatrix, setPaeMatrix] = useState<number[][] | null>(null);
-    const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number; residue_numbers?: number[] }>>({});
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
-    const [chainBoundaries, setChainBoundaries] = useState<{ id: string; start: number; end: number }[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerAreaRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -121,6 +185,100 @@ export default function StructureViewerPane({
     const themeColors = useThemeColors();
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
+    const preferredRfMetricScope = normalizeRfScreeningScope(activeJob?.params?.rfantibody_screen_reference_scope) ?? 'cdr_loops';
+    const effectiveRfMetricScope = rfMetricScope ?? preferredRfMetricScope;
+    const rfMetricLabels = RF_SCOPE_LABELS[effectiveRfMetricScope];
+    const rfLoopEntries = getRfLoopEntries(selectedDesign ?? null);
+    const bfactorLabel = isOligoJob ? 'Design Conf.' : (designLens === 'rfantibody' ? 'RF pLDDT' : 'pLDDT');
+    const structureAnalysisStatus = structureAnalysisRun?.status ?? 'missing';
+    const structureAnalysisStatusCopy = structureAnalysisStatus === 'completed'
+        ? 'Cached'
+        : structureAnalysisStatus === 'running'
+            ? 'Running'
+            : structureAnalysisStatus === 'queued'
+                ? 'Queued'
+                : structureAnalysisStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
+
+    const { data: chainMetricsRun } = useQuery({
+        queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
+                : null
+        ),
+        enabled: !!selectedDesignId,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const chainMetrics = (chainMetricsRun?.status === 'completed'
+        ? (chainMetricsRun.result as Record<string, ChainMetric> | null)
+        : null) ?? {};
+    const runChainMetrics = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'chain_metrics', selectedDesignId] });
+        },
+    });
+    const chainMetricsBusy = runChainMetrics.isPending
+        || chainMetricsRun?.status === 'queued'
+        || chainMetricsRun?.status === 'running';
+    const chainMetricsStatus = chainMetricsRun?.status ?? 'missing';
+    const chainMetricsStatusCopy = chainMetricsStatus === 'completed'
+        ? 'Cached'
+        : chainMetricsStatus === 'running'
+            ? 'Running'
+            : chainMetricsStatus === 'queued'
+                ? 'Queued'
+                : chainMetricsStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
+
+    const { data: paeRun } = useQuery({
+        queryKey: ['design-analysis', 'pae_matrix', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
+                : null
+        ),
+        enabled: !!selectedDesignId,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const paeData = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;
+    const paeMatrix = paeData?.pae_matrix ?? null;
+    const runPaeMatrix = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 });
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'pae_matrix', selectedDesignId] });
+        },
+    });
+    const paeBusy = runPaeMatrix.isPending
+        || paeRun?.status === 'queued'
+        || paeRun?.status === 'running';
+    const paeStatus = paeRun?.status ?? 'missing';
+    const paeStatusCopy = paeStatus === 'completed'
+        ? 'Cached'
+        : paeStatus === 'running'
+            ? 'Running'
+            : paeStatus === 'queued'
+                ? 'Queued'
+                : paeStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
 
     const clampReferenceWindow = useCallback((next: ReferenceWindowState): ReferenceWindowState => {
         const bounds = viewerAreaRef.current?.getBoundingClientRect();
@@ -153,62 +311,40 @@ export default function StructureViewerPane({
         }));
     }, [clampReferenceWindow]);
 
-    // Fetch all structure metrics in parallel when design changes
-    // (Consolidated from 3 separate useEffects to reduce network round-trips)
+    // Per-residue confidence is already persisted on the design row, so fetching it
+    // is cheap and does not kick off new analysis work.
     useEffect(() => {
         if (!selectedDesignId) return;
 
-        const fetchAllMetrics = async () => {
+        const fetchResidueMetrics = async () => {
             try {
-                // Parallel fetch all three endpoints
-                const [residueRes, paeRes, chainRes] = await Promise.all([
-                    fetch(`/api/designs/${selectedDesignId}/residue-metrics`).catch(() => null),
-                    fetch(`/api/designs/${selectedDesignId}/pae`).catch(() => null),
-                    fetch(`/api/designs/${selectedDesignId}/chain-metrics`).catch(() => null),
-                ]);
+                const residueRes = await fetch(`/api/designs/${selectedDesignId}/residue-metrics`).catch(() => null);
 
-                // Process residue pLDDT
                 if (residueRes?.ok) {
                     const data = await residueRes.json();
                     setPlddtProfile(data.plddt || []);
                 } else {
                     setPlddtProfile([]);
                 }
-
-                // Process PAE matrix
-                if (paeRes?.ok) {
-                    const data = await paeRes.json();
-                    setPaeMatrix(data.pae_matrix || null);
-                } else {
-                    setPaeMatrix(null);
-                }
-
-                // Process chain metrics
-                if (chainRes?.ok) {
-                    const data = await chainRes.json();
-                    setChainMetrics(data);
-
-                    // Compute chain boundaries for PAE overlay
-                    const chainIds = Object.keys(data).sort();
-                    let offset = 0;
-                    const boundaries: { id: string; start: number; end: number }[] = [];
-                    for (const chainId of chainIds) {
-                        const length = data[chainId]?.length || 0;
-                        boundaries.push({ id: chainId, start: offset, end: offset + length });
-                        offset += length;
-                    }
-                    setChainBoundaries(boundaries);
-                } else {
-                    setChainMetrics({});
-                    setChainBoundaries([]);
-                }
             } catch (err) {
                 console.error('Failed to fetch structure metrics:', err);
             }
         };
 
-        fetchAllMetrics();
+        fetchResidueMetrics();
     }, [selectedDesignId]);
+
+    const chainBoundaries = useMemo(() => {
+        const chainIds = Object.keys(chainMetrics).sort();
+        let offset = 0;
+        const boundaries: { id: string; start: number; end: number }[] = [];
+        for (const chainId of chainIds) {
+            const length = chainMetrics[chainId]?.length || 0;
+            boundaries.push({ id: chainId, start: offset, end: offset + length });
+            offset += length;
+        }
+        return boundaries;
+    }, [chainMetrics]);
 
     const hasResidueConfidence = plddtProfile.length > 0 || Object.keys(chainMetrics).length > 0;
     const hasPae = Array.isArray(paeMatrix) && paeMatrix.length > 0;
@@ -243,8 +379,10 @@ export default function StructureViewerPane({
     })();
 
     const stageGuidance =
-        designLens === 'rfantibody' && !hasResidueConfidence
-            ? 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.'
+        designLens === 'rfantibody'
+            ? (hasResidueConfidence
+                ? 'RF confidence here is stage-native RFantibody output, not a downstream validator score.'
+                : 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.')
             : null;
 
     const structureMetricCards = (() => {
@@ -253,23 +391,23 @@ export default function StructureViewerPane({
         if (designLens === 'rfantibody') {
             return [
                 {
-                    label: 'Any-Target Contacts',
-                    value: formatMetricValue(selectedDesign.target_contact_count ?? null, 0),
+                    label: rfMetricLabels.target,
+                    value: formatMetricValue(getRfHeadlineMetricValue(selectedDesign, effectiveRfMetricScope, 'target_contact_count'), 0),
                     accentClass: 'text-emerald-300',
                 },
                 {
-                    label: 'Epitope Contacts',
-                    value: formatMetricValue(selectedDesign.epitope_contact_count ?? null, 0),
+                    label: rfMetricLabels.epitope,
+                    value: formatMetricValue(getRfHeadlineMetricValue(selectedDesign, effectiveRfMetricScope, 'epitope_contact_count'), 0),
                     accentClass: 'text-cyan-300',
                 },
                 {
-                    label: 'Any-Target Dist',
-                    value: formatMetricValue(selectedDesign.target_min_distance ?? null, 1, ' A'),
+                    label: rfMetricLabels.distance,
+                    value: formatMetricValue(getRfHeadlineMetricValue(selectedDesign, effectiveRfMetricScope, 'target_min_distance'), 1, ' A'),
                     accentClass: 'text-amber-300',
                 },
                 {
-                    label: 'Epitope Dist',
-                    value: formatMetricValue(selectedDesign.epitope_min_distance ?? null, 1, ' A'),
+                    label: `${rfMetricLabels.short} Epi Dist`,
+                    value: formatMetricValue(getRfHeadlineMetricValue(selectedDesign, effectiveRfMetricScope, 'epitope_min_distance'), 1, ' A'),
                     accentClass: 'text-violet-300',
                 },
                 {
@@ -613,6 +751,23 @@ export default function StructureViewerPane({
                                         {stageGuidance}
                                     </div>
                                 )}
+                                {designLens === 'rfantibody' && setRfMetricScope && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-violet-500/20 bg-violet-500/5 px-2 py-2">
+                                        <div className="text-[10px] uppercase tracking-wider text-violet-200">RF Lens</div>
+                                        <div className="inline-flex rounded-md border border-slate-700/70 bg-slate-950/60 p-1">
+                                            {(['cdr_loops', 'whole_antibody'] as RfScreeningScope[]).map((scope) => (
+                                                <button
+                                                    key={scope}
+                                                    type="button"
+                                                    onClick={() => setRfMetricScope(scope)}
+                                                    className={`rounded px-2 py-1 text-[10px] transition-colors ${effectiveRfMetricScope === scope ? 'bg-violet-500/20 text-violet-100' : 'text-slate-400 hover:text-slate-200'}`}
+                                                >
+                                                    {RF_SCOPE_LABELS[scope].short}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                                     {metricSectionTitle}
                                 </div>
@@ -626,6 +781,30 @@ export default function StructureViewerPane({
                                         </div>
                                     ))}
                                 </div>
+                                {designLens === 'rfantibody' && rfLoopEntries.length > 0 && (
+                                    <div className="space-y-2">
+                                        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Loop Triage</div>
+                                        <div className="grid grid-cols-1 gap-2">
+                                            {rfLoopEntries.map(({ loopId, metrics }) => (
+                                                <div key={loopId} className={`rounded border px-2 py-2 text-[11px] ${metrics.redesign_candidate ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-slate-700/60 bg-slate-900/40 text-slate-300'}`}>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="font-semibold text-white">{loopId}</span>
+                                                        <span>{metrics.screening_status || metrics.screening_note || 'ok'}</span>
+                                                    </div>
+                                                    <div className="mt-1 text-slate-400">
+                                                        {metrics.epitope_contact_count ?? '—'} epi cts • {metrics.target_contact_count ?? '—'} tgt cts • {metrics.target_min_distance != null ? `${metrics.target_min_distance.toFixed(1)} A` : '—'}
+                                                    </div>
+                                                    {metrics.screening_note && metrics.screening_note !== metrics.screening_status && (
+                                                        <div className="mt-1 text-[10px] text-slate-500">{metrics.screening_note}</div>
+                                                    )}
+                                                    {metrics.redesign_candidate && (
+                                                        <div className="mt-1 text-[10px] text-amber-200">Flagged for redesign triage.</div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </>
                         )}
 
@@ -652,6 +831,75 @@ export default function StructureViewerPane({
                                 )}
                             </div>
                         )}
+                        {!structureAnalysis && (
+                            <div className="rounded border border-slate-700/60 bg-slate-900/40 p-2 text-[11px] text-slate-400">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="font-semibold uppercase tracking-wider text-slate-500">Structure Analysis</div>
+                                        <div className="mt-1">{structureAnalysisStatusCopy}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={onRunStructureAnalysis}
+                                        disabled={!onRunStructureAnalysis || !!structureAnalysisBusy}
+                                        className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${structureAnalysisBusy
+                                            ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                            : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                            }`}
+                                    >
+                                        {structureAnalysisBusy ? 'Running…' : 'Run'}
+                                    </button>
+                                </div>
+                                {structureAnalysisRun?.error_message && (
+                                    <div className="mt-2 text-[10px] text-rose-300">Last error: {structureAnalysisRun.error_message}</div>
+                                )}
+                            </div>
+                        )}
+                        <div className="rounded border border-slate-700/60 bg-slate-900/30 p-2 text-[11px] text-slate-400">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Auxiliary Analyses</div>
+                            <div className="mt-2 space-y-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-slate-200">Chain Metrics</div>
+                                        <div className="text-[10px] text-slate-500">{chainMetricsStatusCopy}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => runChainMetrics.mutate()}
+                                        disabled={chainMetricsBusy}
+                                        className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${chainMetricsBusy
+                                            ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                            : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                            }`}
+                                    >
+                                        {chainMetricsBusy ? 'Running…' : Object.keys(chainMetrics).length ? 'Refresh' : 'Run'}
+                                    </button>
+                                </div>
+                                {chainMetricsRun?.error_message && (
+                                    <div className="text-[10px] text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
+                                )}
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-slate-200">PAE Matrix</div>
+                                        <div className="text-[10px] text-slate-500">{paeStatusCopy}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => runPaeMatrix.mutate()}
+                                        disabled={paeBusy}
+                                        className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
+                                            ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                            : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
+                                            }`}
+                                    >
+                                        {paeBusy ? 'Running…' : paeMatrix ? 'Refresh' : 'Run'}
+                                    </button>
+                                </div>
+                                {paeRun?.error_message && (
+                                    <div className="text-[10px] text-rose-300">Last PAE error: {paeRun.error_message}</div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
 
@@ -856,8 +1104,20 @@ export default function StructureViewerPane({
                                 </div>
                             </div>
                         ) : (
-                            <div className="h-40 flex items-center justify-center text-slate-500 text-xs bg-slate-800/40 rounded">
-                                No PAE matrix available
+                            <div className="h-40 flex flex-col items-center justify-center gap-3 text-slate-500 text-xs bg-slate-800/40 rounded px-4 text-center">
+                                <div>No cached PAE matrix available.</div>
+                                <div className="uppercase tracking-wider text-[10px]">{paeStatusCopy}</div>
+                                <button
+                                    type="button"
+                                    onClick={() => runPaeMatrix.mutate()}
+                                    disabled={paeBusy}
+                                    className={`rounded border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
+                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                        : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
+                                        }`}
+                                >
+                                    {paeBusy ? 'Running…' : 'Run PAE'}
+                                </button>
                             </div>
                         )}
                     </div>
@@ -893,6 +1153,23 @@ export default function StructureViewerPane({
                             {stageGuidance}
                         </div>
                     )}
+                    {designLens === 'rfantibody' && setRfMetricScope && (
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                            <div className="text-[10px] uppercase tracking-wider text-violet-200">RF Lens</div>
+                            <div className="inline-flex rounded-md border border-slate-700/70 bg-slate-950/60 p-1">
+                                {(['cdr_loops', 'whole_antibody'] as RfScreeningScope[]).map((scope) => (
+                                    <button
+                                        key={scope}
+                                        type="button"
+                                        onClick={() => setRfMetricScope(scope)}
+                                        className={`rounded px-2 py-1 text-[10px] transition-colors ${effectiveRfMetricScope === scope ? 'bg-violet-500/20 text-violet-100' : 'text-slate-400 hover:text-slate-200'}`}
+                                    >
+                                        {RF_SCOPE_LABELS[scope].short}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                         {structureMetricCards.map((metric) => (
                             <div key={metric.label} className="bg-slate-900/50 rounded-lg p-3 text-center">
@@ -903,13 +1180,55 @@ export default function StructureViewerPane({
                             </div>
                         ))}
                     </div>
+                    {designLens === 'rfantibody' && rfLoopEntries.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Loop Triage</div>
+                            <div className="grid grid-cols-1 gap-2">
+                                {rfLoopEntries.map(({ loopId, metrics }) => (
+                                    <div key={loopId} className={`rounded border px-3 py-2 text-xs ${metrics.redesign_candidate ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-slate-700/60 bg-slate-900/40 text-slate-300'}`}>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="font-semibold text-white">{loopId}</span>
+                                            <span>{metrics.screening_status || metrics.screening_note || 'ok'}</span>
+                                        </div>
+                                        <div className="mt-1 text-slate-400">
+                                            {metrics.epitope_contact_count ?? '—'} epi cts • {metrics.target_contact_count ?? '—'} tgt cts • {metrics.target_min_distance != null ? `${metrics.target_min_distance.toFixed(1)} A` : '—'}
+                                        </div>
+                                        {metrics.screening_note && metrics.screening_note !== metrics.screening_status && (
+                                            <div className="mt-1 text-[10px] text-slate-500">{metrics.screening_note}</div>
+                                        )}
+                                        {metrics.redesign_candidate && (
+                                            <div className="mt-1 text-[10px] text-amber-200">Flagged for redesign triage.</div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
             {/* Structure Analysis */}
-            {structureAnalysis && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
-                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Structure Analysis</h4>
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Structure Analysis</h4>
+                    <div className="flex items-center gap-2">
+                        <span className={`text-[10px] uppercase tracking-wider ${structureAnalysisStatus === 'completed' ? 'text-emerald-300' : structureAnalysisStatus === 'failed' ? 'text-rose-300' : 'text-slate-500'}`}>
+                            {structureAnalysisStatusCopy}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={onRunStructureAnalysis}
+                            disabled={!onRunStructureAnalysis || !!structureAnalysisBusy}
+                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${structureAnalysisBusy
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                }`}
+                        >
+                            {structureAnalysisBusy ? 'Running…' : structureAnalysis ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                </div>
+                {structureAnalysis ? (
                     <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                             <span className="text-slate-500">Total Residues</span>
@@ -932,8 +1251,57 @@ export default function StructureViewerPane({
                             </>
                         )}
                     </div>
+                ) : (
+                    <div className="text-sm text-slate-500">
+                        Structure summary is now on-demand and persisted. Run it once for this design to cache the result.
+                        {structureAnalysisRun?.error_message && (
+                            <div className="mt-2 text-xs text-rose-300">Last error: {structureAnalysisRun.error_message}</div>
+                        )}
+                    </div>
+                )}
+                <div className="mt-4 space-y-3 border-t border-slate-700/50 pt-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chain Metrics</div>
+                            <div className="mt-1 text-sm text-slate-400">{chainMetricsStatusCopy}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => runChainMetrics.mutate()}
+                            disabled={chainMetricsBusy}
+                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${chainMetricsBusy
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                }`}
+                        >
+                            {chainMetricsBusy ? 'Running…' : Object.keys(chainMetrics).length ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                    {chainMetricsRun?.error_message && (
+                        <div className="text-xs text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
+                    )}
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">PAE Matrix</div>
+                            <div className="mt-1 text-sm text-slate-400">{paeStatusCopy}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => runPaeMatrix.mutate()}
+                            disabled={paeBusy}
+                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
+                                }`}
+                        >
+                            {paeBusy ? 'Running…' : paeMatrix ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                    {paeRun?.error_message && (
+                        <div className="text-xs text-rose-300">Last PAE error: {paeRun.error_message}</div>
+                    )}
                 </div>
-            )}
+            </div>
 
             {/* Chain Details Panel (for multi-chain complexes) */}
             {selectedDesign && Object.keys(chainMetrics).length > 0 && (

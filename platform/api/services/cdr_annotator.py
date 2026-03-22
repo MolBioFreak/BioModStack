@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 
+from services.anarcii_runtime import (
+    ANARCIIRuntime,
+    build_apptainer_exec_command,
+    get_default_anarcii_batch_size,
+    get_default_anarcii_cpu_threads,
+    resolve_anarcii_runtime,
+)
 
 @dataclass
 class CDRAnnotation:
@@ -107,6 +114,10 @@ FR3_RANGE = (82, 87)
 FR4_RANGE = (101, 103)
 VARIABLE_DOMAIN_MIN_LENGTH = 70
 VARIABLE_DOMAIN_MAX_LENGTH = 260
+
+
+def _cpu_only_runtime(container_path: Path) -> ANARCIIRuntime:
+    return ANARCIIRuntime(mode="cpu", gpu_id=None, reason="cpu fallback", container_path=container_path)
 
 
 def _normalize_insertion_code(value: Any) -> str:
@@ -321,17 +332,26 @@ def run_anarcii(sequence: str, scheme: str = "imgt") -> Optional[Dict]:
     if not container_path.exists():
         logger.error(f"[CDR Annotator] Container not found: {container_path}")
         return None
-    
-    try:
-        # Run ANARCII inside container with correct API
-        cmd = [
-            "apptainer", "exec", str(container_path),
-            "python3", "-c", f'''
+
+    runtime = resolve_anarcii_runtime(container_path=container_path)
+    logger.info(
+        "[CDR Annotator] Single ANARCII runtime=%s gpu=%s (%s)",
+        runtime.mode,
+        runtime.gpu_id,
+        runtime.reason,
+    )
+
+    def _build_cmd(selected_runtime: ANARCIIRuntime) -> list[str]:
+        cpu_mode = selected_runtime.mode != "gpu"
+        inner_cmd = [
+            "python3",
+            "-c",
+            f'''
 import json
 from anarcii import Anarcii
 
-seq = "{sequence}"
-numberer = Anarcii(seq_type='unknown')  # Auto-detect antibody vs TCR
+seq = {json.dumps(sequence)}
+numberer = Anarcii(seq_type='unknown', mode='accuracy', cpu={str(cpu_mode)}, ncpu=1, batch_size=32)
 result = numberer.number([seq])
 
 output = {{}}
@@ -403,15 +423,31 @@ for seq_name, data in result.items():
     output[chain_type] = payload
 
 print(json.dumps(output))
-'''
+''',
         ]
-        
+        return build_apptainer_exec_command(selected_runtime, inner_cmd)
+
+    try:
         result = subprocess.run(
-            cmd,
+            _build_cmd(runtime),
             capture_output=True,
             text=True,
             timeout=120
         )
+
+        if result.returncode != 0 and runtime.mode == "gpu":
+            logger.warning(
+                "[CDR Annotator] GPU ANARCII failed on gpu=%s, retrying on CPU: %s",
+                runtime.gpu_id,
+                (result.stderr or "").strip()[:300],
+            )
+            runtime = _cpu_only_runtime(container_path)
+            result = subprocess.run(
+                _build_cmd(runtime),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
         
         if result.returncode == 0 and result.stdout.strip():
             try:
@@ -582,9 +618,9 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
     """
     Batch annotate multiple PDB files for CDR regions.
     
-    This is ~30x faster than calling annotate_pdb one-by-one because it:
+    This is much faster than calling annotate_pdb one-by-one because it:
     1. Extracts all sequences first (CPU-bound, fast)
-    2. Runs ANARCII once with all sequences batched (CPU inference with 24 cores)
+    2. Runs ANARCII once with all sequences batched
     3. Maps results back to PDB paths
     
     Returns dict of {pdb_path: CDRAnnotation}
@@ -624,7 +660,15 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
         print("[CDR Annotator] No sequences extracted")
         return {}
     
-    print(f"[CDR Annotator] Extracted {len(all_sequences)} chains from {len(path_to_chains)} PDBs, running ANARCII with 24 cores...")
+    requested_batch_size = max(1, int(batch_size or get_default_anarcii_batch_size()))
+    cpu_threads = get_default_anarcii_cpu_threads()
+    runtime = resolve_anarcii_runtime(container_path=container_path)
+    print(
+        f"[CDR Annotator] Extracted {len(all_sequences)} chains from {len(path_to_chains)} PDBs, "
+        f"running batched ANARCII via {runtime.mode}"
+        + (f" on GPU {runtime.gpu_id}" if runtime.gpu_id is not None else "")
+        + f" ({runtime.reason})..."
+    )
     
     # Step 2: Run ANARCII in batch using temp file for sequences
     # Write sequences to temp file to avoid shell escaping issues
@@ -632,12 +676,9 @@ def batch_annotate_pdbs(pdb_paths: list, batch_size: int = 500) -> Dict[str, CDR
         json.dump(all_sequences, f)
         seq_file = f.name
     
-    try:
-        cmd = [
-            "apptainer", "exec", 
-            "--bind", f"{seq_file}:/tmp/sequences.json",
-            str(container_path),
-            "python3", "-c", '''
+    def _build_batch_cmd(selected_runtime: ANARCIIRuntime) -> list[str]:
+        cpu_mode = selected_runtime.mode != "gpu"
+        inner_script = """
 import json
 import sys
 
@@ -647,8 +688,14 @@ with open("/tmp/sequences.json") as f:
 
 from anarcii import Anarcii
 
-# Use 24 CPU cores and batch size 500
-numberer = Anarcii(seq_type='unknown', cpu=True, batch_size=500, ncpu=24)  # Auto-detect antibody vs TCR
+# Use a large batch on CPU or GPU, with explicit fallback mode selection.
+numberer = Anarcii(
+    seq_type='unknown',
+    mode='accuracy',
+    batch_size=__BATCH_SIZE__,
+    cpu=__CPU_MODE__,
+    ncpu=__NCPU__,
+)  # Auto-detect antibody vs TCR
 results = numberer.number(sequences) or []
 
 # FR contact hotspot IMGT positions (Zavrtanik et al. 2018)
@@ -715,10 +762,10 @@ for data in ordered_results:
             "fr4_contacts": "",
         })
         continue
-    
+
     residues = []
     seq_idx = -1
-    
+
     for (pos, insertion), aa in numbering:
         if aa == "-":
             continue
@@ -741,7 +788,7 @@ for data in ordered_results:
         payload[f"cdr{idx}"] = "".join(entry["aa"] for entry in loop_residues)
         payload[f"cdr{idx}_range"] = [min(positions), max(positions)] if positions else None
         payload[f"cdr{idx}_seq_range"] = [min(seq_indices), max(seq_indices)] if seq_indices else None
-    
+
     output.append({
         "chain_type": chain_type,
         "cdr1": payload["cdr1"],
@@ -760,15 +807,50 @@ for data in ordered_results:
     })
 
 print(json.dumps(output))
-'''
+""".replace("__BATCH_SIZE__", str(requested_batch_size)).replace(
+            "__CPU_MODE__", "True" if cpu_mode else "False"
+        ).replace("__NCPU__", str(cpu_threads if cpu_mode else 1))
+        inner_cmd = [
+            "python3",
+            "-c",
+            inner_script,
         ]
-        
+        cmd = ["apptainer", "exec"]
+        if selected_runtime.mode == "gpu" and selected_runtime.gpu_id is not None:
+            cmd.extend(
+                [
+                    "--nv",
+                    "--env",
+                    "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+                    "--env",
+                    f"CUDA_VISIBLE_DEVICES={selected_runtime.gpu_id}",
+                ]
+            )
+        cmd.extend(["--bind", f"{seq_file}:/tmp/sequences.json", str(container_path)])
+        cmd.extend(inner_cmd)
+        return cmd
+
+    try:
         result = subprocess.run(
-            cmd,
+            _build_batch_cmd(runtime),
             capture_output=True,
             text=True,
             timeout=600  # 10 min timeout for large batches
         )
+
+        if result.returncode != 0 and runtime.mode == "gpu":
+            logger.warning(
+                "[CDR Annotator] GPU batch ANARCII failed on gpu=%s, retrying on CPU: %s",
+                runtime.gpu_id,
+                (result.stderr or "").strip()[:300],
+            )
+            runtime = _cpu_only_runtime(container_path)
+            result = subprocess.run(
+                _build_batch_cmd(runtime),
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
         
         if result.returncode != 0:
             print(f"[CDR Annotator] Batch ANARCII error: {result.stderr[:500]}")
