@@ -5,6 +5,7 @@ import re
 import json
 import logging
 import math
+import shutil
 from pathlib import Path
 import argparse
 from multiprocessing import Pool
@@ -25,6 +26,14 @@ def setup_logging():
     return logger
 
 logger = setup_logging()
+
+
+def copy_optional_file(src: Path, dst: Path) -> bool:
+    if not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
 
 def get_chain_ids(structure):
     chain_ids = []
@@ -89,7 +98,7 @@ def rmsd_without_refit(ref_atoms, mobile_atoms):
 
 def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
-    (design_path, boltz_path, out_pdb, src_json, dst_json, 
+    (design_path, boltz_path, out_pdb, src_json, dst_json, src_pae, dst_pae,
      fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg,
      geometry_mode, strict_target_rmsd) = args
     
@@ -208,6 +217,14 @@ def align_structures(args):
                 "boltz_pde": round(data.get("complex_pde", 0), 2),
             }
 
+        if not src_pae.exists():
+            raise FileNotFoundError(f"Boltz PAE NPZ not found for {boltz_path.name}: expected {src_pae}")
+        copied_pae = copy_optional_file(src_pae, dst_pae)
+        if not copied_pae:
+            raise FileNotFoundError(f"Boltz PAE NPZ could not be copied for {boltz_path.name}: {src_pae}")
+        out_json['aligned_error_artifact'] = dst_pae.name
+        out_json['aligned_error_format'] = 'boltz_pae_npz'
+
         with open(dst_json, 'w') as f:
             json.dump(out_json, f, indent=2)
 
@@ -287,15 +304,19 @@ def main():
             
         # Generate paths
         src_json = args.boltz_dir / f"{boltz_file.stem}.json"
+        src_pae = args.boltz_dir / f"{boltz_file.stem}.pae.npz"
         out_pdb = args.output_dir / f"{boltz_file.stem}.pdb"
         dst_json = args.output_dir / f"{boltz_file.stem}.json"
-        
+        dst_pae = args.output_dir / f"{boltz_file.stem}.pae.npz"
+
         tasks.append((
             design_files[base_name],
             boltz_file,
             out_pdb,
             src_json,
             dst_json,
+            src_pae,
+            dst_pae,
             fold_id,
             seq_id,
             args.design_type,

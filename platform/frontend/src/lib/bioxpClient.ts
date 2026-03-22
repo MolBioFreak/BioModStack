@@ -133,9 +133,16 @@ export interface CameraStreamOptions {
 
 export interface DaemonStatus {
     running: boolean;
+    healthy?: boolean;
+    stale_process?: boolean;
     host: string;
     port: number;
     detail: string | null;
+    inferred_via_proxy?: boolean;
+    probe_error?: {
+        status_code?: number;
+        detail?: unknown;
+    } | null;
 }
 
 const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
@@ -306,6 +313,18 @@ export const useMotionPowerDiag = () => {
     });
 };
 
+export const useMotionArmStrictStartup = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('motion', 'arm', 'strict-startup'),
+        mutationFn: async ({ run_homing = false }: { run_homing?: boolean } = {}) => {
+            const res = await api.post('/api/bioxp/motion/arm/strict_startup', { run_homing });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
 export const useMotionHardReset = () => {
     const queryClient = useQueryClient();
     return useMutation({
@@ -334,8 +353,18 @@ export const useMoveRelative = () => {
     const queryClient = useQueryClient();
     return useMutation({
         mutationKey: bioxpHardwareMutationKey('motion', 'relative'),
-        mutationFn: async ({ axis, steps, wait_timeout_s = 15.0 }: { axis: AxisName; steps: number; wait_timeout_s?: number }) => {
-            const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s });
+        mutationFn: async ({
+            axis,
+            steps,
+            wait_timeout_s = 15.0,
+            reuse_prepared = false,
+        }: {
+            axis: AxisName;
+            steps: number;
+            wait_timeout_s?: number;
+            reuse_prepared?: boolean;
+        }) => {
+            const res = await api.post('/api/bioxp/motion/axis/relative', { axis, steps, wait_timeout_s, reuse_prepared });
             return res.data;
         },
         onSuccess: (_, variables) => {
