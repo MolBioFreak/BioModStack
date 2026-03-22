@@ -50,6 +50,14 @@ class Job(Base):
     # ═══════════════════════════════════════════════════════════════════════════
     batch_id = Column(String(36), nullable=True, index=True)  # Groups related jobs (UUID)
     batch_name = Column(String(255), nullable=True)  # Human-readable, auto-generated or user-set
+    lineage_root_job_id = Column(String(36), nullable=True, index=True)  # Root job for this lineage branch
+    stage_family = Column(String(64), nullable=True, index=True)  # e.g. rfantibody, fampnn, ppiflow
+    stage_mode = Column(String(64), nullable=True, index=True)  # e.g. backbone_refine, maturation
+    selection_source_type = Column(String(64), nullable=True)  # saved_dataset, selected_designs, etc.
+    selection_source_job_id = Column(String(36), nullable=True, index=True)
+    selection_dataset_name = Column(String(255), nullable=True)
+    selected_loop_scope = Column(JSON, nullable=True)  # Selected loops / stage scope for re-orchestration
+    provenance = Column(JSON, nullable=True)  # Optional lineage/provenance snapshot for the job
     queue_status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|failed|paused
     paused = Column(Boolean, default=False)  # User manually paused this job
     pinned_gpu = Column(Integer, nullable=True)  # User override: force job to specific GPU (0-3)
@@ -111,6 +119,15 @@ class Design(Base):
     name = Column(String(255), nullable=False)
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
+    lineage_root_job_id = Column(String(36), nullable=True, index=True)
+    parent_design_id = Column(String(36), nullable=True, index=True)
+    origin_design_id = Column(String(36), nullable=True, index=True)
+    origin_job_id = Column(String(36), nullable=True, index=True)
+    origin_backbone_design_id = Column(String(36), nullable=True, index=True)
+    stage_family = Column(String(64), nullable=True, index=True)
+    stage_mode = Column(String(64), nullable=True, index=True)
+    selected_loop_scope = Column(JSON, nullable=True)
+    provenance = Column(JSON, nullable=True)
     
     # Structural metrics (predicted structures)
     num_helices = Column(Integer, nullable=True)
@@ -150,6 +167,17 @@ class Design(Base):
     num_recycles = Column(Integer, nullable=True)  # Recycling iterations reported by model
     has_clash = Column(Boolean, nullable=True)  # Steric clash flag from confidence output
     confidence_metrics = Column(JSON, nullable=True)  # Raw model confidence JSON payload
+    aligned_error_path = Column(String(500), nullable=True)
+    aligned_error_format = Column(String(64), nullable=True)
+    aligned_error_key = Column(String(128), nullable=True)
+    ipsae = Column(Float, nullable=True)
+    ipsae_binder_to_target = Column(Float, nullable=True)
+    ipsae_target_to_binder = Column(Float, nullable=True)
+    ipsae_d0chn = Column(Float, nullable=True)
+    ipsae_d0dom = Column(Float, nullable=True)
+    ipsae_chain_pair = Column(String(64), nullable=True)
+    ipsae_pae_cutoff = Column(Float, nullable=True)
+    ipsae_dist_cutoff = Column(Float, nullable=True)
     
     # Binding Affinity (Boltz-2)
     affinity_score = Column(Float, nullable=True)  # log(IC50)
@@ -269,6 +297,38 @@ class Design(Base):
     
     # Relationship to job
     job = relationship("Job", back_populates="designs")
+
+
+class AnalysisRun(Base):
+    """Persisted on-demand analysis run for a design or job subject."""
+    __tablename__ = "analysis_runs"
+
+    id = Column(String(36), primary_key=True)
+    subject_kind = Column(String(32), nullable=False, index=True)
+    subject_id = Column(String(64), nullable=False, index=True)
+    analysis_type = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    resource_class = Column(String(32), nullable=False, default="cpu_heavy", index=True)
+
+    params_json = Column(JSON, nullable=False, default=dict)
+    params_hash = Column(String(64), nullable=False, index=True)
+    input_signature = Column(String(128), nullable=False)
+    code_version = Column(String(64), nullable=False)
+    cache_key = Column(String(128), nullable=False, index=True)
+
+    summary_json = Column(JSON, nullable=True)
+    result_inline_json = Column(JSON, nullable=True)
+    artifact_manifest = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    requested_by = Column(String(64), nullable=True)
+    reuse_count = Column(Integer, default=0)
+    supersedes_run_id = Column(String(36), nullable=True, index=True)
+
+    queued_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    last_accessed_at = Column(DateTime, nullable=True)
 
 
 class InputFile(Base):
@@ -412,6 +472,7 @@ async def _ensure_schema(conn):
     
     await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
     await _ensure_table_columns(conn, "designs", Design.__table__.columns)
+    await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

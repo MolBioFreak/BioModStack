@@ -1,7 +1,15 @@
 process ANARCII {
     tag "${meta.id}"
-    label 'process_low'
+    label { (((params.anarcii_execution_mode ?: 'auto').toString().toLowerCase() == 'gpu') && ((params.anarcii_gpu_id ?: params.gpu_id) != null)) ? 'gpu_light' : 'process_low' }
     container "${params.container_dir}/antibody_tools.sif"
+    containerOptions {
+        def runtimeMode = (params.anarcii_execution_mode ?: 'auto').toString().toLowerCase()
+        def gpuId = params.anarcii_gpu_id?.toString() ?: params.gpu_id?.toString()
+        if (runtimeMode == 'gpu' && gpuId) {
+            return "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${gpuId}"
+        }
+        return ""
+    }
 
     input:
     tuple val(meta), path(pdb)
@@ -14,6 +22,10 @@ process ANARCII {
 
     script:
     def chainTimeout = params.anarcii_chain_timeout ?: 120
+    def batchSize = params.anarcii_batch_size ?: 500
+    def cpuThreads = params.anarcii_cpu_threads ?: 24
+    def runtimeMode = (params.anarcii_execution_mode ?: 'auto').toString().toLowerCase()
+    def useGpu = runtimeMode == 'gpu' && (params.anarcii_gpu_id != null || params.gpu_id != null)
     """
     (python3 << 'EOF'
 import sys
@@ -53,7 +65,7 @@ except ImportError:
     from ANARCII import Anarcii
 
 seq = sys.argv[1]
-runner = Anarcii(seq_type='unknown')
+runner = Anarcii(seq_type='unknown', mode='accuracy', batch_size=${batchSize}, cpu=${useGpu ? 'False' : 'True'}, ncpu=${useGpu ? '1' : cpuThreads})
 runner.number([seq])
 numbering, alignments, hit_tables = runner.to_legacy()
 print(json.dumps({

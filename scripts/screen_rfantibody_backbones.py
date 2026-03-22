@@ -38,6 +38,13 @@ def normalize_chain_hint(raw: str) -> str | None:
     return parts[0] if parts else None
 
 
+def normalize_screen_reference_scope(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"whole", "full", "framework", "framework_inclusive", "whole_antibody"}:
+        return "whole_antibody"
+    return "cdr_loops"
+
+
 def parse_residue_numbers(epitope_residues: list[str]) -> set[int]:
     residue_numbers: set[int] = set()
     for res_spec in epitope_residues:
@@ -150,6 +157,101 @@ def calculate_radius_of_gyration(coords: np.ndarray) -> float | None:
     return float(np.sqrt(np.mean(squared_distances)))
 
 
+def calculate_centroid_distance(query_ca, target_ca) -> float | None:
+    if len(query_ca) == 0 or len(target_ca) == 0:
+        return None
+    return float(np.linalg.norm(np.mean(query_ca.coord, axis=0) - np.mean(target_ca.coord, axis=0)))
+
+
+def summarize_query_geometry(
+    query_ca,
+    query_atoms,
+    epitope_ca,
+    epitope_atoms,
+    target_ca,
+    target_atoms,
+    epitope_contact_distance_threshold: float,
+    target_contact_distance_threshold: float,
+) -> dict[str, Any]:
+    if len(query_ca) == 0:
+        return {
+            "reference_residue_count": 0,
+            "epitope_contact_count": 0,
+            "epitope_min_distance": None,
+            "epitope_min_atom_distance": None,
+            "epitope_nearest_antibody_residue": None,
+            "epitope_nearest_target_residue": None,
+            "epitope_nearest_antibody_atom": None,
+            "epitope_nearest_target_atom": None,
+            "epitope_centroid_distance": None,
+            "target_contact_count": 0,
+            "target_min_distance": None,
+            "target_min_atom_distance": None,
+            "target_nearest_antibody_residue": None,
+            "target_nearest_target_residue": None,
+            "target_nearest_antibody_atom": None,
+            "target_nearest_target_atom": None,
+            "target_centroid_distance": None,
+        }
+
+    query_coords = query_ca.coord
+    target_pairwise = np.linalg.norm(
+        query_coords[:, None, :] - target_ca.coord[None, :, :],
+        axis=2,
+    )
+    min_target_distances = np.min(target_pairwise, axis=1)
+    target_ca_nearest = nearest_pair_details(query_ca, target_ca)
+    target_atom_nearest = nearest_pair_details(query_atoms, target_atoms)
+
+    epitope_contact_count = 0
+    epitope_min_distance: float | None = None
+    epitope_ca_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
+    epitope_atom_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
+    if len(epitope_ca) > 0:
+        epitope_pairwise = np.linalg.norm(
+            query_coords[:, None, :] - epitope_ca.coord[None, :, :],
+            axis=2,
+        )
+        min_epitope_distances = np.min(epitope_pairwise, axis=1)
+        epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
+        epitope_min_distance = float(np.min(min_epitope_distances))
+        epitope_ca_nearest = nearest_pair_details(query_ca, epitope_ca)
+        if len(epitope_atoms) > 0:
+            epitope_atom_nearest = nearest_pair_details(query_atoms, epitope_atoms)
+
+    return {
+        "reference_residue_count": int(len(query_ca)),
+        "epitope_contact_count": epitope_contact_count,
+        "epitope_min_distance": epitope_min_distance,
+        "epitope_min_atom_distance": epitope_atom_nearest["distance"],
+        "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
+        "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
+        "epitope_nearest_antibody_atom": epitope_atom_nearest["query_atom"],
+        "epitope_nearest_target_atom": epitope_atom_nearest["target_atom"],
+        "epitope_centroid_distance": calculate_centroid_distance(query_ca, epitope_ca),
+        "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
+        "target_min_distance": float(np.min(min_target_distances)),
+        "target_min_atom_distance": target_atom_nearest["distance"],
+        "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
+        "target_nearest_target_residue": target_ca_nearest["target_residue"],
+        "target_nearest_antibody_atom": target_atom_nearest["query_atom"],
+        "target_nearest_target_atom": target_atom_nearest["target_atom"],
+        "target_centroid_distance": calculate_centroid_distance(query_ca, target_ca),
+    }
+
+
 def per_loop_geometry_metrics(
     antibody_ca,
     antibody_atoms,
@@ -174,57 +276,161 @@ def per_loop_geometry_metrics(
         if len(loop_ca) == 0:
             continue
 
-        loop_coords = loop_ca.coord
-        target_pairwise = np.linalg.norm(
-            loop_coords[:, None, :] - target_ca.coord[None, :, :],
-            axis=2,
-        )
-        min_target_distances = np.min(target_pairwise, axis=1)
-        target_ca_nearest = nearest_pair_details(loop_ca, target_ca)
-        target_atom_nearest = nearest_pair_details(loop_atoms, target_atoms)
-
-        epitope_contact_count = 0
-        epitope_min_distance: float | None = None
-        epitope_ca_nearest = {
-            "distance": None,
-            "query_residue": None,
-            "target_residue": None,
-            "query_atom": None,
-            "target_atom": None,
-        }
-        epitope_atom_nearest = {
-            "distance": None,
-            "query_residue": None,
-            "target_residue": None,
-            "query_atom": None,
-            "target_atom": None,
-        }
-        if len(epitope_ca) > 0:
-            epitope_pairwise = np.linalg.norm(
-                loop_coords[:, None, :] - epitope_ca.coord[None, :, :],
-                axis=2,
-            )
-            min_epitope_distances = np.min(epitope_pairwise, axis=1)
-            epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
-            epitope_min_distance = float(np.min(min_epitope_distances))
-            epitope_ca_nearest = nearest_pair_details(loop_ca, epitope_ca)
-            if len(epitope_atoms) > 0:
-                epitope_atom_nearest = nearest_pair_details(loop_atoms, epitope_atoms)
-
         loop_metrics[loop_id] = {
             "residue_count": int(len(loop_ca)),
-            "epitope_contact_count": epitope_contact_count,
-            "epitope_min_distance": epitope_min_distance,
-            "epitope_min_atom_distance": epitope_atom_nearest["distance"],
-            "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
-            "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
-            "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
-            "target_min_distance": float(np.min(min_target_distances)),
-            "target_min_atom_distance": target_atom_nearest["distance"],
-            "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
-            "target_nearest_target_residue": target_ca_nearest["target_residue"],
+            **summarize_query_geometry(
+                query_ca=loop_ca,
+                query_atoms=loop_atoms,
+                epitope_ca=epitope_ca,
+                epitope_atoms=epitope_atoms,
+                target_ca=target_ca,
+                target_atoms=target_atoms,
+                epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+                target_contact_distance_threshold=target_contact_distance_threshold,
+            ),
         }
     return loop_metrics
+
+
+def choose_headline_scope(
+    requested_scope: str,
+    metrics_by_scope: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any], str | None]:
+    preferred = requested_scope if requested_scope in metrics_by_scope else "cdr_loops"
+    candidate = metrics_by_scope.get(preferred)
+    if candidate and int(candidate.get("reference_residue_count") or 0) > 0:
+        return preferred, candidate, None
+
+    fallback = metrics_by_scope.get("whole_antibody")
+    if fallback and int(fallback.get("reference_residue_count") or 0) > 0:
+        return "whole_antibody", fallback, (
+            None if preferred == "whole_antibody" else "missing_loop_annotations"
+        )
+
+    return preferred, candidate or {}, "no_reference_residues"
+
+
+def annotate_loop_metrics(
+    loop_metrics: dict[str, dict[str, Any]],
+    epitope_contact_distance_threshold: float,
+    target_contact_distance_threshold: float,
+) -> dict[str, dict[str, Any]]:
+    annotated: dict[str, dict[str, Any]] = {}
+    for loop_id, raw_metrics in loop_metrics.items():
+        metrics = dict(raw_metrics)
+        epitope_contacts = int(metrics.get("epitope_contact_count") or 0)
+        target_contacts = int(metrics.get("target_contact_count") or 0)
+        epitope_min_distance = metrics.get("epitope_min_distance")
+        target_min_distance = metrics.get("target_min_distance")
+
+        has_epitope_contacts = epitope_contacts > 0
+        has_target_contacts = target_contacts > 0
+        within_epitope_cutoff = (
+            epitope_min_distance is not None
+            and float(epitope_min_distance) <= float(epitope_contact_distance_threshold)
+        )
+        within_target_cutoff = (
+            target_min_distance is not None
+            and float(target_min_distance) <= float(target_contact_distance_threshold)
+        )
+
+        redesign_reasons: list[str] = []
+        if not has_target_contacts:
+            redesign_reasons.append("no_target_contacts")
+        if not has_epitope_contacts:
+            redesign_reasons.append("no_epitope_contacts")
+        if epitope_min_distance is None or float(epitope_min_distance) > float(epitope_contact_distance_threshold):
+            redesign_reasons.append("epitope_far")
+        if target_min_distance is None or float(target_min_distance) > float(target_contact_distance_threshold):
+            redesign_reasons.append("target_far")
+
+        if has_epitope_contacts:
+            engagement_label = "engaged"
+        elif has_target_contacts and within_epitope_cutoff:
+            engagement_label = "proximal"
+        elif has_target_contacts:
+            engagement_label = "off_epitope"
+        else:
+            engagement_label = "detached"
+
+        redesign_candidate = engagement_label in {"off_epitope", "detached"}
+        metrics.update({
+            "has_epitope_contacts": has_epitope_contacts,
+            "has_target_contacts": has_target_contacts,
+            "within_epitope_cutoff": within_epitope_cutoff,
+            "within_target_cutoff": within_target_cutoff,
+            "engagement_label": engagement_label,
+            "redesign_candidate": redesign_candidate,
+            "redesign_reason": ",".join(dict.fromkeys(redesign_reasons)) if redesign_candidate else None,
+        })
+        annotated[loop_id] = metrics
+    return annotated
+
+
+def build_loop_screening_summary(
+    loop_metrics: dict[str, dict[str, Any]],
+    metrics_by_scope: dict[str, dict[str, Any]],
+    requested_scope: str,
+    effective_scope: str,
+    scope_fallback_reason: str | None,
+) -> dict[str, Any]:
+    redesign_candidate_loops = sorted(
+        loop_id for loop_id, metrics in loop_metrics.items() if metrics.get("redesign_candidate") is True
+    )
+    engaged_loops = sorted(
+        loop_id for loop_id, metrics in loop_metrics.items() if metrics.get("engagement_label") == "engaged"
+    )
+
+    def best_loop(metric_key: str, higher_is_better: bool) -> str | None:
+        candidates = [
+            (loop_id, metrics.get(metric_key))
+            for loop_id, metrics in loop_metrics.items()
+            if metrics.get(metric_key) is not None
+        ]
+        if not candidates:
+            return None
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda item: float(item[1]),
+            reverse=higher_is_better,
+        )
+        return sorted_candidates[0][0]
+
+    return {
+        "requested_scope": requested_scope,
+        "effective_scope": effective_scope,
+        "scope_fallback_reason": scope_fallback_reason,
+        "headline_metrics_by_scope": metrics_by_scope,
+        "framework_only_target_contact_count": max(
+            0,
+            int(metrics_by_scope.get("whole_antibody", {}).get("target_contact_count") or 0)
+            - int(metrics_by_scope.get("cdr_loops", {}).get("target_contact_count") or 0),
+        ),
+        "framework_only_epitope_contact_count": max(
+            0,
+            int(metrics_by_scope.get("whole_antibody", {}).get("epitope_contact_count") or 0)
+            - int(metrics_by_scope.get("cdr_loops", {}).get("epitope_contact_count") or 0),
+        ),
+        "engaged_loops": engaged_loops,
+        "redesign_candidate_loops": redesign_candidate_loops,
+        "loop_ids": sorted(loop_metrics.keys()),
+        "best_epitope_loop": best_loop("epitope_contact_count", higher_is_better=True),
+        "closest_epitope_loop": best_loop("epitope_min_distance", higher_is_better=False),
+        "best_target_loop": best_loop("target_contact_count", higher_is_better=True),
+        "closest_target_loop": best_loop("target_min_distance", higher_is_better=False),
+    }
+
+
+def build_hotspot_screening_summary(
+    hotspot_metrics_by_scope: dict[str, dict[str, dict[str, Any]]],
+    hotspot_covered_count_by_scope: dict[str, int],
+    effective_scope: str,
+) -> dict[str, Any]:
+    return {
+        "effective_scope": effective_scope,
+        "hotspot_covered_count_by_scope": hotspot_covered_count_by_scope,
+        "hotspot_metrics_by_scope": hotspot_metrics_by_scope,
+    }
 
 
 def per_hotspot_metrics(
@@ -403,15 +609,7 @@ def compute_geometry_metrics(
     loop_residue_ids = parse_hlt_loop_residue_ids(pdb_path)
 
     antibody_coords = antibody_ca.coord
-    target_coords = target_ca.coord
     antibody_ca_rog = calculate_radius_of_gyration(antibody_coords)
-    pairwise_target_distances = np.linalg.norm(
-        antibody_coords[:, None, :] - target_coords[None, :, :],
-        axis=2,
-    )
-    min_target_distances = np.min(pairwise_target_distances, axis=1)
-    target_ca_nearest = nearest_pair_details(antibody_ca, target_ca)
-    target_atom_nearest = nearest_pair_details(antibody_atoms, target_atoms)
 
     epitope_residue_numbers, epitope_mapping_mode = map_epitope_residue_numbers(
         epitope_residues,
@@ -420,45 +618,17 @@ def compute_geometry_metrics(
         reference_target_pdb=reference_target_pdb,
         reference_target_chain=target_chain,
     )
-    epitope_centroid_distance: float | None = None
     epitope_residue_count = 0
-    epitope_contact_count = 0
-    epitope_min_distance: float | None = None
-    epitope_ca_nearest = {
-        "distance": None,
-        "query_residue": None,
-        "target_residue": None,
-        "query_atom": None,
-        "target_atom": None,
-    }
-    epitope_atom_nearest = {
-        "distance": None,
-        "query_residue": None,
-        "target_residue": None,
-        "query_atom": None,
-        "target_atom": None,
-    }
     epitope_ca = target_ca[:0]
     epitope_atoms = target_atoms[:0]
     if epitope_residue_numbers:
         epitope_ca = target_ca[np.isin(target_ca.res_id, list(epitope_residue_numbers))]
         epitope_residue_count = int(len(epitope_ca))
-        if epitope_residue_count > 0:
-            epitope_coords = epitope_ca.coord
-            epitope_pairwise_distances = np.linalg.norm(
-                antibody_coords[:, None, :] - epitope_coords[None, :, :],
-                axis=2,
-            )
-            min_epitope_distances = np.min(epitope_pairwise_distances, axis=1)
-            epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
-            epitope_min_distance = float(np.min(min_epitope_distances))
-            antibody_centroid = np.mean(antibody_coords, axis=0)
-            epitope_centroid = np.mean(epitope_ca.coord, axis=0)
-            epitope_centroid_distance = float(np.linalg.norm(antibody_centroid - epitope_centroid))
-            epitope_ca_nearest = nearest_pair_details(antibody_ca, epitope_ca)
-            epitope_atoms = target_atoms[np.isin(target_atoms.res_id, list(epitope_residue_numbers))]
-            if len(epitope_atoms) > 0:
-                epitope_atom_nearest = nearest_pair_details(antibody_atoms, epitope_atoms)
+        epitope_atoms = target_atoms[np.isin(target_atoms.res_id, list(epitope_residue_numbers))]
+
+    loop_residue_id_values = sorted(set().union(*loop_residue_ids.values())) if loop_residue_ids else []
+    loop_antibody_ca = antibody_ca[np.isin(antibody_ca.res_id, loop_residue_id_values)] if loop_residue_id_values else antibody_ca[:0]
+    loop_antibody_atoms = antibody_atoms[np.isin(antibody_atoms.res_id, loop_residue_id_values)] if loop_residue_id_values else antibody_atoms[:0]
 
     loop_metrics = per_loop_geometry_metrics(
         antibody_ca=antibody_ca,
@@ -472,7 +642,7 @@ def compute_geometry_metrics(
         epitope_contact_distance_threshold=epitope_contact_distance_threshold,
         target_contact_distance_threshold=target_contact_distance_threshold,
     )
-    hotspot_metrics, hotspot_covered_count = per_hotspot_metrics(
+    whole_hotspot_metrics, whole_hotspot_covered_count = per_hotspot_metrics(
         antibody_ca=antibody_ca,
         antibody_atoms=antibody_atoms,
         target_ca=target_ca,
@@ -480,9 +650,34 @@ def compute_geometry_metrics(
         epitope_residue_numbers=epitope_residue_numbers,
         epitope_contact_distance_threshold=epitope_contact_distance_threshold,
     )
+    loop_hotspot_metrics, loop_hotspot_covered_count = per_hotspot_metrics(
+        antibody_ca=loop_antibody_ca,
+        antibody_atoms=loop_antibody_atoms,
+        target_ca=target_ca,
+        target_atoms=target_atoms,
+        epitope_residue_numbers=epitope_residue_numbers,
+        epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+    )
 
-    antibody_target_centroid_distance = float(
-        np.linalg.norm(np.mean(antibody_coords, axis=0) - np.mean(target_coords, axis=0))
+    whole_antibody_metrics = summarize_query_geometry(
+        query_ca=antibody_ca,
+        query_atoms=antibody_atoms,
+        epitope_ca=epitope_ca,
+        epitope_atoms=epitope_atoms,
+        target_ca=target_ca,
+        target_atoms=target_atoms,
+        epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+        target_contact_distance_threshold=target_contact_distance_threshold,
+    )
+    cdr_loop_metrics = summarize_query_geometry(
+        query_ca=loop_antibody_ca,
+        query_atoms=loop_antibody_atoms,
+        epitope_ca=epitope_ca,
+        epitope_atoms=epitope_atoms,
+        target_ca=target_ca,
+        target_atoms=target_atoms,
+        epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+        target_contact_distance_threshold=target_contact_distance_threshold,
     )
 
     return {
@@ -492,27 +687,21 @@ def compute_geometry_metrics(
         "target_residue_count": int(len(target_ca)),
         "epitope_residue_count": epitope_residue_count,
         "epitope_mapping_mode": epitope_mapping_mode,
-        "epitope_contact_count": epitope_contact_count,
-        "epitope_min_distance": epitope_min_distance,
-        "epitope_min_atom_distance": epitope_atom_nearest["distance"],
-        "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
-        "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
-        "epitope_nearest_antibody_atom": epitope_atom_nearest["query_atom"],
-        "epitope_nearest_target_atom": epitope_atom_nearest["target_atom"],
-        "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
-        "target_min_distance": float(np.min(min_target_distances)),
-        "target_min_atom_distance": target_atom_nearest["distance"],
-        "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
-        "target_nearest_target_residue": target_ca_nearest["target_residue"],
-        "target_nearest_antibody_atom": target_atom_nearest["query_atom"],
-        "target_nearest_target_atom": target_atom_nearest["target_atom"],
         "target_contact_distance_threshold": float(target_contact_distance_threshold),
-        "epitope_centroid_distance": epitope_centroid_distance,
-        "target_centroid_distance": antibody_target_centroid_distance,
         "antibody_ca_rog": antibody_ca_rog,
+        "screening_metrics_by_scope": {
+            "cdr_loops": cdr_loop_metrics,
+            "whole_antibody": whole_antibody_metrics,
+        },
         "rfa_loop_metrics": loop_metrics,
-        "rfa_hotspot_metrics": hotspot_metrics,
-        "rfa_hotspot_covered_count": int(hotspot_covered_count),
+        "rfa_hotspot_metrics_by_scope": {
+            "cdr_loops": loop_hotspot_metrics,
+            "whole_antibody": whole_hotspot_metrics,
+        },
+        "rfa_hotspot_covered_count_by_scope": {
+            "cdr_loops": int(loop_hotspot_covered_count),
+            "whole_antibody": int(whole_hotspot_covered_count),
+        },
     }
 
 
@@ -521,6 +710,7 @@ def screen_design(
     epitope_residues: list[str],
     antibody_chain: str | None,
     target_chain: str | None,
+    screen_reference_scope: str,
     min_contacts: int | None,
     max_epitope_distance: float | None,
     contact_distance_threshold: float,
@@ -539,8 +729,42 @@ def screen_design(
         epitope_contact_distance_threshold=contact_distance_threshold,
         reference_target_pdb=reference_target_pdb,
     )
-    contact_count = int(geometry_metrics["epitope_contact_count"])
-    min_distance = geometry_metrics["epitope_min_distance"]
+    metrics_by_scope = geometry_metrics.pop("screening_metrics_by_scope", {})
+    requested_scope = normalize_screen_reference_scope(screen_reference_scope)
+    effective_scope, headline_metrics, scope_fallback_reason = choose_headline_scope(
+        requested_scope=requested_scope,
+        metrics_by_scope=metrics_by_scope,
+    )
+
+    annotated_loop_metrics = annotate_loop_metrics(
+        geometry_metrics.get("rfa_loop_metrics") or {},
+        epitope_contact_distance_threshold=contact_distance_threshold,
+        target_contact_distance_threshold=target_contact_distance_threshold,
+    )
+    hotspot_metrics_by_scope = geometry_metrics.pop("rfa_hotspot_metrics_by_scope", {})
+    hotspot_covered_count_by_scope = geometry_metrics.pop("rfa_hotspot_covered_count_by_scope", {})
+    geometry_metrics["rfa_loop_metrics"] = {
+        **annotated_loop_metrics,
+        "_screening": build_loop_screening_summary(
+            loop_metrics=annotated_loop_metrics,
+            metrics_by_scope=metrics_by_scope,
+            requested_scope=requested_scope,
+            effective_scope=effective_scope,
+            scope_fallback_reason=scope_fallback_reason,
+        ),
+    }
+    geometry_metrics["rfa_hotspot_metrics"] = {
+        "_screening": build_hotspot_screening_summary(
+            hotspot_metrics_by_scope=hotspot_metrics_by_scope,
+            hotspot_covered_count_by_scope=hotspot_covered_count_by_scope,
+            effective_scope=effective_scope,
+        ),
+        **(hotspot_metrics_by_scope.get(effective_scope) or {}),
+    }
+    geometry_metrics["rfa_hotspot_covered_count"] = int(hotspot_covered_count_by_scope.get(effective_scope) or 0)
+
+    contact_count = int(headline_metrics.get("epitope_contact_count") or 0)
+    min_distance = headline_metrics.get("epitope_min_distance")
 
     passed = True
     reasons: list[str] = []
@@ -557,9 +781,9 @@ def screen_design(
             passed = False
             reasons.append(f"min_distance>{max_epitope_distance}")
 
-    target_contact_count = geometry_metrics["target_contact_count"]
-    target_min_distance = geometry_metrics["target_min_distance"]
-    epitope_centroid_distance = geometry_metrics["epitope_centroid_distance"]
+    target_contact_count = headline_metrics.get("target_contact_count")
+    target_min_distance = headline_metrics.get("target_min_distance")
+    epitope_centroid_distance = headline_metrics.get("epitope_centroid_distance")
 
     if min_target_contacts is not None and int(target_contact_count) < int(min_target_contacts):
         passed = False
@@ -586,7 +810,14 @@ def screen_design(
         "pdb_path": str(pdb_path.resolve()),
         "passed_screen": bool(passed),
         "screening_reason": ",".join(reasons) if reasons else "passed",
+        "screening_scope_requested": requested_scope,
+        "screening_scope_effective": effective_scope,
+        "screening_scope_fallback_reason": scope_fallback_reason,
+        "redesign_candidate_loops": ",".join(
+            geometry_metrics["rfa_loop_metrics"].get("_screening", {}).get("redesign_candidate_loops", [])
+        ),
         **geometry_metrics,
+        **headline_metrics,
     }
 
 
@@ -606,6 +837,7 @@ def main() -> int:
     parser.add_argument("--max-target-distance", type=float, default=None, help="Maximum allowed minimum CA distance to any target residue")
     parser.add_argument("--max-epitope-centroid-distance", type=float, default=None, help="Maximum antibody-to-epitope centroid distance in angstroms")
     parser.add_argument("--target-contact-distance-threshold", type=float, default=12.0, help="Loose antibody-target CA contact cutoff in angstroms")
+    parser.add_argument("--screen-reference-scope", default="cdr_loops", help="Screen against CDR loops (default) or whole antibody")
     args = parser.parse_args()
 
     pdb_dir = Path(args.pdb_dir).expanduser().resolve()
@@ -616,6 +848,7 @@ def main() -> int:
     antibody_chain = normalize_chain_hint(args.antibody_chains)
     target_chain = (args.target_chain or "").strip() or None
     reference_target_pdb = Path(args.reference_target_pdb).expanduser().resolve() if args.reference_target_pdb else None
+    screen_reference_scope = normalize_screen_reference_scope(args.screen_reference_scope)
 
     screening_applied = any(
         threshold is not None
@@ -660,6 +893,7 @@ def main() -> int:
                 epitope_residues=epitope_residues,
                 antibody_chain=antibody_chain,
                 target_chain=target_chain,
+                screen_reference_scope=screen_reference_scope,
                 min_contacts=args.min_epitope_contacts,
                 max_epitope_distance=args.max_epitope_distance,
                 contact_distance_threshold=args.contact_distance_threshold,
@@ -697,6 +931,10 @@ def main() -> int:
                 "target_residue_count": 0,
                 "epitope_residue_count": 0,
                 "target_contact_distance_threshold": args.target_contact_distance_threshold,
+                "screening_scope_requested": screen_reference_scope,
+                "screening_scope_effective": screen_reference_scope,
+                "screening_scope_fallback_reason": None,
+                "redesign_candidate_loops": "",
                 "passed_screen": False if screening_applied else True,
                 "screening_reason": f"error:{exc}",
             }
@@ -725,6 +963,7 @@ def main() -> int:
                 "epitope_nearest_antibody_atom",
                 "epitope_nearest_target_atom",
                 "epitope_mapping_mode",
+                "reference_residue_count",
                 "target_contact_count",
                 "target_min_distance",
                 "target_min_atom_distance",
@@ -735,6 +974,10 @@ def main() -> int:
                 "epitope_centroid_distance",
                 "target_centroid_distance",
                 "target_contact_distance_threshold",
+                "screening_scope_requested",
+                "screening_scope_effective",
+                "screening_scope_fallback_reason",
+                "redesign_candidate_loops",
                 "rfa_hotspot_covered_count",
                 "antibody_ca_rog",
                 "rfa_loop_metrics",
@@ -771,6 +1014,7 @@ def main() -> int:
         "max_target_distance": args.max_target_distance,
         "max_epitope_centroid_distance": args.max_epitope_centroid_distance,
         "target_contact_distance_threshold": args.target_contact_distance_threshold,
+        "screen_reference_scope": screen_reference_scope,
         "results": results,
         "summary_csv": str(summary_csv.resolve()),
     }

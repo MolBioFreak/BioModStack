@@ -107,7 +107,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
     const path = (design.pdb_path || '').toLowerCase();
 
     if (
-        containsAny(path, ['/ppiflow/', '/ppiflow_maturation/', '/maturation/']) ||
+        containsAny(path, ['/ppiflow/', '/ppiflow_maturation/', '/ppiflow_backbone/', '/ppiflow_repair/', '/maturation/']) ||
         hasMetricKeys(design, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])
     ) {
         return 'ppiflow';
@@ -157,9 +157,11 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
 
     if (
         stage === 'post_fampnn' ||
+        containsAny(modelId, ['fampnn']) ||
+        containsAny(mode, ['fampnn']) ||
         containsAny(stage, ['fampnn']) ||
-        containsAny(candidateDir, ['fampnn']) ||
-        containsAny(name, ['fampnn_redesign', 'fampnn'])
+        containsAny(candidateDir, ['fampnn', 'fa-mpnn']) ||
+        containsAny(name, ['fampnn_redesign', 'fampnn', 'fa-mpnn'])
     ) {
         return 'fampnn';
     }
@@ -168,6 +170,8 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
         containsAny(stage, ['ppiflow', 'maturation']) ||
         containsAny(name, ['ppiflow', 'maturation']) ||
         containsAny(candidateDir, ['ppiflow', 'maturation']) ||
+        params.run_ppiflow_backbone_refine === true ||
+        params.run_ppiflow_maturation === true ||
         params.run_post_validation_maturation === true ||
         params.run_post_boltz_maturation === true ||
         params.run_maturation === true

@@ -81,6 +81,9 @@ def parseFastaRecords(fasta_file) {
         } else {
             sequence.append(trimmed)
         }
+        // ANARCII post-polishing is handled once at parent job completion by
+        // the API completion hook, so review gates and child workflows do not
+        // fan out duplicate annotation passes.
     }
 
     if (currentId != null) {
@@ -272,6 +275,7 @@ process ScreenRFantibodyBackbones {
     def maxTargetDistanceArg = params.rfantibody_max_target_distance != null ? "--max-target-distance ${params.rfantibody_max_target_distance}" : ""
     def maxEpitopeCentroidArg = params.rfantibody_max_epitope_centroid_distance != null ? "--max-epitope-centroid-distance ${params.rfantibody_max_epitope_centroid_distance}" : ""
     def targetContactCutoffArg = params.rfantibody_target_contact_distance_threshold != null ? "--target-contact-distance-threshold ${params.rfantibody_target_contact_distance_threshold}" : ""
+    def screenReferenceScopeArg = params.rfantibody_screen_reference_scope ? "--screen-reference-scope \"${params.rfantibody_screen_reference_scope}\"" : ""
     def targetChainArg = target_chain ? "--target-chain \"${target_chain}\"" : ""
     """
     python3 ${params.code_root}/scripts/screen_rfantibody_backbones.py \\
@@ -289,6 +293,7 @@ process ScreenRFantibodyBackbones {
         ${maxTargetDistanceArg} \\
         ${maxEpitopeCentroidArg} \\
         ${targetContactCutoffArg} \\
+        ${screenReferenceScopeArg} \\
         2>&1 | tee screen_rfantibody_${task.index}.log
     """
 }
@@ -652,6 +657,19 @@ process SpawnMaturationJobs {
     path "spawn_maturation_result.json", emit: result
 
     script:
+    def selectedLoopsList = params.ppiflow_selected_loops
+        ? params.ppiflow_selected_loops.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
+        : null
+    def selectedLoopScope = [
+        region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
+        ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
+    ]
+    if (selectedLoopsList) {
+        selectedLoopScope.selected_loops = selectedLoopsList
+        selectedLoopScope.ppiflow_selected_loops = selectedLoopsList
+    }
     def params_json = groovy.json.JsonOutput.toJson([
         framework_type: params.framework_type,
         framework_pdb: params.framework_pdb,
@@ -677,6 +695,25 @@ process SpawnMaturationJobs {
         maturation_design_mode: params.maturation_design_mode,
         maturation_redesign_enabled: params.maturation_redesign_enabled,
         maturation_redesign_top_n: params.maturation_redesign_top_n,
+        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
+        ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
+        ppiflow_selected_loops: params.ppiflow_selected_loops,
+        selected_loop_scope: selectedLoopScope,
+        cdr_positions_by_loop: params.get('cdr_positions_by_loop'),
+        manual_cdr_definitions: params.get('manual_cdr_definitions'),
+        stage_family: 'ppiflow',
+        stage_mode: stage_name,
+        ppiflow_stage_mode: stage_name,
+        ppiflow_mode: stage_name == 'backbone_refine' ? 'backbone_refine' : 'maturation',
+        seq_design_fampnn: true,
+        seq_design_antifold: false,
+        seq_design_proteinmpnn: false,
+        run_anarcii_post: false,
+        anarcii_execution_mode: params.anarcii_execution_mode ?: 'auto',
+        anarcii_gpu_id: params.anarcii_gpu_id,
+        anarcii_batch_size: params.anarcii_batch_size,
+        anarcii_cpu_threads: params.anarcii_cpu_threads,
         fampnn_checkpoint: params.fampnn_checkpoint,
         fampnn_checkpoint_path: params.fampnn_checkpoint_path,
         fampnn_temperature: params.fampnn_temperature,
@@ -687,6 +724,7 @@ process SpawnMaturationJobs {
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
         thermompnn_max_ddg: params.thermompnn_max_ddg,
+        structure_validator: params.structure_validator,
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
         pinned_gpus: params.pinned_gpus
@@ -735,6 +773,8 @@ process CollectMaturationOutputs {
 
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
 
     input:
     path child_outputs_json
@@ -743,6 +783,8 @@ process CollectMaturationOutputs {
     output:
     path "*.pdb", emit: pdbs, optional: true
     path "*.json", emit: jsons, optional: true
+    path "*.txt", emit: txts, optional: true
+    path "*.csv", emit: csvs, optional: true
     path "collection_manifest.json", emit: manifest
 
     script:
@@ -789,6 +831,19 @@ process SpawnValidatedMaturationJobs {
     path "spawn_validated_maturation_result.json", emit: result
 
     script:
+    def selectedLoopsList = params.ppiflow_selected_loops
+        ? params.ppiflow_selected_loops.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
+        : null
+    def selectedLoopScope = [
+        region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
+        ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
+    ]
+    if (selectedLoopsList) {
+        selectedLoopScope.selected_loops = selectedLoopsList
+        selectedLoopScope.ppiflow_selected_loops = selectedLoopsList
+    }
     def params_json = groovy.json.JsonOutput.toJson([
         framework_type: params.framework_type,
         framework_pdb: params.framework_pdb,
@@ -814,11 +869,35 @@ process SpawnValidatedMaturationJobs {
         maturation_design_mode: params.maturation_design_mode,
         maturation_redesign_enabled: params.maturation_redesign_enabled,
         maturation_redesign_top_n: params.maturation_redesign_top_n,
+        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
+        ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
+        ppiflow_selected_loops: params.ppiflow_selected_loops,
+        selected_loop_scope: selectedLoopScope,
+        cdr_positions_by_loop: params.get('cdr_positions_by_loop'),
+        manual_cdr_definitions: params.get('manual_cdr_definitions'),
+        stage_family: 'ppiflow',
+        stage_mode: stage_name,
+        ppiflow_stage_mode: stage_name,
+        ppiflow_mode: stage_name == 'backbone_refine' ? 'backbone_refine' : 'maturation',
+        seq_design_fampnn: true,
+        seq_design_antifold: false,
+        seq_design_proteinmpnn: false,
+        run_anarcii_post: false,
+        anarcii_execution_mode: params.anarcii_execution_mode ?: 'auto',
+        anarcii_gpu_id: params.anarcii_gpu_id,
+        anarcii_batch_size: params.anarcii_batch_size,
+        anarcii_cpu_threads: params.anarcii_cpu_threads,
+        fampnn_checkpoint: params.fampnn_checkpoint,
+        fampnn_checkpoint_path: params.fampnn_checkpoint_path,
+        fampnn_temperature: params.fampnn_temperature,
+        fampnn_num_steps: params.fampnn_num_steps,
         fampnn_psce_threshold: params.fampnn_psce_threshold,
         fampnn_exclude_cys: params.fampnn_exclude_cys,
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
+        structure_validator: params.structure_validator,
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
         pinned_gpus: params.pinned_gpus
@@ -867,6 +946,8 @@ process CollectValidatedMaturationOutputs {
 
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
 
     input:
     path child_outputs_json
@@ -875,6 +956,8 @@ process CollectValidatedMaturationOutputs {
     output:
     path "*.pdb", emit: pdbs, optional: true
     path "*.json", emit: jsons, optional: true
+    path "*.txt", emit: txts, optional: true
+    path "*.csv", emit: csvs, optional: true
     path "collection_manifest.json", emit: manifest
 
     script:
@@ -900,22 +983,40 @@ process StageStructureValidationArtifacts {
     script:
     def pdbList = (pdbs instanceof Collection ? pdbs : [pdbs]).collect { it.toString() }.join('\n')
     """
+    set -euo pipefail
+    shopt -s nullglob
     mkdir -p validation_artifacts
     cat > pdbs.list <<'EOF'
 ${pdbList}
 EOF
+
+    copy_if_present() {
+        local src="\$1"
+        [ -f "\$src" ] || return 0
+        cp "\$src" "validation_artifacts/\$(basename "\$src")"
+    }
+
     while IFS= read -r pdb; do
         [ -n "\$pdb" ] || continue
         [ -f "\$pdb" ] || continue
         base="\$(basename "\$pdb")"
         stem="\${base%.*}"
+        src_dir="\$(dirname "\$pdb")"
         cp "\$pdb" "validation_artifacts/\$base"
-        for ext in json cif; do
-            sibling="\${pdb%.*}.\$ext"
-            if [ -f "\$sibling" ]; then
-                cp "\$sibling" "validation_artifacts/\${stem}.\$ext"
-            fi
-        done
+
+        copy_if_present "\${pdb%.*}.json"
+        copy_if_present "\${pdb%.*}.cif"
+        copy_if_present "\${pdb%.*}.npz"
+        copy_if_present "\${pdb%.*}.pae.npz"
+        copy_if_present "\$src_dir/\${stem}_full_data.json"
+        copy_if_present "\$src_dir/full_data_\${stem}.json"
+
+        if [[ "\$stem" =~ ^(.+)_sample_([0-9]+)$ ]]; then
+            prefix="\${BASH_REMATCH[1]}"
+            sample_rank="\${BASH_REMATCH[2]}"
+            copy_if_present "\$src_dir/\${prefix}_summary_confidence_sample_\${sample_rank}.json"
+            copy_if_present "\$src_dir/\${prefix}_full_data_sample_\${sample_rank}.json"
+        fi
     done < pdbs.list
     """
 }
@@ -955,6 +1056,84 @@ process OpenInteractiveGate {
         --structure_validator "${structure_validator ?: ''}" \\
         --api_url "${params.api_url}" \\
         --output "gate_${stage_name}.json"
+    """
+}
+
+process OpenInteractivePayloadGate {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/gates", mode: 'copy', pattern: "*.json"
+
+    input:
+    val job_id
+    val stage_name
+    path payload_json
+
+    output:
+    path "gate_${stage_name}.json", emit: report
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/open_stage_gate.py \\
+        --job_id "${job_id}" \\
+        --stage "${stage_name}" \\
+        --candidate_dir "" \\
+        --payload_json "${payload_json}" \\
+        --api_url "${params.api_url}" \\
+        --output "gate_${stage_name}.json"
+    """
+}
+
+process CheckProtenixMsaPreflight {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/gates", mode: 'copy', pattern: "protenix_msa_preflight.json"
+
+    input:
+    path pdbs
+
+    output:
+    path "protenix_msa_preflight.json", emit: report
+
+    script:
+    def normalizeGpuCsv = { raw ->
+        if (raw == null) return ''
+        if (raw instanceof Collection) {
+            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
+        }
+        def text = raw.toString().trim()
+        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+            text = text.substring(1, text.length() - 1)
+        }
+        return text
+    }
+    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    """
+    python3 ${params.code_root}/scripts/prep_protenix_batch.py \\
+        --pdb_files ${pdbs} \\
+        --out_json input.json \\
+        --seeds "${params.protenix_seeds ?: '42'}"
+
+    python3 ${params.code_root}/scripts/check_protenix_msa_preflight.py \\
+        --input_json input.json \\
+        --output protenix_msa_preflight.json \\
+        --backend "${params.protenix_msa_backend ?: 'auto'}" \\
+        --db-path "${params.msa_local_db}" \\
+        --cache-dir "${params.msa_cache_dir}" \\
+        ${msa_cpu_only_flag} \\
+        --gpu-mode "${params.msa_gpu_mode ?: 'auto'}" \\
+        --gpu-threshold ${params.msa_gpu_threshold ?: 80} \\
+        ${msa_preferred_gpu_csv ? '--preferred-gpus "' + msa_preferred_gpu_csv + '"' : ''} \\
+        ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
+        --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
+        --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
+        --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
+        --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+        --small-max-tasks ${params.protenix_msa_small_max_tasks ?: 1} \\
+        --small-max-protein-chains ${params.protenix_msa_small_max_protein_chains ?: 4} \\
+        --small-max-total-residues ${params.protenix_msa_small_max_total_residues ?: 1500}
     """
 }
 
@@ -1114,6 +1293,7 @@ process WaitAndAggregateChildResults {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
     
     input:
@@ -1125,6 +1305,7 @@ process WaitAndAggregateChildResults {
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
+    path "validated_designs/*.npz", emit: aligned_error, optional: true
     path "aggregation_report.json", emit: report
     
     script:
@@ -1232,6 +1413,17 @@ with open('wait_result.json') as f:
                             COPIED_BASENAMES[\$basename]=1
                         fi
                     done
+                    for npz_path in \$search_path/*.npz; do
+                        if [ -f "\$npz_path" ]; then
+                            basename=\$(basename "\$npz_path")
+                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
+                                continue
+                            fi
+                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                            cp "\$npz_path" "\$dest_path" 2>/dev/null || true
+                            COPIED_BASENAMES[\$basename]=1
+                        fi
+                    done
                 fi
             done
         fi
@@ -1303,7 +1495,37 @@ if (!params.containsKey('interactive_gating')) params.interactive_gating = false
 if (!params.containsKey('interactive_swa')) params.interactive_swa = false
 if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
 if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
+if (!params.containsKey('protenix_allow_cpu_msa_fallback')) params.protenix_allow_cpu_msa_fallback = false
 if (!params.containsKey('target_model_number')) params.target_model_number = null
+def normalizeLoopSelection = { raw ->
+    if (raw == null) return null
+    def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
+    def normalized = values.collect { it.toString().trim().toUpperCase() }.findAll { it }
+    normalized ? normalized.join(',') : null
+}
+def normalizePpiFlowRegionMode = { raw ->
+    def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
+    if (value in ['all_cdrs']) return 'all_cdrs'
+    if (value in ['framework', 'framework_only']) return 'framework_only'
+    if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
+    return 'selected_cdrs'
+}
+if (!params.containsKey('ppiflow_selected_loops')) {
+    params.ppiflow_selected_loops = normalizeLoopSelection(
+        params.get('maturation_selected_loops') ?: params.get('selected_cdr_loops') ?: params.get('ppiflow_cdr_loops')
+    )
+} else {
+    params.ppiflow_selected_loops = normalizeLoopSelection(params.ppiflow_selected_loops)
+}
+if (!params.containsKey('ppiflow_backbone_region_mode')) params.ppiflow_backbone_region_mode = params.get('ppiflow_region_mode')
+if (!params.containsKey('ppiflow_maturation_region_mode')) params.ppiflow_maturation_region_mode = params.get('ppiflow_region_mode')
+params.ppiflow_backbone_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_backbone_region_mode'))
+params.ppiflow_maturation_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_maturation_region_mode'))
+def ppiflowBackboneLoopScope = normalizeLoopSelection(params.get('ppiflow_backbone_loop_scope')) ?: params.ppiflow_selected_loops
+def ppiflowMaturationLoopScope = normalizeLoopSelection(params.get('ppiflow_maturation_loop_scope')) ?: params.ppiflow_selected_loops
+if (!params.containsKey('run_ppiflow_backbone_refine')) params.run_ppiflow_backbone_refine = false
+if (!params.containsKey('run_ppiflow_maturation')) params.run_ppiflow_maturation = params.run_maturation
+if (!params.containsKey('run_maturation')) params.run_maturation = params.run_ppiflow_maturation ?: false
 
 // Orchestrator-based parallelism settings
 // 'standard' = Nextflow-internal parallelism (current behavior)
@@ -1587,6 +1809,69 @@ workflow ANTIBODY_DENOVO {
                 .map { meta, pdbs, _guard -> [meta, pdbs] }
         }
 
+        def run_ppiflow_backbone_refine = (params.run_ppiflow_backbone_refine == true) ||
+            (params.ppiflow_stage != null && params.ppiflow_stage.toString().toLowerCase() in ['post_rfantibody', 'backbone_refine', 'ppiflow_backbone_refine'])
+
+        if (run_ppiflow_backbone_refine) {
+            log.info("Step 1.5: Running PPIFlow backbone refinement on RFantibody outputs...")
+            log.info("  Spawning backbone-refine child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+            params.ppiflow_region_mode = params.ppiflow_backbone_region_mode
+            params.ppiflow_selected_loops = params.ppiflow_region_mode == 'selected_cdrs' ? ppiflowBackboneLoopScope : null
+            log.info("  Backbone refinement region mode: ${params.ppiflow_region_mode}")
+            if (params.ppiflow_selected_loops) {
+                log.info("  Backbone refinement loop scope: ${params.ppiflow_selected_loops}")
+            }
+
+            backbone_refine_inputs = backbone_designs
+                .map { meta, pdbs -> pdbs }
+                .flatten()
+                .collect()
+
+            StageMaturationInputs(backbone_refine_inputs)
+
+            SpawnMaturationJobs(
+                StageMaturationInputs.out.pdb_dir,
+                params.maturation_designs_per_job ?: 4,
+                params.job_id ?: "unknown",
+                orchestrator_batch_name,
+                "backbone_refine"
+            )
+
+            backbone_refine_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+            backbone_refine_batch_name = orchestrator_batch_name
+
+            WaitForMaturationChildren(
+                backbone_refine_wait_trigger,
+                "backbone_refine",
+                30,
+                backbone_refine_batch_name
+            )
+
+            CollectMaturationOutputs(
+                WaitForMaturationChildren.out.child_outputs,
+                "backbone_refine"
+            )
+
+            CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
+                try {
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def count = file_list.size()
+                    log.info("  PPIFlow backbone refinement: Collected ${count} PDBs from child jobs")
+                    def report_files = count > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "backbone_refine", "complete"] + report_files.collect { it.toString() }
+                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage backbone_refine: ${e.message}"
+                }
+            }
+
+            backbone_designs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
+                def meta = [id: "ppiflow_backbone_refine"]
+                [meta, pdbs]
+            }
+        }
+
         // Step 2: CDR Sequence Design (Cross-Validation Mode)
         // ---------------------------------------------------------------------------
         log.info("Step 2: Designing CDR sequences...")
@@ -1768,15 +2053,6 @@ workflow ANTIBODY_DENOVO {
 
     if (shouldPauseAfterFampnn) {
         log.info("Interactive SWA gate: pausing after FAMPNN candidate collection at ${fampnnCandidateDir}")
-        if (params.run_anarcii_post == true) {
-            if (!params.job_id) {
-                log.warn("ANARCII polishing requested for post-FAMPNN gate but job_id is missing; skipping.")
-            } else {
-                def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
-                log.info("Step 2.y: Triggering ANARCII CDR annotation before FAMPNN review gate (include_children=${includeChildren})")
-                TriggerANARCIIAnnotationPostFAMPNNGate(params.job_id, includeChildren)
-            }
-        }
         OpenInteractiveGate(
             params.job_id ?: "unknown",
             "post_fampnn",
@@ -1796,13 +2072,21 @@ workflow ANTIBODY_DENOVO {
         // Applies only to the FAMPNN branch
         // =====================================================================
         maturation_seqs = Channel.empty()
-        if (params.run_maturation == true) {
-            if (!run_fampnn) {
+        def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
+        if (run_ppiflow_maturation == true) {
+            def hasPreCollectedFampnnInputs = params.fampnn_collected_pdbs != null
+            if (!run_fampnn && !hasPreCollectedFampnnInputs) {
                 log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
                 maturation_seqs = fampnn_seqs
             } else {
                 log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
                 log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+                params.ppiflow_region_mode = params.ppiflow_maturation_region_mode
+                params.ppiflow_selected_loops = params.ppiflow_region_mode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
+                log.info("  PPIFlow maturation region mode: ${params.ppiflow_region_mode}")
+                if (params.ppiflow_selected_loops) {
+                    log.info("  PPIFlow maturation loop scope: ${params.ppiflow_selected_loops}")
+                }
 
                 maturation_inputs = fampnn_seqs
                     .map { meta, pdbs -> pdbs }
@@ -1878,6 +2162,10 @@ workflow ANTIBODY_DENOVO {
         }
 
         pdb_designs = maturation_seqs.mix(proteinmpnn_seqs)
+        if (!run_fampnn && !run_antifold && !run_proteinmpnn) {
+            log.info("  No sequence-design branch selected; carrying backbone-stage PDBs forward for downstream refinement/validation.")
+            pdb_designs = backbone_designs
+        }
         sequence_only_designs = Channel.empty()
         if (run_antifold) {
             if (params.exploration_mode == true) {
@@ -2044,6 +2332,40 @@ workflow ANTIBODY_DENOVO {
                 msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
             }
 
+            def protenix_use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
+            def shouldPreflightProtenixMsa = structure_validator == 'protenix' &&
+                protenix_use_msa &&
+                !(params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
+            def protenixMsaReadySignal = Channel.value(true)
+
+            if (shouldPreflightProtenixMsa) {
+                protenix_msa_preflight_inputs = pdb_design_sequences
+                    .map { sequence, name, pdb -> pdb }
+                    .collect()
+
+                CheckProtenixMsaPreflight(protenix_msa_preflight_inputs)
+
+                protenixMsaReadySignal = CheckProtenixMsaPreflight.out.report
+                    .map { report_file ->
+                        def data = new groovy.json.JsonSlurper().parse(report_file)
+                        ((data.allow_validation ?: false) as Boolean) ? true : null
+                    }
+                    .filter { it != null }
+
+                protenix_msa_gate_payload = CheckProtenixMsaPreflight.out.report
+                    .map { report_file ->
+                        def data = new groovy.json.JsonSlurper().parse(report_file)
+                        ((data.allow_validation ?: false) as Boolean) ? null : report_file
+                    }
+                    .filter { it != null }
+
+                OpenInteractivePayloadGate(
+                    params.job_id ?: "unknown",
+                    "pre_protenix_msa",
+                    protenix_msa_gate_payload
+                )
+            }
+
             if (params.exploration_mode == true) {
                 log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
 
@@ -2052,6 +2374,11 @@ workflow ANTIBODY_DENOVO {
                     .collect()
 
                 msa_for_spawn = msa_file_ch
+                spawn_validation_inputs = collected_pdbs
+                    .combine(msa_for_spawn)
+                    .map { pdbs, msa_file -> tuple(pdbs, msa_file) }
+                    .combine(protenixMsaReadySignal)
+                    .map { validation_input, _gate_ok -> validation_input }
 
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
                 def batch = orchestrator_batch_name
@@ -2090,6 +2417,7 @@ workflow ANTIBODY_DENOVO {
                     msa_gpu_server_wait_timeout: params.msa_gpu_server_wait_timeout,
                     msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
                     msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
+                    protenix_allow_cpu_msa_fallback: params.protenix_allow_cpu_msa_fallback,
                     run_thermompnn: params.run_thermompnn ?: false,
                     thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
@@ -2099,8 +2427,8 @@ workflow ANTIBODY_DENOVO {
                 ])
 
                 SpawnChildJobs(
-                    collected_pdbs,
-                    msa_for_spawn,
+                    spawn_validation_inputs.map { pdbs, msa_file -> pdbs },
+                    spawn_validation_inputs.map { pdbs, msa_file -> msa_file },
                     parent_id,
                     batch,
                     child_params
@@ -2150,7 +2478,16 @@ workflow ANTIBODY_DENOVO {
                         .collect()
 
                     msa_for_validation = msa_file_ch
-                    BatchProtenixValidation(collected_validation_pdbs, msa_for_validation)
+                    ready_validation_inputs = collected_validation_pdbs
+                        .combine(msa_for_validation)
+                        .map { pdbs, msa_file -> tuple(pdbs, msa_file) }
+                        .combine(protenixMsaReadySignal)
+                        .map { validation_input, _gate_ok -> validation_input }
+
+                    BatchProtenixValidation(
+                        ready_validation_inputs.map { pdbs, msa_file -> pdbs },
+                        ready_validation_inputs.map { pdbs, msa_file -> msa_file }
+                    )
 
                     BatchProtenixValidation.out.pdbs.subscribe { pdbs ->
                         try {
@@ -2217,6 +2554,7 @@ workflow ANTIBODY_DENOVO {
             staged_validation_pdbs = validated_structures
                 .map { meta, pdb -> pdb }
                 .collect()
+                .filter { pdbs -> pdbs && pdbs.size() > 0 }
 
             StageStructureValidationArtifacts(staged_validation_pdbs)
 
@@ -2226,15 +2564,6 @@ workflow ANTIBODY_DENOVO {
 
         if (shouldPauseAfterStructureValidation) {
             log.info("Interactive SWA gate: pausing after ${validation_label} structure validation")
-            if (params.run_anarcii_post == true) {
-                if (!params.job_id) {
-                    log.warn("ANARCII polishing requested for post-structure-validation gate but job_id is missing; skipping.")
-                } else {
-                    def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
-                    log.info("Step 3.y: Triggering ANARCII CDR annotation before ${validation_label} review gate (include_children=${includeChildren})")
-                    TriggerANARCIIAnnotationPostValidationGate(params.job_id, includeChildren)
-                }
-            }
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
@@ -2254,6 +2583,7 @@ workflow ANTIBODY_DENOVO {
             validated_maturation_inputs = validated_structures
                 .map { meta, pdb -> pdb }
                 .collect()
+                .filter { pdbs -> pdbs && pdbs.size() > 0 }
 
             StageValidatedMaturationInputs(validated_maturation_inputs)
 
@@ -2465,16 +2795,6 @@ workflow ANTIBODY_DENOVO {
         AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
     }
 
-    // Step 4.y: ANARCII CDR annotation (post-pipeline polishing)
-    if (params.run_anarcii_post == true) {
-        if (!params.job_id) {
-            log.warn("ANARCII polishing requested but job_id is missing; skipping.")
-        } else {
-            def includeChildren = params.anarcii_include_children != null ? params.anarcii_include_children : true
-            log.info("Step 4.y: Triggering ANARCII CDR annotation (include_children=${includeChildren})")
-            TriggerANARCIIAnnotationFinal(params.job_id, includeChildren)
-        }
-    }
     }
 
     emit:

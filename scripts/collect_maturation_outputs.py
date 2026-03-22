@@ -66,31 +66,67 @@ def main():
 
     output_dirs = data.get("child_output_dirs", [])
 
+    search_subdirs = [
+        "run/ppiflow/results",
+        "run/ppiflow/redesign_debug",
+        "ppiflow/results",
+        "ppiflow/redesign_debug",
+    ]
+
     pdbs = collect_files(
         output_dirs,
         patterns=["*.pdb"],
-        subdirs=["run/ppiflow/results", "ppiflow/results"],
+        subdirs=search_subdirs,
     )
 
-    scores = collect_files(
+    jsons = collect_files(
         output_dirs,
-        patterns=["*maturation_score.json", "*maturation_filter.json", "*_matured.json"],
-        subdirs=["run/ppiflow/results", "ppiflow/results"],
+        patterns=[
+            "*_anchors.json",
+            "*_interface_score.json",
+            "*_partial_flow_score.json",
+            "*_maturation_score.json",
+            "*_maturation_filter.json",
+            "*_matured.json",
+            "*.json",
+        ],
+        subdirs=search_subdirs,
+    )
+
+    txts = collect_files(
+        output_dirs,
+        patterns=["*_cdr_positions.txt", "fixed_positions.txt"],
+        subdirs=search_subdirs,
+    )
+
+    csvs = collect_files(
+        output_dirs,
+        patterns=["*.csv"],
+        subdirs=search_subdirs,
     )
 
     manifest = {
         "stage": args.stage_name,
         "source_dirs": output_dirs,
         "collected_pdbs": pdbs,
-        "collected_scores": scores,
+        "collected_jsons": jsons,
+        "collected_txts": txts,
+        "collected_csvs": csvs,
+        "collected_scores": jsons,
         "count_pdbs": len(pdbs),
-        "count_scores": len(scores),
+        "count_jsons": len(jsons),
+        "count_txts": len(txts),
+        "count_csvs": len(csvs),
+        "count_scores": len(jsons),
     }
 
     with open(args.manifest, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    print(f"Collected {len(pdbs)} PDBs and {len(scores)} score files")
+    print(
+        f"Collected {len(pdbs)} PDBs, {len(jsons)} JSON files, "
+        f"{len(txts)} TXT files and {len(csvs)} CSV files"
+    )
 
 
 if __name__ == "__main__":

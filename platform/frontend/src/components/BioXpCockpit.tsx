@@ -32,6 +32,7 @@ import {
     useLedOff,
     useLedPct,
     useLedRgb,
+    useMotionArmStrictStartup,
     useMotionHardReset,
     useMotionPowerDiag,
     useMotionPowerEnable,
@@ -97,8 +98,8 @@ const CAMERA_HOLD_JOG_AXES = ['x', 'y', 'z'] as const;
 const CAMERA_HOLD_JOG_PROFILE = {
     speed: 100,
     acc: 50,
-    xy_step: 40,
-    z_step: 24,
+    xy_step: 160,
+    z_step: 80,
 } as const;
 const V4L2_CTRL_TYPE_INTEGER = 1;
 const V4L2_CTRL_TYPE_BOOLEAN = 2;
@@ -624,6 +625,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
                 axis: command.axis,
                 steps: command.steps,
                 wait_timeout_s: CAMERA_HOLD_JOG_WAIT_TIMEOUT_S,
+                reuse_prepared: true,
             },
             {
                 onSuccess: (data) => {
@@ -1232,12 +1234,13 @@ export const BioXpCockpit = () => {
     const setLinkage = useSetLinkage();
     const disconnectLinkage = useDisconnectLinkage();
 
-    const { data: daemon, isLoading: daemonLoading } = useDaemonStatus();
+    const { data: daemon, isLoading: daemonLoading, isError: daemonStatusIsError, error: daemonStatusError } = useDaemonStatus();
     const daemonStart = useDaemonStart();
     const daemonStop = useDaemonStop();
     const reconnectRuntime = useReconnectRuntime();
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
+    const motionArmStrictStartup = useMotionArmStrictStartup();
     const motionHardReset = useMotionHardReset();
     const prepareInterlock = usePrepareInterlock();
     const clearLock = useClearLock();
@@ -1246,6 +1249,39 @@ export const BioXpCockpit = () => {
     const hasRecentHardwareContact =
         lastHealthyAt != null &&
         (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
+    const daemonRunning = !!daemon?.running;
+    const daemonInferred = !!daemon?.inferred_via_proxy;
+    const daemonState =
+        daemonLoading
+            ? 'checking'
+            : daemonRunning
+                ? (daemonInferred ? 'inferred' : 'running')
+                : daemonStatusIsError
+                    ? (hardwareReachable ? 'proxy-running' : 'unknown')
+                    : 'stopped';
+    const daemonBadgeClass =
+        daemonState === 'running'
+            ? 'bg-success/10 text-success border-success/30'
+            : daemonState === 'stopped'
+                ? 'bg-error/10 text-error border-error/30'
+                : 'bg-warning/10 text-warning border-warning/30';
+    const daemonLabel =
+        daemonState === 'checking'
+            ? 'CHECKING...'
+            : daemonState === 'running'
+                ? 'RUNNING'
+                : daemonState === 'inferred' || daemonState === 'proxy-running'
+                    ? 'RUNNING (PROXY)'
+                    : daemonState === 'unknown'
+                        ? 'UNKNOWN'
+                        : 'STOPPED';
+    const daemonStatusHelp =
+        daemon?.detail
+        ?? (daemonState === 'proxy-running'
+            ? 'SSH daemon probe is unavailable, but the BioXP proxy is still reaching the live robot runtime.'
+            : daemonStatusIsError
+                ? (getErrorMessage(daemonStatusError) ?? 'Daemon status probe failed.')
+                : null);
     const connectionPollingEnabled = hardwareReachable && activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !hardwareBusy;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
@@ -1543,6 +1579,7 @@ export const BioXpCockpit = () => {
     const motionActionError =
         getErrorMessage(motionPowerEnable.error) ||
         getErrorMessage(motionPowerDiag.error) ||
+        getErrorMessage(motionArmStrictStartup.error) ||
         getErrorMessage(motionHardReset.error) ||
         (!motionPowerApiMissing ? motionPowerApiError : null) ||
         getErrorMessage(prepareInterlock.error) ||
@@ -1764,7 +1801,7 @@ export const BioXpCockpit = () => {
                                 ? 'ARMED'
                                 : 'DISARMED'}
                     </div>
-                    <div className="mt-1">seq {motionPowerEffectiveStatus?.motion_arm?.seq ?? 'n/a'}</div>
+                    <div className="mt-1">seq {motionPowerEffectiveStatus?.motion_arm?.arm_seq ?? 'n/a'}</div>
                 </div>
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Latch Override</div>
@@ -1797,7 +1834,7 @@ export const BioXpCockpit = () => {
 
             {motionPowerApiMissing && (
                 <div className="rounded border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] text-warning">
-                    Linked robot daemon is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Driver Power Diag` and `Hard Reset` require the newer daemon update.
+                    Linked robot daemon is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Arm Motion`, `Driver Power Diag`, and `Hard Reset` require the newer daemon update.
                 </div>
             )}
 
@@ -1820,6 +1857,21 @@ export const BioXpCockpit = () => {
                     className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
                 >
                     {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
+                </button>
+                <button
+                    onClick={() =>
+                        motionArmStrictStartup.mutate(
+                            { run_homing: false },
+                            {
+                                onSuccess: (data) => recordMotionInfraAction('arm_motion', data),
+                                onError: (error) => recordMotionInfraError('arm_motion', error),
+                            },
+                        )
+                    }
+                    disabled={motionArmStrictStartup.isPending || motionPowerApiMissing}
+                    className="px-4 py-2 bg-success/20 hover:bg-success/30 text-success text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motion'}
                 </button>
                 <button
                     onClick={() =>
@@ -1934,10 +1986,10 @@ export const BioXpCockpit = () => {
                             subtitle={`Start or stop the BioXP API daemon on ${daemon?.host ?? 'robot'}:${daemon?.port ?? 8123} via SSH.`}
                         >
                             <div className="flex items-center gap-4 flex-wrap">
-                                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${daemon?.running ? 'bg-success/10 text-success border-success/30' : 'bg-error/10 text-error border-error/30'}`}>
-                                    DAEMON: {daemonLoading ? 'CHECKING...' : daemon?.running ? 'RUNNING' : 'STOPPED'}
+                                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${daemonBadgeClass}`}>
+                                    DAEMON: {daemonLabel}
                                 </div>
-                                {daemon?.running ? (
+                                {daemonState === 'running' ? (
                                     <button
                                         onClick={() => daemonStop.mutate()}
                                         disabled={daemonStop.isPending}
@@ -1945,7 +1997,7 @@ export const BioXpCockpit = () => {
                                     >
                                         {daemonStop.isPending ? 'STOPPING...' : 'STOP SERVER'}
                                     </button>
-                                ) : (
+                                ) : daemonState === 'stopped' ? (
                                     <button
                                         onClick={() => daemonStart.mutate()}
                                         disabled={daemonStart.isPending}
@@ -1953,11 +2005,18 @@ export const BioXpCockpit = () => {
                                     >
                                         {daemonStart.isPending ? 'STARTING...' : 'START SERVER'}
                                     </button>
+                                ) : (
+                                    <button
+                                        disabled
+                                        className="px-4 py-1.5 bg-warning/10 text-warning/70 text-xs font-semibold rounded-lg border border-warning/20 cursor-not-allowed"
+                                    >
+                                        PROBE UNAVAILABLE
+                                    </button>
                                 )}
                             </div>
-                            {(daemonStart.isError || daemonStop.isError) && (
-                                <div className="text-xs text-error">
-                                    {getErrorMessage(daemonStart.error) || getErrorMessage(daemonStop.error)}
+                            {(daemonStart.isError || daemonStop.isError || daemonStatusHelp) && (
+                                <div className={`text-xs ${daemonStart.isError || daemonStop.isError ? 'text-error' : 'text-warning'}`}>
+                                    {getErrorMessage(daemonStart.error) || getErrorMessage(daemonStop.error) || daemonStatusHelp}
                                 </div>
                             )}
                         </SectionCard>

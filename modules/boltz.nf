@@ -65,6 +65,7 @@ process RunBoltz {
 
     output:
     tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons
+    path ("predictions/*.npz"), emit: pae_npz, optional: true
     path ("*.log"), emit: logs
 
     script:
@@ -108,6 +109,10 @@ process RunBoltz {
             # Process JSON file 
             if [ -f "\${dir}/confidence_\${inputname}_model_0.json" ]; then
                 mv "\${dir}/confidence_\${inputname}_model_0.json" "predictions/\${inputname}_boltzpred.json"
+            fi
+            npz_src="\${dir}/pae_\${inputname}_model_0.npz"
+            if [ -f "\$npz_src" ]; then
+                cp "\$npz_src" "predictions/\${inputname}_boltzpred.pae.npz"
             fi
             # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
             cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :

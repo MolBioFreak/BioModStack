@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from run_local_msa import inspect_mmseqs_runtime, parse_gpu_csv
+
 DEFAULT_COLABFOLD_API_HOST = os.getenv("BMS_COLABFOLD_API_HOST") or "https://api.colabfold.com"
 DEFAULT_SMALL_MAX_TASKS = 1
 DEFAULT_SMALL_MAX_PROTEIN_CHAINS = 4
@@ -167,6 +169,7 @@ def _run_local_msa(
     gpu_server_wait_timeout: int,
     gpu_server_db_load_mode: int,
     gpu_server_startup_wait: float,
+    allow_cpu_fallback: bool,
 ) -> Path:
     script_path = Path(__file__).resolve().with_name("run_local_msa.py")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -208,6 +211,8 @@ def _run_local_msa(
         cmd.extend(["--preferred-gpus", preferred_gpus])
     if excluded_gpus:
         cmd.extend(["--excluded-gpus", excluded_gpus])
+    if not allow_cpu_fallback:
+        cmd.append("--disallow-cpu-fallback")
 
     subprocess.run(cmd, check=True)
 
@@ -234,6 +239,7 @@ def prepare_with_local_msa(
     gpu_server_wait_timeout: int,
     gpu_server_db_load_mode: int,
     gpu_server_startup_wait: float,
+    allow_cpu_fallback: bool,
 ) -> Path:
     msa_root = work_dir / "local_msa"
     msa_root.mkdir(parents=True, exist_ok=True)
@@ -270,6 +276,7 @@ def prepare_with_local_msa(
                 gpu_server_wait_timeout=gpu_server_wait_timeout,
                 gpu_server_db_load_mode=gpu_server_db_load_mode,
                 gpu_server_startup_wait=gpu_server_startup_wait,
+                allow_cpu_fallback=allow_cpu_fallback,
             )
             non_pairing = msa_dir / "non_pairing.a3m"
             pairing = msa_dir / "pairing.a3m"
@@ -304,6 +311,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-server-wait-timeout", type=int, default=120, help="Local MSA gpuserver wait timeout")
     parser.add_argument("--gpu-server-db-load-mode", type=int, default=0, help="Local MSA gpuserver db load mode")
     parser.add_argument("--gpu-server-startup-wait", type=float, default=1.0, help="Local MSA gpuserver startup wait")
+    parser.add_argument("--allow-cpu-fallback", action="store_true", help="Allow CPU MMseqs when GPU MMseqs is unavailable")
     parser.add_argument("--small-max-tasks", type=int, default=DEFAULT_SMALL_MAX_TASKS, help="Auto mode ColabFold API max task count")
     parser.add_argument("--small-max-protein-chains", type=int, default=DEFAULT_SMALL_MAX_PROTEIN_CHAINS, help="Auto mode ColabFold API max protein chains")
     parser.add_argument("--small-max-total-residues", type=int, default=DEFAULT_SMALL_MAX_TOTAL_RESIDUES, help="Auto mode ColabFold API max total residues")
@@ -359,6 +367,29 @@ def main() -> None:
             raise ValueError("Local Protenix MSA preparation requires --db-path")
         if not args.cache_dir:
             raise ValueError("Local Protenix MSA preparation requires --cache-dir")
+        runtime = inspect_mmseqs_runtime(
+            db_path=args.db_path,
+            cache_dir=args.cache_dir,
+            cpu_only=bool(args.cpu_only),
+            gpu_mode=str(args.gpu_mode or "auto"),
+            gpu_threshold=int(args.gpu_threshold),
+            preferred_gpus=parse_gpu_csv(args.preferred_gpus),
+            excluded_gpus=parse_gpu_csv(args.excluded_gpus),
+            gpu_server_mode=str(args.gpu_server_mode or "persistent"),
+            gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
+            gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
+            gpu_server_startup_wait=float(args.gpu_server_startup_wait),
+            verbose=True,
+        )
+        if not bool(runtime.get("use_gpu_mmseqs")) and not bool(args.allow_cpu_fallback):
+            failure_message = str(
+                runtime.get("failure_message")
+                or runtime.get("summary_message")
+                or "GPU MMseqs unavailable"
+            )
+            raise RuntimeError(
+                f"{failure_message}. Local Protenix MSA will not continue on CPU without explicit approval."
+            )
         prepared = prepare_with_local_msa(
             payload=payload,
             output_json=output_json,
@@ -376,6 +407,7 @@ def main() -> None:
             gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
             gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
             gpu_server_startup_wait=float(args.gpu_server_startup_wait),
+            allow_cpu_fallback=bool(args.allow_cpu_fallback),
         )
 
     print(f"[prepare_protenix_msa] Prepared input JSON: {prepared}", flush=True)
