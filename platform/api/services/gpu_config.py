@@ -23,7 +23,9 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
     "global": {
         "busy_threshold": 0.5,
         "cooldown_ms": 10000,
-        "cpu_threads_per_job": 11,
+        "cpu_threads_per_job": 24,
+        "auto_cpu_threads": True,
+        "auto_cpu_thread_job_threshold": 2,
         "enabled": True,
         "target_vram_fill": 0.85,
         "capacity_weight": 3.0,

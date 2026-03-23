@@ -237,6 +237,8 @@ class Design(Base):
     rfa_plddt_initial = Column(Float, nullable=True)
     rfa_plddt_final = Column(Float, nullable=True)
     rfa_plddt_delta = Column(Float, nullable=True)
+    rfa_plddt_selected = Column(Float, nullable=True)
+    rfa_plddt_nonselected = Column(Float, nullable=True)
     rfa_design_loops = Column(JSON, nullable=True)
     rfa_hotspots = Column(JSON, nullable=True)
 
@@ -292,6 +294,10 @@ class Design(Base):
     maturation_delta_interface = Column(Float, nullable=True)   # delta_interface_score (REU, more negative = better)
     maturation_interface_score = Column(Float, nullable=True)   # interface_score_matured (REU)
     maturation_rmsd = Column(Float, nullable=True)              # rmsd_backbone (Å, matured vs original)
+    maturation_selected_delta_interface = Column(Float, nullable=True)   # selected_delta_interface_score (REU)
+    maturation_selected_interface_score = Column(Float, nullable=True)   # selected_interface_score_matured (REU)
+    maturation_selected_rmsd = Column(Float, nullable=True)              # selected_rmsd_backbone (Å)
+    maturation_nonselected_rmsd = Column(Float, nullable=True)           # nonselected_rmsd_backbone (Å)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     

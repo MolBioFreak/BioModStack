@@ -14,8 +14,12 @@ def load_scores(manifest_path):
     scores = []
     if isinstance(data, list):
         for item in data:
-            if isinstance(item, dict) and "delta_interface_score" in item:
-                scores.append(item["delta_interface_score"])
+            if isinstance(item, dict):
+                value = item.get("selected_delta_interface_score")
+                if value is None:
+                    value = item.get("delta_interface_score")
+                if value is not None:
+                    scores.append(value)
             elif isinstance(item, (int, float)):
                 scores.append(item)
     return scores
@@ -47,7 +51,9 @@ def main():
 
     with open(args.score_json, "r") as f:
         score_data = json.load(f)
-    delta = score_data.get("delta_interface_score")
+    delta = score_data.get("selected_delta_interface_score")
+    if delta is None:
+        delta = score_data.get("delta_interface_score")
 
     threshold = args.min_improvement
     if not args.disable_filter and args.percentile is not None and args.scores_manifest:
@@ -79,7 +85,11 @@ def main():
         "score_data": score_data,
         "interface_score_original": score_data.get("interface_score_original"),
         "interface_score_matured": score_data.get("interface_score_matured"),
+        "selected_interface_score_original": score_data.get("selected_interface_score_original"),
+        "selected_interface_score_matured": score_data.get("selected_interface_score_matured"),
         "rmsd_backbone": score_data.get("rmsd_backbone"),
+        "selected_rmsd_backbone": score_data.get("selected_rmsd_backbone"),
+        "nonselected_rmsd_backbone": score_data.get("nonselected_rmsd_backbone"),
         "sequence_identity": score_data.get("sequence_identity"),
         "clash_count_ca": score_data.get("clash_count_ca"),
     }

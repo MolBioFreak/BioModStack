@@ -92,6 +92,7 @@ const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'rfa_hotspot_avg_min_distance',
     'rfa_runtime_seconds',
     'rfa_plddt_final',
+    'rfa_plddt_selected',
     'rfa_plddt_delta',
     'affinity_score',
     'binder_probability',
@@ -100,7 +101,12 @@ const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'frustration_high_count',
     'frustration_pct_high',
     'maturation_delta_interface',
+    'maturation_interface_score',
     'maturation_rmsd',
+    'maturation_selected_delta_interface',
+    'maturation_selected_interface_score',
+    'maturation_selected_rmsd',
+    'maturation_nonselected_rmsd',
     'fr2_contacts',
     'binding_tier',
     'is_favorite',
@@ -125,7 +131,8 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'rfa_hotspot_min_distance', label: 'Hotspot Min Dist' },
     { value: 'rfa_hotspot_avg_min_distance', label: 'Hotspot Avg Dist' },
     { value: 'rfa_runtime_seconds', label: 'RF Runtime' },
-    { value: 'rfa_plddt_final', label: 'RF pLDDT Final' },
+    { value: 'rfa_plddt_final', label: 'RF pLDDT Global' },
+    { value: 'rfa_plddt_selected', label: 'RF pLDDT Selected' },
     { value: 'rfa_plddt_delta', label: 'RF pLDDT Δ' },
     { value: 'affinity_score', label: 'Affinity' },
     { value: 'binder_probability', label: 'Binder %' },
@@ -138,8 +145,13 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'rfd_rog', label: 'RFD RoG' },
     { value: 'frustration_high_count', label: 'Frust High' },
     { value: 'frustration_pct_high', label: 'High Frust %' },
-    { value: 'maturation_delta_interface', label: 'ΔIface' },
-    { value: 'maturation_rmsd', label: 'Mat RMSD' },
+    { value: 'maturation_delta_interface', label: 'ΔIface Global' },
+    { value: 'maturation_selected_delta_interface', label: 'ΔIface Selected' },
+    { value: 'maturation_interface_score', label: 'Iface Global' },
+    { value: 'maturation_selected_interface_score', label: 'Iface Selected' },
+    { value: 'maturation_rmsd', label: 'RMSD Global' },
+    { value: 'maturation_selected_rmsd', label: 'RMSD Selected' },
+    { value: 'maturation_nonselected_rmsd', label: 'RMSD Rest' },
     { value: 'is_favorite', label: 'Favorite' },
 ];
 
@@ -160,12 +172,17 @@ const ASCENDING_DEFAULT_SORT_FIELDS = new Set<string>([
     'rfa_hotspot_min_distance',
     'rfa_hotspot_avg_min_distance',
     'rfa_runtime_seconds',
+    'maturation_delta_interface',
     'pae',
     'pae_overall',
     'pae_interaction',
     'rog',
     'rfd_rog',
+    'maturation_interface_score',
+    'maturation_selected_interface_score',
     'maturation_rmsd',
+    'maturation_selected_rmsd',
+    'maturation_nonselected_rmsd',
 ]);
 
 // Formatting helpers
@@ -296,6 +313,15 @@ const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFi
     const candidateDir = String(job?.awaiting_payload?.candidate_dir || '').toLowerCase();
 
     if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
+    if (
+        stage.includes('ppiflow') ||
+        stage.includes('maturation') ||
+        candidateDir.includes('ppiflow') ||
+        candidateDir.includes('backbone_refine') ||
+        candidateDir.includes('maturation')
+    ) {
+        return 'ppiflow';
+    }
     if (stage === 'post_fampnn' || candidateDir.includes('fampnn')) return 'fampnn';
     if (stage === 'post_rfantibody' || candidateDir.includes('rfantibody')) return 'rfantibody';
     return 'all';
@@ -347,6 +373,18 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
             : `${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`;
     }
     if (source === 'fampnn') return seqMatch ? `FAMPNN Seq ${seqMatch[1]}` : 'FAMPNN Candidate';
+    if (source === 'ppiflow') {
+        const ppiflowRecord = (
+            design && typeof design === 'object' && 'provenance' in design && design.provenance && typeof design.provenance === 'object'
+                ? ((design.provenance as Record<string, any>).ppiflow as Record<string, any> | undefined)
+                : undefined
+        );
+        const sourceName = typeof ppiflowRecord?.source_design_name === 'string' ? ppiflowRecord.source_design_name.trim() : '';
+        const backboneMatch = sourceName.match(/^(\d+)_/);
+        const backboneLabel = backboneMatch ? `BB ${backboneMatch[1]}` : (sourceName || 'PPIFlow');
+        if (sampleMatch) return `${backboneLabel} • Sample ${sampleMatch[1]}`;
+        return backboneLabel;
+    }
     if (source === 'rfantibody') {
         const jobMatch = design.name.match(/job[_-]?(\d+)/i);
         return jobMatch ? `RFantibody Backbone ${jobMatch[1]}` : 'RFantibody Backbone';
@@ -354,11 +392,84 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
     return design.name;
 };
 
+const getDesignSelectorMetricLabel = (design: Design): string | null => {
+    const source = inferDesignOutputSource(design);
+    if (source === 'rfantibody' && typeof design.plddt_overall === 'number') {
+        return `RF pLDDT ${design.plddt_overall.toFixed(0)}`;
+    }
+    if (source === 'validation' && typeof design.plddt_overall === 'number') {
+        return `pLDDT ${design.plddt_overall.toFixed(0)}`;
+    }
+    if (source === 'fampnn' && typeof design.fampnn_psce === 'number') {
+        return `pSCE ${design.fampnn_psce.toFixed(2)}`;
+    }
+    if (source === 'ppiflow') {
+        const deltaIface = design.maturation_selected_delta_interface ?? design.maturation_delta_interface;
+        if (typeof deltaIface === 'number') {
+            return `ΔIface ${deltaIface.toFixed(2)}`;
+        }
+    }
+    return null;
+};
+
 const asRecord = (value: unknown): Record<string, any> | null => (
     value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, any>
         : null
 );
+
+const getPpiflowRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => (
+    asRecord(asRecord(design?.provenance)?.ppiflow)
+);
+
+const getPpiflowScoreRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => {
+    const record = getPpiflowRecord(design);
+    return (
+        asRecord(record?.maturation_score)
+        ?? asRecord(record?.partial_flow_score)
+        ?? asRecord(asRecord(record?.maturation_filter)?.score_data)
+    );
+};
+
+const getPpiflowAnchorRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => (
+    asRecord(getPpiflowRecord(design)?.anchors)
+);
+
+const getPpiflowSourceName = (design: { name?: string; provenance?: unknown } | null | undefined): string | null => {
+    const record = getPpiflowRecord(design);
+    const sourceName = record?.source_design_name;
+    if (typeof sourceName === 'string' && sourceName.trim()) {
+        return sourceName.trim();
+    }
+    if (typeof design?.name === 'string') {
+        return design.name.replace(/_ppiflow_sample\d+$/i, '');
+    }
+    return null;
+};
+
+const getPpiflowSampleIndex = (design: { name?: string; provenance?: unknown } | null | undefined): number | null => {
+    const record = getPpiflowRecord(design);
+    const direct = record?.sample_index;
+    if (typeof direct === 'number' && Number.isFinite(direct)) {
+        return direct;
+    }
+    const match = typeof design?.name === 'string' ? design.name.match(/_ppiflow_sample(\d+)$/i) : null;
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getPpiflowSourceKey = (design: { id?: string; name?: string; provenance?: unknown } | null | undefined): string => (
+    getPpiflowSourceName(design) ?? design?.id ?? design?.name ?? ''
+);
+
+const getPpiflowSourceOrdinal = (design: { name?: string; provenance?: unknown } | null | undefined): number | null => {
+    const sourceName = getPpiflowSourceName(design);
+    const match = typeof sourceName === 'string' ? sourceName.match(/^(\d+)_/) : null;
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+};
 
 type StageSequenceEntry = {
     chain: string;
@@ -752,6 +863,7 @@ const normalizeSavedReviewFilterState = (state: SavedReviewFilterState): SavedRe
     rf_review_set: state.rf_review_set === 'raw' ? 'raw' : state.rf_review_set === 'filtered' ? 'filtered' : undefined,
     output_source_filter: state.output_source_filter === 'rfantibody'
         || state.output_source_filter === 'fampnn'
+        || state.output_source_filter === 'ppiflow'
         || state.output_source_filter === 'validation'
         || state.output_source_filter === 'all'
         ? state.output_source_filter
@@ -945,6 +1057,16 @@ export function ResultsViewer() {
             : [],
         [activeJob, nonNgsJobs],
     );
+    const activeJobHasDesignBearingChildren = useMemo(
+        () => activeChildJobs.some((job) => (job.design_count || 0) > 0),
+        [activeChildJobs],
+    );
+    const activeParentHasDesignBearingChildren = useMemo(
+        () => activeParentJob
+            ? nonNgsJobs.some((job: Job) => job.parent_job_id === activeParentJob.id && (job.design_count || 0) > 0)
+            : false,
+        [activeParentJob, nonNgsJobs],
+    );
     const selectableLineageChildJobs = useMemo(
         () => nonNgsJobs.filter((job: Job) => {
             if (!job.parent_job_id || (job.design_count || 0) <= 0) return false;
@@ -1093,18 +1215,20 @@ export function ResultsViewer() {
             options: filteredJobSelectorOptions.filter((option) => option.group === 'lineage'),
         },
     ]).filter((group) => group.options.length > 0), [filteredJobSelectorOptions]);
-    const activeReviewRootJob = useMemo(() => {
+    const activeLineageRootJob = useMemo(() => {
         if (isPostRfantibodyStage(activeJob)) return activeJob;
         if (activeParentJob && isPostRfantibodyStage(activeParentJob)) return activeParentJob;
+        if (activeJob && activeJobHasDesignBearingChildren) return activeJob;
+        if (activeParentJob && activeParentHasDesignBearingChildren) return activeParentJob;
         return null;
-    }, [activeJob, activeParentJob]);
+    }, [activeJob, activeJobHasDesignBearingChildren, activeParentHasDesignBearingChildren, activeParentJob]);
     const activeLineageOutputJobs = useMemo(
-        () => activeReviewRootJob
+        () => activeLineageRootJob
             ? nonNgsJobs
-                .filter((job: Job) => job.parent_job_id === activeReviewRootJob.id && (job.design_count || 0) > 0)
+                .filter((job: Job) => job.parent_job_id === activeLineageRootJob.id && (job.design_count || 0) > 0)
                 .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             : [],
-        [activeReviewRootJob, nonNgsJobs],
+        [activeLineageRootJob, nonNgsJobs],
     );
     const activeLineageOutputGroups = useMemo(() => {
         const groups = new Map<string, {
@@ -1294,6 +1418,21 @@ export function ResultsViewer() {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
     }, [navigate]);
+    const handleSelectLineageGroup = useCallback((family: string) => {
+        if (!activeLineageRootJob?.id) return;
+        const sourceFilter = (
+            family === 'rfantibody'
+            || family === 'fampnn'
+            || family === 'ppiflow'
+            || family === 'validation'
+        ) ? family as OutputSourceFilter : 'all';
+        setOutputSourceFilter(sourceFilter);
+        setAntibodySourceFilter(sourceFilter);
+        setSelectedJobId(activeLineageRootJob.id);
+        setSelectedDesignId('');
+        setCurrentPage(1);
+        navigate(`/designs/${activeLineageRootJob.id}`, { replace: true });
+    }, [activeLineageRootJob, navigate]);
     const toggleExpandedLineageGroup = useCallback((groupKey: string) => {
         setExpandedLineageGroups((current) => {
             const next = new Set(current);
@@ -1370,7 +1509,7 @@ export function ResultsViewer() {
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         job_id: selectedJobId,
-        include_children: false, // Parent review should default to aggregated parent outputs, not raw child artifacts
+        include_children: !isPostRFantibodyReview && Boolean(activeJobHasDesignBearingChildren && !(activeJob?.design_count || 0)),
         design_ids: activeSavedSubsetDesignIds,
         q: filterText.trim() || undefined,
         limit: pageSize === 0 ? MAX_BULK_SELECTION_DESIGNS : pageSize,
@@ -1427,6 +1566,9 @@ export function ResultsViewer() {
         rfdRogMaxValue,
         activeRfArtifactGroup,
         activeSavedSubsetDesignIds,
+        activeJob?.design_count,
+        activeJobHasDesignBearingChildren,
+        isPostRFantibodyReview,
     ]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
@@ -1834,6 +1976,9 @@ export function ResultsViewer() {
         if (outputSourceFilter === 'all') return orderedDesigns;
         return orderedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
     }, [orderedDesigns, outputSourceFilter]);
+    const showPpiflowColumns = outputSourceFilter === 'ppiflow'
+        || preferredAnalysisLens === 'ppiflow'
+        || orderedDesigns.some((design) => inferDesignOutputSource(design as any) === 'ppiflow');
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1911,11 +2056,11 @@ export function ResultsViewer() {
         if (!viewport || state.pointerId !== event.pointerId) return;
         const deltaX = event.clientX - state.startX;
         const deltaY = event.clientY - state.startY;
-        if (!state.moved && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
+        if (!state.moved && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
             state.moved = true;
         }
         if (!state.moved) return;
-        tableSuppressClickUntilRef.current = Date.now() + 150;
+        tableSuppressClickUntilRef.current = Date.now() + 75;
         viewport.scrollLeft = state.scrollLeft - deltaX;
         viewport.scrollTop = state.scrollTop - deltaY;
     };
@@ -1924,7 +2069,7 @@ export function ResultsViewer() {
         const state = tablePanStateRef.current;
         if (state.pointerId !== event.pointerId) return;
         if (state.moved) {
-            tableSuppressClickUntilRef.current = Date.now() + 150;
+            tableSuppressClickUntilRef.current = Date.now() + 75;
         }
         viewport?.releasePointerCapture?.(event.pointerId);
         tablePanStateRef.current = {
@@ -2139,12 +2284,19 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], fampnn: [], ppiflow: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
-            if (source === 'rfantibody' || source === 'fampnn' || source === 'validation') grouped[source].push(design);
+            if (source === 'rfantibody' || source === 'fampnn' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
             else grouped.all.push(design);
         }
+        grouped.ppiflow.sort((a, b) => {
+            const ordinalDelta = (getPpiflowSourceOrdinal(a) ?? Number.MAX_SAFE_INTEGER) - (getPpiflowSourceOrdinal(b) ?? Number.MAX_SAFE_INTEGER);
+            if (ordinalDelta !== 0) return ordinalDelta;
+            const sourceDelta = getPpiflowSourceKey(a).localeCompare(getPpiflowSourceKey(b));
+            if (sourceDelta !== 0) return sourceDelta;
+            return (getPpiflowSampleIndex(a) ?? Number.MAX_SAFE_INTEGER) - (getPpiflowSampleIndex(b) ?? Number.MAX_SAFE_INTEGER);
+        });
         return grouped;
     }, [orderedDesigns]);
     const antibodyTabDesigns = useMemo(() => {
@@ -2159,8 +2311,8 @@ export function ResultsViewer() {
         ?? asRecord(asRecord(selectedDesign?.confidence_metrics)?.fampnn)
     ), [selectedDesign?.confidence_metrics, selectedDesignProvenance]);
     const selectedDesignPpiflowRecord = useMemo(() => (
-        asRecord(selectedDesignProvenance?.ppiflow)
-    ), [selectedDesignProvenance]);
+        getPpiflowRecord(selectedDesign)
+    ), [selectedDesign]);
     const selectedDesignHasPpiflowLens = selectedDesignLens === 'ppiflow' || Boolean(selectedDesignPpiflowRecord);
     const selectedDesignSequenceEntries = useMemo(
         () => parseStageSequenceEntries(
@@ -2190,6 +2342,9 @@ export function ResultsViewer() {
             ppiflow_start_t: params.ppiflow_start_t,
             ppiflow_samples_per_target: params.ppiflow_samples_per_target,
             ppiflow_checkpoint: params.ppiflow_checkpoint ?? params.ppiflow_checkpoint_path,
+            ppiflow_rotamer_enrichment_enabled: params.ppiflow_rotamer_enrichment_enabled,
+            ppiflow_require_anchors: params.ppiflow_require_anchors,
+            ppiflow_rotamer_shell_cutoff: params.ppiflow_rotamer_shell_cutoff,
             ppiflow_selected_loops: params.ppiflow_selected_loops,
             maturation_design_mode: params.maturation_design_mode,
             maturation_redesign_enabled: params.maturation_redesign_enabled,
@@ -2222,11 +2377,14 @@ export function ResultsViewer() {
                 ['Start t', settings.ppiflow_start_t],
                 ['Samples/Target', settings.ppiflow_samples_per_target],
                 ['Checkpoint', settings.ppiflow_checkpoint],
+                ['Rotamer Enrichment', settings.ppiflow_rotamer_enrichment_enabled],
+                ['Require Anchors', settings.ppiflow_require_anchors],
+                ['Rotamer Shell', settings.ppiflow_rotamer_shell_cutoff],
                 ['Design Mode', settings.maturation_design_mode],
                 ['Redesign', settings.maturation_redesign_enabled],
                 ['Redesign Temp', settings.maturation_redesign_temp],
                 ['Redesign Steps', settings.maturation_redesign_steps],
-                ['Anchor Cutoff', settings.maturation_anchor_distance_cutoff],
+                ['Pair Cutoff', settings.maturation_anchor_distance_cutoff],
                 ['Min ΔIface', settings.maturation_min_improvement],
                 ['Percentile', settings.maturation_filter_percentile],
             ];
@@ -2239,11 +2397,19 @@ export function ResultsViewer() {
         return [
             ['Source Design', selectedDesignPpiflowRecord?.source_design_name],
             ['Source PDB', selectedDesignPpiflowRecord?.source_pdb_path],
+            ['Movable Span', selectedDesignPpiflowRecord?.ppiflow_positions ?? selectedDesignPpiflowRecord?.movable_region_positions],
             ['Anchor Count', selectedDesignPpiflowRecord?.anchors?.anchor_count],
+            ['Anchor Candidates', selectedDesignPpiflowRecord?.anchors?.anchor_candidate_count],
+            ['Movable Anchors', selectedDesignPpiflowRecord?.anchors?.movable_anchor_candidate_count],
             ['Iface Residues', selectedDesignPpiflowRecord?.interface_score?.interface_residue_count ?? selectedDesignPpiflowRecord?.maturation_score?.interface_residue_count_matured],
-            ['ΔIface', selectedDesign.maturation_delta_interface],
-            ['Iface Score', selectedDesign.maturation_interface_score],
-            ['Backbone RMSD', selectedDesign.maturation_rmsd ?? selectedDesignPpiflowRecord?.maturation_score?.rmsd_backbone],
+            ['Enriched Complex', selectedDesignPpiflowRecord?.enriched_complex_pdb],
+            ['ΔIface Selected', selectedDesign.maturation_selected_delta_interface ?? selectedDesignPpiflowRecord?.maturation_score?.selected_delta_interface_score],
+            ['ΔIface Global', selectedDesign.maturation_delta_interface],
+            ['Iface Selected', selectedDesign.maturation_selected_interface_score ?? selectedDesignPpiflowRecord?.maturation_score?.selected_interface_score_matured],
+            ['Iface Global', selectedDesign.maturation_interface_score],
+            ['Backbone RMSD Selected', selectedDesign.maturation_selected_rmsd ?? selectedDesignPpiflowRecord?.maturation_score?.selected_rmsd_backbone],
+            ['Backbone RMSD Global', selectedDesign.maturation_rmsd ?? selectedDesignPpiflowRecord?.maturation_score?.rmsd_backbone],
+            ['Backbone RMSD Rest', selectedDesign.maturation_nonselected_rmsd ?? selectedDesignPpiflowRecord?.maturation_score?.nonselected_rmsd_backbone],
             ['Seq Identity', selectedDesignPpiflowRecord?.maturation_score?.sequence_identity],
             ['CA Clashes', selectedDesignPpiflowRecord?.maturation_score?.clash_count_ca],
             ['Filter Pass', selectedDesignPpiflowRecord?.maturation_filter?.passed],
@@ -2255,6 +2421,131 @@ export function ResultsViewer() {
                 return [label, String(value)] as const;
             });
     }, [selectedDesign, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord]);
+    const selectedDesignMetricCards = useMemo(() => {
+        if (!selectedDesign) return [];
+        if (selectedDesignHasPpiflowLens) {
+            const ppiflowScore = selectedDesignPpiflowRecord?.maturation_score
+                ?? selectedDesignPpiflowRecord?.partial_flow_score
+                ?? selectedDesignPpiflowRecord?.maturation_filter?.score_data
+                ?? null;
+            const deltaIface = selectedDesign.maturation_delta_interface;
+            const clashCount = typeof ppiflowScore?.clash_count_ca === 'number' ? ppiflowScore.clash_count_ca : null;
+            const seqIdentity = typeof ppiflowScore?.sequence_identity === 'number' ? ppiflowScore.sequence_identity : null;
+            const anchorCount = typeof selectedDesignPpiflowRecord?.anchors?.anchor_count === 'number'
+                ? selectedDesignPpiflowRecord.anchors.anchor_count
+                : null;
+            const selectedDeltaIface = selectedDesign.maturation_selected_delta_interface ?? (typeof ppiflowScore?.selected_delta_interface_score === 'number' ? ppiflowScore.selected_delta_interface_score : null);
+            const selectedIfaceScore = selectedDesign.maturation_selected_interface_score ?? (typeof ppiflowScore?.selected_interface_score_matured === 'number' ? ppiflowScore.selected_interface_score_matured : null);
+            const selectedRmsd = selectedDesign.maturation_selected_rmsd ?? (typeof ppiflowScore?.selected_rmsd_backbone === 'number' ? ppiflowScore.selected_rmsd_backbone : null);
+            const nonselectedRmsd = selectedDesign.maturation_nonselected_rmsd ?? (typeof ppiflowScore?.nonselected_rmsd_backbone === 'number' ? ppiflowScore.nonselected_rmsd_backbone : null);
+            const sampleIndex = getPpiflowSampleIndex(selectedDesign as any);
+            const loopScope = normalizeLoopScopeLabel(selectedDesignPpiflowRecord?.selected_loop_scope ?? selectedDesignProvenance?.selected_loop_scope);
+            const movableSpan = selectedDesignPpiflowRecord?.ppiflow_positions ?? selectedDesignPpiflowRecord?.movable_region_positions ?? null;
+            return [
+                { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: 'text-cyan-300' },
+                { label: 'Source Backbone', value: getPpiflowSourceName(selectedDesign as any) ?? '—', tone: 'text-slate-200' },
+                { label: 'Sample', value: sampleIndex != null ? String(sampleIndex) : '—', tone: 'text-slate-200' },
+                { label: 'Region', value: loopScope ?? '—', tone: 'text-slate-200' },
+                { label: 'Movable Span', value: movableSpan ?? '—', tone: 'text-slate-200' },
+                {
+                    label: 'ΔIface Sel',
+                    value: selectedDeltaIface != null ? selectedDeltaIface.toFixed(2) : '—',
+                    tone: selectedDeltaIface != null ? (selectedDeltaIface < 0 ? 'text-emerald-300' : selectedDeltaIface > 0 ? 'text-rose-300' : 'text-slate-200') : 'text-slate-500',
+                },
+                {
+                    label: 'ΔIface Glob',
+                    value: deltaIface != null ? deltaIface.toFixed(2) : '—',
+                    tone: deltaIface != null ? (deltaIface < 0 ? 'text-emerald-300' : deltaIface > 0 ? 'text-rose-300' : 'text-slate-200') : 'text-slate-500',
+                },
+                { label: 'Iface Sel', value: selectedIfaceScore != null ? selectedIfaceScore.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+                { label: 'Iface Glob', value: selectedDesign.maturation_interface_score != null ? selectedDesign.maturation_interface_score.toFixed(2) : '—', tone: 'text-violet-300' },
+                { label: 'RMSD Sel', value: selectedRmsd != null ? `${selectedRmsd.toFixed(2)} Å` : '—', tone: 'text-cyan-300' },
+                { label: 'RMSD Glob', value: selectedDesign.maturation_rmsd != null ? `${selectedDesign.maturation_rmsd.toFixed(2)} Å` : '—', tone: 'text-sky-300' },
+                { label: 'RMSD Rest', value: nonselectedRmsd != null ? `${nonselectedRmsd.toFixed(2)} Å` : '—', tone: 'text-amber-300' },
+                { label: 'Seq Identity', value: seqIdentity != null ? seqIdentity.toFixed(2) : '—', tone: 'text-slate-200' },
+                { label: 'Anchors', value: anchorCount != null ? String(anchorCount) : '—', tone: 'text-slate-200' },
+                {
+                    label: 'CA Clash',
+                    value: clashCount != null ? String(clashCount) : '—',
+                    tone: clashCount != null ? (clashCount > 0 ? 'text-rose-300' : 'text-emerald-300') : 'text-slate-500',
+                },
+            ];
+        }
+        return [
+            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
+            { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
+            {
+                label: selectedDesignSource === 'fampnn' ? 'FAMPNN pSCE' : selectedDesignSource === 'rfantibody' ? 'RF pLDDT Global' : 'pLDDT',
+                value: selectedDesignSource === 'fampnn'
+                    ? formatMetric(selectedDesign.fampnn_psce, 2)
+                    : formatMetric(selectedDesign.plddt_overall, 1),
+                tone: selectedDesignSource === 'fampnn'
+                    ? getMetricColor('fampnn_psce', selectedDesign.fampnn_psce)
+                    : getMetricColor('plddt_overall', selectedDesign.plddt_overall),
+            },
+            ...(selectedDesignSource === 'rfantibody'
+                ? [{
+                    label: 'RF pLDDT Selected',
+                    value: selectedDesign.rfa_plddt_selected != null ? selectedDesign.rfa_plddt_selected.toFixed(1) : '—',
+                    tone: getMetricColor('plddt_overall', selectedDesign.rfa_plddt_selected ?? null),
+                } as const]
+                : []),
+            { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
+            {
+                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.epitope : 'Epitope Contacts',
+                value: selectedDesignSource === 'rfantibody'
+                    ? (getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_contact_count') ?? '—')
+                    : (selectedDesign.epitope_contact_count ?? '—'),
+                tone: 'text-slate-200',
+            },
+            {
+                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epitope Dist` : 'Epitope Dist',
+                value: (() => {
+                    const metricValue = selectedDesignSource === 'rfantibody'
+                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_distance')
+                        : selectedDesign.epitope_min_distance;
+                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                })(),
+                tone: 'text-slate-200',
+            },
+            {
+                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.distance : 'Any-Target Dist',
+                value: (() => {
+                    const metricValue = selectedDesignSource === 'rfantibody'
+                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_distance')
+                        : selectedDesign.target_min_distance;
+                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                })(),
+                tone: 'text-slate-200',
+            },
+            {
+                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epi Atom Dist` : 'Epitope Atom Dist',
+                value: (() => {
+                    const metricValue = selectedDesignSource === 'rfantibody'
+                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_atom_distance')
+                        : selectedDesign.epitope_min_atom_distance;
+                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                })(),
+                tone: 'text-slate-200',
+            },
+            {
+                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Target Atom Dist` : 'Target Atom Dist',
+                value: (() => {
+                    const metricValue = selectedDesignSource === 'rfantibody'
+                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_atom_distance')
+                        : selectedDesign.target_min_atom_distance;
+                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                })(),
+                tone: 'text-slate-200',
+            },
+            { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+            { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+            { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
+            { label: 'High Frust %', value: selectedDesign.frustration_pct_high != null ? `${selectedDesign.frustration_pct_high.toFixed(1)}%` : '—', tone: 'text-amber-300' },
+            { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
+            { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+        ];
+    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
     const overviewAnalysisItems = useMemo(() => ([
         {
             key: 'structure_summary',
@@ -2270,7 +2561,7 @@ export function ResultsViewer() {
         },
         {
             key: 'antibody_annotation_pack',
-            label: 'Annotation Pack',
+            label: 'ANARCII / Annotation Pack',
             scope: 'selected output',
             status: antibodyAnalysisRun?.status ?? 'missing',
             busy: antibodyAnalysisBusy,
@@ -2431,6 +2722,29 @@ export function ResultsViewer() {
         const targetDistances = designs.map(d => d.target_min_distance).filter((v): v is number => v != null);
         const hotspotCoverage = designs.map(d => d.rfa_hotspot_covered_count).filter((v): v is number => v != null);
         const psces = designs.map(d => d.fampnn_psce).filter((v): v is number => v != null);
+        const ppiflowDeltas = designs.map(d => d.maturation_selected_delta_interface ?? d.maturation_delta_interface).filter((v): v is number => v != null);
+        const ppiflowInterfaceScores = designs.map(d => d.maturation_selected_interface_score ?? d.maturation_interface_score).filter((v): v is number => v != null);
+        const ppiflowRmsd = designs.map(d => d.maturation_selected_rmsd ?? d.maturation_rmsd).filter((v): v is number => v != null);
+        const ppiflowSeqIdentity = designs
+            .map(d => {
+                const score = getPpiflowScoreRecord(d as any);
+                return typeof score?.sequence_identity === 'number' ? score.sequence_identity : null;
+            })
+            .filter((v): v is number => v != null);
+        const ppiflowAnchorCounts = designs
+            .map(d => {
+                const anchors = getPpiflowAnchorRecord(d as any);
+                return typeof anchors?.anchor_count === 'number' ? anchors.anchor_count : null;
+            })
+            .filter((v): v is number => v != null);
+        const ppiflowClashCounts = designs
+            .map(d => {
+                const score = getPpiflowScoreRecord(d as any);
+                return typeof score?.clash_count_ca === 'number' ? score.clash_count_ca : null;
+            })
+            .filter((v): v is number => v != null);
+        const ppiflowDesigns = designs.filter((d) => inferDesignOutputSource(d as any) === 'ppiflow');
+        const ppiflowUniqueSources = new Set(ppiflowDesigns.map((d) => getPpiflowSourceKey(d as any)).filter(Boolean));
         const frustrationHigh = designs.map(d => d.frustration_high_count).filter((v): v is number => v != null);
         const frustrationPct = designs.map(d => d.frustration_pct_high).filter((v): v is number => v != null);
         const screenPassed = designs.filter((d) => d.passed_screen === true).length;
@@ -2466,6 +2780,18 @@ export function ResultsViewer() {
             avgTargetDistance: targetDistances.length ? targetDistances.reduce((a, b) => a + b, 0) / targetDistances.length : null,
             avgHotspotCoverage: hotspotCoverage.length ? hotspotCoverage.reduce((a, b) => a + b, 0) / hotspotCoverage.length : null,
             avgPsce: psces.length ? psces.reduce((a, b) => a + b, 0) / psces.length : null,
+            avgPpiflowDeltaInterface: ppiflowDeltas.length ? ppiflowDeltas.reduce((a, b) => a + b, 0) / ppiflowDeltas.length : null,
+            avgPpiflowInterfaceScore: ppiflowInterfaceScores.length ? ppiflowInterfaceScores.reduce((a, b) => a + b, 0) / ppiflowInterfaceScores.length : null,
+            avgPpiflowRmsd: ppiflowRmsd.length ? ppiflowRmsd.reduce((a, b) => a + b, 0) / ppiflowRmsd.length : null,
+            avgPpiflowSeqIdentity: ppiflowSeqIdentity.length ? ppiflowSeqIdentity.reduce((a, b) => a + b, 0) / ppiflowSeqIdentity.length : null,
+            avgPpiflowAnchors: ppiflowAnchorCounts.length ? ppiflowAnchorCounts.reduce((a, b) => a + b, 0) / ppiflowAnchorCounts.length : null,
+            ppiflowUniqueSources: ppiflowUniqueSources.size,
+            ppiflowImproved: ppiflowDeltas.filter((value) => value < 0).length,
+            ppiflowStable: ppiflowDeltas.filter((value) => value >= 0 && value <= 25).length,
+            ppiflowDegraded: ppiflowDeltas.filter((value) => value > 25).length,
+            ppiflowZeroClash: ppiflowClashCounts.filter((value) => value === 0).length,
+            ppiflowClashy: ppiflowClashCounts.filter((value) => value > 0).length,
+            ppiflowLowDrift: ppiflowRmsd.filter((value) => value <= 1.0).length,
             avgFrustrationHigh: frustrationHigh.length ? frustrationHigh.reduce((a, b) => a + b, 0) / frustrationHigh.length : null,
             avgFrustrationPctHigh: frustrationPct.length ? frustrationPct.reduce((a, b) => a + b, 0) / frustrationPct.length : null,
             annotatedWithFrustration: frustrationHigh.length,
@@ -2518,6 +2844,18 @@ export function ResultsViewer() {
             avgTargetDistance: average(representatives.map((representative) => representative.target_min_distance)),
             avgHotspotCoverage: average(representatives.map((representative) => representative.rfa_hotspot_covered_count)),
             avgPsce: null,
+            avgPpiflowDeltaInterface: null,
+            avgPpiflowInterfaceScore: null,
+            avgPpiflowRmsd: null,
+            avgPpiflowSeqIdentity: null,
+            avgPpiflowAnchors: null,
+            ppiflowUniqueSources: 0,
+            ppiflowImproved: 0,
+            ppiflowStable: 0,
+            ppiflowDegraded: 0,
+            ppiflowZeroClash: 0,
+            ppiflowClashy: 0,
+            ppiflowLowDrift: 0,
             avgFrustrationHigh: null,
             avgFrustrationPctHigh: null,
             annotatedWithFrustration: 0,
@@ -2678,6 +3016,7 @@ export function ResultsViewer() {
         const nextRfReviewSet = nextState.rf_review_set === 'raw' ? 'raw' : 'filtered';
         const nextOutputSourceFilter = (nextState.output_source_filter === 'rfantibody'
             || nextState.output_source_filter === 'fampnn'
+            || nextState.output_source_filter === 'ppiflow'
             || nextState.output_source_filter === 'validation'
             || nextState.output_source_filter === 'all')
             ? nextState.output_source_filter
@@ -3320,14 +3659,14 @@ export function ResultsViewer() {
 
                 {activeJob && (
                     <>
-                        {activeReviewRootJob && (
+                        {activeLineageRootJob && (
                             <div className={`mb-4 rounded-xl border p-4 ${isPostRFantibodyReview ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-sky-500/20 bg-sky-500/5'}`}>
                                 <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                                     <div>
                                         <div className={`text-sm font-semibold ${isPostRFantibodyReview ? 'text-emerald-200' : 'text-sky-200'}`}>
                                             {isPostRFantibodyReview
                                                 ? 'Paused after RFantibody backbone generation'
-                                                : `Viewing persisted downstream outputs from ${activeReviewRootJob.name}`}
+                                                : `Viewing persisted downstream outputs from ${activeLineageRootJob.name}`}
                                         </div>
                                         <div className="text-xs text-slate-300">
                                             {isPostRFantibodyReview ? (
@@ -3363,7 +3702,7 @@ export function ResultsViewer() {
                                                     Stage groups {activeLineageOutputGroups.length}
                                                 </span>
                                                 <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                    Downstream jobs {activeLineageOutputJobs.length}
+                                                    Child shards {activeLineageOutputJobs.length}
                                                 </span>
                                                 <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
                                                     Persisted outputs {activeLineageOutputDesignCount.toLocaleString()}
@@ -3389,8 +3728,13 @@ export function ResultsViewer() {
                                                                 {group.label}
                                                             </div>
                                                             <div className="mt-1 text-[11px] text-slate-400">
-                                                                {group.designCount.toLocaleString()} outputs across {group.jobs.length} child job{group.jobs.length === 1 ? '' : 's'}
+                                                                {group.designCount.toLocaleString()} outputs
                                                             </div>
+                                                            {group.jobs.length > 1 && (
+                                                                <div className="mt-1 text-[10px] text-slate-500">
+                                                                    Produced across {group.jobs.length} execution shard{group.jobs.length === 1 ? '' : 's'}
+                                                                </div>
+                                                            )}
                                                             {group.jobs.some((job) => getLineageOutputScopeLabel(job)) && (
                                                                 <div className="mt-1 text-[10px] text-cyan-300">
                                                                     Loop scopes: {Array.from(new Set(group.jobs.map((job) => getLineageOutputScopeLabel(job)).filter(Boolean) as string[])).join(' • ')}
@@ -3400,8 +3744,8 @@ export function ResultsViewer() {
                                                         <div className="flex flex-wrap gap-2">
                                                             <button
                                                                 type="button"
-                                                                onClick={() => handleSelectJob(group.jobs[0].id)}
-                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${(selectedJobId === group.jobs[0].id || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
+                                                                onClick={() => handleSelectLineageGroup(group.family)}
+                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'fampnn' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
                                                                     ? 'border-sky-400/60 bg-sky-500/15 text-white'
                                                                     : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
                                                                     }`}
@@ -4424,6 +4768,17 @@ export function ResultsViewer() {
                                                         <StatCard label="Avg Tgt Dist" value={overviewStats.avgTargetDistance != null ? `${overviewStats.avgTargetDistance.toFixed(1)} Å` : '—'} color="text-cyan-300" />
                                                         <StatCard label="Avg Hotspot Cov" value={formatMetric(overviewStats.avgHotspotCoverage, 1)} color="text-violet-300" />
                                                     </>
+                                                ) : preferredAnalysisLens === 'ppiflow' ? (
+                                                    <>
+                                                        <StatCard label="Total Outputs" value={overviewStats.total.toLocaleString()} />
+                                                        <StatCard label="Source Backbones" value={overviewStats.ppiflowUniqueSources ?? 0} color="text-cyan-300" />
+                                                        <StatCard label="Avg ΔIface" value={formatMetric(overviewStats.avgPpiflowDeltaInterface, 2)} color="text-fuchsia-300" />
+                                                        <StatCard label="Improved" value={overviewStats.ppiflowImproved ?? 0} subtitle="ΔIface < 0" color="text-emerald-300" />
+                                                        <StatCard label="Avg RMSD" value={overviewStats.avgPpiflowRmsd != null ? `${overviewStats.avgPpiflowRmsd.toFixed(2)} Å` : '—'} color="text-cyan-300" />
+                                                        <StatCard label="Avg Seq ID" value={formatMetric(overviewStats.avgPpiflowSeqIdentity, 2)} color="text-slate-200" />
+                                                        <StatCard label="Zero CA Clash" value={overviewStats.ppiflowZeroClash ?? 0} color="text-emerald-300" />
+                                                        <StatCard label="Avg Anchors" value={formatMetric(overviewStats.avgPpiflowAnchors, 1)} color="text-amber-300" />
+                                                    </>
                                                 ) : (
                                                     <>
                                                         <StatCard label="Total Designs" value={overviewStats.total.toLocaleString()} />
@@ -4524,6 +4879,39 @@ export function ResultsViewer() {
                                                             <span>Lower pSCE is better for FA-MPNN sequence confidence.</span>
                                                         </div>
                                                     </>
+                                                ) : preferredAnalysisLens === 'ppiflow' ? (
+                                                    <>
+                                                        <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                                                            <span>🌀</span>
+                                                            PPIFlow Refinement Summary
+                                                            <span className="text-xs text-slate-500 font-normal">(refined outputs in the current set)</span>
+                                                        </h3>
+                                                        <div className="grid grid-cols-4 gap-3">
+                                                            <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
+                                                                <div className="text-2xl font-bold text-emerald-300">{overviewStats.ppiflowImproved ?? 0}</div>
+                                                                <div className="text-xs text-emerald-400 font-medium">Improved</div>
+                                                                <div className="text-[10px] text-slate-500">ΔIface &lt; 0</div>
+                                                            </div>
+                                                            <div className="bg-blue-500/20 rounded-lg p-3 text-center border border-blue-500/30">
+                                                                <div className="text-2xl font-bold text-blue-300">{overviewStats.ppiflowLowDrift ?? 0}</div>
+                                                                <div className="text-xs text-blue-400 font-medium">Low Drift</div>
+                                                                <div className="text-[10px] text-slate-500">RMSD ≤ 1.0 Å</div>
+                                                            </div>
+                                                            <div className="bg-cyan-500/20 rounded-lg p-3 text-center border border-cyan-500/30">
+                                                                <div className="text-2xl font-bold text-cyan-300">{overviewStats.ppiflowZeroClash ?? 0}</div>
+                                                                <div className="text-xs text-cyan-400 font-medium">Zero CA Clash</div>
+                                                                <div className="text-[10px] text-slate-500">clean local geometry</div>
+                                                            </div>
+                                                            <div className="bg-rose-500/20 rounded-lg p-3 text-center border border-rose-500/30">
+                                                                <div className="text-2xl font-bold text-rose-300">{overviewStats.ppiflowDegraded ?? 0}</div>
+                                                                <div className="text-xs text-rose-400 font-medium">Strong Loss</div>
+                                                                <div className="text-[10px] text-slate-500">ΔIface &gt; 25</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-3 text-xs text-slate-500 flex items-center gap-3">
+                                                            <span>Lower ΔIface is better. Use RMSD and CA clash to separate local refinement from bad backbone drift.</span>
+                                                        </div>
+                                                    </>
                                                 ) : (
                                                     <>
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
@@ -4573,7 +4961,9 @@ export function ResultsViewer() {
                                                             ? 'Top Backbones by Target Engagement'
                                                             : preferredAnalysisLens === 'fampnn'
                                                                 ? 'Top Designs by pSCE'
-                                                                : 'Top Designs by pLDDT'}
+                                                                : preferredAnalysisLens === 'ppiflow'
+                                                                    ? 'Top Refined Backbones by ΔIface'
+                                                                    : 'Top Designs by pLDDT'}
                                                     </h3>
                                                     <div className="space-y-2">
                                                         {(isPostRFantibodyReview
@@ -4595,17 +4985,27 @@ export function ResultsViewer() {
                                                                 .sort((a, b) => (
                                                                     preferredAnalysisLens === 'fampnn'
                                                                         ? (a.fampnn_psce ?? Number.POSITIVE_INFINITY) - (b.fampnn_psce ?? Number.POSITIVE_INFINITY)
+                                                                        : preferredAnalysisLens === 'ppiflow'
+                                                                            ? ((a.maturation_delta_interface ?? Number.POSITIVE_INFINITY) - (b.maturation_delta_interface ?? Number.POSITIVE_INFINITY))
                                                                         : (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)
                                                                 ))
                                                                 .slice(0, 5)
                                                                 .map((d) => (
                                                                     <div key={d.id} className="flex justify-between items-center py-2 px-3 bg-slate-900/50 rounded-lg">
-                                                                        <span className="text-sm truncate flex-1">{d.name}</span>
+                                                                        <span className="text-sm truncate flex-1">
+                                                                            {preferredAnalysisLens === 'ppiflow'
+                                                                                ? `${getPpiflowSourceName(d as any) ?? d.name}${getPpiflowSampleIndex(d as any) != null ? ` • sample ${getPpiflowSampleIndex(d as any)}` : ''}`
+                                                                                : d.name}
+                                                                        </span>
                                                                         <span className={`text-sm font-mono ${preferredAnalysisLens === 'fampnn'
                                                                             ? getMetricColor('fampnn_psce', d.fampnn_psce)
-                                                                            : getMetricColor('plddt_overall', d.plddt_overall)}`}>
+                                                                            : preferredAnalysisLens === 'ppiflow'
+                                                                                ? ((d.maturation_delta_interface ?? 0) < 0 ? 'text-emerald-300' : (d.maturation_delta_interface ?? 0) > 0 ? 'text-rose-300' : 'text-slate-300')
+                                                                                : getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                             {preferredAnalysisLens === 'fampnn'
                                                                                 ? formatMetric(d.fampnn_psce, 2)
+                                                                                : preferredAnalysisLens === 'ppiflow'
+                                                                                    ? formatMetric(d.maturation_delta_interface, 2)
                                                                                 : formatMetric(d.plddt_overall, 1)}
                                                                         </span>
                                                                     </div>
@@ -4650,7 +5050,21 @@ export function ResultsViewer() {
                                                             )}
                                                         </div>
                                                     </div>
-                                                    <div className="relative self-start" ref={overviewAnalysisMenuRef}>
+                                                    <div className="relative flex items-center gap-2 self-start" ref={overviewAnalysisMenuRef}>
+                                                        {isAntibodyContext && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => runAntibodyAnalysis.mutate()}
+                                                                disabled={!selectedDesignId || antibodyAnalysisBusy}
+                                                                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${selectedDesignId && !antibodyAnalysisBusy
+                                                                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
+                                                                    : 'cursor-not-allowed border-slate-700 bg-slate-900/70 text-slate-500'
+                                                                    }`}
+                                                                title="Run persisted ANARCII/CDR annotation for the selected output"
+                                                            >
+                                                                {antibodyAnalysisBusy ? 'Running ANARCII…' : antibodyHasAnnotation ? 'Refresh ANARCII' : 'Run ANARCII'}
+                                                            </button>
+                                                        )}
                                                         <button
                                                             type="button"
                                                             onClick={() => setShowOverviewAnalysisMenu((current) => !current)}
@@ -4923,13 +5337,13 @@ export function ResultsViewer() {
                                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
                                                                         className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
-                                                                        {(['rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[])
+                                                                        {(['rfantibody', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[])
                                                                             .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
                                                                             .map((source) => (
                                                                                 <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
                                                                                     {antibodyDesignGroups[source].map((d) => (
                                                                                         <option key={d.id} value={d.id}>
-                                                                                            {getFriendlyDesignName(d)}{d.plddt_overall ? ` | ${inferDesignOutputSource(d as any) === 'rfantibody' ? 'RF pLDDT' : 'pLDDT'} ${d.plddt_overall.toFixed(0)}` : ''}
+                                                                                            {getFriendlyDesignName(d)}{getDesignSelectorMetricLabel(d) ? ` | ${getDesignSelectorMetricLabel(d)}` : ''}
                                                                                         </option>
                                                                                     ))}
                                                                                 </optgroup>
@@ -4939,7 +5353,7 @@ export function ResultsViewer() {
                                                                 </div>
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
-                                                                {(['all', 'rfantibody', 'fampnn', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                {(['all', 'rfantibody', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
                                                                     const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
                                                                     if (source !== 'all' && count === 0) return null;
                                                                     const active = antibodySourceFilter === source;
@@ -5113,73 +5527,7 @@ export function ResultsViewer() {
                                                     )}
 
                                                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                                                        {[
-                                                            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
-                                                            { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
-                                                            {
-                                                                label: selectedDesignSource === 'fampnn' ? 'FAMPNN pSCE' : selectedDesignSource === 'rfantibody' ? 'RF pLDDT' : 'pLDDT',
-                                                                value: selectedDesignSource === 'fampnn'
-                                                                    ? formatMetric(selectedDesign.fampnn_psce, 2)
-                                                                    : formatMetric(selectedDesign.plddt_overall, 1),
-                                                                tone: selectedDesignSource === 'fampnn'
-                                                                    ? getMetricColor('fampnn_psce', selectedDesign.fampnn_psce)
-                                                                    : getMetricColor('plddt_overall', selectedDesign.plddt_overall),
-                                                            },
-                                                            { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
-                                                            {
-                                                                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.epitope : 'Epitope Contacts',
-                                                                value: selectedDesignSource === 'rfantibody'
-                                                                    ? (getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_contact_count') ?? '—')
-                                                                    : (selectedDesign.epitope_contact_count ?? '—'),
-                                                                tone: 'text-slate-200',
-                                                            },
-                                                            {
-                                                                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epitope Dist` : 'Epitope Dist',
-                                                                value: (() => {
-                                                                    const metricValue = selectedDesignSource === 'rfantibody'
-                                                                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_distance')
-                                                                        : selectedDesign.epitope_min_distance;
-                                                                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                                                                })(),
-                                                                tone: 'text-slate-200',
-                                                            },
-                                                            {
-                                                                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.distance : 'Any-Target Dist',
-                                                                value: (() => {
-                                                                    const metricValue = selectedDesignSource === 'rfantibody'
-                                                                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_distance')
-                                                                        : selectedDesign.target_min_distance;
-                                                                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                                                                })(),
-                                                                tone: 'text-slate-200',
-                                                            },
-                                                            {
-                                                                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epi Atom Dist` : 'Epitope Atom Dist',
-                                                                value: (() => {
-                                                                    const metricValue = selectedDesignSource === 'rfantibody'
-                                                                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_atom_distance')
-                                                                        : selectedDesign.epitope_min_atom_distance;
-                                                                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                                                                })(),
-                                                                tone: 'text-slate-200',
-                                                            },
-                                                            {
-                                                                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Target Atom Dist` : 'Target Atom Dist',
-                                                                value: (() => {
-                                                                    const metricValue = selectedDesignSource === 'rfantibody'
-                                                                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_atom_distance')
-                                                                        : selectedDesign.target_min_atom_distance;
-                                                                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                                                                })(),
-                                                                tone: 'text-slate-200',
-                                                            },
-                                                            { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
-                                                            { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
-                                                            { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
-                                                            { label: 'High Frust %', value: selectedDesign.frustration_pct_high != null ? `${selectedDesign.frustration_pct_high.toFixed(1)}%` : '—', tone: 'text-amber-300' },
-                                                            { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
-                                                            { label: 'Maturation ΔIface', value: selectedDesign.maturation_delta_interface != null ? selectedDesign.maturation_delta_interface.toFixed(2) : '—', tone: 'text-fuchsia-300' },
-                                                        ].map((card) => (
+                                                        {selectedDesignMetricCards.map((card) => (
                                                             <div key={card.label} className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
                                                                 <div className="text-[11px] uppercase tracking-wider text-slate-500">{card.label}</div>
                                                                 <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as any}</div>
@@ -5935,6 +6283,7 @@ export function ResultsViewer() {
                                                     ['all', 'All'],
                                                     ['rfantibody', 'RFantibody'],
                                                     ['fampnn', 'FAMPNN'],
+                                                    ['ppiflow', 'PPIFlow'],
                                                     ['validation', 'Validation'],
                                                 ] as Array<[OutputSourceFilter, string]>).map(([value, label]) => (
                                                     <button
@@ -6001,7 +6350,10 @@ export function ResultsViewer() {
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'fampnn_psce', label: 'pSCE' },
                                                                 { key: 'ipsae', label: 'ipSAE' },
-                                                                { key: 'plddt_overall', label: isPostRFantibodyReview ? 'RF pLDDT' : 'pLDDT' },
+                                                                { key: 'plddt_overall', label: isPostRFantibodyReview ? 'RF pLDDT Glob' : 'pLDDT' },
+                                                                ...(isPostRFantibodyReview ? [
+                                                                    { key: 'rfa_plddt_selected', label: 'RF pLDDT Sel' },
+                                                                ] : []),
                                                                 ...(showBinderTargetConfidence ? [
                                                                     { key: 'plddt_binder', label: 'pLDDT Binder' },
                                                                     { key: 'plddt_target', label: 'pLDDT Target' },
@@ -6019,20 +6371,31 @@ export function ResultsViewer() {
                                                                 { key: 'frustration_high_count', label: 'Frust High' },
                                                                 { key: 'frustration_pct_high', label: '% High Frust' },
                                                                 { key: 'has_clash', label: 'Clash' },
-                                                                { key: 'maturation_delta_interface', label: 'ΔIface' },
-                                                                { key: 'maturation_rmsd', label: 'Mat RMSD' },
+                                                                { key: 'maturation_selected_delta_interface', label: 'ΔIface Sel' },
+                                                                { key: 'maturation_delta_interface', label: 'ΔIface Glob' },
+                                                                { key: 'maturation_selected_rmsd', label: 'RMSD Sel' },
+                                                                { key: 'maturation_rmsd', label: 'RMSD Glob' },
                                                                 { key: 'rog', label: 'RoG' },
                                                                 { key: 'rfd_rog', label: 'RFD RoG' },
                                                                 { key: 'fr2_contacts', label: 'FR2' },
                                                                 { key: 'is_favorite', label: '★' },
+                                                                ...(showPpiflowColumns ? [
+                                                                    { key: 'ppiflow_source_name', label: 'PPI Src', sortable: false },
+                                                                    { key: 'ppiflow_sample_index', label: 'Sample', sortable: false },
+                                                                    { key: 'maturation_selected_interface_score', label: 'Iface Sel' },
+                                                                    { key: 'maturation_interface_score', label: 'Iface Glob' },
+                                                                    { key: 'ppiflow_seq_identity', label: 'Seq ID', sortable: false },
+                                                                    { key: 'ppiflow_anchor_count', label: 'Anchors', sortable: false },
+                                                                    { key: 'ppiflow_clash_count', label: 'CA Clash', sortable: false },
+                                                                ] : []),
                                                             ].map(col => (
                                                                 <th
                                                                     key={col.key}
-                                                                    onClick={col.key === 'selected' ? undefined : () => handleSort(col.key)}
-                                                                    className={`px-3 py-2 text-left font-medium text-slate-400 ${col.key === 'selected' ? '' : 'cursor-pointer hover:text-white'}`}
+                                                                    onClick={col.key === 'selected' || col.sortable === false ? undefined : () => handleSort(col.key)}
+                                                                    className={`px-3 py-2 text-left font-medium text-slate-400 ${col.key === 'selected' || col.sortable === false ? '' : 'cursor-pointer hover:text-white'}`}
                                                                 >
                                                                     {col.label}
-                                                                    {sortField === col.key && (
+                                                                    {col.sortable !== false && sortField === col.key && (
                                                                         <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
                                                                     )}
                                                                 </th>
@@ -6040,10 +6403,13 @@ export function ResultsViewer() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {tableDesigns.map(d => (
+                                                        {tableDesigns.map(d => {
+                                                            const rowPpiflowScore = getPpiflowScoreRecord(d);
+                                                            const rowPpiflowAnchors = getPpiflowAnchorRecord(d);
+                                                            return (
                                                             <tr
                                                                 key={d.id}
-                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${selectedDesignSet.has(d.id) ? 'bg-cyan-500/5' : ''
+                                                                className={`border-b border-slate-800 cursor-pointer hover:bg-slate-800/30 ${selectedDesignSet.has(d.id) || selectedDesignId === d.id ? 'bg-cyan-500/5' : ''
                                                                     }`}
                                                                 onClick={() => {
                                                                     if (shouldSuppressTableClick()) return;
@@ -6066,6 +6432,8 @@ export function ResultsViewer() {
                                                                             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
                                                                             : inferDesignOutputSource(d as any) === 'fampnn'
                                                                                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                                                                : inferDesignOutputSource(d as any) === 'ppiflow'
+                                                                                    ? 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200'
                                                                                 : inferDesignOutputSource(d as any) === 'rfantibody'
                                                                                     ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
                                                                                     : 'border-slate-600 bg-slate-800 text-slate-300'
@@ -6181,6 +6549,11 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
+                                                                {isPostRFantibodyReview && (
+                                                                    <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.rfa_plddt_selected ?? null)}`}>
+                                                                        {formatMetric(d.rfa_plddt_selected, 1)}
+                                                                    </td>
+                                                                )}
                                                                 {showBinderTargetConfidence && (
                                                                     <>
                                                                         <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
@@ -6239,12 +6612,33 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>
                                                                     {d.has_clash == null ? '—' : d.has_clash ? '✗' : '✓'}
                                                                 </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface < 0 ? 'text-emerald-400' :
+                                                                    d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
+                                                                    title={d.maturation_selected_delta_interface != null ? `Selected ΔInterface: ${d.maturation_selected_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                    {formatMetric(d.maturation_selected_delta_interface ?? rowPpiflowScore?.selected_delta_interface_score, 1)}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.maturation_delta_interface != null && d.maturation_delta_interface < 0 ? 'text-emerald-400' :
                                                                     d.maturation_delta_interface != null && d.maturation_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
-                                                                    title={d.maturation_delta_interface != null ? `ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                    title={d.maturation_delta_interface != null ? `Global ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
                                                                     {formatMetric(d.maturation_delta_interface, 1)}
                                                                 </td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_selected_rmsd ?? rowPpiflowScore?.selected_rmsd_backbone, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
+                                                                {showPpiflowColumns && (
+                                                                    <>
+                                                                        <td className="px-3 py-2 max-w-[200px] truncate text-xs text-slate-300" title={getPpiflowSourceName(d as any) ?? ''}>
+                                                                            {getPpiflowSourceName(d as any) ?? '—'}
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{getPpiflowSampleIndex(d as any) ?? '—'}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_selected_interface_score ?? rowPpiflowScore?.selected_interface_score_matured, 1)}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_interface_score ?? rowPpiflowScore?.interface_score_matured, 1)}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(rowPpiflowScore?.sequence_identity, 2)}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{rowPpiflowAnchors?.anchor_count ?? '—'}</td>
+                                                                        <td className={`px-3 py-2 font-mono ${rowPpiflowScore?.clash_count_ca != null ? (rowPpiflowScore.clash_count_ca > 0 ? 'text-red-400' : 'text-emerald-400') : 'text-slate-500'}`}>
+                                                                            {rowPpiflowScore?.clash_count_ca ?? '—'}
+                                                                        </td>
+                                                                    </>
+                                                                )}
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>
@@ -6252,7 +6646,7 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2">{d.is_favorite ? '★' : ''}</td>
                                                             </tr>
-                                                        ))}
+                                                        )})}
                                                     </tbody>
                                                 </table>
                                             </div>
