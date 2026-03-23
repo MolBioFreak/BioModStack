@@ -274,12 +274,24 @@ def _dynamic_gpu_cpu_pool_threads() -> int:
 
 async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, Any]) -> Optional[int]:
     scheduler_config = read_scheduler_config()
-    configured_share = scheduler_config.get("global", {}).get("cpu_threads_per_job")
+    global_config = scheduler_config.get("global", {})
+    configured_share = global_config.get("cpu_threads_per_job")
+    auto_cpu_threads = bool(global_config.get("auto_cpu_threads", True))
+    auto_cpu_thread_job_threshold = global_config.get("auto_cpu_thread_job_threshold", 2)
     try:
-        if configured_share is not None:
+        if not auto_cpu_threads and configured_share is not None:
             return max(1, min(24, int(configured_share)))
     except (TypeError, ValueError):
         pass
+
+    try:
+        max_cpu_share = max(1, min(24, int(configured_share))) if configured_share is not None else 24
+    except (TypeError, ValueError):
+        max_cpu_share = 24
+    try:
+        job_threshold = max(1, int(auto_cpu_thread_job_threshold))
+    except (TypeError, ValueError):
+        job_threshold = 2
 
     from sqlalchemy import select
     from database import Job
@@ -309,7 +321,11 @@ async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, 
         concurrency_target = len(list(running_rows.scalars().all()))
 
     concurrency_target = max(1, concurrency_target)
-    cpu_share = max(MIN_DYNAMIC_GPU_CPUS, _dynamic_gpu_cpu_pool_threads() // concurrency_target)
+    if concurrency_target <= job_threshold:
+        cpu_share = max_cpu_share
+    else:
+        cpu_share = max(MIN_DYNAMIC_GPU_CPUS, _dynamic_gpu_cpu_pool_threads() // concurrency_target)
+        cpu_share = min(max_cpu_share, cpu_share)
     return cpu_share
 
 

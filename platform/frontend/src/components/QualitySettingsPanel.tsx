@@ -72,6 +72,9 @@ export interface QualitySettings {
     ppiflow_config: string;
     ppiflow_weights_dir: string;
     ppiflow_checkpoint_path: string;
+    ppiflow_rotamer_enrichment_enabled: boolean;
+    ppiflow_require_anchors: boolean;
+    ppiflow_rotamer_shell_cutoff: number;
     maturation_anchor_threshold: number;
     maturation_anchor_distance_cutoff: number;
     maturation_min_improvement: number;
@@ -238,8 +241,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
+        ppiflow_rotamer_enrichment_enabled: true,
+        ppiflow_require_anchors: true,
+        ppiflow_rotamer_shell_cutoff: 20.0,
         maturation_anchor_threshold: -5.0,
-        maturation_anchor_distance_cutoff: 8.0,
+        maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: -1.0,
         maturation_redesign_temp: 0.1,
         maturation_redesign_steps: 100,
@@ -329,8 +335,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
+        ppiflow_rotamer_enrichment_enabled: true,
+        ppiflow_require_anchors: true,
+        ppiflow_rotamer_shell_cutoff: 20.0,
         maturation_anchor_threshold: -5.0,
-        maturation_anchor_distance_cutoff: 8.0,
+        maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: -1.0,
         maturation_redesign_temp: 0.1,
         maturation_redesign_steps: 100,
@@ -420,8 +429,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
+        ppiflow_rotamer_enrichment_enabled: true,
+        ppiflow_require_anchors: true,
+        ppiflow_rotamer_shell_cutoff: 20.0,
         maturation_anchor_threshold: -6.0,
-        maturation_anchor_distance_cutoff: 8.0,
+        maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: 0.0,
         maturation_redesign_temp: 0.05,
         maturation_redesign_steps: 300,
@@ -511,8 +523,11 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_config: '/app/ppiflow/configs/inference_nanobody.yaml',
         ppiflow_weights_dir: '',
         ppiflow_checkpoint_path: '',
+        ppiflow_rotamer_enrichment_enabled: true,
+        ppiflow_require_anchors: true,
+        ppiflow_rotamer_shell_cutoff: 20.0,
         maturation_anchor_threshold: -7.0,
-        maturation_anchor_distance_cutoff: 8.0,
+        maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: 0.0,
         maturation_redesign_temp: 0.01,
         maturation_redesign_steps: 500,
@@ -749,7 +764,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
 
                 <div>
                     <label className="block text-xs text-slate-500 mb-1">
-                        Anchor Distance Cutoff <span className="text-slate-600">({settings.maturation_anchor_distance_cutoff.toFixed(1)} Å)</span>
+                        Interface Pair Cutoff <span className="text-slate-600">({settings.maturation_anchor_distance_cutoff.toFixed(1)} Å)</span>
                     </label>
                     <input
                         type="range"
@@ -766,7 +781,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>12</span>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
-                        Defines interface neighborhood for anchor detection.
+                        Distance used when summing negative binder-target pair energies for anchor selection.
                     </p>
                 </div>
             </div>
@@ -815,6 +830,55 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
                         Filter threshold on delta interface score (more negative is better).
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                        Rotamer Shell <span className="text-slate-600">({settings.ppiflow_rotamer_shell_cutoff.toFixed(1)} Å)</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={8}
+                        max={24}
+                        step={0.5}
+                        value={settings.ppiflow_rotamer_shell_cutoff}
+                        onChange={(e) => updateSetting('ppiflow_rotamer_shell_cutoff', parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                        <span>8</span>
+                        <span>20</span>
+                        <span>24</span>
+                    </div>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Local relax/repack shell used for interface rotamer enrichment before anchor selection.
+                    </p>
+                </div>
+
+                <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                    <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                        <span>Interface Rotamer Enrichment</span>
+                        <input
+                            type="checkbox"
+                            checked={settings.ppiflow_rotamer_enrichment_enabled}
+                            onChange={(e) => updateSetting('ppiflow_rotamer_enrichment_enabled', e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-teal-500"
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                        <span>Require Non-Movable Anchors</span>
+                        <input
+                            type="checkbox"
+                            checked={settings.ppiflow_require_anchors}
+                            onChange={(e) => updateSetting('ppiflow_require_anchors', e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-teal-500"
+                        />
+                    </label>
+                    <p className="text-[10px] text-slate-600">
+                        Default paper-aligned path: repack the interface first, then fail loudly if no usable anchors remain outside the movable region.
                     </p>
                 </div>
             </div>

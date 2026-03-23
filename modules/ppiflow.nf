@@ -2,6 +2,8 @@ process IdentifyAnchorResidues {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_anchors.json"
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_interface_score.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_rotamer_enrichment.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_enriched_complex.pdb"
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_ppiflow_positions.txt"
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_cdr_positions.txt"
 
@@ -9,7 +11,7 @@ process IdentifyAnchorResidues {
     tuple val(meta), path(complex_pdb)
 
     output:
-    tuple val(meta), path(complex_pdb), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), emit: anchor_inputs
+    tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), emit: anchor_inputs
     tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores
 
     script:
@@ -18,7 +20,10 @@ process IdentifyAnchorResidues {
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def energyThreshold = params.maturation_anchor_threshold ?: -5.0
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
+    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
+    def enrichmentEnabled = params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true
+    def requireAnchors = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
+    def rotamerShellDistance = params.ppiflow_rotamer_shell_distance ?: 20.0
     def regionMode = params.ppiflow_region_mode ?: 'selected_cdrs'
     def selectedLoopsSpec = params.ppiflow_selected_loops ?: ''
     def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
@@ -35,20 +40,32 @@ JSON
 ${manualCdrDefinitionsJson}
 JSON
 
-    "\${PYTHON_BIN}" "${params.code_root}/scripts/identify_anchors.py" \\
+    enrichmentArgs=""
+    if [ "${enrichmentEnabled}" = "true" ]; then
+        enrichmentArgs="\${enrichmentArgs} --rotamer_enrichment"
+    fi
+    if [ "${requireAnchors}" = "true" ]; then
+        enrichmentArgs="\${enrichmentArgs} --require_anchors"
+    fi
+
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/prepare_ppiflow_maturation.py" \\
         --pdb "${complex_pdb}" \\
         --antibody_chains "${antibodyChains}" \\
         --antigen_chains "${antigenChains}" \\
         --energy_threshold ${energyThreshold} \\
         --distance_cutoff ${distanceCutoff} \\
+        --rotamer_shell_distance ${rotamerShellDistance} \\
         --region_mode "${regionMode}" \\
         --selected_loops "${selectedLoopsSpec}" \\
         --cdr_positions_by_loop_json "cdr_positions_by_loop.json" \\
         --manual_cdr_definitions_json "manual_cdr_definitions.json" \\
+        --output_enriched_pdb "${meta.id}_enriched_complex.pdb" \\
         --output_anchors "${meta.id}_anchors.json" \\
         --output_score "${meta.id}_interface_score.json" \\
+        --output_rotamer_enrichment "${meta.id}_rotamer_enrichment.json" \\
         --output_positions "${meta.id}_ppiflow_positions.txt" \\
-        --output_cdr_positions "${meta.id}_cdr_positions.txt"
+        --output_cdr_positions "${meta.id}_cdr_positions.txt" \\
+        \${enrichmentArgs}
     """
 }
 
@@ -58,10 +75,10 @@ process RunPartialFlow {
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
 
     input:
-    tuple val(meta), path(complex_pdb), path(anchors_json), path(ppiflow_positions)
+    tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions)
 
     output:
-    tuple val(meta), path("ppiflow_backbones/*.pdb"), emit: backbones
+    tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones
 
     script:
     def frameworkType = params.get('framework_type')
@@ -119,7 +136,7 @@ from pathlib import Path
 import re
 
 chains = []
-for token in Path("${cdr_positions}").read_text().strip().split(","):
+for token in Path("${ppiflow_positions}").read_text().strip().split(","):
     token = token.strip()
     if not token:
         continue
@@ -275,6 +292,11 @@ PY
         exit 1
     fi
 
+    # Upstream sample_antibody_nanobody_partial.py already expands
+    # args.samples_per_target into repeated input rows and intentionally keeps
+    # ppi_dataset.samples_per_target = 1 in the generated config. Overriding
+    # that config value multiplies outputs to N x N and breaks downstream
+    # expectations.
     configPathBash="${configPath}"
     if [ "\${configPathBash}" = "/app/ppiflow/configs/inference_nanobody.yaml" ] && [ -f "/app/ppiflow/configs/test_antibody.yaml" ]; then
         echo "[PPIFlow] Warning: remapping config '\${configPathBash}' to '/app/ppiflow/configs/test_antibody.yaml' for antibody partial-flow compatibility" >&2
@@ -309,14 +331,27 @@ PY
 
 "\${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
+import json
 import shutil
 
 pdbs = sorted(Path("ppiflow_out").rglob("*.pdb"))
 if not pdbs:
     raise SystemExit("No PPIFlow PDB outputs found")
-Path("ppiflow_backbones").mkdir(exist_ok=True)
+expected = int("${samplesPerTarget}")
+if len(pdbs) != expected:
+    raise SystemExit(f"[PPIFlow] ERROR: expected {expected} output PDBs but found {len(pdbs)} in ppiflow_out")
+out_dir = Path("ppiflow_backbones")
+out_dir.mkdir(exist_ok=True)
+manifest = []
 for i, pdb in enumerate(pdbs):
-    shutil.copy2(pdb, f"ppiflow_backbones/${meta.id}_ppiflow_sample{i}.pdb")
+    out_name = f"${meta.id}_ppiflow_sample{i}.pdb"
+    shutil.copy2(pdb, out_dir / out_name)
+    manifest.append({
+        "sample_index": i,
+        "name": out_name,
+        "path": str((out_dir / out_name).resolve()),
+    })
+Path("ppiflow_backbones_manifest.json").write_text(json.dumps(manifest, indent=2))
 PY
     """
 }
@@ -464,7 +499,7 @@ process ScoreMaturationImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_maturation_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdbs)
+    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions)
 
     output:
     tuple val(meta), path("scores/*_maturation_score.json"), emit: scores
@@ -474,7 +509,7 @@ process ScoreMaturationImprovement {
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
+    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -488,6 +523,7 @@ process ScoreMaturationImprovement {
             --antibody_chains "${antibodyChains}" \\
             --antigen_chains "${antigenChains}" \\
             --distance_cutoff ${distanceCutoff} \\
+            --selected_positions "\$(tr -d '\\n' < "${ppiflow_positions}")" \\
             --output "scores/\${base_name}_maturation_score.json"
     done
     """
@@ -498,7 +534,7 @@ process ScorePartialFlowImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_partial_flow_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdbs)
+    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions)
 
     output:
     tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores
@@ -508,7 +544,7 @@ process ScorePartialFlowImprovement {
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
+    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -522,6 +558,7 @@ process ScorePartialFlowImprovement {
             --antibody_chains "${antibodyChains}" \\
             --antigen_chains "${antigenChains}" \\
             --distance_cutoff ${distanceCutoff} \\
+            --selected_positions "\$(tr -d '\\n' < "${ppiflow_positions}")" \\
             --output "scores/\${base_name}_partial_flow_score.json"
     done
     """

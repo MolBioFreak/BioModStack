@@ -1,4 +1,4 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'ppiflow' | 'validation';
 export type AnalysisLens = 'validation' | 'rfantibody' | 'fampnn' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
@@ -81,6 +81,18 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
     }
 
     if (
+        path.includes('/collected/backbone_refine/') ||
+        path.includes('/run/ppiflow/results/') ||
+        path.includes('/run/ppiflow/') ||
+        path.includes('/ppiflow_backbone/') ||
+        path.includes('/ppiflow_maturation/') ||
+        path.includes('/ppiflow_repair/') ||
+        path.includes('/maturation/')
+    ) {
+        return 'ppiflow';
+    }
+
+    if (
         path.includes('/collected/rfantibody/') ||
         path.includes('/collected/rfantibody_raw/') ||
         path.includes('/collected/rfantibody_filtered/') ||
@@ -96,6 +108,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (hasMetricKeys(design as AnalysisLensDesign, ['fampnn_psce', 'mpnn_score'])) {
         return 'fampnn';
+    }
+
+    if (hasMetricKeys(design as AnalysisLensDesign, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])) {
+        return 'ppiflow';
     }
 
     if (hasValidationMetrics(metrics)) return 'validation';
@@ -130,6 +146,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
     const source = inferDesignOutputSource(design);
     if (source === 'rfantibody') return 'rfantibody';
     if (source === 'fampnn') return 'fampnn';
+    if (source === 'ppiflow') return 'ppiflow';
     if (source === 'validation') return 'validation';
 
     return null;
@@ -243,6 +260,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     if (source === 'validation') {
         return hasValidationMetrics(design.confidence_metrics || null) ? 'Protenix' : 'Validation';
     }
+    if (source === 'ppiflow') return 'PPIFlow';
     if (source === 'fampnn') return 'FAMPNN';
     if (source === 'rfantibody') return 'RFantibody';
     return 'Other';
@@ -251,6 +269,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
 export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string => {
     if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
     if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+    if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
     return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
 };
