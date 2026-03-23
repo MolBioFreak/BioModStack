@@ -1338,6 +1338,7 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
     for key in {
         "job_id",
         "run_id",
+        "batch_name",
         "api_url",
         "out_dir",
         "output_dir",
@@ -1366,6 +1367,16 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "manual_mutation_method",
         "mutation_seed_refinement_trigger",
         "mutation_variant",
+        "resume_job_id",
+        "resume_root_job_id",
+        "resume_work_dir",
+        "resume_source_dir",
+        "resume_stage_work_dir",
+        "resume_requested_stage",
+        "resume_param_overrides",
+        "resume_from_stage",
+        "resume_name_suffix",
+        "resume_lock_retry_attempts",
     }:
         pruned.pop(key, None)
     return _normalize_antibody_job_params(pruned)
@@ -2539,6 +2550,7 @@ def _build_antibody_iteration_job(
     design_ids: List[str],
     name_suffix: Optional[str],
     param_overrides: Dict[str, Any],
+    saved_filter_set: Optional[SavedReviewFilterSet] = None,
 ) -> JobCreate:
     action = action.strip().lower()
     action_map = {
@@ -2618,6 +2630,10 @@ def _build_antibody_iteration_job(
                 "interactive_gate_stage": "post_fampnn",
                 "ppiflow_stage_mode": "post_rfantibody",
                 "ppiflow_stage_target": "post_rfantibody",
+                "ppiflow_rotamer_enrichment_enabled": True,
+                "ppiflow_require_anchors": True,
+                "ppiflow_rotamer_shell_cutoff": 20.0,
+                "maturation_anchor_distance_cutoff": 12.0,
             },
         },
         "ppiflow_maturation": {
@@ -2646,6 +2662,10 @@ def _build_antibody_iteration_job(
                 "interactive_gate_stage": "post_structure_validation",
                 "ppiflow_stage_mode": "post_fampnn",
                 "ppiflow_stage_target": "post_fampnn",
+                "ppiflow_rotamer_enrichment_enabled": True,
+                "ppiflow_require_anchors": True,
+                "ppiflow_rotamer_shell_cutoff": 20.0,
+                "maturation_anchor_distance_cutoff": 12.0,
             },
         },
         "fampnn_redesign": {
@@ -3223,6 +3243,21 @@ async def list_jobs(
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     rows = result.all()
+
+    listed_job_ids = [job.id for job, _design_count in rows]
+    child_design_count_by_parent: dict[str, int] = {}
+    if listed_job_ids:
+        child_count_result = await session.execute(
+            select(Job.parent_job_id, func.count(Design.id))
+            .join(Design, Design.job_id == Job.id)
+            .where(Job.parent_job_id.in_(listed_job_ids))
+            .group_by(Job.parent_job_id)
+        )
+        child_design_count_by_parent = {
+            str(parent_job_id): int(design_count or 0)
+            for parent_job_id, design_count in child_count_result.all()
+            if parent_job_id is not None
+        }
     
     # Get total count (for pagination) - also exclude children
     count_query = select(func.count(Job.id))
@@ -3242,6 +3277,10 @@ async def list_jobs(
         review_count = _review_candidate_count_cached(job)
         if (design_count or 0) == 0 and review_count is not None:
             design_count = review_count
+        if (design_count or 0) == 0:
+            child_design_count = child_design_count_by_parent.get(job.id)
+            if child_design_count:
+                design_count = child_design_count
         
         job_responses.append(JobResponse(
             id=job.id,
@@ -3901,6 +3940,7 @@ async def launch_antibody_iteration_from_designs(
             design_ids=design_ids,
             name_suffix=request.name_suffix,
             param_overrides=request.param_overrides,
+            saved_filter_set=saved_filter_set,
         )
     if isinstance(launch_request.params, dict):
         launch_request.params.update({
@@ -4018,6 +4058,16 @@ async def get_job(
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
+    if (design_count or 0) == 0:
+        child_design_count_query = (
+            select(func.count(Design.id))
+            .select_from(Job)
+            .join(Design, Design.job_id == Job.id)
+            .where(Job.parent_job_id == job.id)
+        )
+        child_design_count = (await session.execute(child_design_count_query)).scalar()
+        if child_design_count:
+            design_count = child_design_count
     review_count = _review_candidate_count(job)
     if (design_count or 0) == 0 and review_count is not None:
         design_count = review_count

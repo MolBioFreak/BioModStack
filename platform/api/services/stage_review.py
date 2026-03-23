@@ -885,6 +885,8 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
                 rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
                 rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
+                rfa_plddt_selected=safe_float(rfa_trb.get("rfa_plddt_selected")),
+                rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
                 rfa_design_loops=rfa_trb.get("rfa_design_loops"),
                 rfa_hotspots=rfa_trb.get("rfa_hotspots"),
                 confidence_metrics=(rfa_trb.get("rfa_metadata") if stage == "post_rfantibody" else None),

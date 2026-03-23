@@ -174,8 +174,8 @@
                 },
                 "maturation_anchor_distance_cutoff": {
                     "type": "number",
-                    "default": 8.0,
-                    "description": "Distance cutoff (A) for interface anchors.",
+                    "default": 12.0,
+                    "description": "Distance cutoff (A) for binder-target interface pair energies.",
                     "hidden": true
                 },
                 "maturation_min_improvement": {
@@ -236,6 +236,24 @@
                     "type": "integer",
                     "default": 10,
                     "description": "Retry limit for PPIFlow sampling.",
+                    "hidden": true
+                },
+                "ppiflow_rotamer_enrichment_enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run Rosetta-style interface rotamer enrichment before anchor selection.",
+                    "hidden": true
+                },
+                "ppiflow_require_anchors": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Fail PPIFlow maturation when no anchor residues pass the strict energy threshold.",
+                    "hidden": true
+                },
+                "ppiflow_rotamer_shell_cutoff": {
+                    "type": "number",
+                    "default": 20.0,
+                    "description": "Shell distance (A) for local interface relax/repack before anchor selection.",
                     "hidden": true
                 },
                 "ppiflow_config": {

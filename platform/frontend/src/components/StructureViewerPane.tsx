@@ -139,6 +139,12 @@ function formatMetricValue(value: number | null | undefined, digits = 1, suffix 
     return `${value.toFixed(digits)}${suffix}`;
 }
 
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+    value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
+);
+
 export default function StructureViewerPane({
     selectedDesignId,
     setSelectedDesignId,
@@ -185,6 +191,18 @@ export default function StructureViewerPane({
     const themeColors = useThemeColors();
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
+    const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
+    const sourceBackboneReference = useMemo<ReferenceStructure | null>(() => {
+        if (designLens !== 'ppiflow') return null;
+        const sourceName = typeof selectedDesignPpiflowRecord?.source_design_name === 'string' && selectedDesignPpiflowRecord.source_design_name.trim()
+            ? selectedDesignPpiflowRecord.source_design_name.trim()
+            : 'Source Backbone';
+        return {
+            url: `/api/designs/${selectedDesign?.id}/source-pdb`,
+            format: 'pdb',
+            name: `Source Backbone • ${sourceName}`,
+        };
+    }, [designLens, selectedDesign?.id, selectedDesignPpiflowRecord]);
     const preferredRfMetricScope = normalizeRfScreeningScope(activeJob?.params?.rfantibody_screen_reference_scope) ?? 'cdr_loops';
     const effectiveRfMetricScope = rfMetricScope ?? preferredRfMetricScope;
     const rfMetricLabels = RF_SCOPE_LABELS[effectiveRfMetricScope];
@@ -476,23 +494,23 @@ export default function StructureViewerPane({
         if (designLens === 'ppiflow') {
             return [
                 {
-                    label: 'Delta Interface',
-                    value: formatMetricValue(selectedDesign.maturation_delta_interface ?? null, 3),
+                    label: 'Delta Interface Sel',
+                    value: formatMetricValue(selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface ?? null, 3),
                     accentClass: 'text-emerald-300',
                 },
                 {
-                    label: 'Interface Score',
-                    value: formatMetricValue(selectedDesign.maturation_interface_score ?? null, 3),
+                    label: 'Interface Score Sel',
+                    value: formatMetricValue(selectedDesign.maturation_selected_interface_score ?? selectedDesign.maturation_interface_score ?? null, 3),
                     accentClass: 'text-cyan-300',
                 },
                 {
-                    label: 'Maturation RMSD',
-                    value: formatMetricValue(selectedDesign.maturation_rmsd ?? null, 2, ' A'),
+                    label: 'RMSD Sel',
+                    value: formatMetricValue(selectedDesign.maturation_selected_rmsd ?? selectedDesign.maturation_rmsd ?? null, 2, ' A'),
                     accentClass: 'text-amber-300',
                 },
                 {
-                    label: 'iPTM',
-                    value: formatMetricValue(selectedDesign.iptm ?? null, 3),
+                    label: 'RMSD Rest',
+                    value: formatMetricValue(selectedDesign.maturation_nonselected_rmsd ?? null, 2, ' A'),
                     accentClass: 'text-violet-300',
                 },
             ] satisfies StructureMetricCard[];
@@ -1437,7 +1455,7 @@ export default function StructureViewerPane({
                 >
                     {designs.map(d => (
                         <option key={d.id} value={d.id}>
-                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
                     ))}
                 </select>
@@ -1478,6 +1496,24 @@ export default function StructureViewerPane({
             )}
 
             {/* Fullscreen Toggle */}
+            <button
+                onClick={() => {
+                    if (sourceBackboneReference) {
+                        showSelectedReference(sourceBackboneReference);
+                    }
+                }}
+                disabled={!sourceBackboneReference}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
+                    ? (sourceBackboneReference
+                        ? 'bg-cyan-500/80 text-white backdrop-blur-sm hover:bg-cyan-400/80'
+                        : 'bg-slate-800/60 text-slate-500 backdrop-blur-sm cursor-not-allowed')
+                    : (sourceBackboneReference
+                        ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/20'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed')}`}
+                title={sourceBackboneReference ? 'Open the pre-refinement source backbone as the reference structure' : 'No source backbone reference is available for this output'}
+            >
+                Source Backbone
+            </button>
             <button
                 onClick={() => {
                     if (showReferenceDock) {
