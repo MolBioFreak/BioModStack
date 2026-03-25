@@ -105,7 +105,7 @@ def load_structure_residue_records(structure_path: str | Path) -> tuple[list[Res
             line = raw_line.rstrip("\n")
             if is_cif and line.startswith("_atom_site."):
                 _atom_site, field_name = line.split(".", 1)
-                field_map[field_name] = len(field_map)
+                field_map[field_name.strip()] = len(field_map)
                 continue
             if not (line.startswith("ATOM") or line.startswith("HETATM")):
                 continue

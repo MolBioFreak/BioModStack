@@ -22,9 +22,10 @@ from sqlalchemy.orm.attributes import flag_modified
 from database import Design, Job
 from paths import get_data_root
 from services.rfantibody_metadata import load_rfantibody_trb_summary
+from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
-from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics
+from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
 
 
 def _is_native_frustration_row(row: Dict[str, Any]) -> bool:
@@ -187,6 +188,7 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
     Extract backbone ID from design name.
     
     Formats:
+    - antibody_job_gpu0_99 -> 99
     - antibody_job_2_seq_15_model_0 -> 2
     - boltzgen_input_5 -> 5
     - rfd_design_3 -> 3
@@ -198,6 +200,7 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
         normalized = normalized.split('_', 1)[1]
 
     patterns = (
+        r"(?:^|[_-])antibody[_-]?job(?:[_-]?gpu\d+)?[_-]?(\d+)(?=[_-]|$)",
         r"(?:^|[_-])rfantibody[_-]?child[_-]?(\d+)(?=[_-]|$)",
         r"(?:^|[_-])child[_-]?(\d+)(?=[_-]|$)",
         r"(?:^|[_-])(?:job|input|design)[_-]?(\d+)(?=[_-]|$)",
@@ -235,6 +238,17 @@ def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
         return True
     if params.get("antibody_chains"):
         return True
+    if params.get("binder_chains") or params.get("target_chains"):
+        return True
+    complex_components = params.get("complex_components")
+    if isinstance(complex_components, list):
+        protein_like = [
+            comp
+            for comp in complex_components
+            if isinstance(comp, dict) and str(comp.get("type") or "").strip().lower() in {"protein", "peptide"}
+        ]
+        if len(protein_like) >= 2:
+            return True
     return False
 
 
@@ -270,6 +284,27 @@ def _parse_chain_ids(raw_value: Any) -> List[str]:
     return ordered
 
 
+def _infer_complex_role_chain_ids(job_params: Dict[str, Any]) -> tuple[List[str], List[str]]:
+    components = job_params.get("complex_components")
+    if not isinstance(components, list):
+        return [], []
+
+    protein_like_ids: List[str] = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        comp_type = str(comp.get("type") or "").strip().lower()
+        if comp_type not in {"protein", "peptide"}:
+            continue
+        chain_id = str(comp.get("id") or "").strip()
+        if chain_id:
+            protein_like_ids.append(chain_id)
+
+    if len(protein_like_ids) < 2:
+        return [], []
+    return [protein_like_ids[0]], protein_like_ids[1:]
+
+
 def _validation_role_fields(job: Optional[Job], job_params: Dict[str, Any]) -> Dict[str, Optional[str]]:
     if not _job_has_explicit_binder_target_roles(job):
         return {
@@ -279,6 +314,11 @@ def _validation_role_fields(job: Optional[Job], job_params: Dict[str, Any]) -> D
 
     binder_chains = _parse_chain_ids(job_params.get("antibody_chains") or job_params.get("binder_chains"))
     target_chains = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
+    inferred_target_chains, inferred_binder_chains = _infer_complex_role_chain_ids(job_params)
+    if not target_chains:
+        target_chains = inferred_target_chains
+    if not binder_chains:
+        binder_chains = inferred_binder_chains
     return {
         "detected_antibody_chains": ",".join(binder_chains) or None,
         "detected_target_chain": ",".join(target_chains) or None,
@@ -344,57 +384,188 @@ def _load_json_payload(json_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     return payload if isinstance(payload, dict) else None
 
 
-def _extract_fampnn_metrics(fam_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not isinstance(fam_payload, dict):
-        return {
-            "avg_psce": None,
-            "max_residue_psce": None,
-            "min_residue_psce": None,
-            "chain_avg_psce": None,
-            "sequence": None,
-            "binder_sequence": None,
-            "binder_length": None,
-            "mpnn_score": None,
-        }
+def _default_fampnn_metrics() -> Dict[str, Any]:
+    return {
+        "avg_psce": None,
+        "max_residue_psce": None,
+        "min_residue_psce": None,
+        "chain_avg_psce": None,
+        "sequence": None,
+        "binder_sequence": None,
+        "binder_length": None,
+        "mpnn_score": None,
+    }
 
-    chain_avg_raw = fam_payload.get("chain_avg_psce")
+
+def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Dict[str, Any]:
+    metrics = {
+        "binder_sequence": None,
+        "binder_length": None,
+    }
+    if not structure_path or not structure_path.exists():
+        return metrics
+
+    try:
+        sequences = extract_sequence_from_pdb(str(structure_path))
+        if not sequences:
+            return metrics
+
+        binder_chains = identify_binder_chains(sequences, str(structure_path))
+        ordered_chain_ids = [
+            chain_id
+            for chain_id in dict.fromkeys(binder_chains.values())
+            if chain_id in sequences
+        ]
+
+        if ordered_chain_ids:
+            binder_sequences = [
+                sequences[chain_id]
+                for chain_id in ordered_chain_ids
+                if sequences.get(chain_id)
+            ]
+            if binder_sequences:
+                metrics["binder_sequence"] = "|".join(binder_sequences)
+                metrics["binder_length"] = sum(len(seq) for seq in binder_sequences)
+                return metrics
+
+        heavy_chain = sequences.get("H")
+        if heavy_chain:
+            metrics["binder_sequence"] = heavy_chain
+            metrics["binder_length"] = len(heavy_chain)
+            return metrics
+
+        if len(sequences) == 1:
+            only_sequence = next(iter(sequences.values()))
+            metrics["binder_sequence"] = only_sequence
+            metrics["binder_length"] = len(only_sequence)
+    except Exception as exc:
+        print(f"[Ingester] Failed binder metric extraction for {structure_path}: {exc}")
+
+    return metrics
+
+
+def _compute_fampnn_metrics_from_structure(structure_path: Optional[Path]) -> Dict[str, Any]:
+    metrics = _default_fampnn_metrics()
+    if not structure_path or not structure_path.exists():
+        return metrics
+
+    metrics.update(_compute_binder_metrics_from_structure(structure_path))
+
+    try:
+        chain_profiles = get_per_chain_fampnn_psce(structure_path)
+    except Exception as exc:
+        print(f"[Ingester] Failed FA-MPNN structure-side metric extraction for {structure_path}: {exc}")
+        return metrics
+
+    residue_psces: List[float] = []
+    chain_avg_psce: Dict[str, float] = {}
+    for chain_id, profile in chain_profiles.items():
+        chain_scores = [
+            value
+            for value in (profile.get("psce") if isinstance(profile, dict) else []) or []
+            if isinstance(value, (int, float))
+        ]
+        if not chain_scores:
+            continue
+        residue_psces.extend(float(value) for value in chain_scores)
+        chain_avg = safe_float(profile.get("avg_psce") if isinstance(profile, dict) else None)
+        if chain_avg is None:
+            chain_avg = sum(chain_scores) / len(chain_scores)
+        chain_avg_psce[str(chain_id)] = round(float(chain_avg), 2)
+
+    if not residue_psces:
+        return metrics
+
+    metrics["avg_psce"] = round(sum(residue_psces) / len(residue_psces), 2)
+    metrics["max_residue_psce"] = round(max(residue_psces), 2)
+    metrics["min_residue_psce"] = round(min(residue_psces), 2)
+    metrics["chain_avg_psce"] = chain_avg_psce or None
+    return metrics
+
+
+def _build_fampnn_payload(fam_payload: Optional[Dict[str, Any]], fam_metrics: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = dict(fam_payload or {})
+    if fam_metrics.get("chain_avg_psce") and not isinstance(payload.get("chain_avg_psce"), dict):
+        payload["chain_avg_psce"] = fam_metrics["chain_avg_psce"]
+    if fam_metrics.get("avg_psce") is not None and safe_float(payload.get("fampnn_avg_psce")) is None:
+        payload["fampnn_avg_psce"] = fam_metrics["avg_psce"]
+    if fam_metrics.get("max_residue_psce") is not None and safe_float(payload.get("fampnn_max_residue_psce")) is None:
+        payload["fampnn_max_residue_psce"] = fam_metrics["max_residue_psce"]
+    if fam_metrics.get("min_residue_psce") is not None and safe_float(payload.get("fampnn_min_residue_psce")) is None:
+        payload["fampnn_min_residue_psce"] = fam_metrics["min_residue_psce"]
+    return payload or None
+
+
+def _extract_fampnn_metrics(
+    fam_payload: Optional[Dict[str, Any]],
+    structure_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    metrics = _default_fampnn_metrics()
+
     chain_avg_psce: Optional[Dict[str, float]] = None
-    if isinstance(chain_avg_raw, dict):
-        normalized_chain_avg: Dict[str, float] = {}
-        for chain_id, raw_value in chain_avg_raw.items():
-            numeric = safe_float(raw_value)
-            if numeric is None:
-                continue
-            normalized_chain_avg[str(chain_id)] = numeric
-        chain_avg_psce = normalized_chain_avg or None
-
-    avg_psce = safe_float(fam_payload.get("fampnn_avg_psce"))
-    if avg_psce is None and chain_avg_psce:
-        avg_psce = sum(chain_avg_psce.values()) / len(chain_avg_psce)
-
-    sequence_text = fam_payload.get("sequence")
-    sequence = str(sequence_text).strip() if isinstance(sequence_text, str) and sequence_text.strip() else None
+    avg_psce: Optional[float] = None
+    max_residue_psce: Optional[float] = None
+    min_residue_psce: Optional[float] = None
+    sequence: Optional[str] = None
     binder_sequence: Optional[str] = None
     binder_length: Optional[int] = None
-    if sequence:
-        first_chain = sequence.split("|", 1)[0].strip()
-        if ":" in first_chain:
-            _, chain_sequence = first_chain.split(":", 1)
-            first_chain = chain_sequence.strip()
-        if first_chain:
-            binder_sequence = first_chain
-            binder_length = len(first_chain)
+    mpnn_score: Optional[float] = None
 
-    return {
+    if isinstance(fam_payload, dict):
+        chain_avg_raw = fam_payload.get("chain_avg_psce")
+        if isinstance(chain_avg_raw, dict):
+            normalized_chain_avg: Dict[str, float] = {}
+            for chain_id, raw_value in chain_avg_raw.items():
+                numeric = safe_float(raw_value)
+                if numeric is None:
+                    continue
+                normalized_chain_avg[str(chain_id)] = numeric
+            chain_avg_psce = normalized_chain_avg or None
+
+        avg_psce = safe_float(fam_payload.get("fampnn_avg_psce"))
+        if avg_psce is None and chain_avg_psce:
+            avg_psce = sum(chain_avg_psce.values()) / len(chain_avg_psce)
+
+        max_residue_psce = safe_float(fam_payload.get("fampnn_max_residue_psce"))
+        min_residue_psce = safe_float(fam_payload.get("fampnn_min_residue_psce"))
+        mpnn_score = safe_float(fam_payload.get("mpnn_score") or fam_payload.get("seq_mpnn_score"))
+
+        sequence_text = fam_payload.get("sequence")
+        sequence = str(sequence_text).strip() if isinstance(sequence_text, str) and sequence_text.strip() else None
+        if sequence:
+            first_chain = sequence.split("|", 1)[0].strip()
+            if ":" in first_chain:
+                _, chain_sequence = first_chain.split(":", 1)
+                first_chain = chain_sequence.strip()
+            if first_chain:
+                binder_sequence = first_chain
+                binder_length = len(first_chain)
+
+    structure_metrics = _compute_fampnn_metrics_from_structure(structure_path)
+    if avg_psce is None:
+        avg_psce = structure_metrics["avg_psce"]
+    if max_residue_psce is None:
+        max_residue_psce = structure_metrics["max_residue_psce"]
+    if min_residue_psce is None:
+        min_residue_psce = structure_metrics["min_residue_psce"]
+    if chain_avg_psce is None:
+        chain_avg_psce = structure_metrics["chain_avg_psce"]
+    if binder_sequence is None:
+        binder_sequence = structure_metrics["binder_sequence"]
+    if binder_length is None:
+        binder_length = structure_metrics["binder_length"]
+
+    metrics.update({
         "avg_psce": avg_psce,
-        "max_residue_psce": safe_float(fam_payload.get("fampnn_max_residue_psce")),
-        "min_residue_psce": safe_float(fam_payload.get("fampnn_min_residue_psce")),
+        "max_residue_psce": max_residue_psce,
+        "min_residue_psce": min_residue_psce,
         "chain_avg_psce": chain_avg_psce,
         "sequence": sequence,
         "binder_sequence": binder_sequence,
         "binder_length": binder_length,
-        "mpnn_score": safe_float(fam_payload.get("mpnn_score") or fam_payload.get("seq_mpnn_score")),
-    }
+        "mpnn_score": mpnn_score,
+    })
+    return metrics
 
 
 def _ordered_unique(values: List[str]) -> List[str]:
@@ -430,6 +601,88 @@ def _candidate_source_design_names(design_name: str) -> List[str]:
     return _ordered_unique(candidates)
 
 
+_UUID_TOKEN_RE = re.compile(
+    r"[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}"
+)
+
+
+def _candidate_source_design_ids(design_name: str) -> List[str]:
+    stem = Path(str(design_name or "")).stem.strip()
+    if not stem:
+        return []
+
+    candidates: List[str] = []
+    search_values = [stem]
+    if "_seq_" in stem:
+        prefix, _suffix = stem.rsplit("_seq_", 1)
+        search_values.append(prefix)
+
+    for value in search_values:
+        stripped = re.sub(r"^job\d+_", "", value)
+        for token in stripped.split("_"):
+            token = token.strip()
+            if token and _UUID_TOKEN_RE.fullmatch(token):
+                candidates.append(token)
+        for match in _UUID_TOKEN_RE.findall(stripped):
+            candidates.append(match)
+
+    return _ordered_unique(candidates)
+
+
+_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS = (
+    Design.id,
+    Design.job_id,
+    Design.name,
+    Design.pdb_path,
+    Design.origin_design_id,
+    Design.origin_backbone_design_id,
+    Design.stage_family,
+    Design.stage_mode,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
+    Design.binder_length,
+    Design.cdr_h1_length,
+    Design.cdr_h2_length,
+    Design.cdr_h3_length,
+    Design.cdr_l1_length,
+    Design.cdr_l2_length,
+    Design.cdr_l3_length,
+    Design.rog,
+    Design.rfd_rog,
+    Design.epitope_contact_count,
+    Design.epitope_min_distance,
+    Design.epitope_min_atom_distance,
+    Design.epitope_nearest_antibody_residue,
+    Design.epitope_nearest_target_residue,
+    Design.epitope_nearest_antibody_atom,
+    Design.epitope_nearest_target_atom,
+    Design.epitope_mapping_mode,
+    Design.epitope_centroid_distance,
+    Design.target_contact_count,
+    Design.target_min_distance,
+    Design.target_min_atom_distance,
+    Design.target_nearest_antibody_residue,
+    Design.target_nearest_target_residue,
+    Design.target_nearest_antibody_atom,
+    Design.target_nearest_target_atom,
+    Design.target_centroid_distance,
+    Design.detected_antibody_chains,
+    Design.detected_target_chain,
+    Design.antibody_residue_count,
+    Design.target_residue_count,
+    Design.epitope_residue_count,
+    Design.passed_screen,
+    Design.rfa_hotspot_covered_count,
+)
+
+
 def _parse_source_pdb_paths(raw_value: Any) -> List[Path]:
     if raw_value in (None, "", [], (), {}):
         return []
@@ -450,8 +703,8 @@ def _build_source_design_index(params: Dict[str, Any]) -> Dict[str, Dict[str, An
     index: Dict[str, Dict[str, Any]] = {}
     for pdb_path in _parse_source_pdb_paths(params.get("pdb_paths")):
         payload = {
-            "pdb_path": str(pdb_path),
-            "design_name": pdb_path.stem,
+            "source_pdb_path": str(pdb_path),
+            "source_design_name": pdb_path.stem,
         }
         for key in _candidate_source_design_names(pdb_path.stem):
             index.setdefault(key, payload)
@@ -600,11 +853,22 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     )
 
     selection_manifest = None
-    selection_dir = params.get("iteration_selection_dir")
-    if selection_dir:
+    selection_manifest_path = None
+    selection_dir = params.get("selected_input_dir") or params.get("iteration_selection_dir")
+    manifest_candidate = params.get("selected_input_manifest") or params.get("source_selection_manifest_path")
+    if manifest_candidate:
         try:
-            manifest_path = Path(str(selection_dir)).expanduser() / "selection_manifest.json"
-            selection_manifest = _load_json_payload(manifest_path)
+            selection_manifest_path = Path(str(manifest_candidate)).expanduser()
+        except Exception:
+            selection_manifest_path = None
+    elif selection_dir:
+        try:
+            selection_manifest_path = Path(str(selection_dir)).expanduser() / "selection_manifest.json"
+        except Exception:
+            selection_manifest_path = None
+    if selection_manifest_path:
+        try:
+            selection_manifest = _load_json_payload(selection_manifest_path)
         except Exception:
             selection_manifest = None
 
@@ -625,6 +889,25 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     source_design_index = _build_source_design_index(params)
     stage_settings = _extract_stage_settings(params, stage_family, stage_mode)
 
+    source_stage_job_id = (
+        params.get("source_stage_job_id")
+        or params.get("selected_input_source_job_id")
+        or getattr(job, "source_stage_job_id", None)
+    )
+    source_stage_family = str(
+        params.get("source_stage_family")
+        or params.get("selected_input_stage_family")
+        or getattr(job, "source_stage_family", None)
+        or ""
+    ).strip().lower() or None
+    source_stage_mode = str(
+        params.get("source_stage_mode")
+        or params.get("selected_input_stage_mode")
+        or getattr(job, "source_stage_mode", None)
+        or ""
+    ).strip().lower() or None
+    source_selection_count = params.get("source_selection_count") or getattr(job, "source_selection_count", None)
+
     provenance = {
         "job_id": getattr(job, "id", None),
         "job_name": getattr(job, "name", None),
@@ -638,6 +921,13 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "selection_source_job_id": params.get("selection_source_job_id") or params.get("iteration_source_job_id"),
         "selection_dataset_name": params.get("selection_dataset_name"),
         "selected_loop_scope": selected_loop_scope,
+        "source_stage_job_id": source_stage_job_id,
+        "source_stage_family": source_stage_family,
+        "source_stage_mode": source_stage_mode,
+        "source_selection_manifest_path": str(selection_manifest_path) if selection_manifest_path else None,
+        "source_selection_count": source_selection_count,
+        "selected_input_dir": str(selection_dir) if selection_dir else None,
+        "selected_input_manifest": str(selection_manifest_path) if selection_manifest_path else None,
         "iteration_action": params.get("iteration_action"),
         "ppiflow_stage_target": params.get("ppiflow_stage_target"),
         "ppiflow_stage_mode": params.get("ppiflow_stage_mode"),
@@ -651,6 +941,11 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "lineage_root_job_id": lineage_root_job_id,
         "origin_job_id": origin_job_id,
         "selected_loop_scope": selected_loop_scope,
+        "source_stage_job_id": source_stage_job_id,
+        "source_stage_family": source_stage_family,
+        "source_stage_mode": source_stage_mode,
+        "source_selection_manifest_path": str(selection_manifest_path) if selection_manifest_path else None,
+        "source_selection_count": source_selection_count,
         "provenance": provenance,
         "selection_index": selection_index,
         "source_design_index": source_design_index,
@@ -702,6 +997,7 @@ async def _resolve_parent_design_lineage(
 ) -> Dict[str, Optional[str]]:
     cache = cache or {}
     selection_index = context.get("selection_index") or {}
+    candidate_source_ids = _candidate_source_design_ids(design_name)
     manifest_item = selection_index.get(design_name)
     if manifest_item is None:
         stem = Path(design_name).stem
@@ -713,55 +1009,64 @@ async def _resolve_parent_design_lineage(
                 manifest_item = match
                 break
 
-    parent_design_id = str(manifest_item.get("design_id")).strip() if manifest_item and manifest_item.get("design_id") else None
-    source_pdb_path = str(manifest_item.get("pdb_path")).strip() if manifest_item and manifest_item.get("pdb_path") else None
-    source_design_name = str(manifest_item.get("design_name")).strip() if manifest_item and manifest_item.get("design_name") else None
+    parent_design_id = None
+    if manifest_item:
+        for key in ("design_id", "source_design_id"):
+            value = manifest_item.get(key)
+            if value:
+                parent_design_id = str(value).strip()
+                break
+    source_pdb_path = None
+    if manifest_item:
+        for key in ("source_pdb_path", "pdb_path"):
+            value = manifest_item.get(key)
+            if value:
+                source_pdb_path = str(value).strip()
+                break
+    source_design_name = None
+    if manifest_item:
+        for key in ("source_design_name", "design_name"):
+            value = manifest_item.get(key)
+            if value:
+                source_design_name = str(value).strip()
+                break
+    if source_design_name:
+        candidate_source_ids.extend(_candidate_source_design_ids(source_design_name))
+    source_stage_job_id = str(manifest_item.get("design_job_id")).strip() if manifest_item and manifest_item.get("design_job_id") else context.get("source_stage_job_id")
+    source_stage_family = str((manifest_item.get("design_stage_family") if manifest_item else None) or context.get("source_stage_family") or "").strip().lower() or None
+    source_stage_mode = str((manifest_item.get("design_stage_mode") if manifest_item else None) or context.get("source_stage_mode") or "").strip().lower() or None
     parent_design = None
     if parent_design_id:
         parent_design = cache.get(parent_design_id)
         if parent_design is None and parent_design_id not in cache:
             result = await session.execute(
                 select(Design).options(
-                    load_only(
-                        Design.id,
-                        Design.job_id,
-                        Design.origin_design_id,
-                        Design.origin_backbone_design_id,
-                        Design.stage_family,
-                        Design.stage_mode,
-                        Design.cdr_h1_length,
-                        Design.cdr_h2_length,
-                        Design.cdr_h3_length,
-                        Design.cdr_l1_length,
-                        Design.cdr_l2_length,
-                        Design.cdr_l3_length,
-                    )
+                    load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
                 ).where(Design.id == parent_design_id)
             )
             parent_design = result.scalar_one_or_none()
             cache[parent_design_id] = parent_design
-    elif source_pdb_path:
+    if parent_design is None and candidate_source_ids:
+        for candidate_id in _ordered_unique(candidate_source_ids):
+            parent_design = cache.get(candidate_id)
+            if parent_design is None and candidate_id not in cache:
+                result = await session.execute(
+                    select(Design).options(
+                        load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
+                    ).where(Design.id == candidate_id)
+                )
+                parent_design = result.scalar_one_or_none()
+                cache[candidate_id] = parent_design
+            if parent_design is not None:
+                parent_design_id = parent_design.id
+                break
+    if parent_design is None and source_pdb_path:
         cache_key = f"pdb::{source_pdb_path}"
         parent_design = cache.get(cache_key)
         if parent_design is None and cache_key not in cache:
             result = await session.execute(
                 select(Design).options(
-                    load_only(
-                        Design.id,
-                        Design.job_id,
-                        Design.origin_design_id,
-                        Design.origin_backbone_design_id,
-                        Design.stage_family,
-                        Design.stage_mode,
-                        Design.pdb_path,
-                        Design.name,
-                        Design.cdr_h1_length,
-                        Design.cdr_h2_length,
-                        Design.cdr_h3_length,
-                        Design.cdr_l1_length,
-                        Design.cdr_l2_length,
-                        Design.cdr_l3_length,
-                    )
+                    load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
                 ).where(Design.pdb_path == source_pdb_path)
             )
             parent_design = result.scalars().first()
@@ -772,21 +1077,7 @@ async def _resolve_parent_design_lineage(
             if parent_design is None and cache_key not in cache:
                 result = await session.execute(
                     select(Design).options(
-                        load_only(
-                            Design.id,
-                            Design.job_id,
-                            Design.origin_design_id,
-                            Design.origin_backbone_design_id,
-                            Design.stage_family,
-                            Design.stage_mode,
-                            Design.name,
-                            Design.cdr_h1_length,
-                            Design.cdr_h2_length,
-                            Design.cdr_h3_length,
-                            Design.cdr_l1_length,
-                            Design.cdr_l2_length,
-                            Design.cdr_l3_length,
-                        )
+                        load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
                     ).where(Design.name == source_design_name)
                 )
                 parent_design = result.scalars().first()
@@ -798,6 +1089,11 @@ async def _resolve_parent_design_lineage(
     origin_backbone_design_id = None
     origin_job_id = None
     if parent_design:
+        source_design_name = getattr(parent_design, "name", None) or source_design_name
+        source_pdb_path = getattr(parent_design, "pdb_path", None) or source_pdb_path
+        source_stage_job_id = source_stage_job_id or getattr(parent_design, "job_id", None)
+        source_stage_family = source_stage_family or getattr(parent_design, "stage_family", None)
+        source_stage_mode = source_stage_mode or getattr(parent_design, "stage_mode", None)
         origin_design_id = parent_design.origin_design_id or parent_design.id
         origin_backbone_design_id = parent_design.origin_backbone_design_id or parent_design.id
         origin_job_id = parent_design.job_id
@@ -811,10 +1107,29 @@ async def _resolve_parent_design_lineage(
         "origin_design_id": origin_design_id,
         "origin_backbone_design_id": origin_backbone_design_id,
         "origin_job_id": origin_job_id,
+        "source_stage_job_id": source_stage_job_id,
+        "source_stage_family": source_stage_family,
+        "source_stage_mode": source_stage_mode,
         "source_cdr_lengths": _extract_design_cdr_lengths(parent_design),
         "selection_manifest_item": manifest_item,
         "source_pdb_path": source_pdb_path,
         "source_design_name": source_design_name,
+        "source_design": parent_design,
+    }
+
+
+def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "lineage_root_job_id": context.get("lineage_root_job_id"),
+        "parent_design_id": lineage.get("parent_design_id"),
+        "origin_design_id": lineage.get("origin_design_id"),
+        "origin_job_id": lineage.get("origin_job_id") or context.get("origin_job_id"),
+        "origin_backbone_design_id": lineage.get("origin_backbone_design_id"),
+        "source_stage_job_id": lineage.get("source_stage_job_id") or context.get("source_stage_job_id"),
+        "source_stage_family": lineage.get("source_stage_family") or context.get("source_stage_family"),
+        "source_stage_mode": lineage.get("source_stage_mode") or context.get("source_stage_mode"),
+        "source_pdb_path": lineage.get("source_pdb_path"),
+        "source_design_name": lineage.get("source_design_name"),
     }
 
 
@@ -986,7 +1301,8 @@ async def ingest_job_results(
                     structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
                     fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path) if structure_path else None
                     fam_payload = _load_json_payload(fam_json_path) if fam_json_path else None
-                    fam_metrics = _extract_fampnn_metrics(fam_payload)
+                    fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                    fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     row_mpnn_score = safe_float(row.get('seq_mpnn_score'))
                     row_fampnn_psce = safe_float(row.get('seq_fampnn_psce'))
                     lineage = await _resolve_parent_design_lineage(
@@ -1004,8 +1320,8 @@ async def ingest_job_results(
                         design_provenance["source_design_name"] = lineage["source_design_name"]
                     if lineage.get("source_pdb_path"):
                         design_provenance["source_pdb_path"] = lineage["source_pdb_path"]
-                    if fam_payload:
-                        design_provenance["fampnn"] = fam_payload
+                    if fampnn_record:
+                        design_provenance["fampnn"] = fampnn_record
 
                     design = Design(
                         id=str(uuid.uuid4()),
@@ -1076,8 +1392,8 @@ async def ingest_job_results(
                         design.rfa_hotspots = rfa_trb.get("rfa_hotspots")
                         design_provenance["rfantibody"] = rfa_trb
                     combined_confidence: Dict[str, Any] = {}
-                    if fam_payload:
-                        combined_confidence["fampnn"] = fam_payload
+                    if fampnn_record:
+                        combined_confidence["fampnn"] = fampnn_record
                     if rfa_trb:
                         combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
                     if combined_confidence:
@@ -1088,15 +1404,17 @@ async def ingest_job_results(
                         design.name,
                         cache=lineage_cache,
                     )
-                    design.lineage_root_job_id = job_context.get("lineage_root_job_id")
-                    design.parent_design_id = lineage["parent_design_id"]
-                    design.origin_design_id = lineage["origin_design_id"]
-                    design.origin_job_id = lineage["origin_job_id"] or job_context.get("origin_job_id")
-                    design.origin_backbone_design_id = lineage["origin_backbone_design_id"]
+                    for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+                        setattr(design, field_name, field_value)
                     design.stage_family = job_context.get("stage_family")
                     design.stage_mode = job_context.get("stage_mode")
                     design.selected_loop_scope = job_context.get("selected_loop_scope")
                     design.provenance = design_provenance
+                    _inherit_source_design_metrics(
+                        design,
+                        lineage.get("source_design"),
+                        structure_path=structure_path,
+                    )
                     
                     session.add(design)
                     designs_created += 1
@@ -1403,6 +1721,75 @@ def _apply_geometry_metrics(design: "Design", metrics: Dict[str, Any], *, overwr
     return changed
 
 
+def _inherit_source_design_metrics(
+    design: "Design",
+    source_design: Optional[Design],
+    *,
+    structure_path: Optional[Path] = None,
+) -> bool:
+    changed = False
+
+    if source_design is not None:
+        scalar_fields = (
+            "binder_length",
+            "cdr_h1_length",
+            "cdr_h2_length",
+            "cdr_h3_length",
+            "cdr_l1_length",
+            "cdr_l2_length",
+            "cdr_l3_length",
+            "rfd_rog",
+            "passed_screen",
+            "rfa_hotspot_covered_count",
+        )
+        for field_name in scalar_fields:
+            if getattr(design, field_name, None) is not None:
+                continue
+            source_value = getattr(source_design, field_name, None)
+            if source_value is None:
+                continue
+            setattr(design, field_name, source_value)
+            changed = True
+
+        geometry_fields = {
+            field_name: getattr(source_design, field_name, None)
+            for field_name in (
+                "epitope_contact_count",
+                "epitope_min_distance",
+                "epitope_min_atom_distance",
+                "epitope_nearest_antibody_residue",
+                "epitope_nearest_target_residue",
+                "epitope_nearest_antibody_atom",
+                "epitope_nearest_target_atom",
+                "epitope_mapping_mode",
+                "epitope_centroid_distance",
+                "target_contact_count",
+                "target_min_distance",
+                "target_min_atom_distance",
+                "target_nearest_antibody_residue",
+                "target_nearest_target_residue",
+                "target_nearest_antibody_atom",
+                "target_nearest_target_atom",
+                "target_centroid_distance",
+                "detected_antibody_chains",
+                "detected_target_chain",
+                "antibody_residue_count",
+                "target_residue_count",
+                "epitope_residue_count",
+            )
+        }
+        changed = _apply_geometry_metrics(design, geometry_fields, overwrite=False) or changed
+
+    if getattr(design, "rog", None) is None:
+        computed_rog = compute_gyration_radius(structure_path) if structure_path else None
+        fallback_rog = computed_rog if computed_rog is not None else (getattr(source_design, "rog", None) if source_design is not None else None)
+        if fallback_rog is not None:
+            design.rog = fallback_rog
+            changed = True
+
+    return changed
+
+
 async def ingest_maturation_data(
     job_id: str,
     output_path: Path,
@@ -1599,7 +1986,8 @@ async def ingest_maturation_data(
 
         fam_json_path = _find_fampnn_sidecar_path(Path(design.pdb_path), output_path)
         fam_payload = _load_json_payload(fam_json_path)
-        fam_metrics = _extract_fampnn_metrics(fam_payload)
+        fam_metrics = _extract_fampnn_metrics(fam_payload, Path(design.pdb_path))
+        fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
         if fam_json_path and not design.json_path:
             design.json_path = str(fam_json_path)
         if fam_metrics.get("avg_psce") is not None:
@@ -1610,8 +1998,8 @@ async def ingest_maturation_data(
             design.mpnn_score = fam_metrics["mpnn_score"]
 
         confidence_metrics = dict(design.confidence_metrics or {})
-        if fam_payload:
-            confidence_metrics["fampnn"] = fam_payload
+        if fampnn_record:
+            confidence_metrics["fampnn"] = fampnn_record
         design.confidence_metrics = confidence_metrics or None
         if confidence_metrics:
             flag_modified(design, "confidence_metrics")
@@ -1720,15 +2108,13 @@ async def ingest_maturation_data(
                 provenance["ppiflow"]["cdr_positions"] = cdr_positions_path.read_text().strip()
                 provenance["ppiflow"]["cdr_positions_txt"] = str(cdr_positions_path)
                 break
-        if fam_json_path:
-            provenance["ppiflow"]["fampnn"] = fam_payload
+        if fam_json_path and fampnn_record:
+            provenance["ppiflow"]["fampnn"] = fampnn_record
             provenance["ppiflow"]["fampnn_json"] = str(fam_json_path)
 
-        design.lineage_root_job_id = design.lineage_root_job_id or job_context.get("lineage_root_job_id")
-        design.parent_design_id = design.parent_design_id or lineage["parent_design_id"]
-        design.origin_design_id = design.origin_design_id or lineage["origin_design_id"]
-        design.origin_job_id = design.origin_job_id or lineage["origin_job_id"] or job_context.get("origin_job_id")
-        design.origin_backbone_design_id = design.origin_backbone_design_id or lineage["origin_backbone_design_id"]
+        for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+            if getattr(design, field_name, None) in (None, "", [], {}, ()):
+                setattr(design, field_name, field_value)
         design.stage_family = design.stage_family or job_context.get("stage_family") or "ppiflow"
         design.stage_mode = design.stage_mode or job_context.get("stage_mode") or "maturation"
         design.selected_loop_scope = design.selected_loop_scope or job_context.get("selected_loop_scope")
@@ -1799,7 +2185,8 @@ async def ingest_published_maturation_structures(
 
         fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
         fam_payload = _load_json_payload(fam_json_path)
-        fam_metrics = _extract_fampnn_metrics(fam_payload)
+        fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+        fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
         lineage = await _resolve_parent_design_lineage(
             session,
             job_context,
@@ -1844,9 +2231,9 @@ async def ingest_published_maturation_structures(
             ppiflow_provenance["cdr_positions"] = cdr_positions_path.read_text().strip()
             ppiflow_provenance["cdr_positions_txt"] = str(cdr_positions_path)
         confidence_metrics: Dict[str, Any] = {}
-        if fam_payload:
-            ppiflow_provenance["fampnn"] = fam_payload
-            confidence_metrics["fampnn"] = fam_payload
+        if fampnn_record:
+            ppiflow_provenance["fampnn"] = fampnn_record
+            confidence_metrics["fampnn"] = fampnn_record
 
         session.add(Design(
             id=str(uuid.uuid4()),
@@ -1855,11 +2242,7 @@ async def ingest_published_maturation_structures(
             pdb_path=str(structure_path),
             json_path=str(fam_json_path) if fam_json_path else None,
             backbone_id=parse_backbone_id(design_name),
-            lineage_root_job_id=job_context.get("lineage_root_job_id"),
-            parent_design_id=lineage["parent_design_id"],
-            origin_design_id=lineage["origin_design_id"],
-            origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
-            origin_backbone_design_id=lineage["origin_backbone_design_id"],
+            **_design_lineage_fields(job_context, lineage),
             stage_family=job_context.get("stage_family") or "ppiflow",
             stage_mode=job_context.get("stage_mode") or "maturation",
             selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -2207,19 +2590,21 @@ async def ingest_loose_files(
                 )
                 fam_json_path = _find_fampnn_sidecar_path(Path(structure_path), output_path)
                 fam_payload = _load_json_payload(fam_json_path)
+                fam_metrics = _extract_fampnn_metrics(fam_payload, Path(structure_path))
+                fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                 fam_provenance: Dict[str, Any] = {
-                    "source": "fampnn" if fam_payload and "fampnn_avg_psce" in fam_payload else "loose_file",
+                    "source": "fampnn" if fampnn_record and fampnn_record.get("fampnn_avg_psce") is not None else "loose_file",
                     "structure_path": str(structure_path),
                 }
                 if lineage.get("source_design_name"):
                     fam_provenance["source_design_name"] = lineage["source_design_name"]
                 if lineage.get("source_pdb_path"):
                     fam_provenance["source_pdb_path"] = lineage["source_pdb_path"]
-                if fam_payload:
-                    fam_provenance["fampnn"] = fam_payload
+                if fampnn_record:
+                    fam_provenance["fampnn"] = fampnn_record
                 combined_confidence = dict(metrics) if isinstance(metrics, dict) else {}
-                if fam_payload:
-                    combined_confidence["fampnn"] = fam_payload
+                if fampnn_record:
+                    combined_confidence["fampnn"] = fampnn_record
                 aligned_error_fields = _strict_aligned_error_fields(
                     structure_path=Path(structure_path),
                     summary_json_path=Path(json_file) if json_file else None,
@@ -2236,11 +2621,7 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
-                    parent_design_id=lineage["parent_design_id"],
-                    origin_design_id=lineage["origin_design_id"],
-                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
-                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    **_design_lineage_fields(job_context, lineage),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -2386,11 +2767,7 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
-                    parent_design_id=lineage["parent_design_id"],
-                    origin_design_id=lineage["origin_design_id"],
-                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
-                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    **_design_lineage_fields(job_context, lineage),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -2565,11 +2942,7 @@ async def ingest_loose_files(
                     json_path=str(json_file),
 
                     backbone_id=parse_backbone_id(design_name),
-                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
-                    parent_design_id=lineage["parent_design_id"],
-                    origin_design_id=lineage["origin_design_id"],
-                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
-                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    **_design_lineage_fields(job_context, lineage),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -2722,6 +3095,11 @@ async def ingest_loose_files(
                     is_favorite=False,
                     created_at=datetime.utcnow()
                 )
+                _inherit_source_design_metrics(
+                    design,
+                    lineage.get("source_design"),
+                    structure_path=Path(structure_path),
+                )
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
@@ -2787,7 +3165,8 @@ async def ingest_loose_files(
                 )
                 fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
                 fam_payload = _load_json_payload(fam_json_path)
-                fam_metrics = _extract_fampnn_metrics(fam_payload)
+                fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     
                 # For raw RFantibody outputs, the meaningful confidence lives in the
                 # .trb sidecar rather than the output PDB B-factors.
@@ -2797,7 +3176,7 @@ async def ingest_loose_files(
                     residue_plddt = rfa_trb.get("residue_plddt")
                 else:
                     plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-                    if fam_payload and str(job_context.get("stage_family") or "").strip().lower() == "fampnn":
+                    if fampnn_record and str(job_context.get("stage_family") or "").strip().lower() == "fampnn":
                         if plddt is not None and plddt <= 0:
                             plddt = None
                         if isinstance(residue_plddt, list) and not any(safe_float(value) and safe_float(value) > 0 for value in residue_plddt):
@@ -2822,9 +3201,9 @@ async def ingest_loose_files(
                 if lineage.get("source_pdb_path"):
                     design_provenance["source_pdb_path"] = lineage["source_pdb_path"]
                 combined_confidence: Dict[str, Any] = {}
-                if fam_payload:
-                    design_provenance["fampnn"] = fam_payload
-                    combined_confidence["fampnn"] = fam_payload
+                if fampnn_record:
+                    design_provenance["fampnn"] = fampnn_record
+                    combined_confidence["fampnn"] = fampnn_record
                 if rfa_trb:
                     design_provenance["rfantibody"] = rfa_trb
                     combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
@@ -2837,11 +3216,7 @@ async def ingest_loose_files(
                     json_path=str(fam_json_path) if fam_json_path.exists() else None,
                     
                     backbone_id=parse_backbone_id(design_name),
-                    lineage_root_job_id=job_context.get("lineage_root_job_id"),
-                    parent_design_id=lineage["parent_design_id"],
-                    origin_design_id=lineage["origin_design_id"],
-                    origin_job_id=lineage["origin_job_id"] or job_context.get("origin_job_id"),
-                    origin_backbone_design_id=lineage["origin_backbone_design_id"],
+                    **_design_lineage_fields(job_context, lineage),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),

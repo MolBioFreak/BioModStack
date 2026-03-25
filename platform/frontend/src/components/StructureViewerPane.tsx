@@ -1,10 +1,12 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import Plot from 'react-plotly.js';
+import type { Data, Layout } from 'plotly.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type Design, type Job, type PAEData, type PersistedAnalysisRun, type RfLoopMetric, type RfLoopMetrics, type RfScopeHeadlineMetrics, type RfScreeningScope, type StructureAnalysis } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type Design, type FampnnPsceChainMetric, type FampnnPsceProfile, type Job, type PAEData, type PersistedAnalysisRun, type RfLoopMetric, type RfLoopMetrics, type RfScopeHeadlineMetrics, type RfScreeningScope, type StructureAnalysis } from '../lib/api';
 import { inferDesignAnalysisLens, inferDesignOutputSource } from './designOutputSource';
 
 interface Selection {
@@ -20,8 +22,8 @@ interface Props {
     setSelectedDesignId: (id: string) => void;
     designs: Design[];
     selectedDesign: Design | null | undefined;
-    colorMode: 'default' | 'plddt' | 'cdr' | 'frustration';
-    setColorMode: (mode: 'default' | 'plddt' | 'cdr' | 'frustration') => void;
+    colorMode: 'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce';
+    setColorMode: (mode: 'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce') => void;
     structureFormat: 'pdb' | 'cif';
     antibodySelections?: Selection[];
     antibodyStructureUrl?: string;
@@ -35,7 +37,7 @@ interface Props {
     setRfMetricScope?: (scope: RfScreeningScope) => void;
 }
 
-type OverlayView = 'metrics' | 'plddt' | 'pae';
+type OverlayView = 'metrics' | 'plddt' | 'psce' | 'pae';
 type ReferenceDockMode = 'selector' | 'viewer';
 
 interface ReferenceWindowState {
@@ -134,6 +136,29 @@ function frustrationColor(value: number): { r: number; g: number; b: number } {
     return { r: 148, g: 163, b: 184 };
 }
 
+const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+const residueColorKey = (chainId: string, residueNumber: number): string => `${chainId}:${residueNumber}`;
+
+function fampnnPsceColor(value: number): { r: number; g: number; b: number } {
+    if (value <= 0.9) return { r: 52, g: 211, b: 153 };
+    if (value <= 1.2) return { r: 56, g: 189, b: 248 };
+    if (value <= 1.6) return { r: 245, g: 158, b: 11 };
+    return { r: 244, g: 114, b: 182 };
+}
+
+function fampnnPsceColorHex(value: number): string {
+    const color = fampnnPsceColor(value);
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+}
+
+function fampnnPsceTierLabel(value: number): string {
+    if (value <= 0.9) return 'Excellent';
+    if (value <= 1.2) return 'Good';
+    if (value <= 1.6) return 'Moderate';
+    return 'Review';
+}
+
 function formatMetricValue(value: number | null | undefined, digits = 1, suffix = ''): string {
     if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
     return `${value.toFixed(digits)}${suffix}`;
@@ -144,6 +169,20 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
         ? value as Record<string, unknown>
         : null
 );
+
+const getFampnnPayload = (design: Design | null | undefined): Record<string, unknown> | null => (
+    asRecord(asRecord(design?.provenance)?.fampnn)
+    ?? asRecord(asRecord(asRecord(design?.provenance)?.ppiflow)?.fampnn)
+    ?? asRecord(asRecord(design?.confidence_metrics)?.fampnn)
+);
+
+const getFampnnScalar = (payload: Record<string, unknown> | null, ...keys: string[]): number | null => {
+    for (const key of keys) {
+        const value = payload?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    return null;
+};
 
 export default function StructureViewerPane({
     selectedDesignId,
@@ -192,6 +231,17 @@ export default function StructureViewerPane({
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
+    const fampnnPayload = useMemo(() => getFampnnPayload(selectedDesign), [selectedDesign]);
+    const fampnnAvgPsce = useMemo(() => {
+        const directValue = selectedDesign?.fampnn_psce;
+        if (typeof directValue === 'number' && Number.isFinite(directValue)) return directValue;
+        return getFampnnScalar(fampnnPayload, 'fampnn_avg_psce', 'avg_psce');
+    }, [fampnnPayload, selectedDesign?.fampnn_psce]);
+    const fampnnMaxResiduePsce = useMemo(() => {
+        const directValue = selectedDesign?.fampnn_max_residue_psce;
+        if (typeof directValue === 'number' && Number.isFinite(directValue)) return directValue;
+        return getFampnnScalar(fampnnPayload, 'fampnn_max_residue_psce', 'max_residue_psce');
+    }, [fampnnPayload, selectedDesign?.fampnn_max_residue_psce]);
     const sourceBackboneReference = useMemo<ReferenceStructure | null>(() => {
         if (designLens !== 'ppiflow') return null;
         const sourceName = typeof selectedDesignPpiflowRecord?.source_design_name === 'string' && selectedDesignPpiflowRecord.source_design_name.trim()
@@ -256,6 +306,47 @@ export default function StructureViewerPane({
             : chainMetricsStatus === 'queued'
                 ? 'Queued'
                 : chainMetricsStatus === 'failed'
+                    ? 'Failed'
+                    : 'Not computed';
+
+    const { data: fampnnPsceProfileRun } = useQuery({
+        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
+                : null
+        ),
+        enabled: !!selectedDesignId && designLens === 'fampnn',
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<FampnnPsceProfile> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const fampnnPsceProfile = fampnnPsceProfileRun?.status === 'completed'
+        ? (fampnnPsceProfileRun.result as FampnnPsceProfile | null)
+        : null;
+    const fampnnPsceChains = (fampnnPsceProfile?.chains ?? {}) as Record<string, FampnnPsceChainMetric>;
+    const runFampnnPsceProfile = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) throw new Error('No design selected');
+            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId] });
+        },
+    });
+    const fampnnPsceBusy = runFampnnPsceProfile.isPending
+        || fampnnPsceProfileRun?.status === 'queued'
+        || fampnnPsceProfileRun?.status === 'running';
+    const fampnnPsceStatus = fampnnPsceProfileRun?.status ?? 'missing';
+    const fampnnPsceStatusCopy = fampnnPsceStatus === 'completed'
+        ? 'Cached'
+        : fampnnPsceStatus === 'running'
+            ? 'Running'
+            : fampnnPsceStatus === 'queued'
+                ? 'Queued'
+                : fampnnPsceStatus === 'failed'
                     ? 'Failed'
                     : 'Not computed';
 
@@ -364,9 +455,51 @@ export default function StructureViewerPane({
         return boundaries;
     }, [chainMetrics]);
 
+    const fampnnPsceChainIds = useMemo(() => Object.keys(fampnnPsceChains).sort(), [fampnnPsceChains]);
+    const fampnnPsceBoundaries = useMemo(() => {
+        let offset = 0;
+        const boundaries: { id: string; start: number; end: number }[] = [];
+        for (const chainId of fampnnPsceChainIds) {
+            const length = fampnnPsceChains[chainId]?.length || 0;
+            boundaries.push({ id: chainId, start: offset, end: offset + length });
+            offset += length;
+        }
+        return boundaries;
+    }, [fampnnPsceChainIds, fampnnPsceChains]);
+    const fampnnPsceProfileValues = useMemo(
+        () => fampnnPsceChainIds.flatMap((chainId) => fampnnPsceChains[chainId]?.psce || []),
+        [fampnnPsceChainIds, fampnnPsceChains],
+    );
+    const fampnnDerivedSummary = useMemo(() => {
+        if (!fampnnPsceProfileValues.length) return null;
+        const total = fampnnPsceProfileValues.reduce((sum, value) => sum + value, 0);
+        return {
+            avg_psce: total / fampnnPsceProfileValues.length,
+            max_psce: Math.max(...fampnnPsceProfileValues),
+            min_psce: Math.min(...fampnnPsceProfileValues),
+        };
+    }, [fampnnPsceProfileValues]);
+    const effectiveFampnnAvgPsce = fampnnAvgPsce ?? fampnnDerivedSummary?.avg_psce ?? null;
+    const effectiveFampnnMaxResiduePsce = fampnnMaxResiduePsce ?? fampnnDerivedSummary?.max_psce ?? null;
     const hasResidueConfidence = plddtProfile.length > 0 || Object.keys(chainMetrics).length > 0;
+    const hasFampnnPsceProfile = fampnnPsceChainIds.length > 0;
     const hasPae = Array.isArray(paeMatrix) && paeMatrix.length > 0;
-    const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence ? 'default' : colorMode;
+    const fampnnPsceChartMax = useMemo(() => {
+        const maxValue = fampnnPsceProfileValues.length ? Math.max(...fampnnPsceProfileValues) : 0;
+        return Math.max(2.0, Math.ceil(maxValue * 2) / 2);
+    }, [fampnnPsceProfileValues]);
+
+    useEffect(() => {
+        if (designLens !== 'fampnn' || !selectedDesignId) return;
+        if (hasFampnnPsceProfile || fampnnPsceBusy || fampnnPsceStatus !== 'missing') return;
+        runFampnnPsceProfile.mutate();
+    }, [designLens, fampnnPsceBusy, fampnnPsceStatus, hasFampnnPsceProfile, runFampnnPsceProfile, selectedDesignId]);
+
+    const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence
+        ? 'default'
+        : colorMode === 'fampnn_psce' && !hasFampnnPsceProfile
+            ? 'default'
+            : colorMode;
     const viewerStructureUrl = effectiveColorMode === 'cdr' && antibodyStructureUrl
         ? antibodyStructureUrl
         : (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined);
@@ -383,10 +516,20 @@ export default function StructureViewerPane({
     }, [colorMode, hasResidueConfidence, selectedDesign?.frustration_residues?.length, setColorMode]);
 
     useEffect(() => {
-        if ((overlayView === 'plddt' && !hasResidueConfidence) || (overlayView === 'pae' && !hasPae)) {
+        if (selectedChain && !new Set([...Object.keys(chainMetrics), ...fampnnPsceChainIds]).has(selectedChain)) {
+            setSelectedChain(null);
+        }
+    }, [chainMetrics, fampnnPsceChainIds, selectedChain]);
+
+    useEffect(() => {
+        if (
+            (overlayView === 'plddt' && !hasResidueConfidence)
+            || (overlayView === 'psce' && !hasFampnnPsceProfile)
+            || (overlayView === 'pae' && !hasPae)
+        ) {
             setOverlayView('metrics');
         }
-    }, [hasPae, hasResidueConfidence, overlayView]);
+    }, [hasFampnnPsceProfile, hasPae, hasResidueConfidence, overlayView]);
 
     const metricSectionTitle = (() => {
         if (designLens === 'rfantibody') return 'RFantibody Screen Metrics';
@@ -401,7 +544,9 @@ export default function StructureViewerPane({
             ? (hasResidueConfidence
                 ? 'RF confidence here is stage-native RFantibody output, not a downstream validator score.'
                 : 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.')
-            : null;
+            : designLens === 'fampnn'
+                ? 'FA-MPNN pSCE is an angstrom-scale expected sidechain error. Lower is better, and the worst-residue readout catches local outliers the average can hide.'
+                : null;
 
     const structureMetricCards = (() => {
         if (!selectedDesign) return [] as StructureMetricCard[];
@@ -444,9 +589,14 @@ export default function StructureViewerPane({
         if (designLens === 'fampnn') {
             return [
                 {
-                    label: 'PSCE',
-                    value: formatMetricValue(selectedDesign.fampnn_psce ?? null, 3),
-                    accentClass: 'text-emerald-300',
+                    label: 'Avg PSCE',
+                    value: formatMetricValue(effectiveFampnnAvgPsce, 3),
+                    accentClass: getMetricColor('fampnn_psce', effectiveFampnnAvgPsce),
+                },
+                {
+                    label: 'Worst Residue',
+                    value: formatMetricValue(effectiveFampnnMaxResiduePsce, 3),
+                    accentClass: getMetricColor('fampnn_max_residue_psce', effectiveFampnnMaxResiduePsce),
                 },
                 {
                     label: 'MPNN Score',
@@ -457,11 +607,6 @@ export default function StructureViewerPane({
                     label: 'Binder Length',
                     value: formatMetricValue(selectedDesign.binder_length ?? null, 0),
                     accentClass: 'text-amber-300',
-                },
-                {
-                    label: 'H3 Length',
-                    value: formatMetricValue(selectedDesign.cdr_h3_length ?? null, 0),
-                    accentClass: 'text-violet-300',
                 },
             ] satisfies StructureMetricCard[];
         }
@@ -543,6 +688,7 @@ export default function StructureViewerPane({
     const overlayTabs = [
         { id: 'metrics', label: 'Metrics' },
         ...(hasResidueConfidence ? [{ id: 'plddt', label: bfactorLabel }] : []),
+        ...(hasFampnnPsceProfile ? [{ id: 'psce', label: 'PSCE' }] : []),
         ...(hasPae ? [{ id: 'pae', label: 'PAE' }] : []),
     ] as Array<{ id: OverlayView; label: string }>;
 
@@ -555,7 +701,7 @@ export default function StructureViewerPane({
             for (let idx = 0; idx < plddt.length; idx++) {
                 const residueNumber = residueNumbers[idx];
                 if (residueNumber == null) continue;
-                colorMap.set(`${chainId}${residueNumber}`, plddtColor(plddt[idx]));
+                colorMap.set(residueColorKey(chainId, residueNumber), plddtColor(plddt[idx]));
             }
         }
         return colorMap.size > 0 ? colorMap : undefined;
@@ -573,7 +719,23 @@ export default function StructureViewerPane({
                 residueNumbers[residue.pos - 1] ??
                 (typeof residue.pos === 'number' ? residue.pos + 1 : null);
             if (actualResidueNumber == null) continue;
-            colorMap.set(`${chainId}${actualResidueNumber}`, frustrationColor(residue.frust));
+            colorMap.set(residueColorKey(chainId, actualResidueNumber), frustrationColor(residue.frust));
+        }
+        return colorMap.size > 0 ? colorMap : undefined;
+    })();
+
+    const fampnnPsceResidueColors = (() => {
+        if (effectiveColorMode !== 'fampnn_psce' || !hasFampnnPsceProfile) return undefined;
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        for (const chainId of fampnnPsceChainIds) {
+            const chain = fampnnPsceChains[chainId];
+            if (!chain) continue;
+            for (let idx = 0; idx < chain.psce.length; idx++) {
+                const residueNumber = chain.residue_numbers[idx];
+                const value = chain.psce[idx];
+                if (residueNumber == null || typeof value !== 'number') continue;
+                colorMap.set(residueColorKey(chainId, residueNumber), fampnnPsceColor(value));
+            }
         }
         return colorMap.size > 0 ? colorMap : undefined;
     })();
@@ -595,6 +757,78 @@ export default function StructureViewerPane({
                 };
             });
     })();
+
+    const fampnnPscePlot = useMemo<{ data: Data[]; layout: Partial<Layout> } | null>(() => {
+        if (!selectedDesign || !hasFampnnPsceProfile) return null;
+        const visibleChainIds = selectedChain && fampnnPsceChains[selectedChain]
+            ? [selectedChain]
+            : fampnnPsceChainIds;
+        if (!visibleChainIds.length) return null;
+
+        const traces: Data[] = visibleChainIds.map((chainId, idx) => {
+            const chain = fampnnPsceChains[chainId];
+            const residueNumbers = chain?.residue_numbers || [];
+            const psce = chain?.psce || [];
+            const residueNames = chain?.residue_names || [];
+            return {
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: `Chain ${chainId}`,
+                x: residueNumbers,
+                y: psce,
+                line: { color: CHAIN_ACCENT_COLORS[idx % CHAIN_ACCENT_COLORS.length], width: selectedChain ? 1.8 : 1.4 },
+                marker: {
+                    size: selectedChain ? 6 : 4,
+                    color: psce.map((value) => fampnnPsceColorHex(value)),
+                    line: { color: '#0f172a', width: 0.5 },
+                },
+                customdata: psce.map((value, residueIdx) => [chainId, residueNames[residueIdx] || '', fampnnPsceTierLabel(value)]),
+                hovertemplate: 'Chain %{customdata[0]}<br>Residue %{x} %{customdata[1]}<br>pSCE: %{y:.2f} Å<br>Tier: %{customdata[2]}<extra></extra>',
+            } as Data;
+        });
+
+        const allResidueNumbers = visibleChainIds.flatMap((chainId) => fampnnPsceChains[chainId]?.residue_numbers || []);
+        const allScores = visibleChainIds.flatMap((chainId) => fampnnPsceChains[chainId]?.psce || []);
+        const minResidue = allResidueNumbers.length ? Math.min(...allResidueNumbers) : 0;
+        const maxResidue = allResidueNumbers.length ? Math.max(...allResidueNumbers) : 1;
+        const maxScore = allScores.length ? Math.max(...allScores) : 0;
+        const yMax = Math.max(2.0, Math.ceil(maxScore * 2) / 2);
+
+        return {
+            data: traces,
+            layout: {
+                paper_bgcolor: 'transparent',
+                plot_bgcolor: '#0f172a',
+                font: { color: '#e2e8f0' },
+                margin: { l: 56, r: 20, t: 34, b: 46 },
+                showlegend: visibleChainIds.length > 1,
+                legend: { orientation: 'h', y: 1.12, font: { color: '#94a3b8' } },
+                xaxis: {
+                    title: { text: 'Residue Number', font: { color: '#94a3b8' } },
+                    gridcolor: '#1e293b',
+                    color: '#94a3b8',
+                },
+                yaxis: {
+                    title: { text: 'pSCE (Å)', font: { color: '#94a3b8' } },
+                    gridcolor: '#1e293b',
+                    color: '#94a3b8',
+                    range: [0, yMax],
+                },
+                shapes: [0.9, 1.2, 1.6].map((threshold, idx) => ({
+                    type: 'line',
+                    x0: minResidue,
+                    x1: maxResidue,
+                    y0: threshold,
+                    y1: threshold,
+                    line: {
+                        color: ['#34d399', '#38bdf8', '#f59e0b'][idx],
+                        width: 1,
+                        dash: 'dash',
+                    },
+                })),
+            },
+        };
+    }, [fampnnPsceChainIds, fampnnPsceChains, hasFampnnPsceProfile, selectedChain, selectedDesign]);
 
     // Draw PAE heatmap on canvas
     useEffect(() => {
@@ -896,6 +1130,30 @@ export default function StructureViewerPane({
                                 {chainMetricsRun?.error_message && (
                                     <div className="text-[10px] text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
                                 )}
+                                {designLens === 'fampnn' && (
+                                    <>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-slate-200">FA-MPNN PSCE Profile</div>
+                                                <div className="text-[10px] text-slate-500">{fampnnPsceStatusCopy}</div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => runFampnnPsceProfile.mutate()}
+                                                disabled={fampnnPsceBusy}
+                                                className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
+                                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                                    : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                                    }`}
+                                            >
+                                                {fampnnPsceBusy ? 'Running…' : hasFampnnPsceProfile ? 'Refresh' : 'Run'}
+                                            </button>
+                                        </div>
+                                        {fampnnPsceProfileRun?.error_message && (
+                                            <div className="text-[10px] text-rose-300">Last PSCE-profile error: {fampnnPsceProfileRun.error_message}</div>
+                                        )}
+                                    </>
+                                )}
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
                                         <div className="text-slate-200">PAE Matrix</div>
@@ -1037,6 +1295,102 @@ export default function StructureViewerPane({
                                 : `${plddtProfile.length} residues • Mean: ${plddtProfile.length > 0 ? (plddtProfile.reduce((a, b) => a + b, 0) / plddtProfile.length).toFixed(1) : '—'}`
                             }
                         </div>
+                    </div>
+                )}
+
+                {overlayView === 'psce' && (
+                    <div>
+                        <div className="flex items-center gap-1 mb-2 flex-wrap">
+                            <span className="text-xs text-slate-400 mr-1">Chain:</span>
+                            <button
+                                onClick={() => setSelectedChain(null)}
+                                className={`px-2 py-0.5 text-[10px] rounded transition-colors ${selectedChain === null
+                                    ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
+                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                    }`}
+                            >
+                                All
+                            </button>
+                            {fampnnPsceChainIds.map((chainId, idx) => (
+                                <button
+                                    key={chainId}
+                                    onClick={() => setSelectedChain(chainId)}
+                                    className={`px-2 py-0.5 text-[10px] rounded transition-colors ${selectedChain === chainId
+                                        ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                        }`}
+                                    style={{ borderLeft: `2px solid ${CHAIN_ACCENT_COLORS[idx % CHAIN_ACCENT_COLORS.length]}` }}
+                                >
+                                    {chainId} ({fampnnPsceChains[chainId]?.length || 0})
+                                </button>
+                            ))}
+                        </div>
+                        {fampnnPsceProfileValues.length > 0 ? (
+                            <div className="h-36 relative bg-slate-800/40 rounded overflow-hidden">
+                                <svg viewBox={`0 0 ${Math.max(fampnnPsceProfileValues.length, 1)} 100`} className="w-full h-full" preserveAspectRatio="none">
+                                    {[0.9, 1.2, 1.6].map((threshold, idx) => (
+                                        <line
+                                            key={threshold}
+                                            x1="0"
+                                            y1={(threshold / fampnnPsceChartMax) * 100}
+                                            x2={Math.max(fampnnPsceProfileValues.length, 1)}
+                                            y2={(threshold / fampnnPsceChartMax) * 100}
+                                            stroke={['#34d399', '#38bdf8', '#f59e0b'][idx]}
+                                            strokeWidth="0.6"
+                                            strokeDasharray="2,2"
+                                        />
+                                    ))}
+                                    {fampnnPsceBoundaries.map((chain, idx) => (
+                                        chain.start > 0 && (
+                                            <line
+                                                key={chain.id}
+                                                x1={chain.start}
+                                                y1="0"
+                                                x2={chain.start}
+                                                y2="100"
+                                                stroke={CHAIN_ACCENT_COLORS[idx % CHAIN_ACCENT_COLORS.length]}
+                                                strokeWidth="1"
+                                                strokeDasharray="2,2"
+                                            />
+                                        )
+                                    ))}
+                                    <polyline
+                                        points={fampnnPsceProfileValues.map((value, idx) => `${idx},${(value / fampnnPsceChartMax) * 100}`).join(' ')}
+                                        fill="none"
+                                        stroke="#38bdf8"
+                                        strokeWidth="1"
+                                        opacity={selectedChain === null ? 0.95 : 0.25}
+                                    />
+                                    {selectedChain && fampnnPsceBoundaries.filter((chain) => chain.id === selectedChain).map((chain) => {
+                                        const chainIndex = fampnnPsceChainIds.indexOf(selectedChain);
+                                        const chainValues = fampnnPsceChains[selectedChain]?.psce || [];
+                                        return (
+                                            <polyline
+                                                key={chain.id}
+                                                points={chainValues.map((value, idx) => `${chain.start + idx},${(value / fampnnPsceChartMax) * 100}`).join(' ')}
+                                                fill="none"
+                                                stroke={CHAIN_ACCENT_COLORS[(chainIndex + CHAIN_ACCENT_COLORS.length) % CHAIN_ACCENT_COLORS.length]}
+                                                strokeWidth="1.8"
+                                            />
+                                        );
+                                    })}
+                                </svg>
+                                <div className="absolute left-1 top-0 text-[8px] text-slate-500">0</div>
+                                <div className="absolute left-1 top-1/2 text-[8px] text-slate-500">{(fampnnPsceChartMax / 2).toFixed(1)}</div>
+                                <div className="absolute left-1 bottom-0 text-[8px] text-slate-500">{fampnnPsceChartMax.toFixed(1)}</div>
+                            </div>
+                        ) : (
+                            <div className="h-36 flex items-center justify-center text-slate-500 text-xs bg-slate-800/40 rounded">
+                                No PSCE profile data available
+                            </div>
+                        )}
+                        <div className="text-[10px] text-slate-500 mt-1 text-center">
+                            {selectedChain && fampnnPsceChains[selectedChain]
+                                ? `Chain ${selectedChain}: ${fampnnPsceChains[selectedChain]?.length || 0} residues • Mean: ${fampnnPsceChains[selectedChain]?.avg_psce?.toFixed(2) || '—'} • Max: ${fampnnPsceChains[selectedChain]?.max_psce?.toFixed(2) || '—'}`
+                                : `${fampnnPsceProfileValues.length} scored residues • Mean: ${fampnnPsceProfileValues.length > 0 ? (fampnnPsceProfileValues.reduce((sum, value) => sum + value, 0) / fampnnPsceProfileValues.length).toFixed(2) : '—'} • Worst: ${fampnnPsceProfileValues.length > 0 ? Math.max(...fampnnPsceProfileValues).toFixed(2) : '—'}`
+                            }
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-1 text-center">Lower is better</div>
                     </div>
                 )}
 
@@ -1298,6 +1652,30 @@ export default function StructureViewerPane({
                     {chainMetricsRun?.error_message && (
                         <div className="text-xs text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
                     )}
+                    {designLens === 'fampnn' && (
+                        <>
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">FA-MPNN PSCE Profile</div>
+                                    <div className="mt-1 text-sm text-slate-400">{fampnnPsceStatusCopy}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => runFampnnPsceProfile.mutate()}
+                                    disabled={fampnnPsceBusy}
+                                    className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
+                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                        : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                        }`}
+                                >
+                                    {fampnnPsceBusy ? 'Running…' : hasFampnnPsceProfile ? 'Refresh' : 'Run'}
+                                </button>
+                            </div>
+                            {fampnnPsceProfileRun?.error_message && (
+                                <div className="text-xs text-rose-300">Last PSCE-profile error: {fampnnPsceProfileRun.error_message}</div>
+                            )}
+                        </>
+                    )}
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">PAE Matrix</div>
@@ -1327,6 +1705,82 @@ export default function StructureViewerPane({
                     design={selectedDesign}
                     chainMetrics={chainMetrics as Record<string, ChainMetric> | null}
                 />
+            )}
+
+            {selectedDesign && designLens === 'fampnn' && (
+                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Per-Residue PSCE</h4>
+                            <div className="mt-1 text-sm text-slate-400">{fampnnPsceStatusCopy}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => runFampnnPsceProfile.mutate()}
+                            disabled={fampnnPsceBusy}
+                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                }`}
+                        >
+                            {fampnnPsceBusy ? 'Running…' : hasFampnnPsceProfile ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                    {fampnnPsceProfileRun?.error_message && (
+                        <div className="mb-3 text-xs text-rose-300">Last PSCE-profile error: {fampnnPsceProfileRun.error_message}</div>
+                    )}
+                    {fampnnPscePlot ? (
+                        <>
+                            <div className="mb-3 flex items-center gap-1 flex-wrap">
+                                <span className="text-xs text-slate-400 mr-1">Chain:</span>
+                                <button
+                                    onClick={() => setSelectedChain(null)}
+                                    className={`px-2 py-0.5 text-[10px] rounded transition-colors ${selectedChain === null
+                                        ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                        }`}
+                                >
+                                    All
+                                </button>
+                                {fampnnPsceChainIds.map((chainId, idx) => (
+                                    <button
+                                        key={chainId}
+                                        onClick={() => setSelectedChain(chainId)}
+                                        className={`px-2 py-0.5 text-[10px] rounded transition-colors ${selectedChain === chainId
+                                            ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
+                                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
+                                            }`}
+                                        style={{ borderLeft: `2px solid ${CHAIN_ACCENT_COLORS[idx % CHAIN_ACCENT_COLORS.length]}` }}
+                                    >
+                                        {chainId} ({fampnnPsceChains[chainId]?.length || 0})
+                                    </button>
+                                ))}
+                            </div>
+                            <Plot
+                                data={fampnnPscePlot.data}
+                                layout={fampnnPscePlot.layout}
+                                config={{
+                                    responsive: true,
+                                    displayModeBar: true,
+                                    toImageButtonOptions: {
+                                        format: 'svg',
+                                        filename: `fampnn_psce_${selectedDesign.name.replace(/\s+/g, '_')}`,
+                                    },
+                                }}
+                                style={{ width: '100%', height: '320px' }}
+                            />
+                            <div className="mt-2 text-[11px] text-slate-400">
+                                {selectedChain && fampnnPsceChains[selectedChain]
+                                    ? `Chain ${selectedChain}: ${fampnnPsceChains[selectedChain]?.length || 0} scored residues • Mean ${fampnnPsceChains[selectedChain]?.avg_psce?.toFixed(2) || '—'} Å • Worst ${fampnnPsceChains[selectedChain]?.max_psce?.toFixed(2) || '—'} Å`
+                                    : `${fampnnPsceProfileValues.length} scored residues • Mean ${fampnnPsceProfileValues.length > 0 ? (fampnnPsceProfileValues.reduce((sum, value) => sum + value, 0) / fampnnPsceProfileValues.length).toFixed(2) : '—'} Å • Worst ${fampnnPsceProfileValues.length > 0 ? Math.max(...fampnnPsceProfileValues).toFixed(2) : '—'} Å`}
+                            </div>
+                        </>
+                    ) : (
+                        <div className="text-sm text-slate-500">
+                            Run the FA-MPNN PSCE profile analysis to color the structure and inspect per-residue sidechain confidence.
+                        </div>
+                    )}
+                </div>
             )}
 
             {/* Frustration Analysis (FrustraMPNN) */}
@@ -1465,11 +1919,12 @@ export default function StructureViewerPane({
             {/* Color Mode */}
             <select
                 value={effectiveColorMode}
-                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration')}
+                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce')}
                 className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
             >
                 <option value="default">Chain Colors</option>
                 <option value="plddt" disabled={!hasResidueConfidence}>{bfactorLabel}</option>
+                <option value="fampnn_psce" disabled={!hasFampnnPsceProfile}>FA-MPNN PSCE</option>
                 <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
                     Frustration
                 </option>
@@ -1485,6 +1940,15 @@ export default function StructureViewerPane({
                     <span className="text-cyan-400 ml-1">■</span>≥70
                     <span className="text-yellow-400 ml-1">■</span>≥50
                     <span className="text-orange-400 ml-1">■</span>&lt;50
+                </div>
+            )}
+            {effectiveColorMode === 'fampnn_psce' && !isCompact && (
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <span className="text-emerald-400">■</span>≤0.9
+                    <span className="text-cyan-400 ml-1">■</span>≤1.2
+                    <span className="text-amber-400 ml-1">■</span>≤1.6
+                    <span className="text-rose-400 ml-1">■</span>&gt;1.6
+                    <span className="ml-2 text-slate-500">Lower is better</span>
                 </div>
             )}
             {effectiveColorMode === 'frustration' && !isCompact && (
@@ -1578,9 +2042,11 @@ export default function StructureViewerPane({
                             residueColors={
                                 effectiveColorMode === 'plddt'
                                     ? plddtResidueColors
-                                    : effectiveColorMode === 'frustration'
-                                        ? frustrationResidueColors
-                                        : undefined
+                                    : effectiveColorMode === 'fampnn_psce'
+                                        ? fampnnPsceResidueColors
+                                        : effectiveColorMode === 'frustration'
+                                            ? frustrationResidueColors
+                                            : undefined
                             }
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
