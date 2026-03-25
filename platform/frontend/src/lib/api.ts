@@ -28,7 +28,16 @@ export interface Job {
     lineage_root_job_id?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
+    source_stage_job_id?: string | null;
+    source_stage_family?: string | null;
+    source_stage_mode?: string | null;
+    source_selection_manifest_path?: string | null;
+    source_selection_count?: number | null;
+    selection_source_type?: string | null;
+    selection_source_job_id?: string | null;
+    selection_dataset_name?: string | null;
     selected_loop_scope?: Record<string, unknown> | null;
+    provenance?: Record<string, unknown> | null;
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
@@ -525,6 +534,8 @@ export interface Design {
     rfd_rog: number | null;
     mpnn_score: number | null;
     fampnn_psce: number | null;
+    fampnn_max_residue_psce?: number | null;
+    fampnn_min_residue_psce?: number | null;
     plddt_overall: number | null;
     plddt_binder: number | null;
     plddt_target: number | null;
@@ -580,6 +591,11 @@ export interface Design {
     artifact_group?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
+    source_stage_job_id?: string | null;
+    source_stage_family?: string | null;
+    source_stage_mode?: string | null;
+    source_pdb_path?: string | null;
+    source_design_name?: string | null;
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;
@@ -606,6 +622,7 @@ export interface Design {
     rfa_hotspots?: string[] | null;
     // Antibody annotation
     binder_length: number | null;
+    binder_sequence?: string | null;
     antibody_type: string | null;
     cdr_h1: string | null;
     cdr_h2: string | null;
@@ -695,6 +712,11 @@ export type DesignSortField =
     | 'pae_overall'
     | 'pae_interaction'
     | 'conf_score'
+    | 'ligand_iptm'
+    | 'rmsd_binder'
+    | 'rmsd_overall'
+    | 'rmsd_target'
+    | 'has_clash'
     | 'rog'
     | 'rfd_rog'
     | 'backbone'
@@ -817,6 +839,27 @@ export interface ChainMetric {
     avg_plddt: number | null;
     plddt: number[];
     residue_numbers: number[];
+}
+
+export interface FampnnPsceChainMetric {
+    type: 'protein';
+    length: number;
+    avg_psce: number | null;
+    max_psce: number | null;
+    min_psce: number | null;
+    residue_numbers: number[];
+    residue_names: string[];
+    psce: number[];
+}
+
+export interface FampnnPsceProfile {
+    design_id: string;
+    design_name: string;
+    metric_kind: 'fampnn_psce';
+    direction: 'lower_is_better';
+    scope: 'all_chains';
+    ignore_cbeta: boolean;
+    chains: Record<string, FampnnPsceChainMetric>;
 }
 
 // Fetch per-chain metrics for a design

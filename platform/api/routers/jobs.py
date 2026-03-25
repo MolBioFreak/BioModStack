@@ -60,6 +60,22 @@ UUID_SUFFIX_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
 PRESERVED_GATE_PAYLOAD_KEYS = ("review_filter_sets",)
+PPI_FLOW_STAGE_FLAG_KEYS = {
+    "run_ppiflow_backbone_refine",
+    "run_ppiflow_maturation",
+    "run_maturation",
+    "run_post_validation_maturation",
+    "run_post_boltz_maturation",
+}
+ANTIBODY_ITERATION_ACTION_LABELS = {
+    "validate_boltz2": "Boltz-2 validation",
+    "validate_protenix": "Protenix validation",
+    "ppiflow_backbone_refine": "PPIFlow backbone refinement",
+    "ppiflow_maturation": "PPIFlow maturation",
+    "fampnn_redesign": "FAMPNN redesign",
+    "frustrampnn": "FrustraMPNN redesign",
+    "ui_refinement": "refinement launch",
+}
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -744,7 +760,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
 
     if "ppiflow_stage_mode" in normalized:
         normalized["ppiflow_stage_mode"] = str(normalized.get("ppiflow_stage_mode") or "").strip().lower() or None
-        if normalized["ppiflow_stage_mode"] in {"post_rfantibody", "backbone_refine"}:
+        if normalized["ppiflow_stage_mode"] in {"post_rfantibody", "backbone_refine", "post_ppiflow"}:
             normalized["run_ppiflow_backbone_refine"] = True
         elif normalized["ppiflow_stage_mode"] in {"post_fampnn", "maturation"}:
             normalized["run_ppiflow_maturation"] = True
@@ -753,6 +769,11 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
             normalized["run_ppiflow_backbone_refine"] = True
             normalized["run_ppiflow_maturation"] = True
             normalized["run_maturation"] = True
+        if normalized["ppiflow_stage_mode"] == "post_ppiflow":
+            if normalized.get("ppiflow_require_anchors") in (None, ""):
+                normalized["ppiflow_require_anchors"] = False
+            if normalized.get("ppiflow_stage_target") in (None, ""):
+                normalized["ppiflow_stage_target"] = "post_ppiflow"
     if "ppiflow_stage_target" in normalized:
         normalized["ppiflow_stage_target"] = str(normalized.get("ppiflow_stage_target") or "").strip().lower() or None
     for key in ("ppiflow_backbone_region_mode", "ppiflow_maturation_region_mode", "ppiflow_region_mode"):
@@ -769,6 +790,45 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
             normalized[key] = value
     if "selected_loop_scope" in normalized:
         normalized["selected_loop_scope"] = _normalize_selected_loop_scope(normalized.get("selected_loop_scope"))
+
+    selected_input_dir = _coerce_nonempty_text(normalized.get("selected_input_dir"))
+    if not selected_input_dir:
+        for key in ("iteration_selection_dir", "rfantibody_input_pdbs", "fampnn_collected_pdbs"):
+            selected_input_dir = _coerce_nonempty_text(normalized.get(key))
+            if selected_input_dir:
+                break
+    if selected_input_dir:
+        normalized["selected_input_dir"] = selected_input_dir
+        normalized.setdefault("iteration_selection_dir", selected_input_dir)
+        selected_input_manifest = (
+            _coerce_nonempty_text(normalized.get("selected_input_manifest"))
+            or _coerce_nonempty_text(normalized.get("source_selection_manifest_path"))
+            or str(_selection_manifest_path(Path(selected_input_dir).expanduser()))
+        )
+        normalized["selected_input_manifest"] = selected_input_manifest
+        normalized["source_selection_manifest_path"] = selected_input_manifest
+
+    if not _coerce_nonempty_text(normalized.get("selected_input_source_job_id")):
+        selected_input_source_job_id = (
+            _coerce_nonempty_text(normalized.get("source_stage_job_id"))
+            or _coerce_nonempty_text(normalized.get("selection_source_job_id"))
+            or _coerce_nonempty_text(normalized.get("iteration_source_job_id"))
+        )
+        if selected_input_source_job_id:
+            normalized["selected_input_source_job_id"] = selected_input_source_job_id
+
+    if not _coerce_nonempty_text(normalized.get("selected_input_stage_family")) and _coerce_nonempty_text(normalized.get("source_stage_family")):
+        normalized["selected_input_stage_family"] = normalized.get("source_stage_family")
+    if not _coerce_nonempty_text(normalized.get("selected_input_stage_mode")) and _coerce_nonempty_text(normalized.get("source_stage_mode")):
+        normalized["selected_input_stage_mode"] = normalized.get("source_stage_mode")
+
+    if _coerce_nonempty_text(normalized.get("selected_input_manifest")) and not _coerce_nonempty_text(normalized.get("source_selection_manifest_path")):
+        normalized["source_selection_manifest_path"] = normalized.get("selected_input_manifest")
+
+    if normalized.get("source_selection_count") in (None, "", 0):
+        design_ids = normalized.get("iteration_source_design_ids")
+        if isinstance(design_ids, list) and design_ids:
+            normalized["source_selection_count"] = len(design_ids)
 
     return normalized
 
@@ -1009,6 +1069,103 @@ def _derive_iteration_stage_metadata(action: str, params: Dict[str, Any]) -> tup
     if action_normalized in {"cdr_indel_round", "mutation_seeded_refinement", "mutation_seed_build", "manual_mutagenesis_round"}:
         return "mutation", action_normalized
     return _normalize_stage_family(params.get("child_stage")), action_normalized or None
+
+
+def _format_stage_identity(stage_family: Optional[str], stage_mode: Optional[str]) -> str:
+    family = _normalize_stage_family(stage_family)
+    mode = _normalize_stage_family(stage_mode)
+    if family and mode:
+        return f"{family}/{mode}"
+    if family:
+        return family
+    if mode:
+        return mode
+    return "unknown"
+
+
+def _requires_immediate_ppiflow_backbone_refine(action: str, params: Dict[str, Any]) -> bool:
+    action_normalized = (action or "").strip().lower()
+    if action_normalized == "ppiflow_backbone_refine":
+        return True
+    if action_normalized != "ui_refinement":
+        return False
+    stage_mode = _normalize_stage_family(params.get("ppiflow_stage_mode"))
+    if stage_mode == "post_ppiflow":
+        return False
+    return _to_bool(params.get("run_ppiflow_backbone_refine")) or stage_mode in {
+        "post_rfantibody",
+        "backbone_refine",
+        "both",
+    }
+
+
+def _requires_direct_ppiflow_maturation(action: str, params: Dict[str, Any]) -> bool:
+    action_normalized = (action or "").strip().lower()
+    if action_normalized == "ppiflow_maturation":
+        return True
+    if action_normalized != "ui_refinement":
+        return False
+    stage_mode = _normalize_stage_family(params.get("ppiflow_stage_mode"))
+    if not (
+        _to_bool(params.get("run_ppiflow_maturation"))
+        or _to_bool(params.get("run_maturation"))
+        or stage_mode in {"post_fampnn", "maturation", "both"}
+    ):
+        return False
+    return not (
+        _to_bool(params.get("seq_design_fampnn"))
+        or _to_bool(params.get("seq_design_antifold"))
+        or _to_bool(params.get("seq_design_proteinmpnn"))
+    )
+
+
+def _requires_post_ppiflow_backbone_reattempt(action: str, params: Dict[str, Any]) -> bool:
+    action_normalized = (action or "").strip().lower()
+    if action_normalized != "ui_refinement":
+        return False
+    stage_mode = _normalize_stage_family(params.get("ppiflow_stage_mode"))
+    return stage_mode == "post_ppiflow"
+
+
+def _validate_antibody_iteration_source_compatibility(action: str, params: Dict[str, Any]) -> None:
+    source_stage_family = _normalize_stage_family(
+        params.get("selected_input_stage_family") or params.get("source_stage_family")
+    )
+    source_stage_mode = _normalize_stage_family(
+        params.get("selected_input_stage_mode") or params.get("source_stage_mode")
+    )
+    source_identity = _format_stage_identity(source_stage_family, source_stage_mode)
+    action_label = ANTIBODY_ITERATION_ACTION_LABELS.get((action or "").strip().lower(), action or "launch")
+
+    if _requires_immediate_ppiflow_backbone_refine(action, params) and source_stage_family not in {None, "rfantibody"}:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{action_label} only accepts RFantibody backbone inputs. "
+                f"Selected input stage is {source_identity}. "
+                "Use FAMPNN redesign first, then optionally run post-FA-MPNN PPIFlow maturation."
+            ),
+        )
+
+    if _requires_post_ppiflow_backbone_reattempt(action, params) and source_stage_family != "ppiflow":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{action_label} in post-PPIFlow reattempt mode only accepts PPIFlow-derived inputs. "
+                f"Selected input stage is {source_identity}. "
+                "Choose RFantibody backbone refine for RF outputs, or switch this relaunch to FA-MPNN/post-FA-MPNN maturation."
+            ),
+        )
+
+    if _requires_direct_ppiflow_maturation(action, params) and source_stage_family not in {"fampnn"}:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{action_label} requires FA-MPNN-designed inputs when it runs directly on the selected structures. "
+                f"Selected input stage is {source_identity}. "
+                "If you are relaunching from PPIFlow backbone outputs, include sequence design first or use FAMPNN redesign."
+            ),
+        )
 
 
 def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], child_stage: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -1377,6 +1534,7 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "resume_from_stage",
         "resume_name_suffix",
         "resume_lock_retry_attempts",
+        *PPI_FLOW_STAGE_FLAG_KEYS,
     }:
         pruned.pop(key, None)
     return _normalize_antibody_job_params(pruned)
@@ -1760,6 +1918,14 @@ def _generate_manual_mutagenesis_variants(
                     "complex_components": complex_components,
                     "source_design_id": design.id,
                     "source_design_name": design.name,
+                    "source_design_job_id": design.job_id,
+                    "source_stage_family": design.stage_family,
+                    "source_stage_mode": design.stage_mode,
+                    "lineage_root_job_id": design.lineage_root_job_id,
+                    "parent_design_id": design.parent_design_id,
+                    "origin_design_id": design.origin_design_id,
+                    "origin_backbone_design_id": design.origin_backbone_design_id,
+                    "selected_loop_scope": design.selected_loop_scope,
                     "source_pdb_path": str(design_path),
                     "binder_chain_id": binder_chain_id,
                     "mutation": mutation_meta,
@@ -1799,12 +1965,96 @@ def _link_selection_input(source_path: Path, dest_path: Path) -> str:
             ) from hardlink_error
 
 
-def _write_seeded_refinement_metadata(
+
+def _selection_manifest_path(selection_dir: Path) -> Path:
+    return selection_dir / "selection_manifest.json"
+
+
+def _derive_source_stage_payload(
+    source_job: Job,
+    designs: List[Design],
+    selection_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    source_job_ids = _dedupe_preserve_order([str(design.job_id) for design in designs if getattr(design, "job_id", None)])
+    source_stage_families = _dedupe_preserve_order([
+        family
+        for family in (_normalize_stage_family(getattr(design, "stage_family", None)) for design in designs)
+        if family
+    ])
+    source_stage_modes = _dedupe_preserve_order([
+        mode
+        for mode in (_normalize_stage_family(getattr(design, "stage_mode", None)) for design in designs)
+        if mode
+    ])
+
+    job_stage_family = _normalize_stage_family(getattr(source_job, "stage_family", None))
+    job_stage_mode = _normalize_stage_family(getattr(source_job, "stage_mode", None))
+    if not job_stage_family and not job_stage_mode:
+        job_stage_family, job_stage_mode = _derive_job_stage_tags(
+            getattr(source_job, "model_id", None),
+            getattr(source_job, "mode", None),
+            source_job.params if isinstance(getattr(source_job, "params", None), dict) else {},
+            getattr(source_job, "child_stage", None),
+        )
+
+    source_stage_job_id = source_job_ids[0] if len(source_job_ids) == 1 else source_job.id
+    source_stage_family = source_stage_families[0] if len(source_stage_families) == 1 else job_stage_family
+    source_stage_mode = source_stage_modes[0] if len(source_stage_modes) == 1 else job_stage_mode
+    source_selection_manifest_path = str(_selection_manifest_path(selection_dir)) if selection_dir is not None else None
+
+    return {
+        "source_stage_job_id": source_stage_job_id,
+        "source_stage_family": source_stage_family,
+        "source_stage_mode": source_stage_mode,
+        "source_selection_manifest_path": source_selection_manifest_path,
+        "source_selection_count": len(designs),
+        "selected_input_dir": str(selection_dir) if selection_dir is not None else None,
+        "selected_input_manifest": source_selection_manifest_path,
+        "selected_input_stage_family": source_stage_family,
+        "selected_input_stage_mode": source_stage_mode,
+        "selected_input_source_job_id": source_stage_job_id,
+    }
+
+
+def _build_selection_manifest_item(
+    design: Design,
+    *,
+    source_path: Path,
+    selection_path: Path,
+    selection_entry_mode: Optional[str],
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "design_id": design.id,
+        "design_name": design.name,
+        "design_job_id": design.job_id,
+        "design_stage_family": design.stage_family,
+        "design_stage_mode": design.stage_mode,
+        "lineage_root_job_id": design.lineage_root_job_id,
+        "parent_design_id": design.parent_design_id,
+        "origin_design_id": design.origin_design_id,
+        "origin_backbone_design_id": design.origin_backbone_design_id,
+        "source_design_name": design.name,
+        "source_pdb_path": str(source_path),
+        "selection_pdb_path": str(selection_path),
+        "selected_loop_scope": design.selected_loop_scope,
+    }
+    if selection_entry_mode:
+        item["selection_entry_mode"] = selection_entry_mode
+    if extra:
+        for key, value in extra.items():
+            if value not in (None, "", [], {}, ()):
+                item[key] = value
+    return item
+
+
+def _write_selection_manifest(
     selection_dir: Path,
     root_job: Job,
     source_job: Job,
     action: str,
     manifest_items: List[Dict[str, Any]],
+    source_stage_payload: Optional[Dict[str, Any]] = None,
     fixed_positions_by_pdb: Optional[Dict[str, str]] = None,
 ) -> None:
     manifest = {
@@ -1813,11 +2063,39 @@ def _write_seeded_refinement_metadata(
         "root_job_id": root_job.id,
         "source_job_id": source_job.id,
         "design_count": len(manifest_items),
+        "source_stage_job_id": (source_stage_payload or {}).get("source_stage_job_id"),
+        "source_stage_family": (source_stage_payload or {}).get("source_stage_family"),
+        "source_stage_mode": (source_stage_payload or {}).get("source_stage_mode"),
+        "source_selection_manifest_path": str(_selection_manifest_path(selection_dir)),
+        "source_selection_count": len(manifest_items),
         "designs": manifest_items,
     }
-    (selection_dir / "selection_manifest.json").write_text(json.dumps(manifest, indent=2))
+    _selection_manifest_path(selection_dir).write_text(json.dumps(manifest, indent=2))
     if fixed_positions_by_pdb:
         (selection_dir / "mutation_fixed_positions.json").write_text(json.dumps(fixed_positions_by_pdb, indent=2, sort_keys=True))
+
+
+def _write_seeded_refinement_metadata(
+    selection_dir: Path,
+    root_job: Job,
+    source_job: Job,
+    action: str,
+    manifest_items: List[Dict[str, Any]],
+    fixed_positions_by_pdb: Optional[Dict[str, str]] = None,
+) -> None:
+    _write_selection_manifest(
+        selection_dir=selection_dir,
+        root_job=root_job,
+        source_job=source_job,
+        action=action,
+        manifest_items=manifest_items,
+        source_stage_payload={
+            "source_stage_job_id": source_job.id,
+            "source_stage_family": _normalize_stage_family(getattr(source_job, "stage_family", None)),
+            "source_stage_mode": _normalize_stage_family(getattr(source_job, "stage_mode", None)),
+        },
+        fixed_positions_by_pdb=fixed_positions_by_pdb,
+    )
 
 
 def _write_mutated_seed_pdb(
@@ -1891,22 +2169,32 @@ def _materialize_substitution_seed_selection(
         )
         manifest_items.append({
             "variant_name": variant["name"],
-            "source_design_id": variant.get("source_design_id"),
+            "design_id": variant.get("source_design_id"),
+            "design_name": variant.get("source_design_name"),
+            "design_job_id": variant.get("source_design_job_id"),
+            "design_stage_family": variant.get("source_stage_family"),
+            "design_stage_mode": variant.get("source_stage_mode"),
+            "lineage_root_job_id": variant.get("lineage_root_job_id"),
+            "parent_design_id": variant.get("parent_design_id"),
+            "origin_design_id": variant.get("origin_design_id"),
+            "origin_backbone_design_id": variant.get("origin_backbone_design_id"),
             "source_design_name": variant.get("source_design_name"),
             "source_pdb_path": str(source_path),
             "selection_pdb_path": str(dest_path),
+            "selected_loop_scope": variant.get("selected_loop_scope"),
             "binder_chain_id": variant.get("binder_chain_id"),
             "mutation": variant.get("mutation"),
         })
         if variant.get("locked_positions_spec"):
             fixed_positions_by_pdb[dest_path.stem] = str(variant["locked_positions_spec"])
 
-    _write_seeded_refinement_metadata(
+    _write_selection_manifest(
         selection_dir=selection_dir,
         root_job=root_job,
         source_job=source_job,
         action=action,
         manifest_items=manifest_items,
+        source_stage_payload=_derive_source_stage_payload(source_job, designs, selection_dir),
         fixed_positions_by_pdb=fixed_positions_by_pdb,
     )
     return selection_dir, selection_dir / "mutation_fixed_positions.json"
@@ -1990,15 +2278,13 @@ def _materialize_seed_selection_from_completed_designs(
                 mutation_meta=variant_meta.get("mutation"),
             )
 
-        manifest_items.append({
-            "design_id": design.id,
-            "design_name": design.name,
-            "design_job_id": design.job_id,
-            "source_pdb_path": str(source_path),
-            "selection_pdb_path": str(dest_path),
-            "selection_entry_mode": link_mode,
-            "mutation_variant": variant_meta,
-        })
+        manifest_items.append(_build_selection_manifest_item(
+            design,
+            source_path=source_path,
+            selection_path=dest_path,
+            selection_entry_mode=link_mode,
+            extra={"mutation_variant": variant_meta},
+        ))
         if fixed_spec:
             fixed_positions_by_pdb[dest_path.stem] = fixed_spec
 
@@ -2163,6 +2449,7 @@ def _build_manual_mutagenesis_seeded_refinement_job(
             "manual_mutation_method": "explicit_substitutions",
             "manual_mutation_fixed_positions_json": str(fixed_json_path),
         },
+        selected_designs=designs,
     )
     return launch_request, len(variants), ""
 
@@ -2521,24 +2808,21 @@ def _materialize_antibody_selection(
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
         link_mode = _link_selection_input(source_path, dest_path)
 
-        manifest_items.append({
-            "design_id": design.id,
-            "design_name": design.name,
-            "design_job_id": design.job_id,
-            "source_pdb_path": str(source_path),
-            "selection_pdb_path": str(dest_path),
-            "selection_entry_mode": link_mode,
-        })
+        manifest_items.append(_build_selection_manifest_item(
+            design,
+            source_path=source_path,
+            selection_path=dest_path,
+            selection_entry_mode=link_mode,
+        ))
 
-    manifest = {
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "action": action,
-        "root_job_id": root_job.id,
-        "source_job_id": source_job.id,
-        "design_count": len(manifest_items),
-        "designs": manifest_items,
-    }
-    (selection_dir / "selection_manifest.json").write_text(json.dumps(manifest, indent=2))
+    _write_selection_manifest(
+        selection_dir=selection_dir,
+        root_job=root_job,
+        source_job=source_job,
+        action=action,
+        manifest_items=manifest_items,
+        source_stage_payload=_derive_source_stage_payload(source_job, designs, selection_dir),
+    )
     return selection_dir
 
 
@@ -2551,6 +2835,7 @@ def _build_antibody_iteration_job(
     name_suffix: Optional[str],
     param_overrides: Dict[str, Any],
     saved_filter_set: Optional[SavedReviewFilterSet] = None,
+    selected_designs: Optional[List[Design]] = None,
 ) -> JobCreate:
     action = action.strip().lower()
     action_map = {
@@ -2731,6 +3016,7 @@ def _build_antibody_iteration_job(
         )
 
     launch_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
+    source_stage_payload = _derive_source_stage_payload(source_job, selected_designs or [], selection_dir)
     launch_params.update({
         "iteration_source_job_id": source_job.id,
         "iteration_source_root_job_id": root_job.id,
@@ -2738,6 +3024,7 @@ def _build_antibody_iteration_job(
         "iteration_action": action,
         "iteration_selection_dir": str(selection_dir),
         "interactive_gate_continue": False,
+        **source_stage_payload,
     })
     
     # Preserve epitope residue configurations for contact calculations during refinement
@@ -2758,6 +3045,16 @@ def _build_antibody_iteration_job(
         "selection_dataset_name": saved_filter_set.name if saved_filter_set is not None else None,
         "selected_loop_scope": _build_selected_loop_scope(launch_params),
         "ppiflow_selected_loops": launch_params.get("ppiflow_selected_loops"),
+        "source_stage_job_id": source_stage_payload.get("source_stage_job_id"),
+        "source_stage_family": source_stage_payload.get("source_stage_family"),
+        "source_stage_mode": source_stage_payload.get("source_stage_mode"),
+        "source_selection_manifest_path": source_stage_payload.get("source_selection_manifest_path"),
+        "source_selection_count": source_stage_payload.get("source_selection_count"),
+        "selected_input_dir": source_stage_payload.get("selected_input_dir"),
+        "selected_input_manifest": source_stage_payload.get("selected_input_manifest"),
+        "selected_input_stage_family": source_stage_payload.get("selected_input_stage_family"),
+        "selected_input_stage_mode": source_stage_payload.get("selected_input_stage_mode"),
+        "selected_input_source_job_id": source_stage_payload.get("selected_input_source_job_id"),
     })
 
     for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
@@ -2823,9 +3120,20 @@ def _build_antibody_iteration_job(
 
         launch_params["skip_rfantibody"] = True
         
-        # If the UI mapped sequence design (like FAMPNN), the inputs go to rfantibody_input_pdbs.
-        # If sequence design is fully skipped (starting at validation/maturation), inputs go to fampnn_collected_pdbs.
-        if launch_params.get("seq_design_fampnn") or launch_params.get("seq_design_antifold") or launch_params.get("seq_design_proteinmpnn"):
+        requested_ppiflow_stage_mode = _normalize_stage_family(launch_params.get("ppiflow_stage_mode"))
+        requests_backbone_refine = (
+            _to_bool(launch_params.get("run_ppiflow_backbone_refine"))
+            or requested_ppiflow_stage_mode in {"post_rfantibody", "backbone_refine", "post_ppiflow", "both"}
+        )
+
+        # Sequence-design and sequence-free backbone-retry launches both start from backbone-style inputs.
+        # Direct maturation/validation-only launches start from sequence-conditioned collected structures.
+        if (
+            launch_params.get("seq_design_fampnn")
+            or launch_params.get("seq_design_antifold")
+            or launch_params.get("seq_design_proteinmpnn")
+            or requests_backbone_refine
+        ):
             launch_params["rfantibody_input_pdbs"] = str(selection_dir)
             launch_params["fampnn_collected_pdbs"] = None
         else:
@@ -2840,6 +3148,7 @@ def _build_antibody_iteration_job(
                 launch_params.pop(key, None)
 
     launch_params = _normalize_antibody_job_params(launch_params)
+    _validate_antibody_iteration_source_compatibility(action, launch_params)
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
     job_name = f"{root_job.name}_{suffix}"
 
@@ -3300,6 +3609,19 @@ async def list_jobs(
             batch_name=job.batch_name,
             parent_job_id=job.parent_job_id,
             child_stage=job.child_stage,
+            lineage_root_job_id=job.lineage_root_job_id,
+            stage_family=job.stage_family,
+            stage_mode=job.stage_mode,
+            source_stage_job_id=job.source_stage_job_id,
+            source_stage_family=job.source_stage_family,
+            source_stage_mode=job.source_stage_mode,
+            source_selection_manifest_path=job.source_selection_manifest_path,
+            source_selection_count=job.source_selection_count,
+            selection_source_type=job.selection_source_type,
+            selection_source_job_id=job.selection_source_job_id,
+            selection_dataset_name=job.selection_dataset_name,
+            selected_loop_scope=job.selected_loop_scope,
+            provenance=job.provenance,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs=stage_outputs,
@@ -3390,6 +3712,19 @@ async def create_job(
                 batch_name=existing_child.batch_name,
                 parent_job_id=existing_child.parent_job_id,
                 child_stage=existing_child.child_stage,
+                lineage_root_job_id=existing_child.lineage_root_job_id,
+                stage_family=existing_child.stage_family,
+                stage_mode=existing_child.stage_mode,
+                source_stage_job_id=existing_child.source_stage_job_id,
+                source_stage_family=existing_child.source_stage_family,
+                source_stage_mode=existing_child.source_stage_mode,
+                source_selection_manifest_path=existing_child.source_selection_manifest_path,
+                source_selection_count=existing_child.source_selection_count,
+                selection_source_type=existing_child.selection_source_type,
+                selection_source_job_id=existing_child.selection_source_job_id,
+                selection_dataset_name=existing_child.selection_dataset_name,
+                selected_loop_scope=existing_child.selected_loop_scope,
+                provenance=existing_child.provenance,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -3751,6 +4086,29 @@ async def create_job(
         provenance_selection_dataset_name = _coerce_nonempty_text(
             job_params.get("selection_dataset_name") if isinstance(job_params, dict) else None
         )
+        provenance_source_stage_job_id = _coerce_nonempty_text(
+            job_params.get("source_stage_job_id") if isinstance(job_params, dict) else None
+        ) or _coerce_nonempty_text(
+            job_params.get("selected_input_source_job_id") if isinstance(job_params, dict) else None
+        )
+        provenance_source_stage_family = _normalize_stage_family(
+            job_params.get("source_stage_family") if isinstance(job_params, dict) else None
+        ) or _normalize_stage_family(
+            job_params.get("selected_input_stage_family") if isinstance(job_params, dict) else None
+        )
+        provenance_source_stage_mode = _normalize_stage_family(
+            job_params.get("source_stage_mode") if isinstance(job_params, dict) else None
+        ) or _normalize_stage_family(
+            job_params.get("selected_input_stage_mode") if isinstance(job_params, dict) else None
+        )
+        provenance_source_selection_manifest_path = _coerce_nonempty_text(
+            job_params.get("source_selection_manifest_path") if isinstance(job_params, dict) else None
+        ) or _coerce_nonempty_text(
+            job_params.get("selected_input_manifest") if isinstance(job_params, dict) else None
+        )
+        provenance_source_selection_count = _coerce_positive_int(
+            job_params.get("source_selection_count") if isinstance(job_params, dict) else None
+        )
         provenance_payload = {
             "job_id": job_id,
             "job_name": job_name,
@@ -3765,6 +4123,11 @@ async def create_job(
             "selection_source_job_id": provenance_selection_source_job_id,
             "selection_dataset_name": provenance_selection_dataset_name,
             "selected_loop_scope": provenance_selection_scope,
+            "source_stage_job_id": provenance_source_stage_job_id,
+            "source_stage_family": provenance_source_stage_family,
+            "source_stage_mode": provenance_source_stage_mode,
+            "source_selection_manifest_path": provenance_source_selection_manifest_path,
+            "source_selection_count": provenance_source_selection_count,
             "iteration_action": job_params.get("iteration_action") if isinstance(job_params, dict) else None,
         }
 
@@ -3799,6 +4162,11 @@ async def create_job(
             lineage_root_job_id=provenance_lineage_root,
             stage_family=provenance_stage_family,
             stage_mode=provenance_stage_mode,
+            source_stage_job_id=provenance_source_stage_job_id,
+            source_stage_family=provenance_source_stage_family,
+            source_stage_mode=provenance_source_stage_mode,
+            source_selection_manifest_path=provenance_source_selection_manifest_path,
+            source_selection_count=provenance_source_selection_count,
             selection_source_type=provenance_selection_source_type,
             selection_source_job_id=provenance_selection_source_job_id,
             selection_dataset_name=provenance_selection_dataset_name,
@@ -3855,6 +4223,19 @@ async def create_job(
         batch_name=first_job.batch_name,
         parent_job_id=first_job.parent_job_id,
         child_stage=first_job.child_stage,
+        lineage_root_job_id=first_job.lineage_root_job_id,
+        stage_family=first_job.stage_family,
+        stage_mode=first_job.stage_mode,
+        source_stage_job_id=first_job.source_stage_job_id,
+        source_stage_family=first_job.source_stage_family,
+        source_stage_mode=first_job.source_stage_mode,
+        source_selection_manifest_path=first_job.source_selection_manifest_path,
+        source_selection_count=first_job.source_selection_count,
+        selection_source_type=first_job.selection_source_type,
+        selection_source_job_id=first_job.selection_source_job_id,
+        selection_dataset_name=first_job.selection_dataset_name,
+        selected_loop_scope=first_job.selected_loop_scope,
+        provenance=first_job.provenance,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -3941,8 +4322,10 @@ async def launch_antibody_iteration_from_designs(
             name_suffix=request.name_suffix,
             param_overrides=request.param_overrides,
             saved_filter_set=saved_filter_set,
+            selected_designs=ordered_designs,
         )
     if isinstance(launch_request.params, dict):
+        source_stage_payload = _derive_source_stage_payload(source_job, ordered_designs, selection_dir)
         launch_request.params.update({
             "lineage_root_job_id": root_job.id,
             "stage_family": launch_request.params.get("stage_family"),
@@ -3951,6 +4334,7 @@ async def launch_antibody_iteration_from_designs(
             "selection_source_job_id": source_job.id,
             "selection_dataset_name": saved_filter_set.name if saved_filter_set is not None else None,
             "selected_loop_scope": _build_selected_loop_scope(launch_request.params),
+            **source_stage_payload,
         })
     launch_selection_dir = str(launch_request.params.get("iteration_selection_dir") or selection_dir)
     launched_job = await create_job(launch_request, background_tasks, session)
@@ -4096,6 +4480,19 @@ async def get_job(
         batch_name=job.batch_name,
         parent_job_id=job.parent_job_id,
         child_stage=job.child_stage,
+        lineage_root_job_id=job.lineage_root_job_id,
+        stage_family=job.stage_family,
+        stage_mode=job.stage_mode,
+        source_stage_job_id=job.source_stage_job_id,
+        source_stage_family=job.source_stage_family,
+        source_stage_mode=job.source_stage_mode,
+        source_selection_manifest_path=job.source_selection_manifest_path,
+        source_selection_count=job.source_selection_count,
+        selection_source_type=job.selection_source_type,
+        selection_source_job_id=job.selection_source_job_id,
+        selection_dataset_name=job.selection_dataset_name,
+        selected_loop_scope=job.selected_loop_scope,
+        provenance=job.provenance,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,

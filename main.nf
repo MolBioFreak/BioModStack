@@ -33,7 +33,7 @@ include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
-include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
+include { ANTIBODY_DENOVO ; NormalizeTargetPDB as NormalizeAntibodyTargetPDB } from './workflows/antibody_denovo.nf'
 
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 include { RFANTIBODY_BACKBONE } from './workflows/rfantibody_backbone.nf'
@@ -613,8 +613,13 @@ workflow {
                 ? channel.of(tuple(meta, file(params.framework_pdb)))
                 : channel.empty()
 
+            // Match the standalone antibody workflow by collapsing multi-model
+            // targets to a single model before RFantibody sees the input.
+            NormalizeAntibodyTargetPDB(input_ch)
+            def normalized_input_ch = NormalizeAntibodyTargetPDB.out.normalized
+
             // Call de novo antibody workflow
-            ANTIBODY_DENOVO(input_ch, epitope, framework_ch)
+            ANTIBODY_DENOVO(normalized_input_ch, epitope, framework_ch)
 
             return null
         }

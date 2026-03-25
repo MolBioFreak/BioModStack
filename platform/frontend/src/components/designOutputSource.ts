@@ -6,6 +6,10 @@ type OutputSourceDesign = {
     confidence_metrics?: Record<string, unknown> | null;
     source_stage?: string | null;
     artifact_group?: string | null;
+    stage_family?: string | null;
+    stage_mode?: string | null;
+    source_stage_family?: string | null;
+    source_stage_mode?: string | null;
 };
 
 type AnalysisLensDesign = OutputSourceDesign & Record<string, unknown>;
@@ -51,8 +55,26 @@ const hasValidationMetrics = (metrics: Record<string, unknown> | null | undefine
 export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourceFilter => {
     const path = (design.pdb_path || '').toLowerCase();
     const sourceStage = String(design.source_stage || '').toLowerCase();
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const stageMode = String(design.stage_mode || '').toLowerCase();
     const artifactGroup = String(design.artifact_group || '').toLowerCase();
     const metrics = design.confidence_metrics || {};
+
+    if (containsAny(stageFamily, ['rfantibody']) || containsAny(stageMode, ['rfantibody', 'post_rfantibody'])) {
+        return 'rfantibody';
+    }
+
+    if (containsAny(stageFamily, ['fampnn']) || containsAny(stageMode, ['fampnn', 'post_fampnn'])) {
+        return 'fampnn';
+    }
+
+    if (containsAny(stageFamily, ['ppiflow', 'maturation']) || containsAny(stageMode, ['ppiflow', 'maturation', 'backbone_refine'])) {
+        return 'ppiflow';
+    }
+
+    if (containsAny(stageFamily, ['validation', 'protenix', 'boltz']) || containsAny(stageMode, ['validation', 'post_structure_validation'])) {
+        return 'validation';
+    }
 
     if (sourceStage === 'post_rfantibody' || containsAny(artifactGroup, ['raw', 'filtered'])) {
         return 'rfantibody';

@@ -21,6 +21,7 @@ process ProtenixPredict {
     label 'Protenix'
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { _ -> "protenix_msa_report.json" }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
@@ -32,6 +33,7 @@ process ProtenixPredict {
     path "predictions/**/*.cif", emit: cifs, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
+    path "msa_prepared/msa_report.json", emit: msa_report, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
@@ -171,6 +173,7 @@ ENDJSON
             --input_json input.json \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
+            --report_json msa_prepared/msa_report.json \\
             --backend "${msa_backend}" \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
             --db-path "${params.msa_local_db}" \\
@@ -325,6 +328,7 @@ process ProtenixFromComplex {
     label 'Protenix'
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { _ -> "protenix_complex_msa_report.json" }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
@@ -336,6 +340,7 @@ process ProtenixFromComplex {
     path "predictions/**/*.cif", emit: structures, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
+    path "msa_prepared/msa_report.json", emit: msa_report, optional: true
     path "*.log", emit: logs, optional: true
 
     script:
@@ -344,7 +349,9 @@ process ProtenixFromComplex {
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
-    def use_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def requested_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
+    def anchor_target = (params.protenix_anchor_target == true || params.protenix_anchor_target == 'true')
+    def use_template = requested_template || anchor_target
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
@@ -379,8 +386,20 @@ process ProtenixFromComplex {
     #!/bin/bash
     set -euo pipefail
 
-    # Persist Protenix caches/checkpoints on host disk.
-    export PROTENIX_ROOT_DIR="${params.code_root}/.protenix_cache"
+    SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
+    if [ "${anchor_target}" = "true" ]; then
+        if [ -z "${params.fixed_target_source_path ?: ''}" ] || [ -z "${params.fixed_target_source_chains ?: ''}" ]; then
+            echo "[PROTENIX-COMPLEX] ERROR: protenix_anchor_target requires fixed_target_source_path and fixed_target_source_chains" | tee -a protenix_complex.log
+            exit 84
+        fi
+        export PROTENIX_ROOT_DIR="$PWD/.protenix_anchor_root"
+        mkdir -p "\$PROTENIX_ROOT_DIR"
+        if [ -d "\$SHARED_PROTENIX_ROOT/checkpoint" ] && [ ! -e "\$PROTENIX_ROOT_DIR/checkpoint" ]; then
+            ln -s "\$SHARED_PROTENIX_ROOT/checkpoint" "\$PROTENIX_ROOT_DIR/checkpoint"
+        fi
+    else
+        export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
+    fi
     export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
     export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
     export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
@@ -395,6 +414,16 @@ process ProtenixFromComplex {
         exit 127
     fi
 
+    if [ "${anchor_target}" = "true" ]; then
+        python3 ${params.code_root}/scripts/extract_target_templates.py \\
+            --pdb_files "${params.fixed_target_source_path}" \\
+            --target_chains "${params.fixed_target_source_chains}" \\
+            --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
+            --manifest target_template_manifest.json \\
+            ${params.fixed_target_model_number ? '--model_number ' + params.fixed_target_model_number : ''}
+        echo "[PROTENIX-COMPLEX] Fixed-target mode enabled: staged target templates from ${params.fixed_target_source_path}" | tee -a protenix_complex.log
+    fi
+
     if [ "${use_template}" = "true" ]; then
         template_dir="\$PROTENIX_ROOT_DIR/mmcif"
         template_file=""
@@ -407,6 +436,9 @@ process ProtenixFromComplex {
             exit 89
         fi
         echo "[PROTENIX-COMPLEX] Template database detected: \$template_file"
+    fi
+    if [ "${requested_template}" = "true" ] && [ "${anchor_target}" != "true" ]; then
+        echo "[PROTENIX-COMPLEX] Generic template DB conditioning enabled for this run; no explicit target anchoring is applied." | tee -a protenix_complex.log
     fi
 
     # Fail fast if GPU architecture is unsupported by the container's torch build.
@@ -459,6 +491,7 @@ PY
             --input_json ${complex_json} \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
+            --report_json msa_prepared/msa_report.json \\
             --backend "${msa_backend}" \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
             --db-path "${params.msa_local_db}" \\

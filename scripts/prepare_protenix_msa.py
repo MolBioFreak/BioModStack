@@ -130,6 +130,37 @@ def choose_backend(requested: str, stats: Dict[str, int], max_tasks: int, max_ch
     return "local"
 
 
+def write_msa_report(report_path: Path, payload: List[Dict[str, Any]], backend: str, stats: Dict[str, int]) -> None:
+    report: Dict[str, Any] = {
+        "backend": backend,
+        "tasks": stats["tasks"],
+        "protein_chains": stats["protein_chains"],
+        "unique_sequences": stats["unique_sequences"],
+        "total_residues": stats["total_residues"],
+        "chains": [],
+    }
+
+    for task_idx, seq_idx, chain in iter_protein_chains(payload):
+        _hydrate_old_precomputed_dir(chain)
+        paired_path, unpaired_path = _existing_msa_paths(chain)
+        sequence = str(chain.get("sequence", "") or "").strip()
+        report["chains"].append(
+            {
+                "task_index": task_idx,
+                "sequence_index": seq_idx,
+                "sequence_length": len(sequence),
+                "sequence_sha256_16": hashlib.sha256(sequence.encode("utf-8")).hexdigest()[:16] if sequence else None,
+                "paired_msa_path": str(paired_path.resolve()) if paired_path and paired_path.exists() else None,
+                "unpaired_msa_path": str(unpaired_path.resolve()) if unpaired_path and unpaired_path.exists() else None,
+                "has_paired_msa": bool(paired_path and paired_path.exists()),
+                "has_unpaired_msa": bool(unpaired_path and unpaired_path.exists()),
+            }
+        )
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+
 def _copy_or_link(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
@@ -312,6 +343,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-server-db-load-mode", type=int, default=0, help="Local MSA gpuserver db load mode")
     parser.add_argument("--gpu-server-startup-wait", type=float, default=1.0, help="Local MSA gpuserver startup wait")
     parser.add_argument("--allow-cpu-fallback", action="store_true", help="Allow CPU MMseqs when GPU MMseqs is unavailable")
+    parser.add_argument("--report_json", default="", help="Optional JSON report path summarizing prepared MSA inputs")
     parser.add_argument("--small-max-tasks", type=int, default=DEFAULT_SMALL_MAX_TASKS, help="Auto mode ColabFold API max task count")
     parser.add_argument("--small-max-protein-chains", type=int, default=DEFAULT_SMALL_MAX_PROTEIN_CHAINS, help="Auto mode ColabFold API max protein chains")
     parser.add_argument("--small-max-total-residues", type=int, default=DEFAULT_SMALL_MAX_TOTAL_RESIDUES, help="Auto mode ColabFold API max total residues")
@@ -336,12 +368,16 @@ def main() -> None:
 
     if stats["protein_chains"] == 0:
         dump_json(output_json, payload)
+        if args.report_json:
+            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, "none", stats)
         print(f"[prepare_protenix_msa] No protein chains found; copied input to {output_json}", flush=True)
         print(str(output_json), flush=True)
         return
 
     if all_protein_chains_have_msa(payload):
         dump_json(output_json, payload)
+        if args.report_json:
+            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, "precomputed", stats)
         print(f"[prepare_protenix_msa] Existing MSA paths detected; reusing input via {output_json}", flush=True)
         print(str(output_json), flush=True)
         return
@@ -409,6 +445,10 @@ def main() -> None:
             gpu_server_startup_wait=float(args.gpu_server_startup_wait),
             allow_cpu_fallback=bool(args.allow_cpu_fallback),
         )
+
+    if args.report_json:
+        prepared_payload = load_json(Path(prepared))
+        write_msa_report(Path(args.report_json).expanduser().resolve(), prepared_payload, backend, stats)
 
     print(f"[prepare_protenix_msa] Prepared input JSON: {prepared}", flush=True)
     print(str(prepared), flush=True)
