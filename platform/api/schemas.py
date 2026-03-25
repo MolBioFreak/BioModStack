@@ -81,6 +81,19 @@ class JobResponse(BaseModel):
     # Parent-child tracking (SWA pattern)
     parent_job_id: Optional[str] = None
     child_stage: Optional[str] = None
+    lineage_root_job_id: Optional[str] = None
+    stage_family: Optional[str] = None
+    stage_mode: Optional[str] = None
+    source_stage_job_id: Optional[str] = None
+    source_stage_family: Optional[str] = None
+    source_stage_mode: Optional[str] = None
+    source_selection_manifest_path: Optional[str] = None
+    source_selection_count: Optional[int] = None
+    selection_source_type: Optional[str] = None
+    selection_source_job_id: Optional[str] = None
+    selection_dataset_name: Optional[str] = None
+    selected_loop_scope: Optional[dict] = None
+    provenance: Optional[dict] = None
     # GPU assignment
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
@@ -156,6 +169,22 @@ class DesignResponse(BaseModel):
     # User data
     is_favorite: bool = False
     notes: Optional[str] = None
+
+    # Lineage / provenance
+    lineage_root_job_id: Optional[str] = None
+    parent_design_id: Optional[str] = None
+    origin_design_id: Optional[str] = None
+    origin_job_id: Optional[str] = None
+    origin_backbone_design_id: Optional[str] = None
+    stage_family: Optional[str] = None
+    stage_mode: Optional[str] = None
+    source_stage_job_id: Optional[str] = None
+    source_stage_family: Optional[str] = None
+    source_stage_mode: Optional[str] = None
+    source_pdb_path: Optional[str] = None
+    source_design_name: Optional[str] = None
+    selected_loop_scope: Optional[Any] = None
+    provenance: Optional[Any] = None
     
     created_at: datetime
     

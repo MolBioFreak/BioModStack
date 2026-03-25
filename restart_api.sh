@@ -6,7 +6,7 @@ PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
 API_LOG="/tmp/biomodstack_api.log"
 API_LOG_DIR="/tmp/biomodstack_api_logs"
 MAX_LOGS=10
-API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
+API_RELOAD_RAW="${BMS_API_RELOAD:-0}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
 
@@ -22,6 +22,36 @@ cpu_power_strict_enabled() {
         0|false|no|off) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+port_8000_in_use() {
+    ss -ltn "( sport = :8000 )" 2>/dev/null | tail -n +2 | grep -q .
+}
+
+wait_for_port_8000_clear() {
+    local attempts=${1:-20}
+    local delay=${2:-0.5}
+    local i
+    for ((i = 0; i < attempts; i++)); do
+        if ! port_8000_in_use; then
+            return 0
+        fi
+        sleep "$delay"
+    done
+    return 1
+}
+
+wait_for_api_health() {
+    local attempts=${1:-30}
+    local delay=${2:-1}
+    local i
+    for ((i = 0; i < attempts; i++)); do
+        if curl -fsS "http://127.0.0.1:8000/api/health" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "$delay"
+    done
+    return 1
 }
 
 rapl_requires_privileged_api_launch() {
@@ -129,7 +159,16 @@ sleep 1
 
 # Force kill port 8000 if still in use
 fuser -k -n tcp 8000 >/dev/null 2>&1
-sleep 1
+if ! wait_for_port_8000_clear 20 0.5; then
+    echo "[API] Port 8000 still busy after initial shutdown; forcing one more cleanup pass"
+    pkill -9 -f "uvicorn.*main:app" 2>/dev/null || true
+    fuser -k -n tcp 8000 >/dev/null 2>&1 || true
+    wait_for_port_8000_clear 20 0.5 || {
+        echo "[API] Port 8000 did not clear in time"
+        notify-send "BioModStack" "❌ API restart aborted: port 8000 still busy" -i dialog-error
+        exit 1
+    }
+fi
 
 # Start API
 cd "$PROJECT_DIR/platform/api"
@@ -148,10 +187,22 @@ else
     API_PID=$!
 fi
 
-sleep 2
-
-if pgrep -f "uvicorn.*main:app" > /dev/null; then
+if wait_for_api_health 20 1; then
     notify-send "BioModStack" "✅ API restarted successfully (PID: $API_PID)" -i dialog-ok
+elif grep -q "Address already in use" "$API_LOG" 2>/dev/null; then
+    echo "[API] Initial restart hit address-in-use; retrying once after cleanup"
+    pkill -f "uvicorn.*main:app" 2>/dev/null || true
+    fuser -k -n tcp 8000 >/dev/null 2>&1 || true
+    wait_for_port_8000_clear 20 0.5 || true
+    nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
+    API_PID=$!
+    if wait_for_api_health 20 1; then
+        notify-send "BioModStack" "✅ API restarted successfully (PID: $API_PID)" -i dialog-ok
+    else
+        notify-send "BioModStack" "❌ API failed to restart after retry! Check logs: $API_LOG" -i dialog-error
+        exit 1
+    fi
 else
     notify-send "BioModStack" "❌ API failed to restart! Check logs: $API_LOG" -i dialog-error
+    exit 1
 fi
