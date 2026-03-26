@@ -29,13 +29,15 @@ interface EpitopeSelectorProps {
     selectedResidues: Set<string>;  // Set of "A45", "B100", etc.
     onSelectionChange: (residues: Set<string>) => void;
     activeChain?: string;  // Optional: limit to single chain
+    selectedLabel?: string;
 }
 
 export function EpitopeSelector({
     chains,
     selectedResidues,
     onSelectionChange,
-    activeChain
+    activeChain,
+    selectedLabel = 'Selected Residues',
 }: EpitopeSelectorProps) {
     const [lastClickedResidue, setLastClickedResidue] = useState<string | null>(null);
 
@@ -165,7 +167,7 @@ export function EpitopeSelector({
                                 (residues {firstResNum}–{chain.residues[chain.residues.length - 1]?.resNum ?? firstResNum})
                             </span>
                         </div>
-                        <div className="flex flex-wrap gap-x-0.5 gap-y-4 font-mono text-sm leading-none bg-slate-900/50 pt-5 pb-3 px-3 rounded-lg border border-slate-800 max-h-[400px] overflow-y-auto">
+                        <div className="flex max-h-[52vh] flex-wrap gap-x-0.5 gap-y-4 overflow-auto rounded-lg border border-slate-800 bg-slate-900/50 px-3 pb-3 pt-5 pr-2 font-mono text-sm leading-none">
                             {chain.residues.map((residue) => {
                                 const key = getResKey(residue);
                                 const isSelected = selectedResidues.has(key);
@@ -196,6 +198,11 @@ export function EpitopeSelector({
                                 );
                             })}
                         </div>
+                        {chain.residues.length > 120 && (
+                            <div className="text-[11px] text-slate-500">
+                                Scroll inside the residue grid to inspect the full chain without pushing the rest of the redesign controls off screen.
+                            </div>
+                        )}
                     </div>
                 );
             })}
@@ -203,7 +210,7 @@ export function EpitopeSelector({
             {/* Selected Residues Summary */}
             {selectedResidues.size > 0 && (
                 <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-800">
-                    <div className="text-xs text-slate-400 mb-2">Selected Epitope Residues:</div>
+                    <div className="text-xs text-slate-400 mb-2">{selectedLabel}:</div>
                     <div className="flex flex-wrap gap-1">
                         {Array.from(selectedResidues).sort().map(key => {
                             const chainId = key[0];

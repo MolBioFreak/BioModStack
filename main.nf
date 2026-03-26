@@ -30,6 +30,7 @@ include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustram
 include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqPlasmidQC ; RunCloneValidation } from './modules/dorado.nf'
 
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
+include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -437,6 +438,28 @@ workflow {
             target_pdb
         )
 
+        return null
+    }
+
+    /////////////////////////////
+    // PROTEIN LOCAL REDESIGN  //
+    /////////////////////////////
+    if (params.rfd_mode == 'protein_local_redesign') {
+        println("Running Protein Local Redesign (RFD3 + constrained sequence design)")
+        println("* Input PDB: ${params.plr_input_pdb}")
+        println("* Design chain: ${params.plr_design_chains}")
+        println("* Region mode: ${params.plr_region_mode ?: 'manual_ranges'}")
+        println("* Sequence method: ${params.plr_seq_method ?: 'fampnn'}")
+        println("* Boltz validation: ${params.plr_run_boltz_validation != false}")
+
+        if (!params.plr_input_pdb) {
+            error("Input PDB required for protein_local_redesign mode")
+        }
+        if (!params.plr_design_chains) {
+            error("Design chain required for protein_local_redesign mode")
+        }
+
+        PROTEIN_LOCAL_REDESIGN()
         return null
     }
 

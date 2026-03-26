@@ -121,6 +121,11 @@ async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Opti
     return review_stage if review_stage in REVIEWABLE_STAGES else None
 
 
+def _should_force_review_stage_listing(job: Optional[Job], review_stage: Optional[str]) -> bool:
+    normalized_stage = str(review_stage or "").strip().lower()
+    return bool(job and job.awaiting_input and normalized_stage in REVIEWABLE_STAGES)
+
+
 def _structure_file_response(path: Path, filename_root: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
@@ -313,6 +318,17 @@ class DesignResponse(BaseModel):
     maturation_selected_interface_score: Optional[float] = None
     maturation_selected_rmsd: Optional[float] = None
     maturation_nonselected_rmsd: Optional[float] = None
+    ppiflow_primary_loop: Optional[str] = None
+    ppiflow_primary_loop_rmsd: Optional[float] = None
+    ppiflow_primary_loop_target_contact_delta: Optional[int] = None
+    ppiflow_primary_loop_target_distance_delta: Optional[float] = None
+    ppiflow_primary_loop_epitope_contact_delta: Optional[int] = None
+    ppiflow_primary_loop_epitope_distance_delta: Optional[float] = None
+    ppiflow_objective_mode: Optional[str] = None
+    ppiflow_objective_score: Optional[float] = None
+    ppiflow_filter_passed: Optional[bool] = None
+    ppiflow_filter_reason: Optional[str] = None
+    ppiflow_loop_metrics: Optional[Dict[str, Any]] = None
     
     created_at: datetime
     
@@ -445,6 +461,17 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.maturation_selected_interface_score,
     Design.maturation_selected_rmsd,
     Design.maturation_nonselected_rmsd,
+    Design.ppiflow_primary_loop,
+    Design.ppiflow_primary_loop_rmsd,
+    Design.ppiflow_primary_loop_target_contact_delta,
+    Design.ppiflow_primary_loop_target_distance_delta,
+    Design.ppiflow_primary_loop_epitope_contact_delta,
+    Design.ppiflow_primary_loop_epitope_distance_delta,
+    Design.ppiflow_objective_mode,
+    Design.ppiflow_objective_score,
+    Design.ppiflow_filter_passed,
+    Design.ppiflow_filter_reason,
+    Design.ppiflow_loop_metrics,
     Design.lineage_root_job_id,
     Design.parent_design_id,
     Design.origin_design_id,
@@ -582,6 +609,17 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.maturation_selected_interface_score,
     Design.maturation_selected_rmsd,
     Design.maturation_nonselected_rmsd,
+    Design.ppiflow_primary_loop,
+    Design.ppiflow_primary_loop_rmsd,
+    Design.ppiflow_primary_loop_target_contact_delta,
+    Design.ppiflow_primary_loop_target_distance_delta,
+    Design.ppiflow_primary_loop_epitope_contact_delta,
+    Design.ppiflow_primary_loop_epitope_distance_delta,
+    Design.ppiflow_objective_mode,
+    Design.ppiflow_objective_score,
+    Design.ppiflow_filter_passed,
+    Design.ppiflow_filter_reason,
+    Design.ppiflow_loop_metrics,
     Design.lineage_root_job_id,
     Design.parent_design_id,
     Design.origin_design_id,
@@ -734,6 +772,12 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "maturation_selected_interface_score": design.maturation_selected_interface_score,
         "maturation_selected_rmsd": design.maturation_selected_rmsd,
         "maturation_nonselected_rmsd": design.maturation_nonselected_rmsd,
+        "ppiflow_primary_loop_rmsd": design.ppiflow_primary_loop_rmsd,
+        "ppiflow_primary_loop_target_contact_delta": design.ppiflow_primary_loop_target_contact_delta,
+        "ppiflow_primary_loop_target_distance_delta": design.ppiflow_primary_loop_target_distance_delta,
+        "ppiflow_primary_loop_epitope_contact_delta": design.ppiflow_primary_loop_epitope_contact_delta,
+        "ppiflow_primary_loop_epitope_distance_delta": design.ppiflow_primary_loop_epitope_distance_delta,
+        "ppiflow_objective_score": design.ppiflow_objective_score,
     }
     _inject_metric(metrics, "screening_reason_present", 1.0 if design.screening_reason else None)
     for key, value in base_metrics.items():
@@ -782,10 +826,17 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "ppiflow_selected_interface_residue_count_original": ppiflow_score.get("selected_interface_residue_count_original"),
         "ppiflow_selected_interface_residue_count_matured": ppiflow_score.get("selected_interface_residue_count_matured"),
         "ppiflow_filter_threshold": ppiflow_filter.get("threshold"),
+        "ppiflow_filter_passed": design.ppiflow_filter_passed if design.ppiflow_filter_passed is not None else ppiflow_filter.get("passed"),
         "ppiflow_anchor_count": ppiflow_anchors.get("anchor_count"),
         "ppiflow_anchor_interface_residue_count": ppiflow_anchors.get("interface_residue_count"),
         "ppiflow_source_interface_score": ppiflow_interface.get("interface_score"),
         "ppiflow_source_interface_residue_count": ppiflow_interface.get("interface_residue_count"),
+        "ppiflow_primary_loop_target_contact_delta": design.ppiflow_primary_loop_target_contact_delta if design.ppiflow_primary_loop_target_contact_delta is not None else ppiflow_score.get("primary_loop_target_contact_delta"),
+        "ppiflow_primary_loop_target_distance_delta": design.ppiflow_primary_loop_target_distance_delta if design.ppiflow_primary_loop_target_distance_delta is not None else ppiflow_score.get("primary_loop_target_distance_delta"),
+        "ppiflow_primary_loop_epitope_contact_delta": design.ppiflow_primary_loop_epitope_contact_delta if design.ppiflow_primary_loop_epitope_contact_delta is not None else ppiflow_score.get("primary_loop_epitope_contact_delta"),
+        "ppiflow_primary_loop_epitope_distance_delta": design.ppiflow_primary_loop_epitope_distance_delta if design.ppiflow_primary_loop_epitope_distance_delta is not None else ppiflow_score.get("primary_loop_epitope_distance_delta"),
+        "ppiflow_primary_loop_rmsd": design.ppiflow_primary_loop_rmsd if design.ppiflow_primary_loop_rmsd is not None else ppiflow_score.get("primary_loop_rmsd"),
+        "ppiflow_objective_score": design.ppiflow_objective_score if design.ppiflow_objective_score is not None else ppiflow_score.get("objective_score"),
     }
     for key, value in ppiflow_metrics.items():
         _inject_metric(metrics, key, value)
@@ -1089,6 +1140,30 @@ def _design_to_response(
         include_structure_fallback=include_fampnn_structure_fallback,
     )
     data.update(fampnn_metrics)
+    provenance = design.provenance if isinstance(design.provenance, dict) else {}
+    ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
+    ppiflow_score = (
+        ppiflow.get("maturation_score") if isinstance(ppiflow.get("maturation_score"), dict)
+        else ppiflow.get("partial_flow_score") if isinstance(ppiflow.get("partial_flow_score"), dict)
+        else None
+    ) or {}
+    ppiflow_filter = ppiflow.get("maturation_filter") if isinstance(ppiflow.get("maturation_filter"), dict) else {}
+    fallback_fields = {
+        "ppiflow_primary_loop": ppiflow_score.get("primary_loop"),
+        "ppiflow_primary_loop_rmsd": ppiflow_score.get("primary_loop_rmsd"),
+        "ppiflow_primary_loop_target_contact_delta": ppiflow_score.get("primary_loop_target_contact_delta"),
+        "ppiflow_primary_loop_target_distance_delta": ppiflow_score.get("primary_loop_target_distance_delta"),
+        "ppiflow_primary_loop_epitope_contact_delta": ppiflow_score.get("primary_loop_epitope_contact_delta"),
+        "ppiflow_primary_loop_epitope_distance_delta": ppiflow_score.get("primary_loop_epitope_distance_delta"),
+        "ppiflow_objective_mode": ppiflow_score.get("objective_mode"),
+        "ppiflow_objective_score": ppiflow_score.get("objective_score"),
+        "ppiflow_filter_passed": ppiflow_filter.get("passed"),
+        "ppiflow_filter_reason": ppiflow_filter.get("filter_reason"),
+        "ppiflow_loop_metrics": ppiflow_score.get("loop_metrics"),
+    }
+    for field_name, fallback_value in fallback_fields.items():
+        if data.get(field_name) in (None, "", [], {}, ()):
+            data[field_name] = fallback_value
     data["binder_sequence"] = _compute_binder_sequence_response_value(
         design,
         include_structure_fallback=include_fampnn_structure_fallback,
@@ -1239,8 +1314,10 @@ async def list_designs(
     if job_id:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         selected_job = job_result.scalar_one_or_none()
-        if selected_job and not include_children:
+        if selected_job:
             review_stage = await _hydrate_review_job(session, selected_job)
+            if _should_force_review_stage_listing(selected_job, review_stage):
+                include_children = False
 
     # Build base query with optional sorting
     sort_field_map = {
@@ -1297,6 +1374,12 @@ async def list_designs(
         'maturation_selected_interface_score': Design.maturation_selected_interface_score,
         'maturation_selected_rmsd': Design.maturation_selected_rmsd,
         'maturation_nonselected_rmsd': Design.maturation_nonselected_rmsd,
+        'ppiflow_objective_score': Design.ppiflow_objective_score,
+        'ppiflow_primary_loop_rmsd': Design.ppiflow_primary_loop_rmsd,
+        'ppiflow_primary_loop_target_contact_delta': Design.ppiflow_primary_loop_target_contact_delta,
+        'ppiflow_primary_loop_target_distance_delta': Design.ppiflow_primary_loop_target_distance_delta,
+        'ppiflow_primary_loop_epitope_contact_delta': Design.ppiflow_primary_loop_epitope_contact_delta,
+        'ppiflow_primary_loop_epitope_distance_delta': Design.ppiflow_primary_loop_epitope_distance_delta,
         'fr2_contacts': Design.fr2_contacts,
         'is_favorite': Design.is_favorite,
         'binding_tier': func.coalesce(Design.iptm, 0.0) + case(
