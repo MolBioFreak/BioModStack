@@ -18,6 +18,15 @@ params.pdb_paths = null
 params.framework_type = 'standard-fv'
 params.maturation_redesign_enabled = true
 params.maturation_redesign_top_n = 0
+params.ppiflow_require_anchors = true
+params.ppiflow_selected_loops = null
+params.maturation_selected_loops = null
+params.selected_cdr_loops = null
+params.ppiflow_region_mode = 'selected_cdrs'
+params.ppiflow_maturation_region_mode = 'selected_cdrs'
+params.ppiflow_backbone_region_mode = 'selected_cdrs'
+params.ppiflow_mode = 'maturation'
+params.maturation_stage_name = null
 // 0 = use all
 
 include { MATURATION_CHILD_CORE as MATURATION_CHILD_IMPL } from './maturation_child_core.nf'

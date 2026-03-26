@@ -8,15 +8,15 @@ import shutil
 from pathlib import Path
 
 
-def load_scores(manifest_path):
+def load_scores(manifest_path, metric_key):
     with open(manifest_path, "r") as f:
         data = json.load(f)
     scores = []
     if isinstance(data, list):
         for item in data:
             if isinstance(item, dict):
-                value = item.get("selected_delta_interface_score")
-                if value is None:
+                value = item.get(metric_key)
+                if value is None and metric_key == "selected_delta_interface_score":
                     value = item.get("delta_interface_score")
                 if value is not None:
                     scores.append(value)
@@ -47,17 +47,31 @@ def main():
     parser.add_argument("--report_json", required=True, help="Output report JSON")
     parser.add_argument("--disable_filter", action="store_true",
                         help="Disable rejection and pass all matured structures through")
+    parser.add_argument("--objective_mode", default="selected_interface",
+                        choices=["selected_interface", "loop_target", "loop_epitope", "balanced"],
+                        help="Ranking objective used when interpreting score_json")
+    parser.add_argument("--objective_threshold", type=float, default=None,
+                        help="Threshold for objective_score when objective_mode is not selected_interface (lower is better)")
     args = parser.parse_args()
 
     with open(args.score_json, "r") as f:
         score_data = json.load(f)
-    delta = score_data.get("selected_delta_interface_score")
-    if delta is None:
-        delta = score_data.get("delta_interface_score")
+
+    objective_mode = (args.objective_mode or score_data.get("objective_mode") or "selected_interface").strip().lower()
+    selection_metric = "selected_delta_interface_score"
+    selection_value = score_data.get("selected_delta_interface_score")
+    if selection_value is None:
+        selection_metric = "delta_interface_score"
+        selection_value = score_data.get("delta_interface_score")
 
     threshold = args.min_improvement
+    if objective_mode != "selected_interface":
+        selection_metric = "objective_score"
+        selection_value = score_data.get("objective_score")
+        threshold = args.objective_threshold
+
     if not args.disable_filter and args.percentile is not None and args.scores_manifest:
-        scores = load_scores(args.scores_manifest)
+        scores = load_scores(args.scores_manifest, selection_metric)
         percentile_val = percentile_threshold(scores, args.percentile)
         if percentile_val is not None:
             threshold = percentile_val
@@ -67,7 +81,7 @@ def main():
     elif threshold is None:
         passed = True
     else:
-        passed = delta is not None and delta <= threshold
+        passed = selection_value is not None and selection_value <= threshold
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,11 +90,25 @@ def main():
 
     report = {
         "passed": passed,
-        "delta_interface_score": delta,
+        "selection_metric": selection_metric,
+        "selection_value": selection_value,
+        "delta_interface_score": score_data.get("delta_interface_score"),
+        "objective_mode": objective_mode,
+        "objective_score": score_data.get("objective_score"),
         "threshold": threshold,
         "min_improvement": args.min_improvement,
+        "objective_threshold": args.objective_threshold,
         "percentile": args.percentile,
         "filter_disabled": args.disable_filter,
+        "filter_reason": (
+            "filter_disabled"
+            if args.disable_filter
+            else "no_threshold"
+            if threshold is None
+            else "passed"
+            if passed
+            else f"{selection_metric}_above_threshold"
+        ),
         "score_json": str(Path(args.score_json).resolve()),
         "score_data": score_data,
         "interface_score_original": score_data.get("interface_score_original"),

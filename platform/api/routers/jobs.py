@@ -316,6 +316,12 @@ class ResumeJobRequest(BaseModel):
     name_suffix: Optional[str] = None
 
 
+class ContinueProteinLocalReviewRequest(BaseModel):
+    """Continue a paused protein local redesign review using a selected subset."""
+    design_ids: List[str] = Field(default_factory=list)
+    name_suffix: Optional[str] = None
+
+
 class OpenStageGateRequest(BaseModel):
     """Internal workflow request to mark a job as awaiting user input."""
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -774,8 +780,37 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
                 normalized["ppiflow_require_anchors"] = False
             if normalized.get("ppiflow_stage_target") in (None, ""):
                 normalized["ppiflow_stage_target"] = "post_ppiflow"
+    ppiflow_tuning_profile = _normalize_ppiflow_tuning_profile(normalized.get("ppiflow_tuning_profile"))
+    if ppiflow_tuning_profile is not None:
+        inferred_ppiflow_stage_mode = _infer_ppiflow_stage_mode_from_flags(normalized)
+        if ppiflow_tuning_profile == "stage_optimized" and inferred_ppiflow_stage_mode == "both":
+            ppiflow_tuning_profile = "manual"
+        normalized["ppiflow_tuning_profile"] = ppiflow_tuning_profile
+        if ppiflow_tuning_profile == "stage_optimized":
+            normalized.update(_stage_optimized_ppiflow_defaults(inferred_ppiflow_stage_mode))
     if "ppiflow_stage_target" in normalized:
         normalized["ppiflow_stage_target"] = str(normalized.get("ppiflow_stage_target") or "").strip().lower() or None
+    ppiflow_objective_mode = str(normalized.get("ppiflow_objective_mode") or "").strip().lower() or None
+    if ppiflow_objective_mode not in {None, "selected_interface", "loop_target", "loop_epitope", "balanced"}:
+        ppiflow_objective_mode = None
+    ppiflow_stage_enabled = (
+        _to_bool(normalized.get("run_ppiflow_backbone_refine"))
+        or _to_bool(normalized.get("run_ppiflow_maturation"))
+        or _to_bool(normalized.get("run_maturation"))
+    )
+    if ppiflow_stage_enabled and ppiflow_objective_mode is None:
+        ppiflow_objective_mode = "balanced"
+    if ppiflow_objective_mode is not None:
+        normalized["ppiflow_objective_mode"] = ppiflow_objective_mode
+    objective_threshold = normalized.get("ppiflow_objective_threshold")
+    if objective_threshold in ("", None):
+        if ppiflow_objective_mode and ppiflow_objective_mode != "selected_interface":
+            normalized["ppiflow_objective_threshold"] = 0.0
+    else:
+        try:
+            normalized["ppiflow_objective_threshold"] = float(objective_threshold)
+        except (TypeError, ValueError):
+            normalized.pop("ppiflow_objective_threshold", None)
     for key in ("ppiflow_backbone_region_mode", "ppiflow_maturation_region_mode", "ppiflow_region_mode"):
         if key in normalized:
             value = str(normalized.get(key) or "").strip().lower()
@@ -968,6 +1003,52 @@ def _normalize_stage_family(value: Any) -> Optional[str]:
     return text.strip().lower()
 
 
+def _normalize_ppiflow_tuning_profile(value: Any) -> Optional[str]:
+    text = _coerce_nonempty_text(value)
+    if not text:
+        return None
+    normalized = text.strip().lower()
+    if normalized in {"stage_optimized", "manual"}:
+        return normalized
+    return None
+
+
+def _infer_ppiflow_stage_mode_from_flags(params: Dict[str, Any]) -> Optional[str]:
+    explicit_stage_mode = _normalize_stage_family(params.get("ppiflow_stage_mode"))
+    if explicit_stage_mode:
+        return explicit_stage_mode
+    runs_backbone = _to_bool(params.get("run_ppiflow_backbone_refine"))
+    runs_maturation = _to_bool(params.get("run_ppiflow_maturation")) or _to_bool(params.get("run_maturation"))
+    if runs_backbone and runs_maturation:
+        return "both"
+    if runs_backbone:
+        return "post_rfantibody"
+    if runs_maturation:
+        return "post_fampnn"
+    return None
+
+
+def _stage_optimized_ppiflow_defaults(stage_mode: Optional[str]) -> Dict[str, Any]:
+    normalized_stage_mode = _normalize_stage_family(stage_mode)
+    if normalized_stage_mode in {"post_rfantibody", "backbone_refine", "post_ppiflow"}:
+        return {
+            "ppiflow_start_t": 0.55,
+            "ppiflow_samples_per_target": 7,
+            "ppiflow_require_anchors": False,
+            "ppiflow_objective_mode": "loop_epitope",
+            "ppiflow_objective_threshold": 0.0,
+        }
+    if normalized_stage_mode in {"post_fampnn", "maturation"}:
+        return {
+            "ppiflow_start_t": 0.8,
+            "ppiflow_samples_per_target": 4,
+            "ppiflow_require_anchors": True,
+            "ppiflow_objective_mode": "balanced",
+            "ppiflow_objective_threshold": 0.0,
+        }
+    return {}
+
+
 def _normalize_selected_loop_scope(raw_value: Any) -> Optional[Dict[str, Any]]:
     if raw_value is None:
         return None
@@ -1081,6 +1162,32 @@ def _format_stage_identity(stage_family: Optional[str], stage_mode: Optional[str
     if mode:
         return mode
     return "unknown"
+
+
+def _review_stage_to_canonical_stage(stage: Any) -> tuple[Optional[str], Optional[str]]:
+    normalized = _normalize_stage_family(stage)
+    if normalized == "post_rfantibody":
+        return "rfantibody", "post_rfantibody"
+    if normalized == "post_fampnn":
+        return "fampnn", "post_fampnn"
+    if normalized == "post_structure_validation":
+        return "validation", "post_structure_validation"
+    return None, None
+
+
+def _resolve_design_stage_metadata(design: Any) -> tuple[Optional[str], Optional[str]]:
+    family = (
+        _normalize_stage_family(getattr(design, "stage_family", None))
+        or _normalize_stage_family(getattr(design, "source_stage_family", None))
+    )
+    mode = (
+        _normalize_stage_family(getattr(design, "stage_mode", None))
+        or _normalize_stage_family(getattr(design, "source_stage_mode", None))
+    )
+    review_stage_family, review_stage_mode = _review_stage_to_canonical_stage(
+        getattr(design, "source_stage", None)
+    )
+    return family or review_stage_family, mode or review_stage_mode
 
 
 def _requires_immediate_ppiflow_backbone_refine(action: str, params: Dict[str, Any]) -> bool:
@@ -1517,8 +1624,11 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "selection_dataset_name",
         "selected_loop_scope",
         "ppiflow_stage_mode",
+        "ppiflow_tuning_profile",
         "ppiflow_stage_target",
         "ppiflow_selected_loops",
+        "ppiflow_objective_mode",
+        "ppiflow_objective_threshold",
         "manual_mutation_fixed_positions_json",
         "manual_mutation_mode",
         "manual_mutation_method",
@@ -1946,6 +2056,16 @@ def _create_antibody_selection_dir(action: str) -> Path:
     return selection_dir
 
 
+def _create_generic_selection_dir(namespace: str, action: str) -> Path:
+    selection_root = get_inputs_dir() / "design_selections" / namespace
+    selection_root.mkdir(parents=True, exist_ok=True)
+    selection_dir = selection_root / (
+        f"{datetime.utcnow():%Y%m%d_%H%M%S}_{action}_{uuid.uuid4().hex[:8]}"
+    )
+    selection_dir.mkdir(parents=True, exist_ok=False)
+    return selection_dir
+
+
 def _link_selection_input(source_path: Path, dest_path: Path) -> str:
     try:
         rel_target = os.path.relpath(source_path, start=dest_path.parent)
@@ -1976,14 +2096,15 @@ def _derive_source_stage_payload(
     selection_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     source_job_ids = _dedupe_preserve_order([str(design.job_id) for design in designs if getattr(design, "job_id", None)])
+    design_stage_metadata = [_resolve_design_stage_metadata(design) for design in designs]
     source_stage_families = _dedupe_preserve_order([
         family
-        for family in (_normalize_stage_family(getattr(design, "stage_family", None)) for design in designs)
+        for family, _ in design_stage_metadata
         if family
     ])
     source_stage_modes = _dedupe_preserve_order([
         mode
-        for mode in (_normalize_stage_family(getattr(design, "stage_mode", None)) for design in designs)
+        for _, mode in design_stage_metadata
         if mode
     ])
 
@@ -2024,12 +2145,13 @@ def _build_selection_manifest_item(
     selection_entry_mode: Optional[str],
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    design_stage_family, design_stage_mode = _resolve_design_stage_metadata(design)
     item: Dict[str, Any] = {
         "design_id": design.id,
         "design_name": design.name,
         "design_job_id": design.job_id,
-        "design_stage_family": design.stage_family,
-        "design_stage_mode": design.stage_mode,
+        "design_stage_family": design_stage_family,
+        "design_stage_mode": design_stage_mode,
         "lineage_root_job_id": design.lineage_root_job_id,
         "parent_design_id": design.parent_design_id,
         "origin_design_id": design.origin_design_id,
@@ -2826,6 +2948,78 @@ def _materialize_antibody_selection(
     return selection_dir
 
 
+def _candidate_sidecar_paths(design: Design, source_path: Path) -> List[Path]:
+    candidates: List[Path] = []
+    if design.json_path:
+        candidates.append(_resolve_design_structure_path(design.json_path))
+    else:
+        sibling_json = source_path.with_suffix(".json")
+        if sibling_json.exists():
+            candidates.append(sibling_json.resolve())
+    for suffix in (".cif", ".npz"):
+        candidate = source_path.with_suffix(suffix)
+        if candidate.exists():
+            candidates.append(candidate.resolve())
+    pae_candidate = source_path.with_suffix(".pae.npz")
+    if pae_candidate.exists():
+        candidates.append(pae_candidate.resolve())
+    unique_paths: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve())
+        if normalized in seen or not candidate.exists():
+            continue
+        seen.add(normalized)
+        unique_paths.append(candidate)
+    return unique_paths
+
+
+def _materialize_protein_local_selection(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    action: str,
+) -> Path:
+    selection_dir = _create_generic_selection_dir("protein_local_redesign", action)
+
+    manifest_items: List[Dict[str, Any]] = []
+    for idx, design in enumerate(designs, start=1):
+        if not design.pdb_path:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Design '{design.name}' is missing a structure path.",
+            )
+        source_path = _resolve_design_structure_path(design.pdb_path)
+        dest_name = source_path.name
+        dest_path = selection_dir / dest_name
+        if dest_path.exists():
+            dest_path = selection_dir / f"{idx:03d}_{dest_name}"
+        link_mode = _link_selection_input(source_path, dest_path)
+
+        for sidecar in _candidate_sidecar_paths(design, source_path):
+            sidecar_dest = selection_dir / sidecar.name
+            if sidecar_dest.exists():
+                sidecar_dest = selection_dir / f"{idx:03d}_{sidecar.name}"
+            _link_selection_input(sidecar, sidecar_dest)
+
+        manifest_items.append(_build_selection_manifest_item(
+            design,
+            source_path=source_path,
+            selection_path=dest_path,
+            selection_entry_mode=link_mode,
+        ))
+
+    _write_selection_manifest(
+        selection_dir=selection_dir,
+        root_job=root_job,
+        source_job=source_job,
+        action=action,
+        manifest_items=manifest_items,
+        source_stage_payload=_derive_source_stage_payload(source_job, designs, selection_dir),
+    )
+    return selection_dir
+
+
 def _build_antibody_iteration_job(
     root_job: Job,
     source_job: Job,
@@ -2914,6 +3108,7 @@ def _build_antibody_iteration_job(
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_fampnn",
                 "ppiflow_stage_mode": "post_rfantibody",
+                "ppiflow_tuning_profile": "stage_optimized",
                 "ppiflow_stage_target": "post_rfantibody",
                 "ppiflow_rotamer_enrichment_enabled": True,
                 "ppiflow_require_anchors": True,
@@ -2946,6 +3141,7 @@ def _build_antibody_iteration_job(
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",
                 "ppiflow_stage_mode": "post_fampnn",
+                "ppiflow_tuning_profile": "stage_optimized",
                 "ppiflow_stage_target": "post_fampnn",
                 "ppiflow_rotamer_enrichment_enabled": True,
                 "ppiflow_require_anchors": True,
@@ -5521,10 +5717,28 @@ async def resume_job(
     if job.awaiting_input:
         awaiting_payload = dict(job.awaiting_payload or {})
         candidate_dir = awaiting_payload.get("candidate_dir")
-        if candidate_dir and job.awaiting_stage == "post_rfantibody":
-            param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
-        if candidate_dir and job.awaiting_stage == "post_fampnn":
-            param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
+        output_path = Path(job.output_dir)
+        if not output_path.is_absolute():
+            output_path = get_data_root() / output_path
+        if candidate_dir and job.model_id == "protein_local_redesign":
+            if job.awaiting_stage == "post_rfantibody":
+                param_overrides.setdefault("plr_backbone_input_pdbs", candidate_dir)
+                param_overrides.setdefault(
+                    "plr_region_manifest",
+                    str(output_path / "inputs" / "protein_local_redesign" / "region_manifest.json"),
+                )
+            elif job.awaiting_stage == "post_fampnn":
+                param_overrides.setdefault("plr_sequence_input_pdbs", candidate_dir)
+                if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
+                    param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
+            elif job.awaiting_stage == "post_structure_validation":
+                param_overrides.setdefault("plr_validation_input_pdbs", candidate_dir)
+                param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
+        else:
+            if candidate_dir and job.awaiting_stage == "post_rfantibody":
+                param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
+            if candidate_dir and job.awaiting_stage == "post_fampnn":
+                param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
         if job.awaiting_stage in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
             param_overrides.setdefault("interactive_gate_continue", True)
             param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
@@ -5641,6 +5855,90 @@ async def resume_job(
         "preserved_stages": [],
         "applied_overrides": sorted(param_overrides.keys())
     }
+
+
+@router.post("/{job_id}/continue-protein-local-review")
+async def continue_protein_local_review(
+    job_id: str,
+    request: ContinueProteinLocalReviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Resume a paused protein-local-redesign job from a filtered subset."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "protein_local_redesign":
+        raise HTTPException(status_code=422, detail="This continue endpoint only supports Protein Local Redesign jobs.")
+    if not job.awaiting_input or not job.awaiting_stage:
+        raise HTTPException(status_code=422, detail="Protein local redesign job is not currently paused for review.")
+
+    selected_ids = [str(design_id).strip() for design_id in request.design_ids if str(design_id).strip()]
+    if not selected_ids:
+        raise HTTPException(status_code=422, detail="Select at least one design before continuing the workflow.")
+
+    design_result = await session.execute(
+        select(Design)
+        .where(
+            Design.job_id == job_id,
+            Design.id.in_(selected_ids),
+        )
+        .order_by(Design.created_at.asc(), Design.name.asc())
+    )
+    selected_designs = design_result.scalars().all()
+
+    if len(selected_designs) != len(set(selected_ids)):
+        found_ids = {design.id for design in selected_designs}
+        missing = [design_id for design_id in selected_ids if design_id not in found_ids]
+        raise HTTPException(
+            status_code=422,
+            detail=f"Some selected designs could not be resolved for this paused job: {', '.join(missing[:5])}",
+        )
+
+    selection_dir = _materialize_protein_local_selection(job, job, selected_designs, "continue_review")
+    source_stage_payload = _derive_source_stage_payload(job, selected_designs, selection_dir)
+    output_path = Path(job.output_dir)
+    if not output_path.is_absolute():
+        output_path = get_data_root() / output_path
+    region_manifest_path = output_path / "inputs" / "protein_local_redesign" / "region_manifest.json"
+    param_overrides: Dict[str, Any] = {
+        **source_stage_payload,
+        "selected_input_dir": str(selection_dir),
+        "selected_input_manifest": str(_selection_manifest_path(selection_dir)),
+    }
+    from_stage = None
+
+    if job.awaiting_stage == "post_rfantibody":
+        param_overrides.update({
+            "plr_backbone_input_pdbs": str(selection_dir),
+            "plr_region_manifest": str(region_manifest_path),
+        })
+        from_stage = "rfantibody"
+    elif job.awaiting_stage == "post_fampnn":
+        param_overrides["plr_sequence_input_pdbs"] = str(selection_dir)
+        if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
+            param_overrides["plr_final_candidate_dir"] = str(selection_dir)
+        from_stage = "fampnn"
+    elif job.awaiting_stage == "post_structure_validation":
+        param_overrides.update({
+            "plr_validation_input_pdbs": str(selection_dir),
+            "plr_final_candidate_dir": str(selection_dir),
+        })
+        from_stage = "structure_validation"
+    else:
+        raise HTTPException(status_code=422, detail=f"Unsupported PLR review stage '{job.awaiting_stage}'.")
+
+    return await resume_job(
+        job_id=job_id,
+        from_stage=from_stage,
+        request=ResumeJobRequest(
+            from_stage=from_stage,
+            param_overrides=param_overrides,
+            name_suffix=request.name_suffix or "_continued",
+        ),
+        session=session,
+    )
 
 
 @router.get("/{job_id}/structure-files")

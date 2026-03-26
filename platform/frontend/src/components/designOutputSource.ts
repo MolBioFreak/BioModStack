@@ -52,6 +52,31 @@ const hasValidationMetrics = (metrics: Record<string, unknown> | null | undefine
     );
 };
 
+const isProteinLocalRedesignBackboneDesign = (design: OutputSourceDesign): boolean => {
+    const path = (design.pdb_path || '').toLowerCase();
+    const sourceStage = String(design.source_stage || '').toLowerCase();
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const stageMode = String(design.stage_mode || '').toLowerCase();
+    const sourceStageFamily = String(design.source_stage_family || '').toLowerCase();
+    const sourceStageMode = String(design.source_stage_mode || '').toLowerCase();
+
+    const hasProteinLocalHints = (
+        containsAny(stageFamily, ['protein_local_redesign']) ||
+        containsAny(stageMode, ['post_rfd3', 'protein_local_redesign']) ||
+        containsAny(sourceStageFamily, ['protein_local_redesign']) ||
+        containsAny(sourceStageMode, ['post_rfd3']) ||
+        path.includes('/protein_local_redesign_backbones/') ||
+        path.includes('/collected/protein_local_redesign_backbones/')
+    );
+
+    return hasProteinLocalHints && (
+        sourceStage === 'post_rfantibody' ||
+        containsAny(stageMode, ['post_rfd3']) ||
+        containsAny(sourceStageMode, ['post_rfd3']) ||
+        path.includes('/protein_local_redesign_backbones/')
+    );
+};
+
 export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourceFilter => {
     const path = (design.pdb_path || '').toLowerCase();
     const sourceStage = String(design.source_stage || '').toLowerCase();
@@ -59,6 +84,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
     const stageMode = String(design.stage_mode || '').toLowerCase();
     const artifactGroup = String(design.artifact_group || '').toLowerCase();
     const metrics = design.confidence_metrics || {};
+
+    if (isProteinLocalRedesignBackboneDesign(design)) {
+        return 'all';
+    }
 
     if (containsAny(stageFamily, ['rfantibody']) || containsAny(stageMode, ['rfantibody', 'post_rfantibody'])) {
         return 'rfantibody';
@@ -183,7 +212,13 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
     const mode = String(job.mode || '').toLowerCase();
     const candidateDir = String(job.awaiting_payload?.candidate_dir || '').toLowerCase();
     const params = job.params ?? {};
+    const rfdMode = String(params.rfd_mode || '').toLowerCase();
     const validator = String(params.structure_validator || '').toLowerCase();
+    const isProteinLocalRedesign = modelId === 'protein_local_redesign' || mode === 'local_redesign' || rfdMode === 'protein_local_redesign';
+
+    if (isProteinLocalRedesign && stage === 'post_rfantibody') {
+        return null;
+    }
 
     if (
         stage === 'post_rfantibody' ||
@@ -278,6 +313,7 @@ export const inferPreferredAnalysisLens = (
 };
 
 export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
+    if (isProteinLocalRedesignBackboneDesign(design)) return 'RFD3 Backbone';
     const source = inferDesignOutputSource(design);
     if (source === 'validation') {
         return hasValidationMetrics(design.confidence_metrics || null) ? 'Protenix' : 'Validation';

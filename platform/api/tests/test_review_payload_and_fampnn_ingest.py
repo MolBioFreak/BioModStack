@@ -12,18 +12,26 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from routers.designs import _compute_fampnn_response_metrics, _merge_review_payload
+from routers.designs import (
+    _compute_fampnn_response_metrics,
+    _merge_review_payload,
+    _should_force_review_stage_listing,
+)
 from routers.jobs import (
     SavedReviewFilterSet,
     _build_antibody_iteration_job,
     _build_selection_manifest_item,
     _derive_source_stage_payload,
     _merge_preserved_gate_payload,
+    _normalize_antibody_job_params,
     _prune_iteration_params,
 )
 from services.result_ingester import (
+    _apply_ppiflow_filter_fields,
+    _apply_ppiflow_score_fields,
     _candidate_source_design_ids,
     _coalesce_cdr_lengths,
+    _discover_collected_ppiflow_structures,
     _extract_fampnn_metrics,
     _inherit_source_design_metrics,
     parse_backbone_id,
@@ -100,6 +108,36 @@ def test_parse_backbone_id_supports_rfantibody_gpu_job_names() -> None:
     assert parse_backbone_id("001_antibody_job_gpu0_7") == 7
 
 
+def test_should_force_review_stage_listing_for_awaiting_review_parent() -> None:
+    assert _should_force_review_stage_listing(
+        SimpleNamespace(awaiting_input=True),
+        "post_fampnn",
+    )
+    assert not _should_force_review_stage_listing(
+        SimpleNamespace(awaiting_input=False),
+        "post_fampnn",
+    )
+    assert not _should_force_review_stage_listing(
+        SimpleNamespace(awaiting_input=True),
+        None,
+    )
+
+
+def test_discover_collected_ppiflow_structures_ignores_enriched_intermediates(tmp_path: Path) -> None:
+    stage_dir = tmp_path / "collected" / "backbone_refine"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "001_demo_enriched_complex.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    (stage_dir / "001_demo_ppiflow_sample0.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    (stage_dir / "001_demo_ppiflow_sample1.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+
+    discovered = _discover_collected_ppiflow_structures(tmp_path)
+
+    assert [(stage, path.name) for stage, path in discovered] == [
+        ("backbone_refine", "001_demo_ppiflow_sample0.pdb"),
+        ("backbone_refine", "001_demo_ppiflow_sample1.pdb"),
+    ]
+
+
 def test_extract_fampnn_metrics_reads_sidecar_payload() -> None:
     payload = {
         "sequence": "A:QVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAIYSGGSTYYADSVKGRFTISRDNAKNTVYLQMNSLKPEDTAVYYCAAARGGYYYGMDVWGQGTTVTVS|B:TARGETSEQ",
@@ -139,12 +177,18 @@ def test_inherit_source_design_metrics_copies_geometry_and_cdr_lengths(tmp_path:
 
     design = SimpleNamespace(
         binder_length=159,
+        antibody_type=None,
+        humanness_score=None,
         cdr_h1_length=None,
         cdr_h2_length=None,
         cdr_h3_length=None,
         cdr_l1_length=None,
         cdr_l2_length=None,
         cdr_l3_length=None,
+        fr2_contacts=None,
+        de_loop=None,
+        fr3_contacts=None,
+        fr4_contacts=None,
         rfd_rog=None,
         passed_screen=None,
         rfa_hotspot_covered_count=None,
@@ -174,12 +218,18 @@ def test_inherit_source_design_metrics_copies_geometry_and_cdr_lengths(tmp_path:
     )
     source_design = SimpleNamespace(
         binder_length=159,
+        antibody_type="vhh",
+        humanness_score=0.81,
         cdr_h1_length=20,
         cdr_h2_length=20,
         cdr_h3_length=30,
         cdr_l1_length=10,
         cdr_l2_length=11,
         cdr_l3_length=12,
+        fr2_contacts="37,42,44",
+        de_loop="72-75",
+        fr3_contacts="82-87",
+        fr4_contacts="101-103",
         rfd_rog=17.5,
         passed_screen=True,
         rfa_hotspot_covered_count=4,
@@ -211,8 +261,14 @@ def test_inherit_source_design_metrics_copies_geometry_and_cdr_lengths(tmp_path:
     changed = _inherit_source_design_metrics(design, source_design, structure_path=pdb_path)
 
     assert changed is True
+    assert design.antibody_type == "vhh"
+    assert design.humanness_score == pytest.approx(0.81)
     assert design.cdr_h1_length == 20
     assert design.cdr_h3_length == 30
+    assert design.fr2_contacts == "37,42,44"
+    assert design.de_loop == "72-75"
+    assert design.fr3_contacts == "82-87"
+    assert design.fr4_contacts == "101-103"
     assert design.epitope_contact_count == 5
     assert design.target_contact_count == 80
     assert design.detected_antibody_chains == "H"
@@ -315,6 +371,143 @@ END
     assert metrics["fampnn_min_residue_psce"] == 1.0
 
 
+def test_apply_ppiflow_score_fields_maps_loop_local_metrics() -> None:
+    design = SimpleNamespace(
+        maturation_delta_interface=None,
+        maturation_interface_score=None,
+        maturation_rmsd=None,
+        maturation_selected_delta_interface=None,
+        maturation_selected_interface_score=None,
+        maturation_selected_rmsd=None,
+        maturation_nonselected_rmsd=None,
+        ppiflow_primary_loop=None,
+        ppiflow_primary_loop_rmsd=None,
+        ppiflow_primary_loop_target_contact_delta=None,
+        ppiflow_primary_loop_target_distance_delta=None,
+        ppiflow_primary_loop_epitope_contact_delta=None,
+        ppiflow_primary_loop_epitope_distance_delta=None,
+        ppiflow_objective_mode=None,
+        ppiflow_objective_score=None,
+        ppiflow_loop_metrics=None,
+    )
+
+    changed = _apply_ppiflow_score_fields(
+        design,
+        {
+            "delta_interface_score": -1.25,
+            "interface_score_matured": -8.5,
+            "rmsd_backbone": 1.4,
+            "selected_delta_interface_score": -2.0,
+            "selected_interface_score_matured": -5.8,
+            "selected_rmsd_backbone": 0.7,
+            "nonselected_rmsd_backbone": 1.1,
+            "primary_loop": "H3",
+            "primary_loop_rmsd": 0.6,
+            "primary_loop_target_contact_delta": 3,
+            "primary_loop_target_distance_delta": 1.7,
+            "primary_loop_epitope_contact_delta": 2,
+            "primary_loop_epitope_distance_delta": 0.9,
+            "objective_mode": "balanced",
+            "objective_score": -1.9,
+            "loop_metrics": {
+                "H3": {
+                    "objective_score": -2.3,
+                    "target_contact_delta": 3,
+                }
+            },
+        },
+    )
+
+    assert changed is True
+    assert design.maturation_selected_delta_interface == -2.0
+    assert design.ppiflow_primary_loop == "H3"
+    assert design.ppiflow_primary_loop_target_contact_delta == 3
+    assert design.ppiflow_primary_loop_epitope_distance_delta == 0.9
+    assert design.ppiflow_objective_mode == "balanced"
+    assert design.ppiflow_objective_score == -1.9
+    assert design.ppiflow_loop_metrics == {"H3": {"objective_score": -2.3, "target_contact_delta": 3}}
+
+
+def test_apply_ppiflow_filter_fields_maps_filter_status() -> None:
+    design = SimpleNamespace(
+        ppiflow_filter_passed=None,
+        ppiflow_filter_reason=None,
+    )
+
+    changed = _apply_ppiflow_filter_fields(
+        design,
+        {
+            "passed": "passed",
+            "filter_reason": "objective_score_above_threshold",
+        },
+    )
+
+    assert changed is True
+    assert design.ppiflow_filter_passed is True
+    assert design.ppiflow_filter_reason == "objective_score_above_threshold"
+
+
+def test_normalize_antibody_job_params_defaults_loop_objective_for_ppiflow() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "run_ppiflow_backbone_refine": True,
+            "ppiflow_stage_mode": "post_rfantibody",
+        }
+    )
+
+    assert normalized["ppiflow_objective_mode"] == "balanced"
+    assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+def test_normalize_antibody_job_params_applies_stage_optimized_ppiflow_defaults_pre_sequence() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "run_ppiflow_backbone_refine": True,
+            "ppiflow_stage_mode": "post_rfantibody",
+            "ppiflow_tuning_profile": "stage_optimized",
+        }
+    )
+
+    assert normalized["ppiflow_tuning_profile"] == "stage_optimized"
+    assert normalized["ppiflow_start_t"] == 0.55
+    assert normalized["ppiflow_samples_per_target"] == 7
+    assert normalized["ppiflow_require_anchors"] is False
+    assert normalized["ppiflow_objective_mode"] == "loop_epitope"
+    assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+def test_normalize_antibody_job_params_applies_stage_optimized_ppiflow_defaults_post_sequence() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "run_ppiflow_maturation": True,
+            "run_maturation": True,
+            "ppiflow_stage_mode": "post_fampnn",
+            "ppiflow_tuning_profile": "stage_optimized",
+        }
+    )
+
+    assert normalized["ppiflow_tuning_profile"] == "stage_optimized"
+    assert normalized["ppiflow_start_t"] == 0.8
+    assert normalized["ppiflow_samples_per_target"] == 4
+    assert normalized["ppiflow_require_anchors"] is True
+    assert normalized["ppiflow_objective_mode"] == "balanced"
+    assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+def test_normalize_antibody_job_params_disables_stage_optimized_profile_for_both_mode() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "run_ppiflow_backbone_refine": True,
+            "run_ppiflow_maturation": True,
+            "run_maturation": True,
+            "ppiflow_stage_mode": "both",
+            "ppiflow_tuning_profile": "stage_optimized",
+        }
+    )
+
+    assert normalized["ppiflow_tuning_profile"] == "manual"
+
+
 def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Path) -> None:
     selection_dir = tmp_path / "selection"
     selection_dir.mkdir()
@@ -386,6 +579,36 @@ def test_derive_source_stage_payload_prefers_selected_design_stage_metadata(tmp_
     assert payload["selected_input_manifest"].endswith("selection_manifest.json")
 
 
+def test_derive_source_stage_payload_falls_back_to_review_stage_metadata(tmp_path: Path) -> None:
+    selection_dir = tmp_path / "selection"
+    selection_dir.mkdir()
+    source_job = SimpleNamespace(
+        id="parent-job",
+        model_id="template_antibody_denovo",
+        mode="template_antibody_denovo",
+        params={},
+        child_stage=None,
+        stage_family=None,
+        stage_mode=None,
+    )
+    selected_designs = [
+        SimpleNamespace(
+            job_id="rf-review-child-1",
+            stage_family=None,
+            stage_mode=None,
+            source_stage="post_rfantibody",
+            source_stage_family=None,
+            source_stage_mode=None,
+        ),
+    ]
+
+    payload = _derive_source_stage_payload(source_job, selected_designs, selection_dir)
+
+    assert payload["source_stage_job_id"] == "rf-review-child-1"
+    assert payload["source_stage_family"] == "rfantibody"
+    assert payload["source_stage_mode"] == "post_rfantibody"
+
+
 def test_build_selection_manifest_item_uses_canonical_source_keys(tmp_path: Path) -> None:
     source_path = tmp_path / "source.pdb"
     selection_path = tmp_path / "selection.pdb"
@@ -415,6 +638,36 @@ def test_build_selection_manifest_item_uses_canonical_source_keys(tmp_path: Path
     assert item["source_design_name"] == "001_example"
     assert item["selection_entry_mode"] == "symlink"
     assert item["source_stage_family"] == "ppiflow"
+
+
+def test_build_selection_manifest_item_falls_back_to_review_stage_metadata(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.pdb"
+    selection_path = tmp_path / "selection.pdb"
+    design = SimpleNamespace(
+        id="design-1",
+        job_id="job-1",
+        name="001_example",
+        stage_family=None,
+        stage_mode=None,
+        source_stage="post_rfantibody",
+        source_stage_family=None,
+        source_stage_mode=None,
+        lineage_root_job_id="root-1",
+        parent_design_id="parent-design-1",
+        origin_design_id="origin-design-1",
+        origin_backbone_design_id="origin-backbone-1",
+        selected_loop_scope={"ppiflow_selected_loops": "H1"},
+    )
+
+    item = _build_selection_manifest_item(
+        design,
+        source_path=source_path,
+        selection_path=selection_path,
+        selection_entry_mode="symlink",
+    )
+
+    assert item["design_stage_family"] == "rfantibody"
+    assert item["design_stage_mode"] == "post_rfantibody"
 
 
 def test_prune_iteration_params_strips_resume_and_batch_identity() -> None:
@@ -617,6 +870,65 @@ def test_build_antibody_iteration_job_rejects_direct_ppiflow_maturation_from_ppi
 
     assert getattr(excinfo.value, "status_code", None) == 422
     assert "requires FA-MPNN-designed inputs" in getattr(excinfo.value, "detail", "")
+
+
+def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source_stage_only(tmp_path: Path) -> None:
+    selection_dir = tmp_path / "selection"
+    selection_dir.mkdir()
+
+    root_job = SimpleNamespace(
+        id="root-job",
+        name="RBX1 best of 100 RFA outputs",
+        params={"epitope_residues": "A45,A53"},
+        pinned_gpu=None,
+    )
+    source_job = SimpleNamespace(
+        id="source-job",
+        model_id="template_antibody_denovo",
+        mode="antibody_denovo_pipeline",
+        params={"interactive_gate_stage": "post_rfantibody"},
+        child_stage=None,
+        stage_family=None,
+        stage_mode=None,
+    )
+    selected_designs = [
+        SimpleNamespace(
+            job_id="rf-review-child-1",
+            stage_family=None,
+            stage_mode=None,
+            source_stage="post_rfantibody",
+            source_stage_family=None,
+            source_stage_mode=None,
+        ),
+    ]
+
+    launch_request = _build_antibody_iteration_job(
+        root_job=root_job,
+        source_job=source_job,
+        action="ui_refinement",
+        selection_dir=selection_dir,
+        design_ids=["design-1"],
+        name_suffix=None,
+        param_overrides={
+            "seq_design_fampnn": False,
+            "seq_design_antifold": False,
+            "seq_design_proteinmpnn": False,
+            "run_ppiflow_backbone_refine": True,
+            "run_ppiflow_maturation": False,
+            "run_maturation": False,
+            "run_structure_validation": False,
+            "run_frustrampnn": False,
+            "ppiflow_stage_mode": "post_rfantibody",
+            "interactive_swa": False,
+            "interactive_gating": False,
+            "interactive_gate_stage": "post_rfantibody",
+        },
+        selected_designs=selected_designs,
+    )
+
+    assert launch_request.params["selected_input_stage_family"] == "rfantibody"
+    assert launch_request.params["selected_input_stage_mode"] == "post_rfantibody"
+    assert launch_request.params["rfantibody_input_pdbs"] == str(selection_dir)
 
 
 def test_build_antibody_iteration_job_allows_post_ppiflow_backbone_reattempt(tmp_path: Path) -> None:

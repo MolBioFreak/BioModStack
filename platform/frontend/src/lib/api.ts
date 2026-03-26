@@ -444,6 +444,28 @@ export const resumeJob = (
     }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
 };
 
+export const continueProteinLocalReview = (
+    jobId: string,
+    designIds: string[],
+    nameSuffix?: string,
+) => {
+    const requestBody = {
+        design_ids: designIds,
+        ...(nameSuffix && nameSuffix.trim() ? { name_suffix: nameSuffix } : {}),
+    };
+    return api.post<{
+        message: string;
+        original_job_id: string;
+        new_job_id: string;
+        new_job_name: string;
+        resume_from_stage: string;
+        resume_stage_mode?: string;
+        resume_stage_note?: string;
+        preserved_stages: string[];
+        applied_overrides?: string[];
+    }>(`/api/jobs/${jobId}/continue-protein-local-review`, requestBody);
+};
+
 // Models API
 export const fetchModels = (category?: string) =>
     api.get<any[]>('/api/models', { params: { category } });
@@ -656,6 +678,17 @@ export interface Design {
     maturation_selected_interface_score?: number | null;
     maturation_selected_rmsd?: number | null;
     maturation_nonselected_rmsd?: number | null;
+    ppiflow_primary_loop?: string | null;
+    ppiflow_primary_loop_rmsd?: number | null;
+    ppiflow_primary_loop_target_contact_delta?: number | null;
+    ppiflow_primary_loop_target_distance_delta?: number | null;
+    ppiflow_primary_loop_epitope_contact_delta?: number | null;
+    ppiflow_primary_loop_epitope_distance_delta?: number | null;
+    ppiflow_objective_mode?: string | null;
+    ppiflow_objective_score?: number | null;
+    ppiflow_filter_passed?: boolean | null;
+    ppiflow_filter_reason?: string | null;
+    ppiflow_loop_metrics?: Record<string, unknown> | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -753,6 +786,13 @@ export type DesignSortField =
     | 'maturation_selected_interface_score'
     | 'maturation_selected_rmsd'
     | 'maturation_nonselected_rmsd'
+    | 'ppiflow_primary_loop'
+    | 'ppiflow_primary_loop_rmsd'
+    | 'ppiflow_primary_loop_target_contact_delta'
+    | 'ppiflow_primary_loop_target_distance_delta'
+    | 'ppiflow_primary_loop_epitope_contact_delta'
+    | 'ppiflow_primary_loop_epitope_distance_delta'
+    | 'ppiflow_objective_score'
     | 'fr2_contacts'
     | 'binding_tier'
     | 'is_favorite';

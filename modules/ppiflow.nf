@@ -6,12 +6,13 @@ process IdentifyAnchorResidues {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_enriched_complex.pdb"
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_ppiflow_positions.txt"
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_cdr_positions.txt"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_cdr_positions_by_loop.json"
 
     input:
     tuple val(meta), path(complex_pdb)
 
     output:
-    tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), emit: anchor_inputs
+    tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs
     tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores
 
     script:
@@ -44,9 +45,6 @@ JSON
     if [ "${enrichmentEnabled}" = "true" ]; then
         enrichmentArgs="\${enrichmentArgs} --rotamer_enrichment"
     fi
-    if [ "${requireAnchors}" = "true" ]; then
-        enrichmentArgs="\${enrichmentArgs} --require_anchors"
-    fi
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/prepare_ppiflow_maturation.py" \\
         --pdb "${complex_pdb}" \\
@@ -65,7 +63,22 @@ JSON
         --output_rotamer_enrichment "${meta.id}_rotamer_enrichment.json" \\
         --output_positions "${meta.id}_ppiflow_positions.txt" \\
         --output_cdr_positions "${meta.id}_cdr_positions.txt" \\
+        --output_cdr_positions_by_loop "${meta.id}_cdr_positions_by_loop.json" \\
         \${enrichmentArgs}
+
+    anchorCount=\$("\${PYTHON_BIN}" - <<'PY'
+import json
+from pathlib import Path
+
+anchor_path = Path("${meta.id}_anchors.json")
+payload = json.loads(anchor_path.read_text())
+print(int(payload.get("anchor_count") or 0))
+PY
+    )
+
+    if [ "${requireAnchors}" = "true" ] && [ "\${anchorCount}" -le 0 ]; then
+        echo "[PPIFlow] Warning: strict anchor requirement not satisfied for ${complex_pdb}; anchor_count=0. This structure will be skipped downstream instead of failing the entire child batch." >&2
+    fi
     """
 }
 
@@ -75,7 +88,7 @@ process RunPartialFlow {
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
 
     input:
-    tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions)
+    tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)
 
     output:
     tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones
@@ -499,7 +512,7 @@ process ScoreMaturationImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_maturation_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions)
+    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)
 
     output:
     tuple val(meta), path("scores/*_maturation_score.json"), emit: scores
@@ -510,6 +523,7 @@ process ScoreMaturationImprovement {
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
+    def objectiveMode = params.ppiflow_objective_mode ?: 'selected_interface'
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -523,7 +537,10 @@ process ScoreMaturationImprovement {
             --antibody_chains "${antibodyChains}" \\
             --antigen_chains "${antigenChains}" \\
             --distance_cutoff ${distanceCutoff} \\
+            --epitope_residues "${params.epitope_residues ?: ''}" \\
             --selected_positions "\$(tr -d '\\n' < "${ppiflow_positions}")" \\
+            --cdr_positions_by_loop_json "${cdr_positions_by_loop_json}" \\
+            --objective_mode "${objectiveMode}" \\
             --output "scores/\${base_name}_maturation_score.json"
     done
     """
@@ -534,7 +551,7 @@ process ScorePartialFlowImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_partial_flow_score.json", saveAs: { fn -> fn.replace('scores/', '') }
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions)
+    tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)
 
     output:
     tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores
@@ -545,6 +562,7 @@ process ScorePartialFlowImprovement {
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
+    def objectiveMode = params.ppiflow_objective_mode ?: 'selected_interface'
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -558,7 +576,10 @@ process ScorePartialFlowImprovement {
             --antibody_chains "${antibodyChains}" \\
             --antigen_chains "${antigenChains}" \\
             --distance_cutoff ${distanceCutoff} \\
+            --epitope_residues "${params.epitope_residues ?: ''}" \\
             --selected_positions "\$(tr -d '\\n' < "${ppiflow_positions}")" \\
+            --cdr_positions_by_loop_json "${cdr_positions_by_loop_json}" \\
+            --objective_mode "${objectiveMode}" \\
             --output "scores/\${base_name}_partial_flow_score.json"
     done
     """
@@ -580,9 +601,14 @@ process FilterByMaturation {
     def rawMinImprovement = params.containsKey('maturation_min_improvement') ? params.maturation_min_improvement : null
     def minImprovement = rawMinImprovement != null ? rawMinImprovement as Double : null
     def percentile = params.maturation_filter_percentile
-    def filterDisabled = (minImprovement == null || minImprovement >= 0.0) && !(percentile != null && percentile > 0)
+    def objectiveMode = (params.ppiflow_objective_mode ?: 'selected_interface').toString()
+    def rawObjectiveThreshold = params.containsKey('ppiflow_objective_threshold') ? params.ppiflow_objective_threshold : null
+    def objectiveThreshold = rawObjectiveThreshold != null ? rawObjectiveThreshold as Double : null
+    def objectiveThresholdActive = objectiveMode != 'selected_interface' && objectiveThreshold != null
+    def filterDisabled = !objectiveThresholdActive && (minImprovement == null || minImprovement >= 0.0) && !(percentile != null && percentile > 0)
     def minImprovementArg = (!filterDisabled && minImprovement != null) ? "--min_improvement ${minImprovement}" : ""
     def percentileArg = (!filterDisabled && percentile != null && percentile > 0) ? "--percentile ${percentile}" : ""
+    def objectiveThresholdArg = (objectiveThreshold != null) ? "--objective_threshold ${objectiveThreshold}" : ""
     def disableFilterArg = filterDisabled ? "--disable_filter" : ""
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
@@ -627,6 +653,8 @@ with open("scores_manifest.json", "w") as f:
             --score_json "\${score_json}" \\
             --pdb_path "\$matured_pdb" \\
             --output_dir "filtered_output" \\
+            --objective_mode "${objectiveMode}" \\
+            ${objectiveThresholdArg} \\
             ${minImprovementArg} \\
             ${percentileArg} \\
             ${disableFilterArg} \\
