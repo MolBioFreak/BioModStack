@@ -1781,6 +1781,8 @@ def build_nextflow_command(
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
         # Oligo Designer (RFDpoly multi-polymer design)
         ('oligo_design', 'oligo_design'): 'oligo_design',
+        # Protein local redesign with constrained RFD3 remodeling
+        ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
@@ -2183,6 +2185,43 @@ def build_nextflow_command(
         for src_key, dest_key in boltzgen_mappings.items():
             if src_key in params:
                 params[dest_key] = params.pop(src_key)
+    elif model_id == 'protein_local_redesign':
+        protein_local_mappings = {
+            'input_pdb': 'plr_input_pdb',
+            'model_number': 'plr_model_number',
+            'design_chains': 'plr_design_chains',
+            'context_chains': 'plr_context_chains',
+            'region_mode': 'plr_region_mode',
+            'redesign_ranges': 'plr_redesign_ranges',
+            'interface_cutoff': 'plr_interface_cutoff',
+            'region_padding': 'plr_region_padding',
+            'num_designs': 'plr_num_designs',
+            'seq_method': 'plr_seq_method',
+            'fix_fixed_sidechains': 'plr_fix_fixed_sidechains',
+            'run_boltz_validation': 'plr_run_boltz_validation',
+            'interactive_gating': 'interactive_gating',
+            'interactive_gate_stage': 'interactive_gate_stage',
+            'interactive_gate_continue': 'interactive_gate_continue',
+            'backbone_input_pdbs': 'plr_backbone_input_pdbs',
+            'sequence_input_pdbs': 'plr_sequence_input_pdbs',
+            'validation_input_pdbs': 'plr_validation_input_pdbs',
+            'region_manifest': 'plr_region_manifest',
+            'final_candidate_dir': 'plr_final_candidate_dir',
+        }
+        for src_key, dest_key in protein_local_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
+            params['rfd_num_designs'] = params['plr_num_designs']
+        if 'plr_seq_method' in params and 'seq_method' not in params:
+            params['seq_method'] = params['plr_seq_method']
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'protein_local_redesign'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {

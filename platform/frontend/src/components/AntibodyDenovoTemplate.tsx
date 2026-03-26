@@ -7,7 +7,16 @@ import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
-import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset, type PPIFlowStageMode, type PPIFlowRegionMode } from './QualitySettingsPanel';
+import {
+    QualitySettingsPanel,
+    PRESETS,
+    applyPpiFlowStageMode,
+    normalizePpiFlowTuningProfile,
+    type QualitySettings,
+    type PPIFlowStageMode,
+    type PPIFlowRegionMode,
+    type PPIFlowObjectiveMode,
+} from './QualitySettingsPanel';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
@@ -103,6 +112,25 @@ const normalizePpiFlowRegionMode = (raw: unknown): PPIFlowRegionMode => {
     if (normalized === 'all_antibody' || normalized === 'whole_antibody' || normalized === 'full_antibody') return 'all_antibody';
     return 'selected_cdrs';
 };
+
+const normalizePpiFlowObjectiveMode = (raw: unknown): PPIFlowObjectiveMode => {
+    const normalized = String(raw || '').trim().toLowerCase();
+    if (normalized === 'selected_interface') return 'selected_interface';
+    if (normalized === 'loop_target') return 'loop_target';
+    if (normalized === 'loop_epitope') return 'loop_epitope';
+    return 'balanced';
+};
+
+const LEGACY_PPIFLOW_TUNING_KEYS: Array<keyof QualitySettings> = [
+    'ppiflow_start_t',
+    'ppiflow_samples_per_target',
+    'ppiflow_retry_limit',
+    'ppiflow_require_anchors',
+    'ppiflow_objective_mode',
+    'ppiflow_objective_threshold',
+    'maturation_anchor_threshold',
+    'maturation_anchor_distance_cutoff',
+];
 
 const buildManualCdrPositionsByLoop = (definitions: CDRDefinition[]): Record<string, number[]> | undefined => {
     const byLoop: Record<string, number[]> = {};
@@ -238,8 +266,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         return model;
     };
     const mergeQualitySettingsFromParams = (params?: Record<string, any>): QualitySettings => {
+        const legacyPresetKey = typeof params?.quality_preset === 'string' && params.quality_preset in PRESETS
+            ? (params.quality_preset as keyof typeof PRESETS)
+            : 'balanced';
         const merged = {
-            ...PRESETS.balanced,
+            ...PRESETS[legacyPresetKey],
             ...(params?.quality_settings || params?.qualitySettings || {}),
         } as QualitySettings;
 
@@ -261,6 +292,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     : params[key];
             }
         });
+
+        merged.ppiflow_objective_mode = normalizePpiFlowObjectiveMode(merged.ppiflow_objective_mode);
+        if (!Number.isFinite(Number(merged.ppiflow_objective_threshold))) {
+            merged.ppiflow_objective_threshold = 0;
+        } else {
+            merged.ppiflow_objective_threshold = Number(merged.ppiflow_objective_threshold);
+        }
+        const rawPpiFlowTuningProfile =
+            params?.quality_settings?.ppiflow_tuning_profile
+            ?? params?.qualitySettings?.ppiflow_tuning_profile
+            ?? params?.ppiflow_tuning_profile;
+        const hasLegacyExplicitPpiFlowControls = LEGACY_PPIFLOW_TUNING_KEYS.some((key) =>
+            params?.[key] !== undefined
+            || params?.quality_settings?.[key] !== undefined
+            || params?.qualitySettings?.[key] !== undefined,
+        );
+        merged.ppiflow_tuning_profile = normalizePpiFlowTuningProfile(rawPpiFlowTuningProfile);
+        if (rawPpiFlowTuningProfile === undefined && hasLegacyExplicitPpiFlowControls) {
+            merged.ppiflow_tuning_profile = 'manual';
+        }
+        if (merged.ppiflow_tuning_profile === 'stage_optimized' && merged.ppiflow_stage_mode === 'both') {
+            merged.ppiflow_tuning_profile = 'manual';
+        }
 
         return merged;
     };
@@ -363,7 +417,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [showCDREditor, setShowCDREditor] = useState(false);
 
     // Quality settings
-    const [qualityPreset, setQualityPreset] = useState<QualityPreset>((initialValues?.quality_preset as QualityPreset) || 'balanced');
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
@@ -372,6 +425,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const runPpiFlowBackboneRefine = ppiflowStageMode === 'post_rfantibody' || ppiflowStageMode === 'post_ppiflow' || ppiflowStageMode === 'both';
     const runPpiFlowMaturation = ppiflowStageMode === 'post_fampnn' || ppiflowStageMode === 'both';
     const anyPpiFlowStageEnabled = runPpiFlowBackboneRefine || runPpiFlowMaturation;
+    const showRfQualitySettings = !isRefinementMode;
+    const showStructureValidationQualitySettings = runStructureValidation;
+    const showFampnnQualitySettings = seqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
     const refinementSourceIsPpiFlow = isRefinementMode && refinementSourceOutputSourceFilter === 'ppiflow';
     const refinementBlocksImmediatePpiFlowBackbone = isRefinementMode && (
         refinementSourceOutputSourceFilter === 'fampnn'
@@ -395,12 +451,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 if (currentMode !== 'post_rfantibody' && currentMode !== 'both') {
                     return current;
                 }
-                return {
-                    ...current,
-                    ppiflow_stage_mode: 'post_ppiflow',
-                    run_maturation: false,
-                    ppiflow_require_anchors: false,
-                };
+                return applyPpiFlowStageMode(current, 'post_ppiflow');
             });
             return;
         }
@@ -414,11 +465,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 return current;
             }
             const nextMode: PPIFlowStageMode = currentMode === 'both' ? 'post_fampnn' : 'off';
-            return {
-                ...current,
-                ppiflow_stage_mode: nextMode,
-                run_maturation: nextMode === 'post_fampnn',
-            };
+            return applyPpiFlowStageMode(current, nextMode);
         });
     }, [ppiflowStageMode, refinementBlocksImmediatePpiFlowBackbone, refinementSourceIsPpiFlow]);
 
@@ -747,7 +794,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSeqDesigner('fampnn');
             setRunStructureValidation(false);
             setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: false, ppiflow_stage_mode: 'off' }));
+            setQualitySettings((current) => applyPpiFlowStageMode(current, 'off'));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_fampnn');
             return;
@@ -756,7 +803,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSeqDesigner('none');
             setRunStructureValidation(true);
             setRunFrustrampnn(false);
-            setQualitySettings((current) => ({ ...current, run_maturation: false, ppiflow_stage_mode: 'off' }));
+            setQualitySettings((current) => applyPpiFlowStageMode(current, 'off'));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_structure_validation');
             return;
@@ -769,12 +816,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 const nextStageMode = current.ppiflow_stage_mode !== 'off'
                     ? current.ppiflow_stage_mode
                     : (refinementSourceIsPpiFlow ? 'post_ppiflow' : 'post_rfantibody');
-                return {
-                    ...current,
-                    ppiflow_stage_mode: nextStageMode,
-                    run_maturation: nextStageMode === 'post_fampnn' || nextStageMode === 'both',
-                    ...(nextStageMode === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
-                };
+                return applyPpiFlowStageMode(current, nextStageMode);
             });
             setInteractiveWorkflow(false);
         }
@@ -785,9 +827,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (initialValues) {
             console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
             setQualitySettings(mergeQualitySettingsFromParams(initialValues));
-            if (initialValues.quality_preset) {
-                setQualityPreset(initialValues.quality_preset);
-            }
 
             // Basic params
             if (initialValues.job_name) setJobName(initialValues.job_name);
@@ -1398,6 +1437,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_ppiflow_maturation: runPpiFlowMaturation,
                     run_maturation: runPpiFlowMaturation,
                     ppiflow_stage_mode: ppiflowStageMode,
+                    ppiflow_tuning_profile: qualitySettings.ppiflow_tuning_profile,
                     ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
                     ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
                     ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
@@ -1419,6 +1459,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     ppiflow_rotamer_enrichment_enabled: qualitySettings.ppiflow_rotamer_enrichment_enabled,
                     ppiflow_require_anchors: qualitySettings.ppiflow_require_anchors,
                     ppiflow_rotamer_shell_cutoff: qualitySettings.ppiflow_rotamer_shell_cutoff,
+                    ppiflow_objective_mode: qualitySettings.ppiflow_objective_mode,
+                    ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
                     maturation_anchor_threshold: qualitySettings.maturation_anchor_threshold,
                     maturation_anchor_distance_cutoff: qualitySettings.maturation_anchor_distance_cutoff,
                     maturation_min_improvement: qualitySettings.maturation_min_improvement,
@@ -1857,12 +1899,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     const next = e.target.value as PPIFlowStageMode;
                                     setRefinementPreset('custom');
                                     setUseManualMutagenesis(false);
-                                    setQualitySettings((current) => ({
-                                        ...current,
-                                        ppiflow_stage_mode: next,
-                                        run_maturation: next === 'post_fampnn' || next === 'both',
-                                        ...(next === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
-                                    }));
+                                    setQualitySettings((current) => applyPpiFlowStageMode(current, next));
                                 }}
                                 className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
                             >
@@ -3378,10 +3415,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <QualitySettingsPanel
                         settings={qualitySettings}
                         onSettingsChange={setQualitySettings}
-                        preset={qualityPreset}
-                        onPresetChange={setQualityPreset}
                         structureValidator={structureValidator}
                         allowPostPpiFlowRetry={refinementSourceIsPpiFlow}
+                        showRfantibodySettings={showRfQualitySettings}
+                        showStructureValidationSettings={showStructureValidationQualitySettings}
+                        showFampnnSettings={showFampnnQualitySettings}
+                        showPreValidationFiltering={seqDesigner === 'fampnn' && runStructureValidation}
+                        showPostValidationFiltering={runStructureValidation}
                     />
 
                     {/* Physics Refinement Panel (OpenMM) */}
@@ -3583,7 +3623,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         <input
                                             type="range"
                                             min="1"
-                                            max="20"
+                                            max="1000"
                                             value={qualitySettings.maturation_designs_per_job}
                                             onChange={(e) => setQualitySettings((current) => ({
                                                 ...current,
@@ -3594,7 +3634,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
                                             <span>1</span>
                                             <span className="font-medium text-teal-200">{qualitySettings.maturation_designs_per_job}</span>
-                                            <span>20</span>
+                                            <span>1000</span>
                                         </div>
                                     </div>
                                 </div>
@@ -3608,7 +3648,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <input
                                         type="range"
                                         min="1"
-                                        max="500"
+                                        max="1000"
                                         value={designsPerJob}
                                         onChange={(e) => setDesignsPerJob(parseInt(e.target.value))}
                                         className="w-full accent-orange-500"
@@ -3620,7 +3660,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <input
                                         type="range"
                                         min="1"
-                                        max="500"
+                                        max="1000"
                                         value={pdBsPerJob}
                                         onChange={(e) => setPdBsPerJob(parseInt(e.target.value))}
                                         className="w-full accent-orange-500"
@@ -3632,7 +3672,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <input
                                         type="range"
                                         min="1"
-                                        max="500"
+                                        max="1000"
                                         value={seqsPerBoltzJob}
                                         onChange={(e) => setSeqsPerBoltzJob(parseInt(e.target.value))}
                                         className="w-full accent-orange-500"
@@ -3907,7 +3947,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setQualitySettings(mergeQualitySettingsFromParams(p));
                             loaded.push('quality_settings');
                         }
-                        if (p.quality_preset) { setQualityPreset(p.quality_preset); loaded.push('quality_preset'); }
                         // Manual CDR definitions - deserialize from arrays
                         if (Array.isArray(p.manual_cdr_definitions)) {
                             const defs = p.manual_cdr_definitions.map((d: any) => ({
@@ -3988,10 +4027,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_ppiflow_maturation: runPpiFlowMaturation,
                     run_maturation: runPpiFlowMaturation,
                     ppiflow_stage_mode: ppiflowStageMode,
+                    ppiflow_tuning_profile: qualitySettings.ppiflow_tuning_profile,
                     ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
                     ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
                     ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
                     ppiflow_maturation_loop_scope: effectivePpiFlowMaturationLoopScope || undefined,
+                    ppiflow_objective_mode: qualitySettings.ppiflow_objective_mode,
+                    ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
                     run_post_validation_maturation: false,
                     run_post_boltz_maturation: false,
                     run_frustrampnn: runFrustrampnn,
@@ -4052,7 +4094,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     pinned_gpus: pinnedGpus,
                     lock_gpus: lockGpus,
                     // Quality settings
-                    quality_preset: qualityPreset,
                     quality_settings: qualitySettings,
                     sabdab_framework: sabdabFramework ? {
                         type: sabdabFramework.type,

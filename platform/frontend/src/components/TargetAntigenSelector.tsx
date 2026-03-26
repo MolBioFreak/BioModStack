@@ -25,6 +25,7 @@ interface TargetAntigenSelectorProps {
     onSelect: (target: SelectedTarget | null) => void;
     selectedTarget?: SelectedTarget | null;
     initialTab?: 'upload' | 'runs' | 'presets' | 'rcsb';
+    label?: string;
 }
 
 interface PdbPreset {
@@ -35,7 +36,7 @@ interface PdbPreset {
     category: string;
 }
 
-export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: TargetAntigenSelectorProps) {
+export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, label = 'Target Antigen PDB' }: TargetAntigenSelectorProps) {
     const [activeTab, setActiveTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>(initialTab ?? 'upload');
     const [pdbIdInput, setPdbIdInput] = useState('');
     const [fetchError, setFetchError] = useState<string | null>(null);
@@ -265,7 +266,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab }: 
 
     return (
         <div className="space-y-3">
-            <label className="block text-sm font-medium text-slate-400">Target Antigen PDB</label>
+            <label className="block text-sm font-medium text-slate-400">{label}</label>
 
             {/* Selected target indicator */}
             {selectedTarget && (

@@ -370,6 +370,49 @@ JSON
     """
 }
 
+process CheckPPIFlowYield {
+    label 'process_low'
+
+    input:
+    val candidate_count
+    val stage_name
+
+    output:
+    path "ppiflow_yield_guard.ok", emit: ok
+
+    script:
+    def stageLabel = (
+        stage_name == 'backbone_refine'
+            ? 'PPIFlow backbone refinement'
+            : stage_name == 'maturation'
+                ? 'PPIFlow maturation'
+                : 'PPIFlow refinement'
+    )
+    def reportJson = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson([
+            status: "completed_zero_yield",
+            stage: stage_name,
+            reason: "No structures survived ${stageLabel}; all candidate inputs were skipped or child jobs emitted no refined PDBs",
+            ppiflow_require_anchors: params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true,
+            maturation_anchor_threshold: params.maturation_anchor_threshold ?: -5.0,
+            maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 12.0,
+            recommendation: "Relax the anchor threshold, disable strict anchor requirement, narrow the loop scope, or inspect the published *_anchors.json files for skipped inputs."
+        ])
+    )
+    """
+    set -euo pipefail
+    if [ "${candidate_count}" -le 0 ]; then
+        mkdir -p "${params.out_dir}"
+        cat > "${params.out_dir}/${stage_name}_zero_yield_report.json" <<'JSON'
+${reportJson}
+JSON
+        echo "ZERO-YIELD: no structures survived ${stageLabel}" >&2
+        exit 1
+    fi
+    touch ppiflow_yield_guard.ok
+    """
+}
+
 process SpawnFAMPNNJobs {
     label 'process_low'
     
@@ -1533,6 +1576,8 @@ if (!params.containsKey('ppiflow_backbone_region_mode')) params.ppiflow_backbone
 if (!params.containsKey('ppiflow_maturation_region_mode')) params.ppiflow_maturation_region_mode = params.get('ppiflow_region_mode')
 params.ppiflow_backbone_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_backbone_region_mode'))
 params.ppiflow_maturation_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_maturation_region_mode'))
+if (!params.containsKey('cdr_positions_by_loop')) params.cdr_positions_by_loop = [:]
+if (!params.containsKey('manual_cdr_definitions')) params.manual_cdr_definitions = []
 def ppiflowBackboneLoopScope = normalizeLoopSelection(params.get('ppiflow_backbone_loop_scope')) ?: params.ppiflow_selected_loops
 def ppiflowMaturationLoopScope = normalizeLoopSelection(params.get('ppiflow_maturation_loop_scope')) ?: params.ppiflow_selected_loops
 if (!params.containsKey('run_ppiflow_backbone_refine')) params.run_ppiflow_backbone_refine = false
@@ -1880,7 +1925,18 @@ workflow ANTIBODY_DENOVO {
                 }
             }
 
-            backbone_designs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
+            ppiflow_backbone_candidate_count = CollectMaturationOutputs.out.manifest.map { manifest_json ->
+                try {
+                    def parsed = new groovy.json.JsonSlurper().parse(new File(manifest_json.toString()))
+                    return (parsed.count_pdbs ?: parsed.count ?: 0) as int
+                } catch (Exception e) {
+                    return 0
+                }
+            }
+            CheckPPIFlowYield(ppiflow_backbone_candidate_count, "backbone_refine")
+
+            backbone_designs = CollectMaturationOutputs.out.pdbs
+                .map { pdbs ->
                 def meta = [id: "ppiflow_backbone_refine"]
                 [meta, pdbs]
             }
@@ -2148,7 +2204,18 @@ workflow ANTIBODY_DENOVO {
                     }
                 }
 
-                maturation_seqs = CollectMaturationOutputs.out.pdbs.map { pdbs ->
+                ppiflow_maturation_candidate_count = CollectMaturationOutputs.out.manifest.map { manifest_json ->
+                    try {
+                        def parsed = new groovy.json.JsonSlurper().parse(new File(manifest_json.toString()))
+                        return (parsed.count_pdbs ?: parsed.count ?: 0) as int
+                    } catch (Exception e) {
+                        return 0
+                    }
+                }
+                CheckPPIFlowYield(ppiflow_maturation_candidate_count, "maturation")
+
+                maturation_seqs = CollectMaturationOutputs.out.pdbs
+                    .map { pdbs ->
                     def meta = [id: "ppiflow_maturation"]
                     [meta, pdbs]
                 }

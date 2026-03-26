@@ -24,6 +24,7 @@ from pyrosetta import rosetta
 
 from identify_anchors import (
     build_ppiflow_region_spec,
+    build_loop_residue_map,
     detect_interface_residues,
     get_chain_ids,
     parse_chain_list,
@@ -274,6 +275,7 @@ def main() -> None:
     parser.add_argument("--output_rotamer_enrichment", required=True, help="Path to write enrichment JSON")
     parser.add_argument("--output_positions", required=True, help="Path to write movable positions")
     parser.add_argument("--output_cdr_positions", required=True, help="Path to write canonical CDR positions")
+    parser.add_argument("--output_cdr_positions_by_loop", required=True, help="Path to write resolved loop-position JSON")
     parser.add_argument("--rotamer_enrichment", action="store_true", help="Enable interface rotamer enrichment repacking")
     parser.add_argument("--rotamer_shell_distance", type=float, default=20.0, help="Shell distance (A) around interface residues to repack")
     parser.add_argument("--require_anchors", action="store_true", help="Fail if no non-movable anchors are found")
@@ -316,6 +318,13 @@ def main() -> None:
         raise SystemExit(f"[PPIFlow] No movable residues resolved for region_mode={region_mode}")
     Path(args.output_positions).write_text(ppiflow_positions + "\n")
     Path(args.output_cdr_positions).write_text((all_cdr_positions or ppiflow_positions) + "\n")
+    loop_residue_map, _ = build_loop_residue_map(
+        args.pdb,
+        antibody_chains,
+        cdr_positions_by_loop_path=args.cdr_positions_by_loop_json,
+        manual_cdr_definitions_path=args.manual_cdr_definitions_json,
+    )
+    Path(args.output_cdr_positions_by_loop).write_text(json.dumps(loop_residue_map, indent=2))
     movable_positions = _parse_position_spec(ppiflow_positions)
 
     original_interface_score, original_interface_residues, original_binder_scores, original_pair_scores = _compute_interface_pair_energy_breakdown(
