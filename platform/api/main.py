@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     
     # Initialize GPU orchestrator
-    from services.nextflow import launch_nextflow_job
+    from services.nextflow import launch_nextflow_job_detached
     
     # Wrapper to call the real Nextflow launcher with GPU assignment
     async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -47,15 +47,15 @@ async def lifespan(app: FastAPI):
         in parallel without waiting for each to complete.
         """
         logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
-        # Fire-and-forget: create a background task for the Nextflow job
-        # This allows the orchestrator to launch multiple jobs in parallel
-        asyncio.create_task(launch_nextflow_job(
+        # Fire-and-forget with immediate registration in the launcher so the
+        # completion reconciler knows the job is still bootstrapping.
+        launch_nextflow_job_detached(
             job_id=job_id,
             model_id=model_id,
             mode=mode,
             params=params,
             output_dir=output_dir
-        ))
+        )
     
     _orchestrator = GPUOrchestrator(
         db_session_factory=async_session,

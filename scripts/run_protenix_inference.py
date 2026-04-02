@@ -9,11 +9,6 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from configs.configs_inference import inference_configs
-from runner.batch_inference import get_default_runner, preprocess_input
-from runner.inference import infer_predict
-
-
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -32,6 +27,63 @@ def _parse_int_list(raw: str | None) -> list[int]:
         if token:
             values.append(int(token))
     return values or [42]
+
+
+def _parse_csv(raw: str | None) -> list[str]:
+    values: list[str] = []
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if token:
+            values.append(token)
+    return values
+
+
+def _install_exact_template_duplicate_allowlist(allowed_pdb_ids: list[str]) -> None:
+    normalized = {token.strip().lower() for token in allowed_pdb_ids if token.strip()}
+    if not normalized:
+        return
+
+    from protenix.data.template import template_utils
+
+    existing = getattr(template_utils.TemplateHitFilter, "_bms_allow_exact_duplicate_pdb_ids", None)
+    if existing == normalized:
+        return
+
+    original = getattr(template_utils.TemplateHitFilter, "_bms_original_assess_hit", None)
+    if original is None:
+        original = template_utils.TemplateHitFilter._assess_hit
+        template_utils.TemplateHitFilter._bms_original_assess_hit = original
+
+    def _wrapped_assess_hit(
+        self,
+        hit,
+        pdb_code,
+        query_seq,
+        cutoff,
+        max_subseq_ratio: float = 0.95,
+        min_align_ratio: float = 0.1,
+    ):
+        effective_ratio = max_subseq_ratio
+        if str(pdb_code).lower() in normalized:
+            # Anchored target conditioning needs the exact source template,
+            # which Protenix otherwise rejects as a duplicate of the query.
+            effective_ratio = max(effective_ratio, 1.01)
+        return original(
+            self,
+            hit,
+            pdb_code,
+            query_seq,
+            cutoff,
+            max_subseq_ratio=effective_ratio,
+            min_align_ratio=min_align_ratio,
+        )
+
+    template_utils.TemplateHitFilter._assess_hit = _wrapped_assess_hit
+    template_utils.TemplateHitFilter._bms_allow_exact_duplicate_pdb_ids = normalized
+    print(
+        "[run_protenix_inference] Allowing exact duplicate templates for PDB IDs:",
+        ",".join(sorted(normalized)),
+    )
 
 
 def _apply_default_params(args: argparse.Namespace) -> None:
@@ -91,9 +143,23 @@ def main() -> None:
     parser.add_argument("--rfam_database_path", default=None)
     parser.add_argument("--rna_central_database_path", default=None)
     parser.add_argument("--nhmmer_n_cpu", type=int, default=None)
+    parser.add_argument(
+        "--allow_exact_duplicate_template_pdb_ids",
+        default="",
+        help="Comma-separated PDB IDs whose exact templates should bypass duplicate-query filtering.",
+    )
     args = parser.parse_args()
 
     _apply_default_params(args)
+
+    if args.allow_exact_duplicate_template_pdb_ids:
+        _install_exact_template_duplicate_allowlist(
+            _parse_csv(args.allow_exact_duplicate_template_pdb_ids)
+        )
+
+    from configs.configs_inference import inference_configs
+    from runner.batch_inference import get_default_runner, preprocess_input
+    from runner.inference import infer_predict
 
     inference_configs["dump_dir"] = args.out_dir
     runner = get_default_runner(

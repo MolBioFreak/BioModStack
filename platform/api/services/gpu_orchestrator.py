@@ -2083,7 +2083,40 @@ class GPUOrchestrator:
                                         f"history_status={history_status or 'n/a'}, gate={gate_present})"
                                     )
                                 elif age_seconds >= stale_fail_after_seconds:
-                                    if job.status == "running":
+                                    bootstrap_artifacts_present = False
+                                    if job.output_dir:
+                                        try:
+                                            out_dir = Path(job.output_dir)
+                                            bootstrap_artifacts_present = any(
+                                                (out_dir / candidate).exists()
+                                                for candidate in ("nextflow.log", ".nextflow.log")
+                                            )
+                                        except Exception:
+                                            bootstrap_artifacts_present = False
+
+                                    launch_never_bootstrapped = (
+                                        not history_status
+                                        and not gate_present
+                                        and not job.awaiting_input
+                                        and not getattr(job, "nextflow_run_id", None)
+                                        and not getattr(job, "stage_work_dir", None)
+                                        and not bootstrap_artifacts_present
+                                    )
+
+                                    if job.status == "running" and launch_never_bootstrapped:
+                                        job.status = "queued"
+                                        job.queue_status = "queued"
+                                        job.error_message = None
+                                        job.completed_at = None
+                                        job.started_at = None
+                                        job.assigned_gpu = None
+                                        job.current_stage = None
+                                        job.stage_progress = None
+                                        logger.warning(
+                                            f"[COMPLETION] {job.name} never completed launcher bootstrap "
+                                            f"(no process/log/history, age: {age_seconds:.0f}s); re-queued"
+                                        )
+                                    elif job.status == "running":
                                         unresolved_reason = (
                                             "Reconciled as failed: no active process and no terminal "
                                             ".nextflow/history status (expected OK/ERR)"

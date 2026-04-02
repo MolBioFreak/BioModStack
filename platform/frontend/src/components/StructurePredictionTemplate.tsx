@@ -63,7 +63,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
     const [boltzMethod, setBoltzMethod] = useState(initialValues?.boltz_method || '');
     const [boltzMaxParallelSamples, setBoltzMaxParallelSamples] = useState(initialValues?.boltz_max_parallel_samples ?? 1);
-    const [boltzAnchorTarget, setBoltzAnchorTarget] = useState(initialValues?.boltz_anchor_target ?? false);
+    const [boltzTargetGeometryMode, setBoltzTargetGeometryMode] = useState<'flexible' | 'conditioned' | 'frozen'>(
+        initialValues?.boltz_target_geometry_mode || (initialValues?.boltz_anchor_target ? 'conditioned' : 'flexible')
+    );
 
     // RF3 parameters
     const [rf3UseMsa, setRf3UseMsa] = useState(initialValues?.rf3_use_msa ?? true);
@@ -77,8 +79,9 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [protenixNStep, setProtenixNStep] = useState(initialValues?.protenix_n_step ?? 200);
     const [protenixNCycle, setProtenixNCycle] = useState(initialValues?.protenix_n_cycle ?? 10);
     const [protenixUseMsa, setProtenixUseMsa] = useState(initialValues?.protenix_use_msa ?? true);
-    const [protenixUseTemplate, setProtenixUseTemplate] = useState(initialValues?.protenix_use_template ?? false);
-    const [protenixAnchorTarget, setProtenixAnchorTarget] = useState(initialValues?.protenix_anchor_target ?? false);
+    const [protenixTargetGeometryMode, setProtenixTargetGeometryMode] = useState<'flexible' | 'conditioned' | 'frozen'>(
+        initialValues?.protenix_target_geometry_mode || ((initialValues?.protenix_anchor_target || initialValues?.protenix_use_template) ? 'conditioned' : 'flexible')
+    );
 
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
@@ -150,6 +153,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         });
         return expanded;
     });
+    const [sequenceBatchInput, setSequenceBatchInput] = useState(initialValues?.sequence_batch_input || '');
+    const [sequenceBatchPrefix, setSequenceBatchPrefix] = useState(
+        initialValues?.sequence_batch_prefix || initialValues?.sequence_name || initialValues?.name || 'variant'
+    );
+    const [sequenceBatchComponentId, setSequenceBatchComponentId] = useState(initialValues?.sequence_batch_component_id || '');
 
     const [showInputModal, setShowInputModal] = useState(false);
     const [inputModalTab, setInputModalTab] = useState<'library' | 'pdb'>('library');
@@ -180,7 +188,6 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
         ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
         ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
-    const complexMode = ligands.length > 0;
     const fixedTargetAvailable = !!targetSourceChainId && !!targetSource;
     const usesBoltz = predictor === 'boltz' || predictor === 'both' || predictor === 'all';
     const usesProtenix = predictor === 'protenix' || predictor === 'all';
@@ -193,6 +200,52 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     };
 
     const sanitizeSequenceInput = (value: string) => value.toUpperCase().replace(/[^A-Z]/g, '');
+
+    const parseSequenceBatchInput = (raw: string, prefix: string) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return [];
+
+        const entries: Array<{ name: string; sequence: string }> = [];
+        const safePrefix = (prefix.trim() || 'variant').replace(/[^A-Za-z0-9._-]+/g, '_');
+        if (trimmed.includes('>')) {
+            const blocks = trimmed.split(/^>/m).map((block) => block.trim()).filter(Boolean);
+            blocks.forEach((block, index) => {
+                const [header, ...rest] = block.split(/\n/);
+                const sequenceValue = sanitizeSequenceInput(rest.join(''));
+                if (!sequenceValue) return;
+                const headerName = (header || '').trim().split(/\s+/)[0];
+                const name = (headerName || `${safePrefix}_${String(index + 1).padStart(3, '0')}`).replace(/[^A-Za-z0-9._-]+/g, '_');
+                entries.push({ name, sequence: sequenceValue });
+            });
+            return entries;
+        }
+
+        trimmed
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .forEach((line, index) => {
+                let name = '';
+                let sequenceValue = '';
+                const colonIndex = line.indexOf(':');
+                if (colonIndex > 0) {
+                    name = line.slice(0, colonIndex).trim();
+                    sequenceValue = sanitizeSequenceInput(line.slice(colonIndex + 1));
+                } else {
+                    const tokens = line.split(/\s+/);
+                    if (tokens.length > 1) {
+                        name = tokens[0];
+                        sequenceValue = sanitizeSequenceInput(tokens.slice(1).join(''));
+                    } else {
+                        sequenceValue = sanitizeSequenceInput(line);
+                    }
+                }
+                if (!sequenceValue) return;
+                const resolvedName = (name || `${safePrefix}_${String(index + 1).padStart(3, '0')}`).replace(/[^A-Za-z0-9._-]+/g, '_');
+                entries.push({ name: resolvedName, sequence: sequenceValue });
+            });
+        return entries;
+    };
 
     const canonicalTargetSourceName = (target: SelectedTarget | null) => {
         const raw = (target?.name?.trim() || 'target').replace(/[^A-Za-z0-9._-]+/g, '_');
@@ -211,7 +264,25 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         return candidate;
     };
 
-    const buildComplexComponents = () => {
+    const batchEntriesPreview = parseSequenceBatchInput(sequenceBatchInput, sequenceBatchPrefix);
+    const hasBatchEntries = batchEntriesPreview.length > 0;
+    const hasProteinBinderComponents = ligands.some((ligand) => ligand.type === 'protein' || ligand.type === 'peptide');
+    const autoBatchBinderMode = hasBatchEntries && fixedTargetAvailable && !hasProteinBinderComponents;
+    const complexMode = ligands.length > 0 || autoBatchBinderMode;
+    const implicitBatchBinderId = (() => {
+        const usedIds = new Set<string>();
+        const primaryId = (primaryChainId || 'A').trim() || 'A';
+        usedIds.add(primaryId);
+        ligands.forEach((ligand) => {
+            const ligandId = (ligand.id || '').trim();
+            if (ligandId) {
+                usedIds.add(ligandId);
+            }
+        });
+        return nextAvailableComponentId(usedIds);
+    })();
+
+    const buildComplexComponents = (batchEntries: Array<{ name: string; sequence: string }> = []) => {
         const components: Array<Record<string, any>> = [];
         const usedIds = new Set<string>();
         const reserveId = (preferred?: string) => {
@@ -250,12 +321,45 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             }
         });
 
+        if (autoBatchBinderMode && binderIds.length === 0) {
+            const autoBinderId = reserveId(implicitBatchBinderId);
+            components.push({
+                type: 'protein',
+                id: autoBinderId,
+                sequence: batchEntries[0]?.sequence || 'G',
+                name: `${sequenceBatchPrefix || 'batch'}_binder_panel`,
+            });
+            binderIds.push(autoBinderId);
+        }
+
         return {
             components,
             resolvedPrimaryId,
             binderIds,
         };
     };
+
+    const proteinBatchTargets = [
+        { id: primaryChainId || 'A', name: `${sequenceName || 'Primary'} (${primaryChainId || 'A'})`, role: 'Primary' },
+        ...ligands
+            .filter((ligand) => ligand.type === 'protein' || ligand.type === 'peptide')
+            .map((ligand) => ({
+                id: ligand.id,
+                name: `${ligand.name || ligand.id} (${ligand.id})`,
+                role: 'Additional',
+            })),
+        ...(autoBatchBinderMode ? [{
+            id: implicitBatchBinderId,
+            name: `Batch Binder (${implicitBatchBinderId})`,
+            role: 'Batch',
+        }] : []),
+    ];
+    const resolvedSequenceBatchComponentId =
+        sequenceBatchComponentId ||
+        proteinBatchTargets.find((entry) => entry.role === 'Batch')?.id ||
+        proteinBatchTargets.find((entry) => entry.role === 'Additional')?.id ||
+        proteinBatchTargets[0]?.id ||
+        '';
 
     const resolveTargetStructurePath = async () => {
         if (targetSourcePath) {
@@ -360,8 +464,15 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 : 'Cache: none';
 
     const handleSubmit = async () => {
-        if (!sequence.trim()) {
+        const batchEntries = batchEntriesPreview;
+
+        if (!sequence.trim() && batchEntries.length === 0) {
             alert('Please enter an amino acid sequence');
+            return;
+        }
+
+        if (batchEntries.length > 0 && complexMode && !resolvedSequenceBatchComponentId) {
+            alert('Sequence matrix mode requires a target protein component to replace.');
             return;
         }
 
@@ -380,7 +491,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.boltz_num_samples = boltzNumSamples;
             params.boltz_use_potentials = boltzUsePotentials;
             params.boltz_max_parallel_samples = boltzMaxParallelSamples;
-            params.boltz_anchor_target = boltzAnchorTarget;
+            params.boltz_target_geometry_mode = boltzTargetGeometryMode;
             if (boltzMethod) params.boltz_method = boltzMethod;
         }
 
@@ -399,8 +510,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.protenix_n_step = protenixNStep;
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
-            params.protenix_use_template = protenixUseTemplate;
-            params.protenix_anchor_target = protenixAnchorTarget;
+            params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
@@ -437,16 +547,16 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
         }
 
-        const anchoringRequested = (usesBoltz && boltzAnchorTarget) || (usesProtenix && protenixAnchorTarget);
-        if (anchoringRequested && !complexMode) {
-            alert('Fixed-target anchoring currently applies to complex predictions. Add at least one additional component before launching.');
+        const targetConditioningRequested = (usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
+        if (targetConditioningRequested && !complexMode) {
+            alert('Target conditioning currently applies to complex predictions. Add a shared target source or additional complex component before launching.');
             return;
         }
-        if (anchoringRequested && !fixedTargetAvailable) {
+        if (targetConditioningRequested && !fixedTargetAvailable) {
             alert('Fixed-target anchoring requires importing the primary target from a PDB source first.');
             return;
         }
-        if (anchoringRequested) {
+        if (targetConditioningRequested) {
             const normalizedCurrentSequence = sanitizeSequenceInput(sequence);
             const normalizedSourceSequence = sanitizeSequenceInput(targetSourceSequence);
             if (!normalizedSourceSequence || normalizedCurrentSequence !== normalizedSourceSequence) {
@@ -459,7 +569,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         const mode = complexMode ? 'complex' : 'predict';
 
         if (complexMode) {
-            const { components, resolvedPrimaryId, binderIds } = buildComplexComponents();
+            const { components, resolvedPrimaryId, binderIds } = buildComplexComponents(batchEntries);
             params.complex_components = components;
             params.primary_chain_id = resolvedPrimaryId;
             params.target_chains = resolvedPrimaryId;
@@ -467,7 +577,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 params.binder_chains = binderIds.join(',');
             }
 
-            if (anchoringRequested) {
+            if (targetConditioningRequested) {
                 try {
                     const resolvedSourcePath = await resolveTargetStructurePath();
                     if (!resolvedSourcePath) {
@@ -482,6 +592,15 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                     alert(error?.message || 'Failed to stage the fixed target structure.');
                     return;
                 }
+            }
+        }
+
+        if (batchEntries.length > 0) {
+            params.sequence_batch_entries = batchEntries;
+            params.sequence_batch_input = sequenceBatchInput;
+            params.sequence_batch_prefix = sequenceBatchPrefix;
+            if (complexMode) {
+                params.sequence_batch_component_id = resolvedSequenceBatchComponentId;
             }
         }
 
@@ -802,18 +921,80 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                             onChange={(e) => setNumParallelJobs(Math.max(1, Math.min(500, parseInt(e.target.value) || 1)))}
                             min={1}
                             max={500}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                            disabled={hasBatchEntries}
+                            className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-white text-sm ${hasBatchEntries ? 'bg-slate-800/70 cursor-not-allowed text-slate-500' : 'bg-slate-900'}`}
                         />
+                        {hasBatchEntries && (
+                            <p className="mt-1 text-xs text-slate-500">Batch launches derive one runtime per pasted sequence and ignore this single-sequence fanout.</p>
+                        )}
                     </div>
+                </div>
+
+                <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
+                        <p className="text-xs text-slate-500">
+                            Paste FASTA or one sequence per line to run a named batch. Runtime outputs are auto-numbered with the chosen prefix so the result set stays traceable. If you have imported a target source, pasted sequences are treated as binder candidates against that shared target assembly.
+                        </p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label className="text-xs text-slate-400 block mb-1">Default Name Prefix</label>
+                            <input
+                                type="text"
+                                value={sequenceBatchPrefix}
+                                onChange={(e) => setSequenceBatchPrefix(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
+                                placeholder="variant"
+                            />
+                        </div>
+                        {complexMode && proteinBatchTargets.length > 1 && (
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Replace Protein Component</label>
+                                <select
+                                    value={resolvedSequenceBatchComponentId}
+                                    onChange={(e) => setSequenceBatchComponentId(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm"
+                                >
+                                    {proteinBatchTargets.map((entry) => (
+                                        <option key={entry.id} value={entry.id}>
+                                            {entry.role}: {entry.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                        <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
+                            <div className="text-xs text-slate-500 mb-1">Parsed Variants</div>
+                            <div className="text-white text-sm">{batchEntriesPreview.length}</div>
+                            <div className="text-xs text-slate-500 mt-1">
+                                {batchEntriesPreview[0]?.name ? `First: ${batchEntriesPreview[0].name}` : 'Paste FASTA or lines to enable'}
+                            </div>
+                        </div>
+                    </div>
+                    <textarea
+                        value={sequenceBatchInput}
+                        onChange={(e) => setSequenceBatchInput(e.target.value)}
+                        placeholder={'>sample_001\nQVQLVESGGGLVQ...\n>sample_002\nQVQLVESGGGLVQ...\n\nor:\nseq_003: QVQLVESGGGLVQ...'}
+                        rows={7}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    {batchEntriesPreview.length > 0 && (
+                        <div className="text-xs text-slate-400 bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-2">
+                            {autoBatchBinderMode
+                                ? `Shared-target screen active: ${batchEntriesPreview.length} binder candidates will be simulated against imported target chain ${targetSourceChainId || primaryChainId}.`
+                                : 'Batch mode will use deterministic per-sequence names and ignore the single-sequence parallel fanout.'}
+                        </div>
+                    )}
                 </div>
 
                 {targetSource && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <h3 className="text-sm font-semibold text-slate-200">Fixed Target Source</h3>
+                                <h3 className="text-sm font-semibold text-slate-200">Target Geometry Source</h3>
                                 <p className="text-xs text-slate-500">
-                                    Imported target structure is available for anchored complex prediction. Primary sequence must stay identical to the selected source chain.
+                                    Imported target structure is available for conditioned or frozen complex prediction. Primary sequence must stay identical to the selected source chain.
                                 </p>
                             </div>
                             <button
@@ -825,8 +1006,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     setTargetSourceSequence('');
                                     setTargetStructure(null);
                                     setPrimaryChainId('A');
-                                    setBoltzAnchorTarget(false);
-                                    setProtenixAnchorTarget(false);
+                                    setBoltzTargetGeometryMode('flexible');
+                                    setProtenixTargetGeometryMode('flexible');
                                 }}
                                 className="text-xs text-slate-400 hover:text-white"
                             >
@@ -869,37 +1050,39 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         {complexMode ? (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {usesBoltz && (
-                                    <label className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg cursor-pointer hover:bg-blue-500/15 transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={boltzAnchorTarget}
-                                            onChange={(e) => setBoltzAnchorTarget(e.target.checked)}
-                                            className="mt-0.5 w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-500"
-                                        />
-                                        <div>
-                                            <span className="text-blue-200 font-medium">Hold fixed target in Boltz</span>
-                                            <p className="text-xs text-blue-100/70">Attach the imported target chain as a structural template during Boltz complex prediction.</p>
-                                        </div>
-                                    </label>
+                                    <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                                        <label className="text-xs text-blue-100/80 block mb-1">Boltz target geometry</label>
+                                        <select
+                                            value={boltzTargetGeometryMode}
+                                            onChange={(e) => setBoltzTargetGeometryMode(e.target.value as 'flexible' | 'conditioned' | 'frozen')}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="flexible">Flexible</option>
+                                            <option value="conditioned">Conditioned</option>
+                                            <option value="frozen">Hard Frozen</option>
+                                        </select>
+                                        <p className="mt-2 text-xs text-blue-100/70">Conditioned applies model-native target steering. Hard Frozen also restores exact target coordinates after prediction.</p>
+                                    </div>
                                 )}
                                 {usesProtenix && (
-                                    <label className="flex items-start gap-3 p-3 bg-violet-500/10 border border-violet-500/30 rounded-lg cursor-pointer hover:bg-violet-500/15 transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={protenixAnchorTarget}
-                                            onChange={(e) => setProtenixAnchorTarget(e.target.checked)}
-                                            className="mt-0.5 w-4 h-4 rounded bg-slate-900 border-slate-700 text-violet-500"
-                                        />
-                                        <div>
-                                            <span className="text-violet-200 font-medium">Hold fixed target in Protenix</span>
-                                            <p className="text-xs text-violet-100/70">Stage the imported target chain into the Protenix template DB so the target stays template-guided during co-folding.</p>
-                                        </div>
-                                    </label>
+                                    <div className="p-3 bg-violet-500/10 border border-violet-500/30 rounded-lg">
+                                        <label className="text-xs text-violet-100/80 block mb-1">Protenix target geometry</label>
+                                        <select
+                                            value={protenixTargetGeometryMode}
+                                            onChange={(e) => setProtenixTargetGeometryMode(e.target.value as 'flexible' | 'conditioned' | 'frozen')}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        >
+                                            <option value="flexible">Flexible</option>
+                                            <option value="conditioned">Conditioned</option>
+                                            <option value="frozen">Hard Frozen</option>
+                                        </select>
+                                        <p className="mt-2 text-xs text-violet-100/70">Conditioned applies template guidance. Hard Frozen also restores exact target coordinates after prediction.</p>
+                                    </div>
                                 )}
                             </div>
                         ) : (
                             <p className="text-xs text-amber-300/80">
-                                Add at least one additional component to switch into complex mode before fixed-target anchoring can be used.
+                                Import a shared target source or add an additional component to enable target conditioning.
                             </p>
                         )}
                     </div>
@@ -1084,21 +1267,21 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 </select>
                             </div>
                             <div>
-                                <label className="text-xs text-slate-400 block mb-1">Use Templates</label>
+                                <label className="text-xs text-slate-400 block mb-1">Geometry Mode</label>
                                 <select
-                                    value={protenixUseTemplate ? 'true' : 'false'}
-                                    onChange={(e) => setProtenixUseTemplate(e.target.value === 'true')}
+                                    value={protenixTargetGeometryMode}
+                                    onChange={(e) => setProtenixTargetGeometryMode(e.target.value as 'flexible' | 'conditioned' | 'frozen')}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
-                                    <option value="false">No</option>
-                                    <option value="true">Yes (HMMER)</option>
+                                    <option value="flexible">Flexible</option>
+                                    <option value="conditioned">Conditioned</option>
+                                    <option value="frozen">Hard Frozen</option>
                                 </select>
                             </div>
                         </div>
-                        {protenixUseTemplate && (
+                        {protenixTargetGeometryMode !== 'flexible' && (
                             <p className="text-xs text-amber-300/90">
-                                Template mode needs local mmCIF data at <code className="text-amber-200">.protenix_cache/mmcif</code>. If this
-                                directory is empty, submission will be rejected.
+                                Conditioned and frozen Protenix runs use the imported target structure as a template source.
                             </p>
                         )}
 
@@ -1574,8 +1757,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                                 setTargetSourceChainId(null);
                                                 setTargetSourceSequence('');
                                                 setTargetStructure(null);
-                                                setBoltzAnchorTarget(false);
-                                                setProtenixAnchorTarget(false);
+                                                setBoltzTargetGeometryMode('flexible');
+                                                setProtenixTargetGeometryMode('flexible');
                                             }
                                             setShowInputModal(false);
                                         }}

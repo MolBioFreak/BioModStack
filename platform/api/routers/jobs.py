@@ -108,6 +108,34 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _child_job_has_reusable_outputs(job: Any) -> bool:
+    child_stage = (_coerce_nonempty_text(getattr(job, "child_stage", None)) or "").strip().lower()
+    if child_stage not in {"maturation", "backbone_refine"}:
+        return True
+
+    output_dir = _coerce_nonempty_text(getattr(job, "output_dir", None))
+    if not output_dir:
+        return False
+
+    output_path = Path(output_dir).expanduser()
+    if not output_path.exists():
+        return False
+
+    try:
+        for pdb_path in output_path.rglob("*.pdb"):
+            name = pdb_path.name
+            if "ppiflow" not in name.lower():
+                continue
+            if name.endswith("_enriched_complex.pdb"):
+                continue
+            return True
+    except OSError as exc:
+        logger.warning("Failed to inspect child output dir %s for reusable outputs: %s", output_path, exc)
+        return False
+
+    return False
+
+
 def _merge_preserved_gate_payload(
     gate_payload: Optional[Dict[str, Any]],
     existing_payload: Optional[Dict[str, Any]],
@@ -895,6 +923,95 @@ def _normalize_antibody_runtime_paths(model_id: str, params: dict) -> dict:
     return normalized
 
 
+def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
+    if model_id not in {"protenix", "boltz2", "rf3"} or not isinstance(params, dict):
+        return params
+
+    normalized = dict(params)
+    for key in ("target_pdb", "fixed_target_source_path"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return None
+    aliases = {
+        "anchor": "conditioned",
+        "anchored": "conditioned",
+        "template": "conditioned",
+        "templated": "conditioned",
+        "fixed": "frozen",
+        "hard_fixed": "frozen",
+        "hard_frozen": "frozen",
+    }
+    value = aliases.get(value, value)
+    if value in {"flexible", "conditioned", "frozen"}:
+        return value
+    return None
+
+
+def _normalize_structure_geometry_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {}
+
+    normalized = dict(params)
+    global_mode = _normalize_target_geometry_mode(normalized.get("target_geometry_mode"))
+    boltz_mode = _normalize_target_geometry_mode(
+        normalized.get("boltz_target_geometry_mode") or global_mode
+    )
+    protenix_mode = _normalize_target_geometry_mode(
+        normalized.get("protenix_target_geometry_mode") or global_mode
+    )
+
+    if boltz_mode is None and _to_bool(normalized.get("boltz_anchor_target")):
+        boltz_mode = "conditioned"
+    if protenix_mode is None and (
+        _to_bool(normalized.get("protenix_anchor_target"))
+        or _to_bool(normalized.get("protenix_use_template"))
+    ):
+        protenix_mode = "conditioned"
+
+    if global_mode is None:
+        derived_modes = {mode for mode in (boltz_mode, protenix_mode) if mode is not None}
+        if len(derived_modes) == 1:
+            global_mode = next(iter(derived_modes))
+
+    if boltz_mode is not None:
+        normalized["boltz_target_geometry_mode"] = boltz_mode
+        normalized["boltz_anchor_target"] = boltz_mode in {"conditioned", "frozen"}
+
+    if protenix_mode is not None:
+        normalized["protenix_target_geometry_mode"] = protenix_mode
+        normalized["protenix_anchor_target"] = protenix_mode in {"conditioned", "frozen"}
+        normalized["protenix_use_template"] = (
+            protenix_mode in {"conditioned", "frozen"}
+            or _to_bool(normalized.get("protenix_use_template"))
+        )
+
+    if global_mode is not None:
+        normalized["target_geometry_mode"] = global_mode
+
+    threshold = normalized.get("target_template_threshold_angstrom")
+    if threshold not in (None, ""):
+        try:
+            normalized["target_template_threshold_angstrom"] = float(threshold)
+        except (TypeError, ValueError):
+            normalized.pop("target_template_threshold_angstrom", None)
+
+    strict_target_rmsd = normalized.get("strict_target_rmsd")
+    if strict_target_rmsd not in (None, ""):
+        try:
+            normalized["strict_target_rmsd"] = float(strict_target_rmsd)
+        except (TypeError, ValueError):
+            normalized.pop("strict_target_rmsd", None)
+
+    return normalized
+
+
 def _validate_antibody_runtime_paths(model_id: str, params: dict) -> None:
     if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
         return
@@ -1647,7 +1764,7 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         *PPI_FLOW_STAGE_FLAG_KEYS,
     }:
         pruned.pop(key, None)
-    return _normalize_antibody_job_params(pruned)
+    return _normalize_antibody_job_params(_normalize_structure_geometry_params(pruned))
 
 
 AA_CODES = {
@@ -3343,7 +3460,7 @@ def _build_antibody_iteration_job(
             for key in refinement_screen_keys - {"enable_rfantibody_filter"}:
                 launch_params.pop(key, None)
 
-    launch_params = _normalize_antibody_job_params(launch_params)
+    launch_params = _normalize_antibody_job_params(_normalize_structure_geometry_params(launch_params))
     _validate_antibody_iteration_source_compatibility(action, launch_params)
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
     job_name = f"{root_job.name}_{suffix}"
@@ -3629,6 +3746,13 @@ def _validate_protenix_template_requirements(model_id: str, params: dict) -> Non
     if not _to_bool(params.get("protenix_use_template", False)):
         return
 
+    fixed_target_source_path = str(params.get("fixed_target_source_path") or "").strip()
+    fixed_target_source_chains = str(params.get("fixed_target_source_chains") or "").strip()
+    if fixed_target_source_path and fixed_target_source_chains:
+        # Anchored/fixed-target Protenix runs extract a task-local template DB from the
+        # supplied target structure, so they do not require the shared global mmCIF cache.
+        return
+
     code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
     code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
     mmcif_dir = code_root / ".protenix_cache" / "mmcif"
@@ -3854,6 +3978,8 @@ async def create_job(
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
         job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_antibody_job_params(job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches
@@ -3879,11 +4005,32 @@ async def create_job(
             )
             .order_by(Job.created_at.desc())
         )
-        existing_child = existing_child_result.scalars().first()
-        if existing_child is not None and existing_child.status not in {
-            JobStatus.FAILED.value,
-            JobStatus.CANCELLED.value,
-        }:
+        existing_children = existing_child_result.scalars().all()
+        for existing_child in existing_children:
+            if existing_child.status in {
+                JobStatus.FAILED.value,
+                JobStatus.CANCELLED.value,
+            }:
+                logger.info(
+                    "[QUEUE] Existing child job %s for parent=%s stage=%s name=%s is %s; creating a new attempt",
+                    existing_child.id,
+                    job_data.parent_job_id,
+                    job_data.child_stage,
+                    job_data.name,
+                    existing_child.status,
+                )
+                continue
+            if not _child_job_has_reusable_outputs(existing_child):
+                logger.info(
+                    "[QUEUE] Existing child job %s for parent=%s stage=%s name=%s has no reusable final outputs in %s; creating a new attempt",
+                    existing_child.id,
+                    job_data.parent_job_id,
+                    job_data.child_stage,
+                    job_data.name,
+                    existing_child.output_dir,
+                )
+                continue
+
             logger.info(
                 "[QUEUE] Reusing existing child job %s for parent=%s stage=%s name=%s",
                 existing_child.id,
@@ -3925,15 +4072,6 @@ async def create_job(
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
                 decision_history=existing_child.decision_history,
-            )
-        elif existing_child is not None:
-            logger.info(
-                "[QUEUE] Existing child job %s for parent=%s stage=%s name=%s is %s; creating a new attempt",
-                existing_child.id,
-                job_data.parent_job_id,
-                job_data.child_stage,
-                job_data.name,
-                existing_child.status,
             )
     
     # Detect complex components for logging (info level)
@@ -4860,6 +4998,8 @@ async def resubmit_job(
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_structure_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_structure_geometry_params(resubmit_params)
     resubmit_params = _normalize_antibody_job_params(resubmit_params)
     if resubmit_params.get("msa_force_refresh") is True:
         # Resubmits should reuse cache by default unless user explicitly
@@ -5524,7 +5664,7 @@ async def get_job_stages(
         display_stages.append("rfantibody")
         
         # Check params for sequence design steps (default to true if not present, matching nextflow logic)
-        params = _normalize_antibody_job_params(job.params or {})
+        params = _normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {}))
         
         # Note: In nextflow 'null' means true for these flags due to how they are processed
         run_fampnn = params.get("seq_design_fampnn")
@@ -5772,7 +5912,7 @@ async def resume_job(
     os.makedirs(output_dir, exist_ok=True)
     
     merged_params = {
-        **_normalize_antibody_job_params(job.params or {}),
+        **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
         **param_overrides,
     }
     merged_params = _ensure_job_resume_identity(
@@ -5790,6 +5930,8 @@ async def resume_job(
     if resolved_child_batch_name:
         merged_params["batch_name"] = resolved_child_batch_name
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_structure_geometry_params(merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
     _validate_antibody_runtime_paths(job.model_id, merged_params)
 
