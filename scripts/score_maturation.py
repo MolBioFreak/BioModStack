@@ -88,6 +88,41 @@ def resolve_chain_groups(pose, requested_ab, requested_ag, fallback_ab_count=Non
     return antibody, antigen, chains
 
 
+def reconcile_chain_groups_with_selected_positions(
+    chains,
+    antibody,
+    antigen,
+    selected_positions,
+    fallback_ab_count=None,
+):
+    """Prefer chain assignments that actually contain the selected movable residues.
+
+    The PPIFlow prep step can resolve antibody chains through ANARCI-aware logic even
+    when the workflow params still use symbolic chain labels like H/L. The scorer sees
+    only concrete PDB chain IDs. If those concrete selected-position chain IDs disagree
+    with the generic antibody/antigen split, selected-loop metrics collapse to zero.
+    """
+    selected_chains = []
+    for chain_id, _resnum in sorted(selected_positions or set(), key=lambda item: (item[0], item[1])):
+        if chain_id in chains and chain_id not in selected_chains:
+            selected_chains.append(chain_id)
+
+    if not selected_chains:
+        return antibody, antigen
+
+    if set(selected_chains).issubset(set(antibody)):
+        return antibody, antigen
+
+    requested_count = fallback_ab_count or len(antibody) or len(selected_chains)
+    requested_count = max(len(selected_chains), requested_count)
+    requested_count = min(requested_count, len(chains))
+
+    remaining = [chain for chain in chains if chain not in selected_chains]
+    corrected_antibody = selected_chains + remaining[:max(0, requested_count - len(selected_chains))]
+    corrected_antigen = [chain for chain in chains if chain not in corrected_antibody]
+    return corrected_antibody, corrected_antigen
+
+
 def pose_residue_map(pose):
     mapping = {}
     for resi in range(1, pose.total_residue() + 1):
@@ -586,12 +621,26 @@ def main():
         antibody_chains,
         antigen_chains,
     )
+    antibody_chains_original, antigen_chains_original = reconcile_chain_groups_with_selected_positions(
+        original_detected_chains,
+        antibody_chains_original,
+        antigen_chains_original,
+        selected_positions,
+        fallback_ab_count=len(antibody_chains_original),
+    )
     antibody_chains_matured, antigen_chains_matured, matured_detected_chains = resolve_chain_groups(
         pose_matured,
         antibody_chains,
         antigen_chains,
         fallback_ab_count=len(antibody_chains_original),
         fallback_ag_count=len(antigen_chains_original),
+    )
+    antibody_chains_matured, antigen_chains_matured = reconcile_chain_groups_with_selected_positions(
+        matured_detected_chains,
+        antibody_chains_matured,
+        antigen_chains_matured,
+        selected_positions,
+        fallback_ab_count=len(antibody_chains_original),
     )
     matured_to_original_chain_map = {
         matured_chain: original_chain

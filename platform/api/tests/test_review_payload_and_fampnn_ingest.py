@@ -21,6 +21,7 @@ from routers.jobs import (
     SavedReviewFilterSet,
     _build_antibody_iteration_job,
     _build_selection_manifest_item,
+    _child_job_has_reusable_outputs,
     _derive_source_stage_payload,
     _merge_preserved_gate_payload,
     _normalize_antibody_job_params,
@@ -34,6 +35,7 @@ from services.result_ingester import (
     _discover_collected_ppiflow_structures,
     _extract_fampnn_metrics,
     _inherit_source_design_metrics,
+    _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
 from services.stage_review import refresh_gate_payload
@@ -100,6 +102,40 @@ def test_refresh_gate_payload_recovers_rfantibody_review_from_run_outputs(tmp_pa
     assert repaired["candidate_dir"] == repaired["raw_dir"]
     assert repaired["candidate_backbone_summary"]["assigned_total"] == 1
     assert repaired["candidate_backbone_summary"]["backbones"]["0"]["count"] == 1
+
+
+def test_child_job_reuse_requires_real_ppiflow_outputs(tmp_path: Path) -> None:
+    child_dir = tmp_path / "run"
+    results_dir = child_dir / "run" / "ppiflow" / "results"
+    results_dir.mkdir(parents=True)
+    (results_dir / "demo_enriched_complex.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+
+    child = SimpleNamespace(child_stage="maturation", output_dir=str(child_dir))
+    assert not _child_job_has_reusable_outputs(child)
+
+    (results_dir / "demo_ppiflow_seq_0_sample0.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    assert _child_job_has_reusable_outputs(child)
+
+
+def test_discover_collected_ppiflow_structures_includes_redesign_outputs(tmp_path: Path) -> None:
+    stage_dir = tmp_path / "collected" / "maturation"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "demo_ppiflow_seq_7_sample0.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    (stage_dir / "demo_enriched_complex.pdb").write_text("MODEL\nENDMDL\n", encoding="utf-8")
+
+    discovered = _discover_collected_ppiflow_structures(tmp_path)
+
+    assert discovered == [("maturation", stage_dir / "demo_ppiflow_seq_7_sample0.pdb")]
+
+
+def test_parse_ppiflow_sample_index_supports_redesign_names() -> None:
+    assert _parse_ppiflow_sample_index("demo_ppiflow_sample4") == 4
+    assert _parse_ppiflow_sample_index("demo_ppiflow_seq_7_sample0") == 0
+
+
+def test_non_ppiflow_child_reuse_does_not_require_output_scan() -> None:
+    child = SimpleNamespace(child_stage="structure_validation", output_dir=None)
+    assert _child_job_has_reusable_outputs(child)
 
 
 def test_parse_backbone_id_supports_rfantibody_gpu_job_names() -> None:

@@ -326,6 +326,95 @@ def _validation_role_fields(job: Optional[Job], job_params: Dict[str, Any]) -> D
     }
 
 
+def _sequence_match_score(seq_a: str, seq_b: str) -> float:
+    left = str(seq_a or "").strip().upper()
+    right = str(seq_b or "").strip().upper()
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if shorter and shorter in longer:
+        return len(shorter) / len(longer)
+    overlap = sum(1 for aa, bb in zip(left, right) if aa == bb)
+    return overlap / max(len(left), len(right))
+
+
+def _resolve_validation_structure_role_fields(
+    *,
+    structure_path: Path,
+    job_params: Dict[str, Any],
+    detected_antibody_chains: Optional[str],
+    detected_target_chain: Optional[str],
+) -> Dict[str, Optional[str]]:
+    resolved = {
+        "detected_antibody_chains": detected_antibody_chains,
+        "detected_target_chain": detected_target_chain,
+    }
+
+    target_pdb_value = str(
+        job_params.get("target_pdb")
+        or job_params.get("fixed_target_source_path")
+        or ""
+    ).strip()
+    if not target_pdb_value:
+        return resolved
+
+    try:
+        structure_sequences = extract_sequence_from_pdb(str(structure_path)) or {}
+    except Exception:
+        return resolved
+    if len(structure_sequences) < 2:
+        return resolved
+
+    target_pdb = Path(target_pdb_value).expanduser()
+    if not target_pdb.is_absolute():
+        target_pdb = (get_data_root() / target_pdb).resolve()
+    if not target_pdb.exists():
+        return resolved
+
+    try:
+        target_sequences = extract_sequence_from_pdb(str(target_pdb)) or {}
+    except Exception:
+        return resolved
+    configured_target_chain_ids = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
+    if configured_target_chain_ids:
+        target_sequences = {
+            chain_id: seq for chain_id, seq in target_sequences.items()
+            if chain_id in configured_target_chain_ids
+        }
+    if not target_sequences:
+        return resolved
+
+    scored_actual_chains: List[tuple[float, str]] = []
+    for actual_chain_id, actual_sequence in structure_sequences.items():
+        best_score = max(
+            (_sequence_match_score(actual_sequence, target_sequence) for target_sequence in target_sequences.values()),
+            default=0.0,
+        )
+        scored_actual_chains.append((best_score, actual_chain_id))
+    scored_actual_chains.sort(reverse=True)
+
+    matched_target_chains = [chain_id for score, chain_id in scored_actual_chains if score >= 0.85]
+    if not matched_target_chains and scored_actual_chains and scored_actual_chains[0][0] > 0.0:
+        matched_target_chains = [scored_actual_chains[0][1]]
+    if not matched_target_chains:
+        return resolved
+
+    matched_target_set = set(matched_target_chains)
+    matched_binder_chains = [
+        chain_id for chain_id in structure_sequences.keys()
+        if chain_id not in matched_target_set
+    ]
+    if not matched_binder_chains:
+        return resolved
+
+    return {
+        "detected_antibody_chains": ",".join(matched_binder_chains),
+        "detected_target_chain": ",".join(matched_target_chains),
+    }
+
+
 def _strict_aligned_error_fields(
     *,
     structure_path: Path,
@@ -1217,13 +1306,31 @@ def _parse_source_cdr_lengths(source_pdb_path: Optional[str]) -> Dict[str, int]:
 def _parse_ppiflow_sample_index(name: Optional[str]) -> Optional[int]:
     if not name:
         return None
-    match = re.search(r"_ppiflow_sample(\d+)$", str(name), re.IGNORECASE)
+    match = re.search(r"_ppiflow(?:_seq_\d+)?_sample(\d+)$", str(name), re.IGNORECASE)
     if not match:
         return None
     try:
         return int(match.group(1))
     except (TypeError, ValueError):
         return None
+
+
+def _ppiflow_design_prefix(name: Optional[str]) -> str:
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        return raw_name
+    match = re.match(r"^(.*)_ppiflow(?:_seq_\d+)?_sample\d+$", raw_name, re.IGNORECASE)
+    return match.group(1) if match else raw_name
+
+
+def _is_final_ppiflow_structure_path(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        path.is_file()
+        and path.suffix.lower() in {".pdb", ".cif", ".mmcif"}
+        and "_ppiflow" in name
+        and not name.endswith("_enriched_complex.pdb")
+    )
 
 
 async def ingest_job_results(
@@ -2295,19 +2402,20 @@ async def ingest_published_maturation_structures(
         if filter_payload:
             ppiflow_provenance["maturation_filter"] = filter_payload
             ppiflow_provenance["maturation_filter_json"] = str(filter_json)
-        rotamer_json = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_rotamer_enrichment.json")
+        design_prefix = _ppiflow_design_prefix(design_name)
+        rotamer_json = structure_path.with_name(f"{design_prefix}_rotamer_enrichment.json")
         rotamer_payload = _load_json_payload(rotamer_json)
         if rotamer_payload:
             ppiflow_provenance["rotamer_enrichment"] = rotamer_payload
             ppiflow_provenance["rotamer_enrichment_json"] = str(rotamer_json)
-        enriched_pdb = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_enriched_complex.pdb")
+        enriched_pdb = structure_path.with_name(f"{design_prefix}_enriched_complex.pdb")
         if enriched_pdb.exists():
             ppiflow_provenance["enriched_complex_pdb"] = str(enriched_pdb)
-        ppiflow_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_ppiflow_positions.txt")
+        ppiflow_positions_path = structure_path.with_name(f"{design_prefix}_ppiflow_positions.txt")
         if ppiflow_positions_path.exists():
             ppiflow_provenance["ppiflow_positions"] = ppiflow_positions_path.read_text().strip()
             ppiflow_provenance["ppiflow_positions_txt"] = str(ppiflow_positions_path)
-        cdr_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_cdr_positions.txt")
+        cdr_positions_path = structure_path.with_name(f"{design_prefix}_cdr_positions.txt")
         if cdr_positions_path.exists():
             ppiflow_provenance["cdr_positions"] = cdr_positions_path.read_text().strip()
             ppiflow_provenance["cdr_positions_txt"] = str(cdr_positions_path)
@@ -2364,8 +2472,9 @@ def _discover_collected_ppiflow_structures(output_path: Path) -> list[tuple[str,
         if not stage_dir.exists():
             continue
         for ext in ("*.pdb", "*.cif", "*.mmcif"):
-            for structure_path in sorted(stage_dir.glob(f"*_ppiflow_sample*{Path(ext).suffix}")):
-                discovered.append((stage_name, structure_path))
+            for structure_path in sorted(stage_dir.glob(ext)):
+                if _is_final_ppiflow_structure_path(structure_path):
+                    discovered.append((stage_name, structure_path))
     return discovered
 
 
@@ -2435,19 +2544,20 @@ async def ingest_collected_ppiflow_structures(
         if filter_payload:
             ppiflow_provenance["maturation_filter"] = filter_payload
             ppiflow_provenance["maturation_filter_json"] = str(filter_json)
-        rotamer_json = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_rotamer_enrichment.json")
+        design_prefix = _ppiflow_design_prefix(design_name)
+        rotamer_json = structure_path.with_name(f"{design_prefix}_rotamer_enrichment.json")
         rotamer_payload = _load_json_payload(rotamer_json)
         if rotamer_payload:
             ppiflow_provenance["rotamer_enrichment"] = rotamer_payload
             ppiflow_provenance["rotamer_enrichment_json"] = str(rotamer_json)
-        enriched_pdb = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_enriched_complex.pdb")
+        enriched_pdb = structure_path.with_name(f"{design_prefix}_enriched_complex.pdb")
         if enriched_pdb.exists():
             ppiflow_provenance["enriched_complex_pdb"] = str(enriched_pdb)
-        ppiflow_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_ppiflow_positions.txt")
+        ppiflow_positions_path = structure_path.with_name(f"{design_prefix}_ppiflow_positions.txt")
         if ppiflow_positions_path.exists():
             ppiflow_provenance["ppiflow_positions"] = ppiflow_positions_path.read_text().strip()
             ppiflow_provenance["ppiflow_positions_txt"] = str(ppiflow_positions_path)
-        cdr_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_cdr_positions.txt")
+        cdr_positions_path = structure_path.with_name(f"{design_prefix}_cdr_positions.txt")
         if cdr_positions_path.exists():
             ppiflow_provenance["cdr_positions"] = cdr_positions_path.read_text().strip()
             ppiflow_provenance["cdr_positions_txt"] = str(cdr_positions_path)
@@ -2756,6 +2866,12 @@ async def ingest_loose_files(
                 # Read Boltz2 metrics
                 with open(json_file, 'r') as f:
                     metrics = json.load(f)
+
+                aligned_pdb_name = str(metrics.get('aligned_pdb') or '').strip()
+                if aligned_pdb_name:
+                    aligned_candidate = json_file.parent / aligned_pdb_name
+                    if aligned_candidate.exists():
+                        structure_path = aligned_candidate
                 
                 # Boltz2 format: complex_plddt, ptm, iptm, confidence_score, complex_pde
                 plddt = metrics.get('complex_plddt') or metrics.get('plddt')
@@ -2817,6 +2933,12 @@ async def ingest_loose_files(
                         antibody_chain="A",  # RFantibody outputs antibody as chain A
                         target_chain="B"     # Target as chain B
                     )
+                structure_role_fields = _resolve_validation_structure_role_fields(
+                    structure_path=Path(structure_path),
+                    job_params=job_params,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                )
                 
                 # Create design
                 lineage = await _resolve_parent_design_lineage(
@@ -2845,8 +2967,8 @@ async def ingest_loose_files(
                 aligned_error_fields = _strict_aligned_error_fields(
                     structure_path=Path(structure_path),
                     summary_json_path=Path(json_file) if json_file else None,
-                    detected_antibody_chains=detected_antibody_chains,
-                    detected_target_chain=detected_target_chain,
+                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
                 )
 
                 design = Design(
@@ -2867,8 +2989,8 @@ async def ingest_loose_files(
                         **fam_provenance,
                     },
                     confidence_metrics=combined_confidence or None,
-                    detected_antibody_chains=detected_antibody_chains,
-                    detected_target_chain=detected_target_chain,
+                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
                     **aligned_error_fields,
                     
                     # Epitope contact metrics
@@ -3095,6 +3217,12 @@ async def ingest_loose_files(
                 with open(json_file, 'r') as f:
                     metrics = json.load(f)
 
+                aligned_pdb_name = str(metrics.get('aligned_pdb') or '').strip()
+                if aligned_pdb_name:
+                    aligned_candidate = json_file.parent / aligned_pdb_name
+                    if aligned_candidate.exists():
+                        structure_path = aligned_candidate
+
                 # Protenix confidence keys vary across releases:
                 #   current: plddt/ptm/iptm/gpde/chain_*/*_iptm/ranking_score/has_clash
                 #   legacy: complex_plddt/complex_pde/...
@@ -3158,6 +3286,12 @@ async def ingest_loose_files(
                         antibody_chain="A",
                         target_chain="B",
                     )
+                structure_role_fields = _resolve_validation_structure_role_fields(
+                    structure_path=Path(structure_path),
+                    job_params=job_params,
+                    detected_antibody_chains=detected_antibody_chains,
+                    detected_target_chain=detected_target_chain,
+                )
                 lineage = await _resolve_parent_design_lineage(
                     session,
                     job_context,
@@ -3167,8 +3301,8 @@ async def ingest_loose_files(
                 aligned_error_fields = _strict_aligned_error_fields(
                     structure_path=Path(structure_path),
                     summary_json_path=Path(json_file),
-                    detected_antibody_chains=detected_antibody_chains,
-                    detected_target_chain=detected_target_chain,
+                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
                 )
 
                 design = Design(
@@ -3186,8 +3320,8 @@ async def ingest_loose_files(
                     provenance=job_context.get("provenance", {}),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
-                    detected_antibody_chains=detected_antibody_chains,
-                    detected_target_chain=detected_target_chain,
+                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
 
                     plddt_overall=safe_float(plddt),
                     plddt_binder=safe_float(plddt_binder),
@@ -3389,9 +3523,28 @@ async def ingest_loose_files(
                     print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
 
                 if not structure_paths:
-                    structure_paths.extend(list(output_path.rglob("*.pdb")))
-                    structure_paths.extend(list(output_path.rglob("*.cif")))
-                    structure_paths.extend(list(output_path.rglob("*.mmcif")))
+                    def _is_ingestable_raw_structure(path: Path) -> bool:
+                        try:
+                            rel_parts = path.relative_to(output_path).parts
+                        except Exception:
+                            rel_parts = path.parts
+                        if not rel_parts:
+                            return True
+                        if rel_parts[0] in {"input", "configs", "spawn", "gates", ".nextflow"}:
+                            return False
+                        if path.stem in {"normalized_target", "target_template"}:
+                            return False
+                        return True
+
+                    structure_paths.extend(
+                        [path for path in output_path.rglob("*.pdb") if _is_ingestable_raw_structure(path)]
+                    )
+                    structure_paths.extend(
+                        [path for path in output_path.rglob("*.cif") if _is_ingestable_raw_structure(path)]
+                    )
+                    structure_paths.extend(
+                        [path for path in output_path.rglob("*.mmcif") if _is_ingestable_raw_structure(path)]
+                    )
 
             if not structure_paths:
                 print(f"[Ingester] No raw structures found under {output_path}")

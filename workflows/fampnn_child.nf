@@ -44,8 +44,8 @@ workflow FAMPNN_CHILD {
     def fampnn_run_input = PrepFAMPNN.out.pdbs
         .collect()
         .combine(PrepFAMPNN.out.csv)
-        .map { pdbs, csv ->
-            tuple(0, pdbs, csv, gpu_id_val)
+        .map { payload ->
+            tuple(0, payload[0..-2], payload[-1], gpu_id_val)
         }
 
     RunFAMPNN(fampnn_run_input, chain_id)
@@ -110,5 +110,5 @@ workflow {
 
     FAMPNN_CHILD(pdb_list, chain_id)
 
-    println("FAMPNN child job complete")
+    println("FAMPNN child workflow configured")
 }

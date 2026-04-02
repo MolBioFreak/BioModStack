@@ -15,7 +15,10 @@ import json
 from pathlib import Path
 import sys
 from collections import OrderedDict
+import re
+import shutil
 from tempfile import TemporaryDirectory
+import urllib.request
 
 try:
     from Bio.PDB import MMCIFIO, PDBParser, Select
@@ -346,6 +349,36 @@ def _write_simple_mmcif(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _looks_like_pdb_id(stem: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9]{4}", stem or ""))
+
+
+def _resolve_authoritative_rcsb_mmcif(pdb_path: Path) -> Path | None:
+    stem = pdb_path.stem.lower()
+    if not _looks_like_pdb_id(stem):
+        return None
+
+    local_candidates = [
+        pdb_path.with_suffix(".cif"),
+        pdb_path.with_suffix(".mmcif"),
+        pdb_path.parent / f"{stem}.cif",
+        pdb_path.parent / f"{stem}.mmcif",
+    ]
+    for candidate in local_candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+
+    target_path = pdb_path.parent / f"{stem}.cif"
+    url = f"https://files.rcsb.org/download/{stem.upper()}.cif"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            payload = response.read()
+        target_path.write_bytes(payload)
+        return target_path.resolve()
+    except Exception:
+        return None
+
+
 def extract_templates(
     pdb_paths: list[Path],
     target_chains: list[str],
@@ -359,6 +392,7 @@ def extract_templates(
     parser = PDBParser(QUIET=True) if use_biopython else None
 
     for pdb_path in pdb_paths:
+        authoritative_mmcif = _resolve_authoritative_rcsb_mmcif(pdb_path)
         source_path = pdb_path
         temp_dir: TemporaryDirectory[str] | None = None
         if use_biopython and model_number is not None:
@@ -372,8 +406,11 @@ def extract_templates(
             )
             source_path = extracted_path
 
-        out_path = out_dir / f"{pdb_path.stem}_target_template.cif"
-        if use_biopython:
+        out_path = out_dir / f"{pdb_path.stem.lower()}.cif"
+        if authoritative_mmcif is not None:
+            shutil.copyfile(authoritative_mmcif, out_path)
+            present = list(target_chains)
+        elif use_biopython:
             structure = parser.get_structure(pdb_path.stem, str(source_path))
             present = []
             for model in structure:
@@ -400,7 +437,7 @@ def extract_templates(
             "cif": str(out_path.resolve()),
             "chains": present,
             "model_number": model_number,
-            "writer": "biopython" if use_biopython else "simple",
+            "writer": "rcsb" if authoritative_mmcif is not None else ("biopython" if use_biopython else "simple"),
         }
 
         if temp_dir is not None:

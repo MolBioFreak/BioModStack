@@ -102,6 +102,9 @@ const CORE_METRICS: MetricOption[] = [
     { key: 'pae_interaction', label: 'Interaction PAE', color: '#f59e0b', family: 'validation' },
     { key: 'ptm', label: 'pTM', color: '#a78bfa', family: 'validation' },
     { key: 'iptm', label: 'iPTM', color: '#8b5cf6', family: 'validation' },
+    { key: 'ipsae', label: 'ipSAE', color: '#22d3ee', family: 'validation' },
+    { key: 'ipsae_binder_to_target', label: 'ipSAE B→T', color: '#06b6d4', family: 'validation' },
+    { key: 'ipsae_target_to_binder', label: 'ipSAE T→B', color: '#0891b2', family: 'validation' },
     { key: 'conf_score', label: 'Confidence', color: '#34d399', family: 'validation' },
     { key: 'affinity_score', label: 'Affinity', color: '#10b981', family: 'validation' },
     { key: 'binder_probability', label: 'Binder Probability', color: '#22c55e', family: 'validation' },
@@ -181,8 +184,8 @@ const LENS_DEFAULT_METRICS: Record<AnalysisLens, {
     custom3d: [string, string, string, string];
 }> = {
     validation: {
-        custom2d: ['plddt_overall', 'pae_overall', 'iptm'],
-        custom3d: ['plddt_overall', 'iptm', 'pae_overall', 'conf_score'],
+        custom2d: ['plddt_overall', 'ipsae', 'iptm'],
+        custom3d: ['plddt_overall', 'ipsae', 'iptm', 'conf_score'],
     },
     rfantibody: {
         custom2d: ['epitope_contact_count', 'rfa_plddt_selected', 'target_contact_count'],
@@ -201,8 +204,8 @@ const LENS_DEFAULT_METRICS: Record<AnalysisLens, {
         custom3d: ['frustration_high_count', 'frustration_min_count', 'frustration_pct_high', 'iptm'],
     },
     protenix: {
-        custom2d: ['protein_iptm', 'complex_iplddt', 'num_recycles'],
-        custom3d: ['protein_iptm', 'complex_iplddt', 'complex_ipde', 'disorder'],
+        custom2d: ['ipsae', 'protein_iptm', 'complex_iplddt'],
+        custom3d: ['ipsae', 'protein_iptm', 'complex_iplddt', 'complex_ipde'],
     },
 };
 
@@ -814,7 +817,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             return firstAvailableKey('frustration_pct_high', 'frustration_high_count', 'frustration_min_count');
         }
         if (resolvedAnalysisLens === 'protenix') {
-            return firstAvailableKey('protein_iptm', 'complex_iplddt', 'complex_ipde', 'num_recycles');
+            return firstAvailableKey('ipsae', 'protein_iptm', 'complex_iplddt', 'complex_ipde', 'num_recycles');
         }
         return firstAvailableKey('conf_score', 'iptm', 'plddt_overall');
     })();

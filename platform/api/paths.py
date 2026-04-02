@@ -17,10 +17,37 @@ def get_code_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _default_data_root() -> Path:
+    return Path.home() / ".biomodstack"
+
+
+def _candidate_data_roots() -> list[Path]:
+    return [
+        Path("/mnt/BioModStack"),
+        _default_data_root(),
+    ]
+
+
+def _looks_like_data_root(path: Path) -> bool:
+    if not path.exists():
+        return False
+    markers = (
+        "biomodstack.db",
+        "bms_results",
+        "work",
+        "analysis_cache",
+    )
+    return any((path / marker).exists() for marker in markers)
+
+
 def get_data_root() -> Path:
     env = os.getenv("BMS_DATA")
     if env:
         return _resolve_path(env)
+    for candidate in _candidate_data_roots():
+        resolved = candidate.expanduser().resolve()
+        if _looks_like_data_root(resolved):
+            return resolved
     return get_code_root()
 
 
@@ -72,37 +99,32 @@ def get_rfd_models_dir() -> Path:
     return default_dir
 
 
-def _get_default_data_root() -> Path:
-    """Return user-space default data root for portability."""
-    return Path.home() / ".biomodstack"
-
-
 def get_weights_root() -> Path:
     env = os.getenv("BMS_WEIGHTS")
     if env:
         return _resolve_path(env)
-    return _get_default_data_root() / "weights"
+    return _default_data_root() / "weights"
 
 
 def get_colabfold_db() -> Path:
     env = os.getenv("BMS_COLABFOLD_DB")
     if env:
         return _resolve_path(env)
-    return _get_default_data_root() / "colabfold_db"
+    return _default_data_root() / "colabfold_db"
 
 
 def get_msa_cache_dir() -> Path:
     env = os.getenv("BMS_MSA_CACHE")
     if env:
         return _resolve_path(env)
-    return _get_default_data_root() / "msa_cache"
+    return _default_data_root() / "msa_cache"
 
 
 def get_sabdab_cache_dir() -> Path:
     env = os.getenv("BMS_SABDAB_CACHE")
     if env:
         return _resolve_path(env)
-    return _get_default_data_root() / "sabdab_cache"
+    return _default_data_root() / "sabdab_cache"
 
 
 def _sqlite_path_from_url(db_url: str) -> Path | None:
@@ -126,9 +148,16 @@ def get_db_path() -> Path:
     env = os.getenv("BMS_DB_PATH")
     if env:
         return _resolve_path(env)
-    if os.getenv("BMS_DATA"):
-        return get_data_root() / "biomodstack.db"
-    return Path(__file__).resolve().parent / "biomodstack.db"
+    data_root = get_data_root()
+    if data_root != get_code_root():
+        return data_root / "biomodstack.db"
+    repo_root_db = get_code_root() / "biomodstack.db"
+    legacy_api_db = Path(__file__).resolve().parent / "biomodstack.db"
+    if repo_root_db.exists():
+        return repo_root_db
+    if legacy_api_db.exists():
+        return legacy_api_db
+    return repo_root_db
 
 
 def get_db_url() -> str:

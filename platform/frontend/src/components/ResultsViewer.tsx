@@ -122,6 +122,22 @@ const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'binding_tier',
     'is_favorite',
 ]);
+const CLIENT_RENDER_SORT_FIELDS = new Set<string>([
+    'maturation_delta_interface',
+    'maturation_interface_score',
+    'maturation_rmsd',
+    'maturation_selected_delta_interface',
+    'maturation_selected_interface_score',
+    'maturation_selected_rmsd',
+    'maturation_nonselected_rmsd',
+    'ppiflow_objective_score',
+    'ppiflow_primary_loop',
+    'ppiflow_primary_loop_rmsd',
+    'ppiflow_primary_loop_target_contact_delta',
+    'ppiflow_primary_loop_target_distance_delta',
+    'ppiflow_primary_loop_epitope_contact_delta',
+    'ppiflow_primary_loop_epitope_distance_delta',
+]);
 
 const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'name', label: 'Name' },
@@ -399,6 +415,55 @@ const validationDesignPreference = (
     return score;
 };
 
+const titleCaseWords = (value: string): string => value.replace(/\b([a-z])/g, (match) => match.toUpperCase());
+
+const getValidationSourceDisplayName = (
+    design: { name: string; source_design_name?: string | null; source_pdb_path?: string | null }
+): string | null => {
+    const direct = typeof design.source_design_name === 'string' ? design.source_design_name.trim() : '';
+    if (direct) return direct;
+
+    const sourceStem = typeof design.source_pdb_path === 'string' && design.source_pdb_path.trim()
+        ? design.source_pdb_path.split('/').pop()?.replace(/\.(pdb|cif|mmcif|json)$/i, '').trim()
+        : '';
+    if (sourceStem) return sourceStem;
+
+    const duplicateVariantMatch = design.name.match(/^(variant_\d+)_\1_model_(\d+)$/i);
+    if (duplicateVariantMatch) {
+        return duplicateVariantMatch[1];
+    }
+    return null;
+};
+
+const formatValidationBaseLabel = (rawName: string): string => {
+    const text = rawName.trim();
+    if (!text) return 'Validation Output';
+
+    const variantMatch = text.match(/^variant_(\d+)$/i);
+    if (variantMatch) return `Variant ${variantMatch[1]}`;
+
+    const snakeReadable = text
+        .replace(/^rbx1[_-]/i, 'RBX1 ')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\bseq\b/gi, 'Seq');
+
+    return titleCaseWords(snakeReadable);
+};
+
+const formatValidationDesignLabel = (
+    design: { name: string; source_design_name?: string | null; source_pdb_path?: string | null }
+): string => {
+    const sourceLabel = formatValidationBaseLabel(getValidationSourceDisplayName(design) || design.name);
+    const modelMatch = design.name.match(/_model_(\d+)$/i);
+    if (modelMatch) return `${sourceLabel} • Model ${modelMatch[1]}`;
+    const sampleMatch = design.name.match(/(?:_sample_(\d+)|_sample(\d+))$/i);
+    if (sampleMatch) {
+        const sampleIndex = sampleMatch[1] ?? sampleMatch[2];
+        return `${sourceLabel} • Sample ${sampleIndex}`;
+    }
+    return sourceLabel;
+};
+
 const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
     const source = inferDesignOutputSource(design);
     const sampleMatch = design.name.match(/(?:_sample_(\d+)|_ppiflow_sample(\d+))$/i);
@@ -409,6 +474,7 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
             ? `Seq ${seqMatch[1]} • ${getOutputSourceLabel(design)} Sample ${sampleIndex}`
             : `${getOutputSourceLabel(design)} Sample ${sampleIndex}`;
     }
+    if (source === 'validation') return formatValidationDesignLabel(design as any);
     if (source === 'fampnn') return seqMatch ? `FAMPNN Seq ${seqMatch[1]}` : 'FAMPNN Candidate';
     if (source === 'ppiflow') {
         const ppiflowRecord = (
@@ -984,6 +1050,16 @@ const getDefaultSortDirection = (field: string): 'asc' | 'desc' =>
 const isTableColumnSortable = (field: string, sortable?: boolean): boolean =>
     sortable !== false && field !== 'selected';
 
+const getDirectNumberField = (design: Design, field: string): number | null => {
+    const value = (design as unknown as Record<string, unknown>)[field];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
+const getDirectStringField = (design: Design, field: string): string | null => {
+    const value = (design as unknown as Record<string, unknown>)[field];
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
+};
+
 const getDesignSortValue = (design: Design, field: string): string | number | boolean | null => {
     switch (field) {
         case 'plddt':
@@ -996,10 +1072,38 @@ const getDesignSortValue = (design: Design, field: string): string | number | bo
             return design.backbone_id ?? null;
         case 'binding_tier':
             return (design.iptm ?? 0) + ((design.epitope_contact_count ?? 0) >= 5 ? 0.05 : 0);
+        case 'maturation_delta_interface':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.delta_interface_score ?? null;
+        case 'maturation_interface_score':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.interface_score_matured ?? null;
+        case 'maturation_rmsd':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.rmsd_backbone ?? null;
+        case 'maturation_selected_delta_interface':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.selected_delta_interface_score ?? null;
+        case 'maturation_selected_interface_score':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.selected_interface_score_matured ?? null;
+        case 'maturation_selected_rmsd':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.selected_rmsd_backbone ?? null;
+        case 'maturation_nonselected_rmsd':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.nonselected_rmsd_backbone ?? null;
         case 'ppiflow_source_name':
             return getPpiflowSourceName(design) ?? null;
         case 'ppiflow_sample_index':
             return getPpiflowSampleIndex(design);
+        case 'ppiflow_objective_score':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.objective_score ?? null;
+        case 'ppiflow_primary_loop':
+            return getDirectStringField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop ?? null;
+        case 'ppiflow_primary_loop_rmsd':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop_rmsd ?? null;
+        case 'ppiflow_primary_loop_target_contact_delta':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop_target_contact_delta ?? null;
+        case 'ppiflow_primary_loop_target_distance_delta':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop_target_distance_delta ?? null;
+        case 'ppiflow_primary_loop_epitope_contact_delta':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop_epitope_contact_delta ?? null;
+        case 'ppiflow_primary_loop_epitope_distance_delta':
+            return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.primary_loop_epitope_distance_delta ?? null;
         case 'ppiflow_seq_identity': {
             const direct = (design as unknown as Record<string, unknown>).ppiflow_seq_identity;
             if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
@@ -1780,7 +1884,10 @@ export function ResultsViewer() {
     const cdrH3MaxValue = cdrH3Max.trim() === '' ? undefined : Number(cdrH3Max);
     const epitopeMaxDistValue = epitopeMaxDist.trim() === '' ? undefined : Number(epitopeMaxDist);
     const targetMaxDistValue = targetMaxDist.trim() === '' ? undefined : Number(targetMaxDist);
-    const apiSortField = SERVER_SORT_FIELDS.has(sortField as DesignSortField) ? sortField as DesignSortField : undefined;
+    const useClientRenderedValueSort = CLIENT_RENDER_SORT_FIELDS.has(sortField);
+    const apiSortField = SERVER_SORT_FIELDS.has(sortField as DesignSortField) && !useClientRenderedValueSort
+        ? sortField as DesignSortField
+        : undefined;
     const isPostRFantibodyReview = isAntibodyContext && isPostRfantibodyStage(activeJob);
     const hasExplicitReviewSelection = !isPostRFantibodyReview || rfReviewSet !== null;
     const reviewSelectionRequired = isPostRFantibodyReview && !hasExplicitReviewSelection;
@@ -1808,7 +1915,8 @@ export function ResultsViewer() {
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody';
     const useClientSourcePagination = outputSourceFilter !== 'all';
-    const requiresClientOnlySort = !SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField);
+    const requiresClientOnlySort = useClientRenderedValueSort
+        || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
     const forceBulkLoadForSorting = useClientSourcePagination || pageSize === 0 || requiresClientOnlySort;
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
@@ -2751,7 +2859,7 @@ export function ResultsViewer() {
             ]
             : [
                 ['Mode', settings.ppiflow_mode],
-                ['Region', settings.ppiflow_selected_loops ?? selectedDesignPpiflowRecord?.selected_loop_scope ?? activeJobSelectedLoops],
+                ['Region', normalizeLoopScopeLabel(settings.ppiflow_selected_loops) ?? selectedDesignPpiflowRecord?.selected_loop_scope ?? activeJobSelectedLoops],
                 ['Start t', settings.ppiflow_start_t],
                 ['Samples/Target', settings.ppiflow_samples_per_target],
                 ['Checkpoint', settings.ppiflow_checkpoint],
@@ -3187,6 +3295,8 @@ export function ResultsViewer() {
         const plddts = designs.map(d => d.plddt_overall).filter((v): v is number => v != null);
         const paes = designs.map(d => d.pae_overall).filter((v): v is number => v != null);
         const ptms = designs.map(d => d.ptm).filter((v): v is number => v != null);
+        const iptms = designs.map(d => d.iptm).filter((v): v is number => v != null);
+        const ipsaes = designs.map(d => d.ipsae).filter((v): v is number => v != null);
         const affinities = designs.map(d => d.affinity_score).filter((v): v is number => v != null);
         const binderProbs = designs.map(d => d.binder_probability).filter((v): v is number => v != null);
         const epitopeContacts = designs.map(d => d.epitope_contact_count).filter((v): v is number => v != null);
@@ -3246,6 +3356,8 @@ export function ResultsViewer() {
             avgPlddt: plddts.length ? plddts.reduce((a, b) => a + b, 0) / plddts.length : null,
             avgPae: paes.length ? paes.reduce((a, b) => a + b, 0) / paes.length : null,
             avgPtm: ptms.length ? ptms.reduce((a, b) => a + b, 0) / ptms.length : null,
+            avgIptm: iptms.length ? iptms.reduce((a, b) => a + b, 0) / iptms.length : null,
+            avgIpsae: ipsaes.length ? ipsaes.reduce((a, b) => a + b, 0) / ipsaes.length : null,
             avgAffinity: affinities.length ? affinities.reduce((a, b) => a + b, 0) / affinities.length : null,
             avgBinderProb: binderProbs.length ? binderProbs.reduce((a, b) => a + b, 0) / binderProbs.length : null,
             avgEpitopeContacts: epitopeContacts.length ? epitopeContacts.reduce((a, b) => a + b, 0) / epitopeContacts.length : null,
@@ -3315,6 +3427,8 @@ export function ResultsViewer() {
             avgPlddt: average(representatives.map((representative) => representative.plddt_overall)),
             avgPae: null,
             avgPtm: null,
+            avgIptm: null,
+            avgIpsae: null,
             avgAffinity: null,
             avgBinderProb: null,
             avgEpitopeContacts: average(representatives.map((representative) => representative.epitope_contact_count)),
@@ -3849,6 +3963,17 @@ export function ResultsViewer() {
             return;
         }
         setSelectedDesignIds((current) => current.filter((designId) => !visibleDesignIds.includes(designId)));
+    };
+
+    const exportFasta = (mode: 'binder' | 'cdr') => {
+        if (!selectedJobId) return;
+        const url = `/api/designs/export/fasta?job_id=${encodeURIComponent(selectedJobId)}&mode=${mode}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     };
 
     const openPipelineReorchestration = (savedFilterSet?: SavedReviewFilterSet | null) => {
@@ -5374,12 +5499,25 @@ export function ResultsViewer() {
                                                         <StatCard label="Total Designs" value={overviewStats.total.toLocaleString()} />
                                                         <StatCard label="Favorites" value={overviewStats.favorites} color="text-yellow-400" />
                                                         <StatCard label="Avg pLDDT" value={formatMetric(overviewStats.avgPlddt, 1)} color="text-blue-400" />
-                                                        <StatCard label="Avg pSCE" value={formatMetric(overviewStats.avgPsce, 2)} subtitle="FAMPNN" color="text-cyan-400" />
-                                                        <StatCard label="Avg Affinity" value={formatMetric(overviewStats.avgAffinity, 2)} color="text-emerald-400" />
-                                                        <StatCard label="Avg Binder %" value={overviewStats.avgBinderProb ? (overviewStats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
-                                                        <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
-                                                        <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
-                                                        <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                        {(preferredAnalysisLens === 'validation' || preferredAnalysisLens === 'protenix') ? (
+                                                            <>
+                                                                <StatCard label="Avg iPTM" value={formatMetric(overviewStats.avgIptm, 2)} color="text-fuchsia-300" />
+                                                                <StatCard label="Avg ipSAE" value={formatMetric(overviewStats.avgIpsae, 3)} color="text-cyan-300" />
+                                                                <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
+                                                                <StatCard label="Avg PAE" value={formatMetric(overviewStats.avgPae, 1)} color="text-amber-300" />
+                                                                <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
+                                                                <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <StatCard label="Avg pSCE" value={formatMetric(overviewStats.avgPsce, 2)} subtitle="FAMPNN" color="text-cyan-400" />
+                                                                <StatCard label="Avg Affinity" value={formatMetric(overviewStats.avgAffinity, 2)} color="text-emerald-400" />
+                                                                <StatCard label="Avg Binder %" value={overviewStats.avgBinderProb ? (overviewStats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
+                                                                <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
+                                                                <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
+                                                                <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                            </>
+                                                        )}
                                                         {overviewStats.annotatedWithFrustration > 0 && (
                                                             <>
                                                                 <StatCard label="Avg High Frust" value={formatMetric(overviewStats.avgFrustrationHigh, 1)} color="text-red-400" />
@@ -7002,6 +7140,28 @@ export function ResultsViewer() {
                                                     {pageSize === 0
                                                         ? `${tableDesigns.length} rows in current output set`
                                                         : `${tableDesigns.length} rows loaded in current output set • ${totalDesigns.toLocaleString()} total after filters`}
+                                                </span>
+                                                <span className="flex items-center gap-1.5 ml-auto">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => exportFasta('binder')}
+                                                        disabled={!selectedJobId}
+                                                        className="flex items-center gap-1 rounded border border-teal-500/40 bg-teal-500/10 px-2 py-1 text-[11px] text-teal-200 transition-colors hover:border-teal-400 hover:bg-teal-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        title="Export full binder sequences for all designs in this job as FASTA"
+                                                    >
+                                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                        Binder FASTA
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => exportFasta('cdr')}
+                                                        disabled={!selectedJobId}
+                                                        className="flex items-center gap-1 rounded border border-teal-500/40 bg-teal-500/10 px-2 py-1 text-[11px] text-teal-200 transition-colors hover:border-teal-400 hover:bg-teal-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        title="Export CDR loop sequences for all designs in this job as FASTA"
+                                                    >
+                                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                        CDR FASTA
+                                                    </button>
                                                 </span>
                                             </div>
                                             {/* Table */}

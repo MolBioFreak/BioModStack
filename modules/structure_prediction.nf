@@ -548,7 +548,9 @@ fixed_target_source_path = "${fixedTargetSourcePath}".strip()
 fixed_target_source_chains = [token.strip() for token in "${fixedTargetSourceChains}".split(",") if token.strip()]
 fixed_target_model_number = "${fixedTargetModelNumber}".strip()
 target_chain_ids = {token.strip() for token in "${targetChains}".split(",") if token.strip()}
+target_template_threshold = float("${params.target_template_threshold_angstrom ?: 2.0}")
 msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
+code_root = Path("${params.code_root}")
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -566,6 +568,11 @@ seq_to_msa = {}
 msa_failures = []
 msa_records = []
 template_cif_path = None
+
+if fixed_target_source_path and not Path(fixed_target_source_path).exists():
+    candidate = code_root / fixed_target_source_path
+    if candidate.exists():
+        fixed_target_source_path = str(candidate.resolve())
 
 if anchor_target:
     if not fixed_target_source_path:
@@ -732,6 +739,7 @@ for comp in complex_def.get("components", []):
                         "chain_id": chain_id,
                         "template_id": chain_id,
                         "force": True,
+                        "threshold": target_template_threshold,
                     }]
                     record["anchored_template_cif"] = template_cif_path
                     break
@@ -929,6 +937,7 @@ process BoltzFromComplex {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def geometryMode = params.boltz_target_geometry_mode ?: (params.boltz_anchor_target ? 'conditioned' : 'flexible')
     """
     set -o pipefail
 
@@ -973,6 +982,18 @@ process BoltzFromComplex {
         echo "ERROR: Boltz produced no output files. Check log for errors."
         echo "Common causes: CCD component not found, malformed YAML, GPU OOM"
         exit 1
+    fi
+
+    if [ "${geometryMode}" != "flexible" ] && [ -n "${params.fixed_target_source_path ?: ''}" ] && [ -n "${params.fixed_target_source_chains ?: ''}" ] && [ -n "${params.target_chains ?: ''}" ]; then
+        python3 ${params.code_root}/scripts/finalize_target_geometry.py \\
+            --prediction_dir predictions \\
+            --backend boltz \\
+            --geometry_mode "${geometryMode}" \\
+            --target_pdb "${params.fixed_target_source_path}" \\
+            --reference_target_chains "${params.fixed_target_source_chains}" \\
+            --predicted_target_chains "${params.target_chains}" \\
+            ${params.fixed_target_model_number ? '--target_model_number ' + params.fixed_target_model_number : ''} \\
+            2>&1 | tee -a boltz_complex_${complex_name}.log
     fi
     """
 }

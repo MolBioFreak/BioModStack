@@ -123,6 +123,35 @@ function getDesignOriginLabel(design: Design | null | undefined): string | null 
     return null;
 }
 
+function formatStructureValidationName(design: Design | null | undefined): string | null {
+    const rawName = typeof design?.name === 'string' ? design.name.trim() : '';
+    if (!rawName) return null;
+
+    const sourceName = typeof design?.source_design_name === 'string' && design.source_design_name.trim()
+        ? design.source_design_name.trim()
+        : '';
+
+    const base = sourceName || rawName.replace(/^(variant_\d+)_\1_model_\d+$/i, '$1');
+    const variantMatch = base.match(/^variant_(\d+)$/i);
+    const readableBase = variantMatch
+        ? `Variant ${variantMatch[1]}`
+        : base
+            .replace(/^rbx1[_-]/i, 'RBX1 ')
+            .replace(/[_-]+/g, ' ')
+            .replace(/\b([a-z])/g, (match) => match.toUpperCase());
+
+    const modelMatch = rawName.match(/_model_(\d+)$/i);
+    if (modelMatch) return `${readableBase} • Model ${modelMatch[1]}`;
+
+    const sampleMatch = rawName.match(/(?:_sample_(\d+)|_sample(\d+))$/i);
+    if (sampleMatch) {
+        const sampleIndex = sampleMatch[1] ?? sampleMatch[2];
+        return `${readableBase} • Sample ${sampleIndex}`;
+    }
+
+    return readableBase;
+}
+
 function plddtColor(value: number): { r: number; g: number; b: number } {
     if (value >= 90) return { r: 59, g: 130, b: 246 };
     if (value >= 70) return { r: 34, g: 211, b: 238 };
@@ -681,6 +710,11 @@ export default function StructureViewerPane({
                 label: 'iPTM',
                 value: formatMetricValue(selectedDesign.iptm ?? null, 3),
                 accentClass: 'text-amber-400',
+            },
+            {
+                label: 'ipSAE',
+                value: formatMetricValue(selectedDesign.ipsae ?? null, 3),
+                accentClass: getMetricColor('ipsae', selectedDesign.ipsae ?? null),
             },
         ] satisfies StructureMetricCard[];
     })();
@@ -1909,7 +1943,7 @@ export default function StructureViewerPane({
                 >
                     {designs.map(d => (
                         <option key={d.id} value={d.id}>
-                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${inferDesignOutputSource(d) === 'validation' ? (formatStructureValidationName(d) || d.name) : d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
                     ))}
                 </select>
