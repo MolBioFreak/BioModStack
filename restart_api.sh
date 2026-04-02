@@ -9,6 +9,8 @@ MAX_LOGS=10
 API_RELOAD_RAW="${BMS_API_RELOAD:-0}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
+SUDO_PASSWORD="${BMS_SUDO_PASSWORD:-}"
+SUDO_SESSION_PRIMED=0
 
 api_reload_enabled() {
     case "${API_RELOAD_RAW,,}" in
@@ -22,6 +24,43 @@ cpu_power_strict_enabled() {
         0|false|no|off) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+run_privileged_shell() {
+    local cmd=$1
+    if command -v sudo >/dev/null 2>&1 && ensure_sudo_session; then
+        sudo -n /bin/bash -lc "$cmd"
+    else
+        pkexec /bin/bash -lc "$cmd"
+    fi
+}
+
+ensure_sudo_session() {
+    if [ "$SUDO_SESSION_PRIMED" -eq 1 ]; then
+        return 0
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        return 1
+    fi
+    if sudo -n true >/dev/null 2>&1; then
+        SUDO_SESSION_PRIMED=1
+        return 0
+    fi
+    if [ -z "$SUDO_PASSWORD" ]; then
+        return 1
+    fi
+    printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1 || return 1
+    SUDO_SESSION_PRIMED=1
+    return 0
+}
+
+ensure_api_log_writable() {
+    if [ -e "$API_LOG" ] && [ ! -w "$API_LOG" ] && { [ -n "$SUDO_PASSWORD" ] || command -v pkexec >/dev/null 2>&1; }; then
+        echo "[API] Reclaiming API log ownership"
+        run_privileged_shell "rm -f '$API_LOG'"
+    fi
+    touch "$API_LOG" 2>/dev/null || true
+    chmod 0644 "$API_LOG" 2>/dev/null || true
 }
 
 port_8000_in_use() {
@@ -39,6 +78,15 @@ wait_for_port_8000_clear() {
         sleep "$delay"
     done
     return 1
+}
+
+force_clear_port_8000() {
+    fuser -k -n tcp 8000 >/dev/null 2>&1 || true
+    pkill -9 -f "uvicorn.*main:app" 2>/dev/null || true
+    if port_8000_in_use && { [ -n "$SUDO_PASSWORD" ] || command -v pkexec >/dev/null 2>&1; }; then
+        echo "[API] Escalating to clear privileged listener on port 8000"
+        run_privileged_shell 'fuser -k -n tcp 8000 >/dev/null 2>&1 || true; pkill -9 -f "uvicorn.*main:app" >/dev/null 2>&1 || true'
+    fi
 }
 
 wait_for_api_health() {
@@ -95,26 +143,41 @@ launch_api_with_rapl_caps() {
         echo "❌ Missing RAPL capability launcher: $helper"
         return 1
     fi
-    if ! command -v pkexec >/dev/null 2>&1; then
+    if ! command -v sudo >/dev/null 2>&1 && ! command -v pkexec >/dev/null 2>&1; then
         echo "❌ pkexec is required for accurate CPU power telemetry"
         return 1
     fi
 
     echo "[API] Authenticating API launch for accurate CPU RAPL telemetry..."
-    DISPLAY="${DISPLAY:-:0}" \
-    XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}" \
-        pkexec env \
-        TARGET_USER="$(id -un)" \
-        TARGET_UID="$(id -u)" \
-        TARGET_GID="$(id -g)" \
-        TARGET_HOME="$HOME" \
-        TARGET_PATH="$PATH" \
-        PROJECT_DIR="$PROJECT_DIR" \
-        API_LOG="$API_LOG" \
-        API_CMD="$api_cmd" \
-        BMS_INPUTS="${BMS_INPUTS:-}" \
-        BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
-        "$helper"
+    if command -v sudo >/dev/null 2>&1 && ensure_sudo_session; then
+        sudo -n env \
+            TARGET_USER="$(id -un)" \
+            TARGET_UID="$(id -u)" \
+            TARGET_GID="$(id -g)" \
+            TARGET_HOME="$HOME" \
+            TARGET_PATH="$PATH" \
+            PROJECT_DIR="$PROJECT_DIR" \
+            API_LOG="$API_LOG" \
+            API_CMD="$api_cmd" \
+            BMS_INPUTS="${BMS_INPUTS:-}" \
+            BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
+            "$helper"
+    else
+        DISPLAY="${DISPLAY:-:0}" \
+        XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}" \
+            pkexec env \
+            TARGET_USER="$(id -un)" \
+            TARGET_UID="$(id -u)" \
+            TARGET_GID="$(id -g)" \
+            TARGET_HOME="$HOME" \
+            TARGET_PATH="$PATH" \
+            PROJECT_DIR="$PROJECT_DIR" \
+            API_LOG="$API_LOG" \
+            API_CMD="$api_cmd" \
+            BMS_INPUTS="${BMS_INPUTS:-}" \
+            BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
+            "$helper"
+    fi
 }
 
 # ── Log rotation: preserve last N logs ──
@@ -158,11 +221,10 @@ pkill -f "uvicorn.*main:app" 2>/dev/null && echo "API stopped" || echo "API not 
 sleep 1
 
 # Force kill port 8000 if still in use
-fuser -k -n tcp 8000 >/dev/null 2>&1
+force_clear_port_8000
 if ! wait_for_port_8000_clear 20 0.5; then
     echo "[API] Port 8000 still busy after initial shutdown; forcing one more cleanup pass"
-    pkill -9 -f "uvicorn.*main:app" 2>/dev/null || true
-    fuser -k -n tcp 8000 >/dev/null 2>&1 || true
+    force_clear_port_8000
     wait_for_port_8000_clear 20 0.5 || {
         echo "[API] Port 8000 did not clear in time"
         notify-send "BioModStack" "❌ API restart aborted: port 8000 still busy" -i dialog-error
@@ -172,6 +234,7 @@ fi
 
 # Start API
 cd "$PROJECT_DIR/platform/api"
+ensure_api_log_writable
 API_CMD="$(build_api_cmd)"
 echo "[API] Starting command: $API_CMD"
 if rapl_requires_privileged_api_launch; then
@@ -191,8 +254,7 @@ if wait_for_api_health 20 1; then
     notify-send "BioModStack" "✅ API restarted successfully (PID: $API_PID)" -i dialog-ok
 elif grep -q "Address already in use" "$API_LOG" 2>/dev/null; then
     echo "[API] Initial restart hit address-in-use; retrying once after cleanup"
-    pkill -f "uvicorn.*main:app" 2>/dev/null || true
-    fuser -k -n tcp 8000 >/dev/null 2>&1 || true
+    force_clear_port_8000
     wait_for_port_8000_clear 20 0.5 || true
     nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
     API_PID=$!

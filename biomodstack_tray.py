@@ -115,12 +115,22 @@ def check_frontend_status() -> bool:
     except Exception:
         return False
 
+STATUS_DB_TIMEOUT_SECONDS = 0.25
+
+def _connect_status_db() -> sqlite3.Connection:
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=STATUS_DB_TIMEOUT_SECONDS)
+    except Exception:
+        conn = sqlite3.connect(str(DB_PATH), timeout=STATUS_DB_TIMEOUT_SECONDS)
+    conn.execute("PRAGMA busy_timeout = 250")
+    return conn
+
 def get_job_counts() -> Tuple[int, int, int]:
     """Get job counts from database. Returns (running, queued, total)."""
     try:
         if not DB_PATH.exists():
             return (0, 0, 0)
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn = _connect_status_db()
         cur = conn.cursor()
         cur.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
         counts = dict(cur.fetchall())
@@ -139,7 +149,7 @@ def get_db_info() -> dict:
             return {"error": "Database not found"}
         
         size_mb = DB_PATH.stat().st_size / (1024 * 1024)
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn = _connect_status_db()
         cur = conn.cursor()
         
         cur.execute("SELECT COUNT(*) FROM jobs")

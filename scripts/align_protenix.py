@@ -9,6 +9,7 @@ augmented confidence JSONs with RMSD fields preserved for downstream ingestion.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import math
@@ -188,6 +189,19 @@ def rmsd_without_refit(ref_atoms, mobile_atoms) -> float:
     return math.sqrt(squared / len(ref_atoms))
 
 
+def replace_target_chains(mobile_structure, ref_structure, target_chains: list[str]) -> None:
+    ref_model = next(ref_structure.get_models())
+    mobile_model = next(mobile_structure.get_models())
+    for chain_id in target_chains:
+        if chain_id in mobile_model:
+            mobile_model.detach_child(chain_id)
+    for chain_id in target_chains:
+        if chain_id in ref_model:
+            cloned_chain = copy.deepcopy(ref_model[chain_id])
+            cloned_chain.id = chain_id
+            mobile_model.add(cloned_chain)
+
+
 def parse_design_name(json_file: Path) -> tuple[str, Path]:
     stem = json_file.stem
     if "_summary_confidence_sample_" in stem:
@@ -314,6 +328,11 @@ def align_structure(args):
             ref_binder, mobile_binder = get_matched_ca_atoms(ref_structure, mobile_structure, binder_chains)
             rmsd_binder = rmsd_without_refit(ref_binder, mobile_binder)
 
+            final_target_rmsd = round(rmsd_target, 2)
+            if geometry_mode == "frozen":
+                replace_target_chains(mobile_structure, ref_structure, target_chains)
+                final_target_rmsd = 0.0
+
             rmsd_data = {
                 "rmsd_overall": round(rmsd_overall, 2),
                 "rmsd_target": round(rmsd_target, 2),
@@ -321,6 +340,8 @@ def align_structure(args):
                 "protenix_overall_rmsd": round(rmsd_overall, 2),
                 "protenix_target_rmsd": round(rmsd_target, 2),
                 "protenix_binder_rmsd": round(rmsd_binder, 2),
+                "raw_target_rmsd": round(rmsd_target, 2),
+                "final_target_rmsd": final_target_rmsd,
             }
             if strict_target_rmsd is not None and rmsd_target > strict_target_rmsd:
                 raise ValueError(
@@ -359,8 +380,9 @@ def align_structure(args):
         metrics["aligned_pdb"] = out_pdb.name
         metrics["source_cif"] = out_cif.name
         metrics["validation_geometry_mode"] = geometry_mode
-        metrics["target_anchor_enabled"] = geometry_mode == "anchored"
+        metrics["target_anchor_enabled"] = geometry_mode in {"conditioned", "frozen"}
         metrics["target_anchor_strict"] = strict_target_rmsd is not None
+        metrics["target_replaced_from_reference"] = geometry_mode == "frozen"
         metrics["aligned_error_artifact"] = out_full_data.name
         metrics["aligned_error_format"] = "protenix_full_json"
 
@@ -382,7 +404,7 @@ def main() -> None:
     parser.add_argument("--design_type", choices=["binder", "monomer"], required=True)
     parser.add_argument("--binder_chains", default="", help="Comma-separated binder chains")
     parser.add_argument("--target_chains", default="", help="Comma-separated target chains")
-    parser.add_argument("--geometry_mode", choices=["flexible", "anchored"], default="flexible")
+    parser.add_argument("--geometry_mode", choices=["flexible", "conditioned", "frozen"], default="flexible")
     parser.add_argument("--strict_target_rmsd", type=float, default=None)
     parser.add_argument("--ncpus", type=int, default=1, help="Parallel worker count")
     args = parser.parse_args()

@@ -92,7 +92,8 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
     const chainsPtm = useMemo(() => normalizeChainsPtm(design.chains_ptm), [design.chains_ptm]);
     const pairChainsIptm = useMemo(() => normalizePairChainsIptm(design.pair_chains_iptm), [design.pair_chains_iptm]);
 
-    // Build chain list from chains_ptm and/or chainMetrics
+    // Hide non-polymer ion/ligand chains from the summary view. They are useful in the
+    // structure itself, but their per-chain confidence blocks and iPTM rows are mostly noise.
     const chains = useMemo(() => {
         const result: Array<{
             id: string;
@@ -131,8 +132,24 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
             });
         }
 
-        return result;
+        return result.filter((chain) => chain.type !== 'ligand');
     }, [chainsPtm, chainMetrics]);
+
+    const visibleChainIds = useMemo(() => new Set(chains.map((chain) => chain.id)), [chains]);
+
+    const visiblePairChainsIptm = useMemo(() => {
+        const normalized: Record<string, Record<string, number>> = {};
+        for (const [rowIdx, contacts] of Object.entries(pairChainsIptm)) {
+            if (!visibleChainIds.has(rowIdx)) continue;
+            const filteredContacts = Object.fromEntries(
+                Object.entries(contacts).filter(([colIdx]) => visibleChainIds.has(colIdx)),
+            );
+            if (Object.keys(filteredContacts).length > 0) {
+                normalized[rowIdx] = filteredContacts;
+            }
+        }
+        return normalized;
+    }, [pairChainsIptm, visibleChainIds]);
 
     // Only show for multi-chain complexes
     if (chains.length <= 1) return null;
@@ -207,7 +224,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                     </div>
 
                     {/* Inter-chain iPTM matrix (if available) */}
-                    {Object.keys(pairChainsIptm).length > 1 && (
+                    {Object.keys(visiblePairChainsIptm).length > 1 && (
                         <div className="mt-4 pt-3 border-t border-slate-700/30">
                             <div className="flex items-center justify-between mb-2">
                                 <div className="text-xs font-medium text-slate-300">Inter-chain iPTM Matrix</div>
@@ -229,7 +246,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                     <thead>
                                         <tr>
                                             <th className="px-2 py-1"></th>
-                                            {Object.keys(pairChainsIptm).map(idx => (
+                                            {Object.keys(visiblePairChainsIptm).map(idx => (
                                                 <th key={idx} className="px-2 py-1 text-slate-400">
                                                     {indexToLetter(idx)}
                                                 </th>
@@ -237,7 +254,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {Object.entries(pairChainsIptm).map(([rowIdx, contacts]) => (
+                                        {Object.entries(visiblePairChainsIptm).map(([rowIdx, contacts]) => (
                                             <tr key={rowIdx}>
                                                 <td className="px-2 py-1 text-slate-400 font-semibold">
                                                     {indexToLetter(rowIdx)}

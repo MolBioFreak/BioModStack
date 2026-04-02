@@ -34,6 +34,28 @@ const parseResidueColorKey = (key: string): { chainId: string; residueNumber: nu
     return null;
 };
 
+const buildSelectionSignature = (selections?: Selection[]): string => {
+    if (!selections || selections.length === 0) return '';
+    return JSON.stringify(
+        selections.map((selection) => ({
+            chain_id: selection.chain_id ?? '',
+            start_residue_number: selection.start_residue_number ?? null,
+            end_residue_number: selection.end_residue_number ?? null,
+            color: selection.color ?? null,
+            focus: Boolean(selection.focus),
+        }))
+    );
+};
+
+const buildResidueColorSignature = (residueColors?: Map<string, { r: number; g: number; b: number }>): string => {
+    if (!residueColors || residueColors.size === 0) return '';
+    return JSON.stringify(
+        Array.from(residueColors.entries())
+            .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+            .map(([key, color]) => [key, color.r, color.g, color.b])
+    );
+};
+
 export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
@@ -48,6 +70,8 @@ export default function MolstarViewer({
     const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
+    const lastAppliedSelectionSignatureRef = useRef<string>('');
+    const lastAppliedResidueColorSignatureRef = useRef<string>('');
 
     // Build absolute URL
     const absoluteUrl = useMemo(() => {
@@ -57,16 +81,24 @@ export default function MolstarViewer({
         }
         return structureUrl;
     }, [structureUrl]);
+    const selectionSignature = useMemo(() => buildSelectionSignature(selections), [selections]);
+    const residueColorSignature = useMemo(() => buildResidueColorSignature(residueColors), [residueColors]);
 
     // Load the web component script
     useEffect(() => {
         ensureMolstarLoaded().then(() => setIsScriptLoaded(true));
     }, []);
 
+    useEffect(() => {
+        lastAppliedSelectionSignatureRef.current = '';
+        lastAppliedResidueColorSignatureRef.current = '';
+    }, [absoluteUrl]);
+
     // Apply selections after viewer loads
     const applySelections = useCallback(async () => {
         if (!selections || selections.length === 0) return;
         if (!viewerRef.current) return;
+        if (lastAppliedSelectionSignatureRef.current === selectionSignature) return;
 
         const viewer = viewerRef.current as any;
 
@@ -83,7 +115,6 @@ export default function MolstarViewer({
 
         const ready = await waitForReady();
         if (!ready) {
-            console.warn('MolstarViewer: viewer.viewerInstance not ready after 5s');
             return;
         }
 
@@ -102,25 +133,26 @@ export default function MolstarViewer({
                 data: selectData,
                 nonSelectedColor: '#888888'  // Grey out non-selected regions
             });
-            console.log('CDR selections applied:', selectData);
+            lastAppliedSelectionSignatureRef.current = selectionSignature;
         } catch (err) {
             console.error('Failed to apply CDR selections:', err);
         }
-    }, [selections]);
+    }, [selectionSignature, selections]);
 
     // Call applySelections when selections change
     useEffect(() => {
-        if (isScriptLoaded && selections && selections.length > 0) {
+        if (isScriptLoaded && selections && selections.length > 0 && selectionSignature) {
             // Delay to allow structure to load
             const timer = setTimeout(applySelections, 1500);
             return () => clearTimeout(timer);
         }
-    }, [isScriptLoaded, selections, applySelections, absoluteUrl]);
+    }, [isScriptLoaded, selectionSignature, applySelections, absoluteUrl, selections]);
 
     // Apply per-residue coloring (for frustration maps, etc.)
     const applyResidueColors = useCallback(async () => {
         if (!residueColors || residueColors.size === 0) return;
         if (!viewerRef.current) return;
+        if (lastAppliedResidueColorSignatureRef.current === residueColorSignature) return;
 
         const viewer = viewerRef.current as any;
 
@@ -137,7 +169,6 @@ export default function MolstarViewer({
 
         const ready = await waitForReady();
         if (!ready) {
-            console.warn('MolstarViewer: viewer not ready for residue coloring');
             return;
         }
 
@@ -146,7 +177,6 @@ export default function MolstarViewer({
             const colorData = Array.from(residueColors.entries()).map(([key, color]) => {
                 const parsedKey = parseResidueColorKey(key);
                 if (!parsedKey) {
-                    console.warn(`Invalid residue key format: ${key}`);
                     return null;
                 }
                 return {
@@ -164,20 +194,20 @@ export default function MolstarViewer({
                     data: colorData,
                     nonSelectedColor: '#444444'
                 });
-                console.log(`Applied ${colorData.length} residue colors`);
+                lastAppliedResidueColorSignatureRef.current = residueColorSignature;
             }
         } catch (err) {
             console.error('Failed to apply residue colors:', err);
         }
-    }, [residueColors]);
+    }, [residueColorSignature, residueColors]);
 
     // Call applyResidueColors when residueColors change
     useEffect(() => {
-        if (isScriptLoaded && residueColors && residueColors.size > 0) {
+        if (isScriptLoaded && residueColors && residueColors.size > 0 && residueColorSignature) {
             const timer = setTimeout(applyResidueColors, 1500);
             return () => clearTimeout(timer);
         }
-    }, [isScriptLoaded, residueColors, applyResidueColors, absoluteUrl]);
+    }, [isScriptLoaded, residueColorSignature, applyResidueColors, absoluteUrl, residueColors]);
 
     // NOTE: Postprocessing settings (shadow, outline, etc) are managed via
     // Molstar's built-in settings panel. Programmatic setProps calls cause
