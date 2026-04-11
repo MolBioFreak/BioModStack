@@ -14,6 +14,7 @@ if str(API_ROOT) not in sys.path:
 
 from routers.designs import (
     _compute_fampnn_response_metrics,
+    _hydrate_review_job,
     _merge_review_payload,
     _should_force_review_stage_listing,
 )
@@ -26,6 +27,7 @@ from routers.jobs import (
     _merge_preserved_gate_payload,
     _normalize_antibody_job_params,
     _prune_iteration_params,
+    _repair_job_for_response,
 )
 from services.result_ingester import (
     _apply_ppiflow_filter_fields,
@@ -38,7 +40,7 @@ from services.result_ingester import (
     _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
-from services.stage_review import refresh_gate_payload
+from services.stage_review import _dedupe_review_structures, refresh_gate_payload
 from services.structure_utils import get_per_chain_fampnn_psce
 
 
@@ -102,6 +104,94 @@ def test_refresh_gate_payload_recovers_rfantibody_review_from_run_outputs(tmp_pa
     assert repaired["candidate_dir"] == repaired["raw_dir"]
     assert repaired["candidate_backbone_summary"]["assigned_total"] == 1
     assert repaired["candidate_backbone_summary"]["backbones"]["0"]["count"] == 1
+
+
+def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "OK")
+    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+
+    job = SimpleNamespace(
+        output_dir=str(tmp_path),
+        awaiting_stage=None,
+        awaiting_payload={},
+        awaiting_input=False,
+        error_message="stale",
+        status="awaiting_input",
+        queue_status="paused",
+        current_stage="waitforchildren",
+        stage_progress="1/1",
+        completed_at=None,
+        parent_job_id=None,
+        child_stage=None,
+    )
+
+    changed = _repair_job_for_response(job)
+
+    assert changed is True
+    assert job.status == "completed"
+    assert job.queue_status == "completed"
+    assert job.current_stage == "Complete"
+    assert job.stage_progress is None
+    assert job.error_message is None
+    assert job.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_hydrate_review_job_materializes_stage_rows_even_with_parent_designs(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.scalar_calls = 0
+            self.committed = False
+
+        async def scalar(self, _query):
+            self.scalar_calls += 1
+            return 0
+
+        async def commit(self):
+            self.committed = True
+
+    session = FakeSession()
+    ensured: list[str] = []
+
+    async def _fake_ensure_stage_review_rows(_session, job):
+        ensured.append(job.id)
+        return 25
+
+    monkeypatch.setattr("routers.designs.load_review_gate_snapshot", lambda *_args, **_kwargs: ("post_fampnn", {}))
+    monkeypatch.setattr("routers.designs.ensure_stage_review_rows", _fake_ensure_stage_review_rows)
+
+    job = SimpleNamespace(
+        id="job-1",
+        output_dir="/tmp/demo",
+        awaiting_stage="post_fampnn",
+        awaiting_payload={},
+        awaiting_input=True,
+    )
+
+    review_stage = await _hydrate_review_job(session, job)
+
+    assert review_stage == "post_fampnn"
+    assert ensured == ["job-1"]
+    assert session.committed is True
+
+
+def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
+    files = [
+        ("candidate", Path("/tmp/demo_design.cif")),
+        ("candidate", Path("/tmp/demo_design.pdb")),
+        ("candidate", Path("/tmp/other_design.cif")),
+        ("filtered", Path("/tmp/demo_design.cif")),
+        ("filtered", Path("/tmp/demo_design.pdb")),
+    ]
+
+    deduped = _dedupe_review_structures(files)
+
+    assert deduped == [
+        ("candidate", Path("/tmp/demo_design.pdb")),
+        ("candidate", Path("/tmp/other_design.cif")),
+        ("filtered", Path("/tmp/demo_design.pdb")),
+    ]
 
 
 def test_child_job_reuse_requires_real_ppiflow_outputs(tmp_path: Path) -> None:

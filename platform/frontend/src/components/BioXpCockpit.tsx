@@ -625,7 +625,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
                 axis: command.axis,
                 steps: command.steps,
                 wait_timeout_s: CAMERA_HOLD_JOG_WAIT_TIMEOUT_S,
-                reuse_prepared: true,
+                reuse_prepared: false,
             },
             {
                 onSuccess: (data) => {
