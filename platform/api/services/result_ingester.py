@@ -415,6 +415,70 @@ def _resolve_validation_structure_role_fields(
     }
 
 
+_GEOMETRY_METRIC_FIELDS = (
+    "epitope_contact_count",
+    "epitope_min_distance",
+    "epitope_min_atom_distance",
+    "epitope_nearest_antibody_residue",
+    "epitope_nearest_target_residue",
+    "epitope_nearest_antibody_atom",
+    "epitope_nearest_target_atom",
+    "epitope_mapping_mode",
+    "epitope_centroid_distance",
+    "target_contact_count",
+    "target_min_distance",
+    "target_min_atom_distance",
+    "target_nearest_antibody_residue",
+    "target_nearest_target_residue",
+    "target_nearest_antibody_atom",
+    "target_nearest_target_atom",
+    "target_centroid_distance",
+    "detected_antibody_chains",
+    "detected_target_chain",
+    "antibody_residue_count",
+    "target_residue_count",
+    "epitope_residue_count",
+)
+
+
+def _geometry_design_fields(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        field_name: metrics.get(field_name)
+        for field_name in _GEOMETRY_METRIC_FIELDS
+        if field_name in metrics
+    }
+
+
+def _compute_validation_geometry_fields(
+    *,
+    structure_path: Path,
+    job_params: Dict[str, Any],
+    detected_antibody_chains: Optional[str],
+    detected_target_chain: Optional[str],
+    epitope_residues: Optional[List[str]],
+) -> Dict[str, Any]:
+    if not detected_antibody_chains or not detected_target_chain:
+        return {}
+
+    try:
+        metrics = compute_contact_geometry_metrics(
+            pdb_path=structure_path,
+            epitope_residues=epitope_residues or [],
+            antibody_chain=detected_antibody_chains,
+            target_chain=detected_target_chain,
+            reference_target_pdb=job_params.get("target_pdb") or job_params.get("fixed_target_source_path"),
+        )
+    except Exception as exc:
+        print(f"[Ingester] Failed validation geometry scoring for {structure_path}: {exc}")
+        return {}
+
+    if not epitope_residues:
+        for field_name in tuple(metrics.keys()):
+            if field_name.startswith("epitope_"):
+                metrics.pop(field_name, None)
+    return metrics
+
+
 def _strict_aligned_error_fields(
     *,
     structure_path: Path,
@@ -1806,31 +1870,7 @@ def _apply_screening_row(design: "Design", row: dict) -> bool:
 
 def _apply_geometry_metrics(design: "Design", metrics: Dict[str, Any], *, overwrite: bool = True) -> bool:
     changed = False
-    metric_fields = (
-        "epitope_contact_count",
-        "epitope_min_distance",
-        "epitope_min_atom_distance",
-        "epitope_nearest_antibody_residue",
-        "epitope_nearest_target_residue",
-        "epitope_nearest_antibody_atom",
-        "epitope_nearest_target_atom",
-        "epitope_mapping_mode",
-        "epitope_centroid_distance",
-        "target_contact_count",
-        "target_min_distance",
-        "target_min_atom_distance",
-        "target_nearest_antibody_residue",
-        "target_nearest_target_residue",
-        "target_nearest_antibody_atom",
-        "target_nearest_target_atom",
-        "target_centroid_distance",
-        "detected_antibody_chains",
-        "detected_target_chain",
-        "antibody_residue_count",
-        "target_residue_count",
-        "epitope_residue_count",
-    )
-    for field_name in metric_fields:
+    for field_name in _GEOMETRY_METRIC_FIELDS:
         if field_name not in metrics:
             continue
         new_value = metrics.get(field_name)
@@ -2923,21 +2963,21 @@ async def ingest_loose_files(
                 _, residue_plddt = extract_plddt_from_pdb(structure_path)
                 structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 
-                # Calculate epitope contacts if epitope_residues provided
-                epitope_contact_count = None
-                epitope_min_distance = None
-                if epitope_residues and structure_path:
-                    epitope_contact_count, epitope_min_distance = calculate_epitope_contacts(
-                        structure_path, 
-                        epitope_residues,
-                        antibody_chain="A",  # RFantibody outputs antibody as chain A
-                        target_chain="B"     # Target as chain B
-                    )
                 structure_role_fields = _resolve_validation_structure_role_fields(
                     structure_path=Path(structure_path),
                     job_params=job_params,
                     detected_antibody_chains=detected_antibody_chains,
                     detected_target_chain=detected_target_chain,
+                )
+                geometry_fields = (
+                    _compute_validation_geometry_fields(
+                        structure_path=Path(structure_path),
+                        job_params=job_params,
+                        detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                        detected_target_chain=structure_role_fields.get("detected_target_chain"),
+                        epitope_residues=epitope_residues,
+                    )
+                    if allow_binder_target_metrics else {}
                 )
                 
                 # Create design
@@ -2989,14 +3029,9 @@ async def ingest_loose_files(
                         **fam_provenance,
                     },
                     confidence_metrics=combined_confidence or None,
-                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
-                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
+                    **_geometry_design_fields(geometry_fields),
                     **aligned_error_fields,
-                    
-                    # Epitope contact metrics
-                    epitope_contact_count=epitope_contact_count,
-                    epitope_min_distance=epitope_min_distance,
-                    
+
                     # Metrics
                     plddt_overall=safe_float(plddt),
                     pae_overall=safe_float(pae),
@@ -3277,20 +3312,21 @@ async def ingest_loose_files(
                     if plddt_target is not None and plddt_target <= 1.0:
                         plddt_target *= 100.0
 
-                epitope_contact_count = None
-                epitope_min_distance = None
-                if epitope_residues and structure_path:
-                    epitope_contact_count, epitope_min_distance = calculate_epitope_contacts(
-                        structure_path,
-                        epitope_residues,
-                        antibody_chain="A",
-                        target_chain="B",
-                    )
                 structure_role_fields = _resolve_validation_structure_role_fields(
                     structure_path=Path(structure_path),
                     job_params=job_params,
                     detected_antibody_chains=detected_antibody_chains,
                     detected_target_chain=detected_target_chain,
+                )
+                geometry_fields = (
+                    _compute_validation_geometry_fields(
+                        structure_path=Path(structure_path),
+                        job_params=job_params,
+                        detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
+                        detected_target_chain=structure_role_fields.get("detected_target_chain"),
+                        epitope_residues=epitope_residues,
+                    )
+                    if allow_binder_target_metrics else {}
                 )
                 lineage = await _resolve_parent_design_lineage(
                     session,
@@ -3318,10 +3354,7 @@ async def ingest_loose_files(
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
-                    epitope_contact_count=epitope_contact_count,
-                    epitope_min_distance=epitope_min_distance,
-                    detected_antibody_chains=structure_role_fields.get("detected_antibody_chains"),
-                    detected_target_chain=structure_role_fields.get("detected_target_chain"),
+                    **_geometry_design_fields(geometry_fields),
 
                     plddt_overall=safe_float(plddt),
                     plddt_binder=safe_float(plddt_binder),
