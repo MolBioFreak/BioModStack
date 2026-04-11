@@ -20,17 +20,32 @@ class _RunningProcess:
     process: subprocess.Popen
     stdout_handle: object
     stderr_handle: object
+    resource_class: str
 
 
-def _max_heavy_runs() -> int:
+def _max_runs_for_class(resource_class: str) -> int:
+    normalized = str(resource_class or "").strip().lower()
+    if normalized == "cpu_light":
+        env_name = "BMS_ANALYSIS_MAX_CONCURRENT_LIGHT"
+        default = "4"
+    else:
+        env_name = "BMS_ANALYSIS_MAX_CONCURRENT_HEAVY"
+        default = "1"
     try:
-        return max(1, int(os.getenv("BMS_ANALYSIS_MAX_CONCURRENT_HEAVY", "1")))
+        return max(1, int(os.getenv(env_name, default)))
     except (TypeError, ValueError):
-        return 1
+        return int(default)
 
 
-def _heavy_cpu_threads() -> int:
-    override = os.getenv("BMS_ANALYSIS_HEAVY_CPUS")
+def _threads_for_class(resource_class: str) -> int:
+    normalized = str(resource_class or "").strip().lower()
+    if normalized == "cpu_light":
+        override = os.getenv("BMS_ANALYSIS_LIGHT_CPUS")
+        default = "1"
+    else:
+        override = os.getenv("BMS_ANALYSIS_HEAVY_CPUS")
+        default = None
+
     cpu_count = max(1, os.cpu_count() or 1)
     if override:
         value = str(override).strip().lower()
@@ -42,6 +57,11 @@ def _heavy_cpu_threads() -> int:
             return max(1, min(cpu_count, int(value)))
         except (TypeError, ValueError):
             pass
+    if default is not None:
+        try:
+            return max(1, min(cpu_count, int(default)))
+        except (TypeError, ValueError):
+            return 1
     return max(1, cpu_count - 2)
 
 
@@ -126,22 +146,27 @@ class AnalysisWorker:
             await session.commit()
 
     async def _launch_available_runs(self) -> None:
-        available_slots = max(0, _max_heavy_runs() - len(self._running))
-        if available_slots <= 0:
-            return
+        running_by_class: Dict[str, int] = {}
+        for entry in self._running.values():
+            key = str(entry.resource_class or "cpu_heavy")
+            running_by_class[key] = running_by_class.get(key, 0) + 1
 
         async with self._db_session_factory() as session:
             result = await session.execute(
                 select(AnalysisRun)
                 .where(AnalysisRun.status == "queued")
                 .order_by(AnalysisRun.queued_at.asc())
-                .limit(available_slots)
+                .limit(64)
             )
             queued_runs = list(result.scalars().all())
             if not queued_runs:
                 return
 
             for run in queued_runs:
+                resource_class = str(run.resource_class or "cpu_heavy")
+                max_runs = _max_runs_for_class(resource_class)
+                if running_by_class.get(resource_class, 0) >= max_runs:
+                    continue
                 manifest = run.artifact_manifest if isinstance(run.artifact_manifest, dict) else None
                 if not manifest:
                     manifest = build_artifact_manifest_for_run(run)
@@ -165,7 +190,7 @@ class AnalysisWorker:
                 stderr_handle = open(stderr_file, "ab")
                 api_root = Path(__file__).resolve().parents[1]
                 env = dict(os.environ)
-                cpu_threads = str(_heavy_cpu_threads())
+                cpu_threads = str(_threads_for_class(resource_class))
                 env["BMS_ANALYSIS_CPUS"] = cpu_threads
                 env["OMP_NUM_THREADS"] = cpu_threads
                 env["OPENBLAS_NUM_THREADS"] = cpu_threads
@@ -197,7 +222,9 @@ class AnalysisWorker:
                     process=process,
                     stdout_handle=stdout_handle,
                     stderr_handle=stderr_handle,
+                    resource_class=resource_class,
                 )
+                running_by_class[resource_class] = running_by_class.get(resource_class, 0) + 1
 
             await session.commit()
 
