@@ -11,6 +11,38 @@ import MolstarViewer from './MolstarViewer';
 import { fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 
+const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
+type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
+const QUICK_VIEWER_SIZE_OPTIONS: ReadonlyArray<{ value: QuickViewerSize; label: string; title: string }> = [
+    { value: 'micro', label: 'XS', title: 'Very compact viewer' },
+    { value: 'compact', label: 'S', title: 'Compact viewer' },
+    { value: 'standard', label: 'M', title: 'Standard viewer' },
+    { value: 'large', label: 'L', title: 'Large viewer' },
+    { value: 'xlarge', label: 'XL', title: 'Maximum viewer size' },
+];
+
+const QUICK_VIEWER_HEIGHTS: Record<QuickViewerSize, number> = {
+    micro: 96,
+    compact: 168,
+    standard: 280,
+    large: 360,
+    xlarge: 480,
+};
+
+const readQuickViewerSizePreference = (): QuickViewerSize => {
+    try {
+        const stored = localStorage.getItem(QUICK_VIEWER_COMPACT_KEY);
+        if (stored === 'true') return 'compact';
+        if (stored === 'false' || stored == null) return 'large';
+        if (QUICK_VIEWER_SIZE_OPTIONS.some((option) => option.value === stored)) {
+            return stored as QuickViewerSize;
+        }
+    } catch {
+        // Fall back to the default below.
+    }
+    return 'large';
+};
+
 interface StructureFile {
     name: string;
     filename: string;
@@ -30,7 +62,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     // Use internal state if not externally controlled
     const [internalJobId, setInternalJobId] = useState<string | null>(null);
     const [selectedStructure, setSelectedStructure] = useState<StructureFile | null>(null);
-    const [expanded, setExpanded] = useState(false);
+    const [viewerSize, setViewerSize] = useState<QuickViewerSize>('large');
 
     // Use external ID if provided, otherwise internal
     const isControlled = externalJobId !== undefined;
@@ -83,12 +115,25 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         }
     }, [completedJobs, internalJobId, isControlled]);
 
+    useEffect(() => {
+        setViewerSize(readQuickViewerSizePreference());
+    }, []);
+
+    const setViewerSizePreference = (nextSize: QuickViewerSize) => {
+        setViewerSize(nextSize);
+        try {
+            localStorage.setItem(QUICK_VIEWER_COMPACT_KEY, nextSize);
+        } catch {
+            // Ignore localStorage write failures and keep in-memory state.
+        }
+    };
+
     const structureUrl = selectedStructure
         ? `/api/files/pdb/${selectedStructure.path}`
         : null;
 
-    // Dynamic sizing based on expanded state
-    const viewerHeight = expanded ? 400 : 180;
+    const viewerHeight = QUICK_VIEWER_HEIGHTS[viewerSize];
+    const hideViewerControls = viewerSize === 'micro' || viewerSize === 'compact';
 
     // Find current job name for display
     const currentJob = completedJobs.find((j: Job) => j.id === selectedJobId);
@@ -107,16 +152,26 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                             {selectedStructure.type}
                         </span>
                     )}
-                    <button
-                        onClick={() => setExpanded(!expanded)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${expanded
-                            ? 'bg-accent/30 text-accent'
-                            : 'bg-slate-600/50 text-slate-400 hover:bg-slate-600'
-                            }`}
-                        title={expanded ? 'Collapse viewer' : 'Expand with controls'}
-                    >
-                        {expanded ? '⇲ Compact' : '⇱ Expand'}
-                    </button>
+                    <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-600/70 bg-slate-900/60 p-1">
+                        {QUICK_VIEWER_SIZE_OPTIONS.map((option) => {
+                            const active = viewerSize === option.value;
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => setViewerSizePreference(option.value)}
+                                    className={`min-w-9 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                                        active
+                                            ? 'border-accent bg-accent/20 text-white'
+                                            : 'border-slate-600 bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                                    }`}
+                                    title={option.title}
+                                >
+                                    {option.label}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
             </div>
 
@@ -163,7 +218,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 </div>
             )}
 
-            {/* Viewer - height and controls based on expanded state */}
+            {/* Viewer */}
             <div
                 className="bg-slate-900/50 rounded-lg overflow-hidden transition-all duration-300"
                 style={{ position: 'relative', zIndex: 0 }}
@@ -173,7 +228,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         structureUrl={structureUrl}
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}
-                        hideControls={!expanded}
+                        hideControls={hideViewerControls}
                         height={viewerHeight}
                         backgroundColor="#0f172a"
                     />
