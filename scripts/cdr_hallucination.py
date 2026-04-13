@@ -161,7 +161,7 @@ def hallucinate_cdrs(
         from colabdesign import mk_afdesign_model, clear_mem
     except ImportError:
         print("[ERROR] ColabDesign not installed. Install with:")
-        print("  pip install git+https://github.com/sokrypton/ColabDesign.git@v1.1.1")
+        print("  uv pip install git+https://github.com/sokrypton/ColabDesign.git@v1.1.1")
         return []
     
     # Initialize model
