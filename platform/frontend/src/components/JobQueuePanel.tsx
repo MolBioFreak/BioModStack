@@ -286,7 +286,7 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
     );
 }
 
-export function JobQueuePanel() {
+export function JobQueuePanel({ className = '' }: { className?: string }) {
     const queryClient = useQueryClient();
     const [expanded, setExpanded] = useState(true);
     const [showCancelled, setShowCancelled] = useState(false);
@@ -428,7 +428,7 @@ export function JobQueuePanel() {
     };
 
     return (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden mb-6">
+        <div className={`bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden ${className}`.trim()}>
             {/* Header */}
             <div
                 className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/20"

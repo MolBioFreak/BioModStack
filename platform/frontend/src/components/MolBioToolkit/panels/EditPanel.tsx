@@ -5,28 +5,21 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import type { SequenceData, SelectionInfo } from '../types';
+import {
+    applyDeleteEdit,
+    applyInsertEdit,
+    applyReplaceEdit,
+    applyTransformEdit,
+} from '../utils/sequenceEdits';
+import {
+    sequenceUnitLabel,
+} from '../utils/nucleotides';
 
 interface EditPanelProps {
     sequenceData: SequenceData;
     selection: SelectionInfo | null;
     onSequenceChange: (newData: SequenceData, actionLabel?: string) => void;
 }
-
-// Complement mapping for DNA/RNA
-const DNA_COMPLEMENT: Record<string, string> = {
-    'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G',
-    'a': 't', 't': 'a', 'g': 'c', 'c': 'g',
-    'N': 'N', 'n': 'n',
-    'R': 'Y', 'Y': 'R', 'M': 'K', 'K': 'M',
-    'S': 'S', 'W': 'W', 'H': 'D', 'D': 'H',
-    'B': 'V', 'V': 'B',
-};
-
-const RNA_COMPLEMENT: Record<string, string> = {
-    'A': 'U', 'U': 'A', 'G': 'C', 'C': 'G',
-    'a': 'u', 'u': 'a', 'g': 'c', 'c': 'g',
-    'N': 'N', 'n': 'n',
-};
 
 export function EditPanel({
     sequenceData,
@@ -39,7 +32,8 @@ export function EditPanel({
     const [activeTab, setActiveTab] = useState<'insert' | 'edit' | 'transform'>('edit');
 
     const isRNA = sequenceData.sequenceType === 'rna';
-    const complement = isRNA ? RNA_COMPLEMENT : DNA_COMPLEMENT;
+    const sequenceType = isRNA ? 'rna' : 'dna';
+    const unitLabel = sequenceUnitLabel(sequenceType);
 
     // Get selected sequence
     const selectedSequence = useMemo(() => {
@@ -69,42 +63,33 @@ export function EditPanel({
             return;
         }
 
-        let newSequence: string;
         let position: number;
 
         if (insertPosition === 'start') {
             position = 0;
-            newSequence = cleanedInsert + sequenceData.sequence;
         } else if (insertPosition === 'end') {
             position = sequenceData.sequence.length;
-            newSequence = sequenceData.sequence + cleanedInsert;
         } else {
             position = selection?.start ?? sequenceData.sequence.length;
-            newSequence =
-                sequenceData.sequence.slice(0, position) +
-                cleanedInsert +
-                sequenceData.sequence.slice(position);
         }
 
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Insert ${cleanedInsert.length}bp at position ${position + 1}`);
+        onSequenceChange(
+            applyInsertEdit(sequenceData, position, cleanedInsert),
+            `Insert ${cleanedInsert.length}${unitLabel} at position ${position + 1}`,
+        );
         setInsertText('');
-    }, [insertText, insertPosition, selection, sequenceData, onSequenceChange, cleanSequence, validateSequence]);
+    }, [insertText, insertPosition, selection, sequenceData, onSequenceChange, cleanSequence, validateSequence, unitLabel]);
 
     // Delete selection
     const handleDelete = useCallback(() => {
         if (!selection) return;
         const start = Math.min(selection.start, selection.end);
         const end = Math.max(selection.start, selection.end);
-        const newSequence = sequenceData.sequence.slice(0, start) + sequenceData.sequence.slice(end);
-
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Delete ${end - start}bp from position ${start + 1}`);
-    }, [selection, sequenceData, onSequenceChange]);
+        onSequenceChange(
+            applyDeleteEdit(sequenceData, start, end),
+            `Delete ${end - start}${unitLabel} from position ${start + 1}`,
+        );
+    }, [selection, sequenceData, onSequenceChange, unitLabel]);
 
     // Replace selection
     const handleReplace = useCallback(() => {
@@ -117,74 +102,45 @@ export function EditPanel({
 
         const start = Math.min(selection.start, selection.end);
         const end = Math.max(selection.start, selection.end);
-        const newSequence =
-            sequenceData.sequence.slice(0, start) +
-            cleanedReplace +
-            sequenceData.sequence.slice(end);
-
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Replace ${end - start}bp with ${cleanedReplace.length}bp`);
+        onSequenceChange(
+            applyReplaceEdit(sequenceData, start, end, cleanedReplace),
+            `Replace ${end - start}${unitLabel} with ${cleanedReplace.length}${unitLabel}`,
+        );
         setReplaceText('');
-    }, [selection, replaceText, sequenceData, onSequenceChange, cleanSequence, validateSequence]);
+    }, [selection, replaceText, sequenceData, onSequenceChange, cleanSequence, validateSequence, unitLabel]);
 
     // Reverse complement
     const handleReverseComplement = useCallback(() => {
         if (!selection) return;
         const start = Math.min(selection.start, selection.end);
         const end = Math.max(selection.start, selection.end);
-        const selected = sequenceData.sequence.substring(start, end);
-
-        const reversed = selected.split('').reverse().map(c => complement[c] || c).join('');
-        const newSequence =
-            sequenceData.sequence.slice(0, start) +
-            reversed +
-            sequenceData.sequence.slice(end);
-
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Reverse complement ${end - start}bp`);
-    }, [selection, sequenceData, onSequenceChange, complement]);
+        onSequenceChange(
+            applyTransformEdit(sequenceData, start, end, 'reverse_complement'),
+            `Reverse complement ${end - start}${unitLabel}`,
+        );
+    }, [selection, sequenceData, onSequenceChange, unitLabel]);
 
     // Reverse only (no complement)
     const handleReverse = useCallback(() => {
         if (!selection) return;
         const start = Math.min(selection.start, selection.end);
         const end = Math.max(selection.start, selection.end);
-        const selected = sequenceData.sequence.substring(start, end);
-
-        const reversed = selected.split('').reverse().join('');
-        const newSequence =
-            sequenceData.sequence.slice(0, start) +
-            reversed +
-            sequenceData.sequence.slice(end);
-
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Reverse ${end - start}bp`);
-    }, [selection, sequenceData, onSequenceChange]);
+        onSequenceChange(
+            applyTransformEdit(sequenceData, start, end, 'reverse'),
+            `Reverse ${end - start}${unitLabel}`,
+        );
+    }, [selection, sequenceData, onSequenceChange, unitLabel]);
 
     // Complement only (no reverse)
     const handleComplement = useCallback(() => {
         if (!selection) return;
         const start = Math.min(selection.start, selection.end);
         const end = Math.max(selection.start, selection.end);
-        const selected = sequenceData.sequence.substring(start, end);
-
-        const complemented = selected.split('').map(c => complement[c] || c).join('');
-        const newSequence =
-            sequenceData.sequence.slice(0, start) +
-            complemented +
-            sequenceData.sequence.slice(end);
-
-        onSequenceChange({
-            ...sequenceData,
-            sequence: newSequence
-        }, `Complement ${end - start}bp`);
-    }, [selection, sequenceData, onSequenceChange, complement]);
+        onSequenceChange(
+            applyTransformEdit(sequenceData, start, end, 'complement'),
+            `Complement ${end - start}${unitLabel}`,
+        );
+    }, [selection, sequenceData, onSequenceChange, unitLabel]);
 
     // Convert to uppercase
     const handleUppercase = useCallback(() => {
@@ -235,7 +191,12 @@ export function EditPanel({
         onSequenceChange({
             ...sequenceData,
             sequence: newSequence,
-            sequenceType: 'rna'
+            sequenceType: 'rna',
+            primers: (sequenceData.primers || []).map((primer) => ({
+                ...primer,
+                sequence: primer.sequence.replace(/T/g, 'U').replace(/t/g, 'u'),
+            })),
+            translations: []
         }, 'Convert DNA to RNA');
     }, [sequenceData, onSequenceChange, isRNA]);
 
@@ -246,7 +207,12 @@ export function EditPanel({
         onSequenceChange({
             ...sequenceData,
             sequence: newSequence,
-            sequenceType: 'dna'
+            sequenceType: 'dna',
+            primers: (sequenceData.primers || []).map((primer) => ({
+                ...primer,
+                sequence: primer.sequence.replace(/U/g, 'T').replace(/u/g, 't'),
+            })),
+            translations: []
         }, 'Convert RNA to DNA');
     }, [sequenceData, onSequenceChange, isRNA]);
 
@@ -284,7 +250,7 @@ export function EditPanel({
                         </div>
                         <div className="flex justify-between">
                             <span className="text-slate-400">Length:</span>
-                            <span className="text-blue-400 font-mono">{selectionLength} bp</span>
+                            <span className="text-blue-400 font-mono">{selectionLength} {unitLabel}</span>
                         </div>
                         {selectedSequence.length <= 50 && (
                             <div className="mt-1 font-mono text-slate-300 break-all">
@@ -306,7 +272,7 @@ export function EditPanel({
                         disabled={!selection}
                         className="w-full py-2 bg-red-600 hover:bg-red-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
                     >
-                        Delete Selection ({selectionLength} bp)
+                        Delete Selection ({selectionLength} {unitLabel})
                     </button>
 
                     {/* Replace */}
@@ -378,7 +344,7 @@ export function EditPanel({
                         />
                         {insertText && (
                             <div className="text-xs text-slate-400">
-                                {cleanSequence(insertText).length} bp to insert
+                                {cleanSequence(insertText).length} {unitLabel} to insert
                             </div>
                         )}
                     </div>
@@ -459,7 +425,7 @@ export function EditPanel({
                 <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="flex justify-between">
                         <span className="text-slate-400">Total:</span>
-                        <span className="font-mono">{sequenceData.sequence.length.toLocaleString()} bp</span>
+                        <span className="font-mono">{sequenceData.sequence.length.toLocaleString()} {unitLabel}</span>
                     </div>
                     <div className="flex justify-between">
                         <span className="text-slate-400">Type:</span>

@@ -1417,7 +1417,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     );
 }
 
-export function GpuSchedulerControls() {
+export function GpuSchedulerControls({ className = '' }: { className?: string }) {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
@@ -1428,7 +1428,7 @@ export function GpuSchedulerControls() {
     const gpus = systemData?.data.gpus ?? [];
 
     return (
-        <section className="mb-6">
+        <section className={className}>
             <GPUSchedulerSettings gpus={gpus} />
         </section>
     );

@@ -20,6 +20,7 @@ import numpy as np
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from antibody_pipeline_contract import is_antibody_pipeline_mode
 from database import Design, Job
 from paths import get_data_root, resolve_allowed_path, to_allowed_relative
 from services.result_ingester import (
@@ -473,7 +474,7 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
 
 
 def infer_antibody_stage_state(job: Job, completed: list[str], stage_outputs: dict[str, list[str]]) -> Tuple[list[str], dict[str, list[str]]]:
-    if str(job.mode or "").strip() != "antibody_denovo_pipeline":
+    if not is_antibody_pipeline_mode(job.mode):
         return completed, stage_outputs
 
     output_path = resolve_output_dir(job.output_dir)
@@ -775,6 +776,96 @@ def _rfantibody_rog_refresh_required(
         return False
 
 
+def _metadata_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) > 0
+    return True
+
+
+def _rfantibody_review_metadata_refresh_required(
+    row: Design,
+    screening_by_name: dict[str, dict],
+    screening_by_backbone: dict[int, dict],
+) -> bool:
+    sample_pdb_path = str(getattr(row, "pdb_path", "") or "").strip()
+    if not sample_pdb_path:
+        return False
+
+    structure_path = Path(sample_pdb_path)
+    screening = screening_row_for_structure(structure_path, screening_by_name, screening_by_backbone)
+    rfa_trb = load_rfantibody_trb_summary(structure_path) or {}
+
+    trb_field_sources = {
+        "confidence_metrics": rfa_trb.get("rfa_metadata"),
+        "rfa_hotspot_min_distance": safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
+        "rfa_hotspot_avg_min_distance": safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
+        "rfa_runtime_seconds": safe_float(rfa_trb.get("rfa_runtime_seconds")),
+        "rfa_device": rfa_trb.get("rfa_device"),
+        "rfa_diffusion_steps": safe_int(rfa_trb.get("rfa_diffusion_steps")),
+        "rfa_noise_scale_ca": safe_float(rfa_trb.get("rfa_noise_scale_ca")),
+        "rfa_noise_scale_frame": safe_float(rfa_trb.get("rfa_noise_scale_frame")),
+        "rfa_guide_scale": safe_float(rfa_trb.get("rfa_guide_scale")),
+        "rfa_plddt_initial": safe_float(rfa_trb.get("rfa_plddt_initial")),
+        "rfa_plddt_final": safe_float(rfa_trb.get("rfa_plddt_final")),
+        "rfa_plddt_delta": safe_float(rfa_trb.get("rfa_plddt_delta")),
+        "rfa_plddt_selected": safe_float(rfa_trb.get("rfa_plddt_selected")),
+        "rfa_plddt_nonselected": safe_float(rfa_trb.get("rfa_plddt_nonselected")),
+        "rfa_design_loops": rfa_trb.get("rfa_design_loops"),
+        "rfa_hotspots": rfa_trb.get("rfa_hotspots"),
+    }
+    for field_name, source_value in trb_field_sources.items():
+        if not _metadata_value_present(getattr(row, field_name, None)) and _metadata_value_present(source_value):
+            return True
+
+    if not isinstance(screening, dict):
+        return False
+
+    screening_field_sources = {
+        "detected_antibody_chains": str(screening.get("detected_antibody_chains") or "").strip() or None,
+        "detected_target_chain": str(screening.get("detected_target_chain") or "").strip() or None,
+        "epitope_contact_count": safe_int(screening.get("epitope_contact_count")),
+        "epitope_min_distance": safe_float(screening.get("epitope_min_distance")),
+        "epitope_min_atom_distance": safe_float(screening.get("epitope_min_atom_distance")),
+        "epitope_nearest_antibody_residue": screening.get("epitope_nearest_antibody_residue"),
+        "epitope_nearest_target_residue": screening.get("epitope_nearest_target_residue"),
+        "epitope_nearest_antibody_atom": screening.get("epitope_nearest_antibody_atom"),
+        "epitope_nearest_target_atom": screening.get("epitope_nearest_target_atom"),
+        "epitope_mapping_mode": screening.get("epitope_mapping_mode"),
+        "epitope_centroid_distance": safe_float(screening.get("epitope_centroid_distance")),
+        "target_contact_count": safe_int(screening.get("target_contact_count")),
+        "target_min_distance": safe_float(screening.get("target_min_distance")),
+        "target_min_atom_distance": safe_float(screening.get("target_min_atom_distance")),
+        "target_nearest_antibody_residue": screening.get("target_nearest_antibody_residue"),
+        "target_nearest_target_residue": screening.get("target_nearest_target_residue"),
+        "target_nearest_antibody_atom": screening.get("target_nearest_antibody_atom"),
+        "target_nearest_target_atom": screening.get("target_nearest_target_atom"),
+        "target_centroid_distance": safe_float(screening.get("target_centroid_distance")),
+        "antibody_residue_count": safe_int(screening.get("antibody_residue_count")),
+        "target_residue_count": safe_int(screening.get("target_residue_count")),
+        "epitope_residue_count": safe_int(screening.get("epitope_residue_count")),
+        "screening_reason": str(screening.get("screening_reason") or "").strip() or None,
+        "rfa_loop_metrics": _coerce_json_value(screening.get("rfa_loop_metrics")),
+        "rfa_hotspot_metrics": _coerce_json_value(screening.get("rfa_hotspot_metrics")),
+        "rfa_hotspot_covered_count": safe_int(screening.get("rfa_hotspot_covered_count")),
+    }
+    for field_name, source_value in screening_field_sources.items():
+        if not _metadata_value_present(getattr(row, field_name, None)) and _metadata_value_present(source_value):
+            return True
+
+    screening_has_pass_fail = (
+        screening.get("passed_screen") not in (None, "")
+        or _metadata_value_present(screening_field_sources["screening_reason"])
+    )
+    if getattr(row, "passed_screen", None) is None and screening_has_pass_fail:
+        return True
+
+    return False
+
+
 async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False) -> int:
     stage = str(job.awaiting_stage or "").strip().lower()
     if stage not in REVIEWABLE_STAGES:
@@ -918,6 +1009,43 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 if missing_rog_sample and _rfantibody_rog_refresh_required(
                     missing_rog_sample[0],
                     missing_rog_sample[1],
+                ):
+                    force = True
+
+            if not force:
+                incomplete_rf_metadata_rows = (
+                    await session.execute(
+                        select(Design).where(
+                            Design.job_id == job.id,
+                            Design.source_stage == stage,
+                            or_(
+                                Design.confidence_metrics.is_(None),
+                                Design.rfa_hotspot_min_distance.is_(None),
+                                Design.rfa_hotspot_avg_min_distance.is_(None),
+                                Design.rfa_plddt_final.is_(None),
+                                Design.rfa_design_loops.is_(None),
+                                Design.rfa_hotspots.is_(None),
+                                Design.detected_antibody_chains.is_(None),
+                                Design.detected_target_chain.is_(None),
+                                Design.target_contact_count.is_(None),
+                                Design.target_min_distance.is_(None),
+                                Design.epitope_contact_count.is_(None),
+                                Design.passed_screen.is_(None),
+                                Design.screening_reason.is_(None),
+                                Design.rfa_loop_metrics.is_(None),
+                                Design.rfa_hotspot_metrics.is_(None),
+                                Design.rfa_hotspot_covered_count.is_(None),
+                            ),
+                        ).limit(25)
+                    )
+                ).scalars().all()
+                if any(
+                    _rfantibody_review_metadata_refresh_required(
+                        row,
+                        screening_by_name,
+                        screening_by_backbone,
+                    )
+                    for row in incomplete_rf_metadata_rows
                 ):
                     force = True
 

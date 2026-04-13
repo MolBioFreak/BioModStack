@@ -2,13 +2,13 @@
 # Two-phase pipeline: Generation → Validation & Scoring
 
 id: antibody_denovo
-name: De Novo Antibody Design
+name: De Novo Nanobody Toolkit
 version: 1.0.0
 category: antibody_design
 description: >
-  End-to-end pipeline for designing novel antibodies targeting a specified epitope.
-  Phase 1 generates CDR backbones and sequences. Phase 2 validates structure,
-  scores immunogenicity, stability, and optionally runs affinity maturation.
+  De novo nanobody design toolkit with multiple upstream generators.
+  Use RFantibody or BoltzGen nanobody generation, then reopen selected outputs
+  in Antibody Refinement for staged redesign, validation, and downstream review.
 
 workflow_type: pipeline
 container: apptainer/antibody_tools.sif
@@ -20,7 +20,11 @@ ui_color: "#ec4899"
 modes:
   - id: antibody_denovo_pipeline
     name: Full Pipeline
-    description: Run complete de novo antibody design pipeline
+    description: Run the complete de novo antibody design pipeline
+    params: []
+  - id: antibody_refinement_pipeline
+    name: Refinement Pipeline
+    description: Start from selected antibody candidates and run modular refinement/validation stages
     params: []
 
 inputs:
@@ -35,9 +39,11 @@ outputs:
 # Pipeline steps (for UI step-by-step configuration)
 steps:
   - id: backbone
-    name: CDR Backbone Generation
-    model: rfantibody
-    description: Generate antibody CDR loop backbones using fine-tuned RFdiffusion
+    name: De Novo Generation
+    models:
+      - rfantibody
+      - boltzgen
+    description: Generate nanobody candidates with RFantibody or BoltzGen, depending on the chosen de novo engine
     required: true
 
   - id: sequence
@@ -53,7 +59,7 @@ steps:
   - id: validation
     name: Structure Validation
     model: boltz2
-    description: Validate designed antibody-antigen complex structure
+    description: Validate designed antibody-antigen complex structure with the configured validator backend
     required: true
 
   - id: immunogenicity
@@ -210,8 +216,16 @@ params:
   # ===== STEP 3: VALIDATION PARAMS =====
   - name: run_structure_validation
     type: boolean
-    description: Validate structures with Boltz2
+    description: Validate structures before downstream scoring
     default: true
+
+  - name: structure_validator
+    type: string
+    description: Validation backend for designed complexes
+    default: boltz2
+    enum:
+      - boltz2
+      - protenix
 
   - name: boltz_iptm_threshold
     type: number

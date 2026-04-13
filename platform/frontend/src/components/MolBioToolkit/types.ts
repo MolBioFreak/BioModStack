@@ -2,11 +2,14 @@
  * Shared TypeScript types for MolBioToolkit
  */
 
+import type { SequenceAnalysisTrack } from '../../lib/api';
+
 // Import types from SequenceViewer for re-export and use
 import type {
     Feature,
     Primer,
     Translation,
+    AnalysisTrack,
     SequenceData,
     VisibilityState,
     SelectionInfo
@@ -22,6 +25,7 @@ export type {
     Feature,
     Primer,
     Translation,
+    AnalysisTrack,
     SequenceData,
     VisibilityState,
     SelectionInfo
@@ -41,6 +45,7 @@ export interface NucleotideSequenceResponse {
     length: number;
     features: Feature[] | null;
     primers: Primer[] | null;
+    analysis_tracks?: SequenceAnalysisTrack[] | null;
     organism: string | null;
     accession: string | null;
     source_file: string | null;
@@ -49,6 +54,8 @@ export interface NucleotideSequenceResponse {
     operation: string | null;
     operation_params: Record<string, unknown> | null;
     version: number | null;
+    entity_kind?: string;
+    topology?: 'circular' | 'linear';
     created_at: string;
     updated_at: string | null;
 }
@@ -62,7 +69,13 @@ export interface NucleotideSequenceListItem {
     length: number;
     gc_content: number | null;
     feature_count: number;
+    organism?: string | null;
+    accession?: string | null;
+    source_file?: string | null;
+    entity_kind?: string;
+    topology?: 'circular' | 'linear';
     created_at: string;
+    updated_at?: string | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -92,6 +105,8 @@ export interface DigestFragment {
     sequence: string;
     start: number;
     end: number;
+    length?: number;
+    wraps_origin?: boolean;
 }
 
 export interface PCRProduct {
@@ -101,6 +116,9 @@ export interface PCRProduct {
     length: number;
     forwardPrimer: Primer;
     reversePrimer: Primer;
+    start?: number;
+    end?: number;
+    wrapsOrigin?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -108,10 +126,12 @@ export interface PCRProduct {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export type ActivePanel =
+    | 'view'
     | 'digest'
     | 'pcr'
     | 'primers'
     | 'ligation'
+    | 'rna'
     | 'features'
     | 'edit'
     | 'search'
