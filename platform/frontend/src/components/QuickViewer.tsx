@@ -5,7 +5,7 @@
  * Can be controlled externally via selectedJobId prop for integration with other components
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import MolstarViewer from './MolstarViewer';
 import { fetchJobs } from '../lib/api';
@@ -21,12 +21,68 @@ const QUICK_VIEWER_SIZE_OPTIONS: ReadonlyArray<{ value: QuickViewerSize; label: 
     { value: 'xlarge', label: 'XL', title: 'Maximum viewer size' },
 ];
 
-const QUICK_VIEWER_HEIGHTS: Record<QuickViewerSize, number> = {
-    micro: 96,
-    compact: 168,
-    standard: 280,
-    large: 360,
-    xlarge: 480,
+interface QuickViewerLayout {
+    panelMaxWidthClass: string;
+    panelPaddingClass: string;
+    viewerHeight: string;
+    titleClass: string;
+    selectorClass: string;
+    structureSelectorClass: string;
+    stackHeader: boolean;
+    showJobIndicator: boolean;
+}
+
+const QUICK_VIEWER_LAYOUTS: Record<QuickViewerSize, QuickViewerLayout> = {
+    micro: {
+        panelMaxWidthClass: 'max-w-3xl',
+        panelPaddingClass: 'p-3',
+        viewerHeight: 'clamp(120px, 18vw, 148px)',
+        titleClass: 'text-xs',
+        selectorClass: 'px-2 py-1 text-xs',
+        structureSelectorClass: 'px-2 py-1 text-[11px]',
+        stackHeader: true,
+        showJobIndicator: false,
+    },
+    compact: {
+        panelMaxWidthClass: 'max-w-5xl',
+        panelPaddingClass: 'p-3.5',
+        viewerHeight: 'clamp(156px, 20vw, 208px)',
+        titleClass: 'text-sm',
+        selectorClass: 'px-2.5 py-1.5 text-sm',
+        structureSelectorClass: 'px-2.5 py-1.5 text-xs',
+        stackHeader: true,
+        showJobIndicator: true,
+    },
+    standard: {
+        panelMaxWidthClass: 'max-w-6xl',
+        panelPaddingClass: 'p-4',
+        viewerHeight: 'clamp(228px, 24vw, 320px)',
+        titleClass: 'text-sm',
+        selectorClass: 'px-3 py-1.5 text-sm',
+        structureSelectorClass: 'px-3 py-1.5 text-xs',
+        stackHeader: false,
+        showJobIndicator: true,
+    },
+    large: {
+        panelMaxWidthClass: 'max-w-none',
+        panelPaddingClass: 'p-4',
+        viewerHeight: 'clamp(288px, 30vw, 412px)',
+        titleClass: 'text-sm',
+        selectorClass: 'px-3 py-1.5 text-sm',
+        structureSelectorClass: 'px-3 py-1.5 text-xs',
+        stackHeader: false,
+        showJobIndicator: true,
+    },
+    xlarge: {
+        panelMaxWidthClass: 'max-w-none',
+        panelPaddingClass: 'p-4',
+        viewerHeight: 'clamp(360px, 36vw, 520px)',
+        titleClass: 'text-sm',
+        selectorClass: 'px-3 py-1.5 text-sm',
+        structureSelectorClass: 'px-3 py-1.5 text-xs',
+        stackHeader: false,
+        showJobIndicator: true,
+    },
 };
 
 const readQuickViewerSizePreference = (): QuickViewerSize => {
@@ -63,6 +119,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const [internalJobId, setInternalJobId] = useState<string | null>(null);
     const [selectedStructure, setSelectedStructure] = useState<StructureFile | null>(null);
     const [viewerSize, setViewerSize] = useState<QuickViewerSize>('large');
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     // Use external ID if provided, otherwise internal
     const isControlled = externalJobId !== undefined;
@@ -119,6 +177,15 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         setViewerSize(readQuickViewerSizePreference());
     }, []);
 
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            const activeElement = document.fullscreenElement;
+            setIsFullscreen(activeElement === containerRef.current);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
     const setViewerSizePreference = (nextSize: QuickViewerSize) => {
         setViewerSize(nextSize);
         try {
@@ -128,22 +195,59 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         }
     };
 
+    const toggleFullscreen = useCallback(async () => {
+        const node = containerRef.current;
+        if (!node) return;
+
+        try {
+            if (document.fullscreenElement === node) {
+                await document.exitFullscreen();
+                return;
+            }
+
+            if (document.fullscreenElement && document.fullscreenElement !== node) {
+                await document.exitFullscreen();
+            }
+
+            await node.requestFullscreen();
+        } catch (error) {
+            console.error('Failed to toggle quick viewer fullscreen:', error);
+        }
+    }, []);
+
     const structureUrl = selectedStructure
         ? `/api/files/pdb/${selectedStructure.path}`
         : null;
 
-    const viewerHeight = QUICK_VIEWER_HEIGHTS[viewerSize];
-    const hideViewerControls = viewerSize === 'micro' || viewerSize === 'compact';
+    const layout = QUICK_VIEWER_LAYOUTS[viewerSize];
+    const viewerHeight = isFullscreen ? '100%' : layout.viewerHeight;
+    const hideViewerControls = !isFullscreen && (viewerSize === 'micro' || viewerSize === 'compact');
+    const stackHeader = isFullscreen ? false : layout.stackHeader;
+    const showJobIndicator = isFullscreen || layout.showJobIndicator;
 
     // Find current job name for display
     const currentJob = completedJobs.find((j: Job) => j.id === selectedJobId);
 
     return (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4" style={{ position: 'relative' }}>
+        <div
+            ref={containerRef}
+            className={isFullscreen ? 'h-full w-full bg-slate-950 p-4 md:p-6' : `mx-auto w-full transition-all duration-300 ${layout.panelMaxWidthClass}`}
+        >
+            <div
+                className={`border border-slate-700 bg-slate-800/50 backdrop-blur-sm transition-all duration-300 ${
+                    isFullscreen
+                        ? 'flex h-full flex-col rounded-none p-4 md:p-6'
+                        : `rounded-xl ${layout.panelPaddingClass}`
+                }`}
+                style={{ position: 'relative' }}
+            >
             {/* Header */}
-            <div className="flex items-center justify-between mb-3" style={{ position: 'relative', zIndex: 10 }}>
-                <h3 className="text-sm font-semibold text-slate-200">🔬 Quick Viewer</h3>
-                <div className="flex items-center gap-2">
+            <div
+                className={`mb-3 flex gap-2 ${stackHeader ? 'flex-col' : 'flex-col sm:flex-row sm:items-center sm:justify-between'}`}
+                style={{ position: 'relative', zIndex: 10 }}
+            >
+                <h3 className={`font-semibold text-slate-200 ${layout.titleClass}`}>Quick Viewer</h3>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     {selectedStructure && (
                         <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${selectedStructure.type === 'pdb'
                             ? 'bg-green-500/20 text-green-400'
@@ -172,6 +276,14 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                             );
                         })}
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => void toggleFullscreen()}
+                        className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+                        title={isFullscreen ? 'Exit fullscreen' : 'Open fullscreen'}
+                    >
+                        {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                    </button>
                 </div>
             </div>
 
@@ -180,7 +292,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 <select
                     value={selectedJobId || ''}
                     onChange={(e) => setSelectedJobId(e.target.value || null)}
-                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-sm focus:ring-2 focus:ring-accent focus:border-transparent"
+                    className={`w-full bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-accent focus:border-transparent ${layout.selectorClass}`}
                 >
                     <option value="">Select a job...</option>
                     {completedJobs.map((job: Job) => (
@@ -200,7 +312,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                             const struct = structureData.structures.find(s => s.path === e.target.value);
                             setSelectedStructure(struct || null);
                         }}
-                        className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-xs focus:ring-2 focus:ring-accent focus:border-transparent"
+                        className={`w-full bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-accent focus:border-transparent ${layout.structureSelectorClass}`}
                     >
                         {structureData.structures.map((struct) => (
                             <option key={struct.path} value={struct.path}>
@@ -212,7 +324,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
             )}
 
             {/* Current job indicator if externally set */}
-            {currentJob && (
+            {showJobIndicator && currentJob && (
                 <div className="mb-2 text-xs text-slate-400">
                     Viewing: <span className="text-accent">{currentJob.name}</span>
                 </div>
@@ -220,11 +332,12 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
 
             {/* Viewer */}
             <div
-                className="bg-slate-900/50 rounded-lg overflow-hidden transition-all duration-300"
+                className={`bg-slate-900/50 overflow-hidden transition-all duration-300 ${isFullscreen ? 'min-h-0 flex-1 rounded-xl' : 'rounded-lg'}`}
                 style={{ position: 'relative', zIndex: 0 }}
             >
                 {structureUrl ? (
                     <MolstarViewer
+                        key={`${selectedStructure?.path ?? 'empty'}:${selectedStructure?.type ?? 'pdb'}:${viewerSize}:${hideViewerControls ? 'compact' : 'full'}:${isFullscreen ? 'fs' : 'inline'}`}
                         structureUrl={structureUrl}
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}
@@ -240,6 +353,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         {selectedJobId ? 'No structures found' : 'Select a job to preview'}
                     </div>
                 )}
+            </div>
             </div>
         </div>
     );
