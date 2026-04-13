@@ -3,6 +3,17 @@
 // Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
+
+def resolveBooleanParam(value, defaultValue) {
+    if (value == null) {
+        return defaultValue
+    }
+    if (value instanceof Boolean) {
+        return value
+    }
+    return value.toString().equalsIgnoreCase('true')
+}
+
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
 // Uses ColabFold database via params.msa_local_db
 // Hybrid scheduling: GPU when available, falls back to CPU
@@ -1121,14 +1132,9 @@ workflow structure_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
-    def toBool = { v, defVal ->
-        if (v == null) return defVal
-        if (v instanceof Boolean) return v
-        return v.toString().equalsIgnoreCase('true')
-    }
-    def boltz_use_msa = toBool(params.boltz_use_msa, false)
-    def rf3_use_msa = toBool(params.rf3_use_msa, false)
-    def protenix_use_msa = toBool(params.protenix_use_msa, true)
+    def boltz_use_msa = resolveBooleanParam(params.boltz_use_msa, false)
+    def rf3_use_msa = resolveBooleanParam(params.rf3_use_msa, false)
+    def protenix_use_msa = resolveBooleanParam(params.protenix_use_msa, true)
 
     structures = channel.empty()
 
