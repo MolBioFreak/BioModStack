@@ -44,7 +44,7 @@ interface AnalyticsDashboardProps {
     loadedDesignCount?: number;
 }
 
-const ANALYSIS_LENS_ORDER: AnalysisLens[] = ['rfantibody', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
+const ANALYSIS_LENS_ORDER: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
 
 const FAMILY_META: Record<AnalysisLens, { title: string; description: string; accent: string }> = {
     validation: {
@@ -56,6 +56,11 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
         title: 'RFantibody Backbone Gate',
         description: 'Backbone screening and target-contact metrics from the RFA review flow. Orientation metrics will surface here automatically once they are persisted.',
         accent: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
+    },
+    boltzgen: {
+        title: 'BoltzGen Generator Batch',
+        description: 'All-atom de novo nanobody candidates before refinement. This view emphasizes generator-native confidence, affinity priors, and batch-shape signals.',
+        accent: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
     },
     fampnn: {
         title: 'FAMPNN Sequence Design',
@@ -105,9 +110,9 @@ const CORE_METRICS: MetricOption[] = [
     { key: 'ipsae', label: 'ipSAE', color: '#22d3ee', family: 'validation' },
     { key: 'ipsae_binder_to_target', label: 'ipSAE B→T', color: '#06b6d4', family: 'validation' },
     { key: 'ipsae_target_to_binder', label: 'ipSAE T→B', color: '#0891b2', family: 'validation' },
-    { key: 'conf_score', label: 'Confidence', color: '#34d399', family: 'validation' },
-    { key: 'affinity_score', label: 'Affinity', color: '#10b981', family: 'validation' },
-    { key: 'binder_probability', label: 'Binder Probability', color: '#22c55e', family: 'validation' },
+    { key: 'conf_score', label: 'Confidence', color: '#34d399', family: 'boltzgen' },
+    { key: 'affinity_score', label: 'Affinity', color: '#10b981', family: 'boltzgen' },
+    { key: 'binder_probability', label: 'Binder Probability', color: '#22c55e', family: 'boltzgen' },
     { key: 'rmsd_overall', label: 'Overall RMSD', color: '#f87171', family: 'validation' },
     { key: 'rmsd_binder', label: 'Binder RMSD', color: '#fb7185', family: 'validation' },
     { key: 'rmsd_target', label: 'Target RMSD', color: '#f97316', family: 'validation' },
@@ -190,6 +195,10 @@ const LENS_DEFAULT_METRICS: Record<AnalysisLens, {
     rfantibody: {
         custom2d: ['epitope_contact_count', 'rfa_plddt_selected', 'target_contact_count'],
         custom3d: ['epitope_contact_count', 'target_contact_count', 'rfa_plddt_selected', 'backbone_id'],
+    },
+    boltzgen: {
+        custom2d: ['conf_score', 'affinity_score', 'binder_probability'],
+        custom3d: ['conf_score', 'affinity_score', 'binder_probability', 'plddt_overall'],
     },
     fampnn: {
         custom2d: ['fampnn_psce', 'plddt_overall', 'iptm'],
@@ -553,6 +562,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         const mapped: Record<Exclude<MetricFamily, 'dynamic'>, string[]> = {
             validation: [],
             rfantibody: [],
+            boltzgen: [],
             fampnn: [],
             ppiflow: [],
             frustrampnn: [],
@@ -570,6 +580,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         const counts: Record<Exclude<MetricFamily, 'dynamic'>, number> = {
             validation: 0,
             rfantibody: 0,
+            boltzgen: 0,
             fampnn: 0,
             ppiflow: 0,
             frustrampnn: 0,
@@ -800,6 +811,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                 'rfd_rog',
             );
         }
+        if (resolvedAnalysisLens === 'boltzgen') {
+            return firstAvailableKey('affinity_score', 'conf_score', 'binder_probability', 'plddt_overall');
+        }
         if (resolvedAnalysisLens === 'fampnn') {
             return firstAvailableKey('fampnn_psce', 'mpnn_score');
         }
@@ -824,6 +838,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const lensPrimaryMetricDescription = (() => {
         if (resolvedAnalysisLens === 'rfantibody') {
             return 'RFA review should lead with contact geometry, hotspot coverage, and RFA-native quality fields rather than validator-style per-residue traces.';
+        }
+        if (resolvedAnalysisLens === 'boltzgen') {
+            return 'BoltzGen batches should lead with generator-native confidence and affinity priors, then hand off shortlisted cohorts into refinement and validation.';
         }
         if (resolvedAnalysisLens === 'fampnn') {
             return 'Sequence triage should lead with PSCE and related sequence-quality summaries before structural validation exists.';
@@ -1763,6 +1780,64 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             ) : null}
                         </PlotCard>
                     )}
+                </div>
+            </section>
+            )}
+
+            {familyDesignCounts.boltzgen > 0 && (
+            <section className="space-y-4">
+                <SectionHeader
+                    title={FAMILY_META.boltzgen.title}
+                    description={FAMILY_META.boltzgen.description}
+                    count={familyDesignCounts.boltzgen}
+                    accentClass={FAMILY_META.boltzgen.accent}
+                />
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                    <PlotCard
+                        title="Confidence vs Affinity"
+                        description="Front-end generator triage for BoltzGen cohorts before refinement or validator passes."
+                        hasData={buildScatter('conf_score', 'affinity_score', 'binder_probability').length > 0}
+                    >
+                        <Plot
+                            data={buildScatter('conf_score', 'affinity_score', 'binder_probability')}
+                            layout={make2DLayout('conf_score', 'affinity_score')}
+                            config={DEFAULT_PLOT_CONFIG}
+                            style={{ width: '100%', height: '300px' }}
+                        />
+                    </PlotCard>
+
+                    <PlotCard
+                        title="Confidence Distribution"
+                        description="Batch-level spread of BoltzGen confidence across the generated nanobody set."
+                        hasData={buildHistogram(firstAvailableKey('conf_score', 'plddt_overall') || 'conf_score').length > 0}
+                    >
+                        <Plot
+                            data={buildHistogram(firstAvailableKey('conf_score', 'plddt_overall') || 'conf_score')}
+                            layout={make2DLayout(firstAvailableKey('conf_score', 'plddt_overall') || 'conf_score', 'count', {
+                                yaxis: {
+                                    title: { text: 'Count', font: { color: AXIS_COLOR } },
+                                    gridcolor: GRID_COLOR,
+                                    color: AXIS_COLOR,
+                                    zeroline: false,
+                                },
+                            })}
+                            config={DEFAULT_PLOT_CONFIG}
+                            style={{ width: '100%', height: '300px' }}
+                        />
+                    </PlotCard>
+
+                    <PlotCard
+                        title="Binder Size vs Confidence"
+                        description="Checks whether the requested nanobody length envelope is staying inside the productive confidence band."
+                        hasData={buildScatter('binder_length', firstAvailableKey('conf_score', 'plddt_overall') || 'plddt_overall', 'affinity_score').length > 0}
+                    >
+                        <Plot
+                            data={buildScatter('binder_length', firstAvailableKey('conf_score', 'plddt_overall') || 'plddt_overall', 'affinity_score')}
+                            layout={make2DLayout('binder_length', firstAvailableKey('conf_score', 'plddt_overall') || 'plddt_overall')}
+                            config={DEFAULT_PLOT_CONFIG}
+                            style={{ width: '100%', height: '300px' }}
+                        />
+                    </PlotCard>
                 </div>
             </section>
             )}
