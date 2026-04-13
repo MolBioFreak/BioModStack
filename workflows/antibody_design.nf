@@ -17,10 +17,10 @@ workflow ANTIBODY_DESIGN {
 
     main:
     // Initialize output channels as empty
-    designs_ch = Channel.empty()
-    stability_ch = Channel.empty()
-    probs_ch = Channel.empty()
-    cdrs_ch = Channel.empty()
+    designs_ch = channel.empty()
+    stability_ch = channel.empty()
+    probs_ch = channel.empty()
+    cdrs_ch = channel.empty()
 
     // Mode: structure_prediction
     // Input: [meta, fasta] -> IMMUNEBUILDER
@@ -47,7 +47,11 @@ workflow ANTIBODY_DESIGN {
         cdrs_ch = ANARCII.out.cdrs
     }
     else if (mode == 'de_novo') {
-        RFANTIBODY(input_ch)
+        def framework_ch = params.framework_pdb
+            ? channel.of(file(params.framework_pdb))
+            : channel.of(file("${params.code_root}/lib/NO_FRAMEWORK"))
+
+        RFANTIBODY(input_ch, framework_ch)
         THERMOMPNN(RFANTIBODY.out.designs)
 
         designs_ch = RFANTIBODY.out.designs
