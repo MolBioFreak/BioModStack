@@ -1,72 +1,116 @@
 # BioModStack Control Platform API
 
-FastAPI backend for the BioModStack web interface.
+This FastAPI service is the control plane for BioModStack. It is not just a job
+submission wrapper: it owns orchestration state, result metadata, lineage,
+analysis scheduling, file access, sequence operations, and hardware proxying.
 
-## Pathing and Database
+## Entry Point
 
-DB resolution is centralized in `platform/api/paths.py`. Defaults:
-- `platform/api/biomodstack.db` (local)
-- `${BMS_DATA}/biomodstack.db` when `BMS_DATA` is set
+- [main.py](main.py)
 
-Overrides (highest priority first):
-- `DATABASE_URL` (SQLAlchemy URL)
-- `BMS_DB_PATH` (absolute sqlite path)
+On startup the API:
 
-If you change any of these, keep them consistent across API, scripts, and
-workflows to avoid writing to multiple databases.
+- initializes the database
+- starts the GPU orchestrator
+- starts the analysis worker
+- exposes model, job, result, file, mol bio, NGS-adjacent, and robotics routes
 
-## Setup (using uv)
+## Run Locally
+
+From `platform/api`:
 
 ```bash
-# Install uv if not installed
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Sync dependencies
-uv sync
-
-# Run development server
 uv run uvicorn main:app --reload --port 8000
 ```
 
-## Setup (alternative: pip)
+Or from the repo root:
 
 ```bash
-pip install -e .
-uvicorn main:app --reload --port 8000
+./start_ui.sh
 ```
 
-## API Endpoints
+## Major Router Surface
 
-- `GET /api/health` - Health check
-- `GET /api/jobs` - List all jobs
-- `POST /api/jobs` - Submit new job
-- `GET /api/jobs/{id}` - Get job details
-- `DELETE /api/jobs/{id}` - Cancel job
-- `GET /api/gpu/status` - GPU monitoring
-- `GET /api/files/browse` - Browse directories
-- `GET /api/system/db-info` - DB path + health info
+Included routers currently cover:
 
-## GPU Fan Backend
+- models and input schemas
+- jobs and queue/orchestration controls
+- designs and analyses
+- files and artifact browsing
+- analytics
+- system and GPU status
+- framework lookup
+- MSA helpers
+- nucleotide sequence storage
+- molecular biology operations
+- RCSB and Ribocentre helpers
+- BioXP robotics linkage/proxy routes
 
-Fan control backend is selected with `BMS_FAN_CONTROL_BACKEND`:
+The router registration lives in [main.py](main.py).
 
-- `nvidia-settings` (default): direct NVIDIA target mapping (`nvidia-settings`)
-- `coolercontrol`: uses CoolerControl daemon API (`/devices/.../settings/...`) for per-GPU, per-channel writes
+## Pathing and Data Roots
 
-When using `coolercontrol`, required runtime env:
+Path resolution is centralized in [paths.py](paths.py).
 
-- `BMS_COOLERCONTROL_DAEMON_ADDRESS` (default `127.0.0.1`)
-- `BMS_COOLERCONTROL_DAEMON_PORT` (default `11987`)
-- `BMS_COOLERCONTROL_USERNAME` (default `CCAdmin`)
-- `BMS_COOLERCONTROL_PASSWORD` (default `coolAdmin`)
-- `BMS_COOLERCONTROL_CLI` (absolute path to `cctv` if not discoverable in `PATH`)
+Important functions/roots:
 
-Notes:
-- `cctv` is used for mode discovery (`available_modes`) and operational diagnostics.
-- Mode names (`BMS_COOLERCONTROL_MODE_AUTO`, `BMS_COOLERCONTROL_MODE_MANUAL`) are optional and only used by helper scripts that bootstrap mode entries in CoolerControl.
-- API-level fallback is `nvidia-settings` when `BMS_FAN_CONTROL_BACKEND` is unset, but project launcher scripts (`start_ui.sh`, `restart_api.sh`) currently default this env to `coolercontrol`.
+- code root:
+  `get_code_root()`
+- data root:
+  `get_data_root()`
+- results:
+  `get_results_dir()`
+- work:
+  `get_work_dir()`
+- analysis cache:
+  `get_analysis_cache_dir()`
+- containers:
+  `get_container_dir()`
+- weights:
+  `get_weights_root()`
+- DB:
+  `get_db_path()` / `get_db_url()`
 
-## Interactive Docs
+Priority for database location:
 
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+1. `DATABASE_URL`
+2. `BMS_DB_PATH`
+3. `${BMS_DATA}/biomodstack.db`
+4. repo-local fallback
+
+## Core Runtime Env Vars
+
+- `BMS_HOME`
+- `BMS_DATA`
+- `BMS_INPUTS`
+- `BMS_DB_PATH`
+- `DATABASE_URL`
+- `BMS_WEIGHTS`
+- `BMS_CONTAINER_DIR`
+- `BMS_MSA_CACHE`
+- `BMS_COLABFOLD_DB`
+- `BMS_SABDAB_CACHE`
+- `BMS_FAN_CONTROL_BACKEND`
+- `CORS_ORIGINS`
+
+BioXP-specific env vars are documented in
+[../../docs/Lab_Automation_MolBio_and_Sequencing.md](../../docs/Lab_Automation_MolBio_and_Sequencing.md).
+
+## Operational Role
+
+The API is responsible for:
+
+- normalizing launch params
+- mapping UI model definitions to workflow runtime behavior
+- tracking stage outputs and lineage
+- persisting `Job`, `Design`, and `AnalysisRun` records
+- serving artifacts back to the frontend
+- running post-hoc analysis and review refresh flows
+
+## Related Docs
+
+- [../../docs/README.md](../../docs/README.md)
+- [../../docs/Platform_Overview.md](../../docs/Platform_Overview.md)
+- [../../docs/Results_and_Analysis.md](../../docs/Results_and_Analysis.md)
+- [../../docs/ai_guidance/Database_Instructions.md](../../docs/ai_guidance/Database_Instructions.md)
+- [../../docs/ai_guidance/Centralization_and_Standardization.md](../../docs/ai_guidance/Centralization_and_Standardization.md)

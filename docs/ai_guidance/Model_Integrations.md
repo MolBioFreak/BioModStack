@@ -1,206 +1,142 @@
-Model Integrations
-==================
+# BioModStack Model Integrations
 
-Purpose
--------
-Canonical list of integrated models/tools, internal documentation links, and
-external code/paper references when documented in this repo. Update this file
-whenever a model is added/removed or its integration changes.
+This file is the live registry-oriented documentation for model and workflow
+integrations in BMS. It replaces the older plan-heavy version that pointed at
+missing docs.
 
-Registry Models (platform/api/config/models/*.yaml)
----------------------------------------------------
-Each entry is backed by a YAML definition loaded by `platform/api/model_registry.py`.
+## How To Read This File
 
-1) **af2 (AlphaFold2)**
-   - Internal: `docs/installation.md`, `docs/parameters.md`, `docs/WORKSTATION_SETUP.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- “Live” means the model or workflow is wired into the current codebase and
+  surfaced through `main.nf`, the model registry, or the frontend launcher.
+- “Internal” means child/orchestrator entries that exist for execution but are
+  not intended as standalone user launch targets.
+- dated spec/plan docs elsewhere under `docs/` are implementation history, not
+  the authoritative integration list.
 
-2) **rfdiffusion**
-   - Internal: `docs/modes.md`, `docs/installation.md`, `docs/parameters.md`
-   - External code: https://github.com/RosettaCommons/RFdiffusion
-   - Paper/Preprint: not referenced in repo
+## Integration Layers
 
-3) **proteinmpnn**
-   - Internal: `docs/parameters.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+Every model integration usually touches some subset of:
 
-4) **fampnn (Full-Atom MPNN)**
-   - Internal: `docs/FAMPNN_CONSTRAINTS_UPDATE.md`, `docs/parameters.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- `platform/api/config/models/*.yaml`
+- `platform/api/services/nextflow.py`
+- [main.nf](../../main.nf)
+- one or more `workflows/*.nf` or `modules/*.nf` files
+- frontend submission surfaces under `platform/frontend/src/components`
 
-5) **boltz2**
-   - Internal: `docs/installation.md`, `docs/parameters.md`
-   - External code: https://huggingface.co/boltz-community/boltz-2
-   - Paper/Preprint: not referenced in repo
+## Live User-Facing Workflow Families
 
-6) **rf3 (RosettaFold3 / Foundry)**
-   - Internal: `docs/foundry_discrepancies.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+### Antibody and binder workflows
 
-7) **ligandmpnn**
-   - Internal: not referenced in repo
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- `antibody_denovo`
+  staged antibody de novo and refinement pipeline
+- `antibody_design`
+  antibody toolkit modes
+- `bindcraft`
+  minibinder / peptide binder design
+- `protein_local_redesign`
+  constrained remodel + redesign workflow
 
-8) **bindcraft**
-   - Internal: `docs/parameters.md`, `workflows/bindcraft_design.nf`
-   - External code: https://github.com/martinpacesa/BindCraft
-   - Paper/Preprint: not referenced in repo
+### Generic prediction / design / docking
 
-9) **diffdock**
-   - Internal: `platform/diffdock_ui.py`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- `rfdiffusion`
+- `boltz2`
+- `protenix`
+- `af2`
+- `rf3`
+- `fampnn`
+- `proteinmpnn`
+- `diffdock`
+- `unidock`
+- `docking`
+- `boltzgen`
+- `oligo_design`
+- `mutagenesis`
 
-10) **unidock**
-   - Internal: `docs/parameters.md`
-   - External code: https://github.com/dptech-corp/Uni-Dock
-   - Paper/Preprint: not referenced in repo
+### Sequencing
 
-11) **boltzgen**
-   - Internal: `modules/boltzgen.nf`, `workflows/bindcraft_design.nf` (orchestration)
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- `nanopore`
 
-12) **oligo_design (RFDpoly)**
-   - Internal: `docs/OligoDesigner_Implementation_Plan.md`, `workflows/oligo_design.nf`
-   - External code: https://github.com/RosettaCommons/RFDpoly
-   - Paper/Preprint: https://www.biorxiv.org/content/10.1101/2025.10.01.679929v1
-   - Documentation: https://rosettacommons.github.io/RFDpoly/
+## Live Model Inventory By Function
 
-13) **mutagenesis**
-   - Internal: `docs/FrustraMPNN_Integration_Plan.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+### Backbone and generative design
 
-14) **antibody_denovo**
-   - Internal: `workflows/antibody_denovo.nf`, `docs/RFA_PPIFlow_Implementation_Plan_Final.md`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- RFantibody
+- RFdiffusion
+- BindCraft
+- BoltzGen
+- RFDpoly / Oligo Designer
 
-15) **antibody_design**
-   - Internal: `workflows/antibody_design.nf`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+### Sequence design and redesign
 
-16) **docking (meta)**
-   - Internal: `platform/api/config/models/docking.yaml`
-   - External code: not referenced in repo
-   - Paper/Preprint: not referenced in repo
+- FAMPNN
+- AntiFold
+- ProteinMPNN
+- FrustraMPNN
+- IgGM
 
-Child/Hidden Registry Models
-----------------------------
-- `rfantibody_child`, `fampnn_child`, `antibody_child`, `boltzgen_child`
-- Purpose: internal orchestration for multi-job workflows.
+### Prediction and validation
 
-Workflow / Module Integrations (not registry-backed)
-----------------------------------------------------
-These are invoked in Nextflow workflows but do not appear as registry models.
+- Boltz-2
+- Protenix
+- AlphaFold2
+- RF3
+- ImmuneBuilder-facing antibody structure prediction surface
 
-- **RFantibody** (`modules/rfantibody.nf`)
-  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`, `docs/RFA_Workflow_Fix_Plan_2026-02-10.md`
-  - External code: https://github.com/RosettaCommons/RFantibody
-  - Paper/Preprint: not referenced in repo
-  - Container: `rfantibody.sif` (build from `apptainer/rfantibody.def`)
-  - Weights: `${weights_root}/rfantibody/rfantibody_repo/weights/RFdiffusion_Ab.pt`
-  - Runtime policy:
-    - Container code is immutable by default (weights-only bind mount).
-    - Runtime preflight runs before inference (`scripts/check_rfantibody_runtime.py`).
-    - Build metadata stored at `/opt/RFantibody/.build_manifest`.
-  - Verification commands:
-    - `apptainer exec --nv <rfantibody.sif> python3 -c "import torch,dgl; print(torch.__version__, torch.version.cuda, dgl.__version__)"`
-    - `apptainer exec <rfantibody.sif> bash -lc 'cat /opt/RFantibody/.build_manifest'`
+### Post-processing and scoring
 
-- **PPIFlow** (`modules/ppiflow.nf`)
-  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`
-  - External code: https://github.com/Mingchenchen/PPIFlow
-  - Paper/Preprint: https://www.biorxiv.org/content/10.64898/2026.01.19.700484
+- ThermoMPNN
+- AntiBERTy
+- OpenMM
+- ANARCI / ANARCII
 
-- **AntiFold** (`modules/antifold.nf`)
-  - Internal: `workflows/antibody_denovo.nf`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+### Docking
 
-- **AntiBERTy** (`modules/antiberty.nf`)
-  - Internal: `workflows/antibody_denovo.nf`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+- DiffDock
+- Uni-Dock
 
-- **ThermoMPNN** (`modules/thermompnn.nf`)
-  - Internal: `workflows/antibody_denovo.nf`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+## Integration Notes That Matter
 
-- **IgGM** (`modules/iggm.nf`)
-  - Internal: `workflows/antibody_denovo.nf`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+### Antibody validation backends
 
-- **ImmuneBuilder** (`modules/immunebuilder.nf`)
-  - Internal: `workflows/antibody_design.nf`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+The current antibody de novo/refinement pipeline documents:
 
-- **FrustraMPNN** (`modules/frustrampnn.nf`)
-  - Internal: `docs/FrustraMPNN_Integration_Plan.md`
-  - External code: not referenced in repo
-  - Paper/Preprint: not referenced in repo
+- Boltz-2
+- Protenix
 
-- **ANARCII / ANARCI** (`modules/utils/anarci.nf`)
-  - Internal: used by antibody workflows
-  - External code: https://github.com/oxpig/ANARCI
-  - Paper/Preprint: not referenced in repo
+as the live validator backends.
 
-- **OpenMM (planned/optional)** (`docs/OpenMM_Integration_Plan.md`)
-  - External code: https://github.com/openmm/openmm-ml
-  - Related tooling: https://github.com/ACEsuit/mace-off, https://github.com/aiqm/torchani, https://github.com/openmm/pdbfixer
+RF3 exists in the codebase as a generic predictor, but should not be documented
+as a production antibody validator surface unless the workflow and control-plane
+integration explicitly say so.
 
-- **Protenix** (`modules/protenix.nf`)
-  - Internal: `platform/api/config/models/protenix.yaml`, `docs/Protenix_PXDesign_Integration_Plan.md`
-  - External code: https://github.com/bytedance/Protenix
-  - Paper/Preprint: https://www.biorxiv.org/content/10.1101/2025.01.08.631790
-  - Container: `protenix.sif` (CUTLASS v3.5.1 + cuEquivariance + HMMER)
-  - Weights: `$BMS_PROTENIX_WEIGHTS` or `${weights_root}/protenix`
-  - Modes: `predict` (single-chain), `complex` (multi-modal protein/DNA/RNA/ligand/ion)
-  - Model variants: `protenix_base_v1.0.0`, `protenix_base_v0.2.1`, `protenix_esm_v0.2.1`, `protenix_mini_esm_v0.5.0`
-  - MSA: Built-in `protenix prep` or ColabFold a3m; auto-switches to ESM model when MSA disabled
-  - VRAM: ~4GB base + 55 MB/1K tokens (quadratic scaling)
+### OpenMM is live
 
-Utility Dependencies (not models)
----------------------------------
-- **MMseqs2 / ColabFold DB**: local MSA generation (`scripts/run_local_msa.py`, `scripts/batch_msa.py`)
-- **Apptainer/Singularity containers**: `apptainer/*.sif`, configured via `params.container_dir`
+OpenMM should be documented as an active integrated post-processing/refinement
+component, not as a future plan.
 
-How to Add a New Model (Standardized Methodology)
--------------------------------------------------
-1) **Model registry YAML**
-   - Add `platform/api/config/models/<model_id>.yaml`
-   - Required fields: `id`, `name`, `version`, `category`, `description`, `container`
-   - Define `modes`, `params`, `inputs`, `outputs` as needed
+### Internal child models
 
-2) **Nextflow module/workflow**
-   - Add `modules/<model_id>.nf` (process definition)
-   - Add `workflows/<model_id>.nf` if it is a top-level workflow
-   - Wire into `main.nf` if it participates in the central pipeline
+These registry entries are internal orchestration surfaces:
 
-3) **Containers / weights**
-   - Ensure container exists in `params.container_dir`
-   - Mount weights via `params.weights_root` or model-specific params
+- `antibody_child`
+- `rfantibody_child`
+- `fampnn_child`
+- `boltzgen_child`
 
-4) **API + UI**
-   - Verify `platform/api/model_registry.py` picks up the YAML
-   - Add UI integration (templates, defaults, param panels) if user-facing
-   - Add any scheduler rules (GPU/CPU labels) if required
+Document them as internal unless the UI deliberately exposes them.
 
-5) **Docs**
-   - Update `docs/parameters.md` and any relevant integration plan
-   - Update `docs/ai_guidance/Model_Integrations.md` (this file)
-   - If new env paths are required, update `docs/ai_guidance/Centralization_and_Standardization.md`
+## Canonical Docs For Operators
 
-6) **Testing**
-   - Add a minimal run path (small input) for validation
-   - Confirm ingestion outputs are parsed and visible in UI
+- [Structure Design and Refinement](../Structure_Design_and_Refinement.md)
+- [API README](../../platform/api/README.md)
+- [Frontend README](../../platform/frontend/README.md)
+
+## Maintenance Rule
+
+Whenever a new model is added or a validator/entrypoint contract changes,
+update:
+
+1. the model YAML
+2. the relevant workflow/nextflow routing
+3. this file
+4. any operator doc affected by the change
