@@ -1,8 +1,8 @@
 # BioModStack Documentation
 
-This directory now has a canonical entry path. If a dated spec, plan, or fix
-note disagrees with the docs below, treat the docs below as the current source
-of truth unless the code has already moved again.
+This directory is the current tracked documentation set for BioModStack.
+Stale dated design/spec/review notes have been removed from the repo-facing docs
+surface so this index can act as the single starting point.
 
 ## Start Here
 
@@ -21,19 +21,6 @@ of truth unless the code has already moved again.
 - [Database Instructions](ai_guidance/Database_Instructions.md)
 - [Pathing and Centralization Rules](ai_guidance/Centralization_and_Standardization.md)
 
-## How To Read The Rest Of `docs/`
-
-The repo still contains many historical files with names like:
-
-- `*_Plan*.md`
-- `*_Spec*.md`
-- `*_Fix*.md`
-- `*_Review*.md`
-- dated implementation notes such as `*_2026-03-*.md`
-
-Those files are useful for design history and implementation context, but they
-are not the primary operator docs.
-
 ## Canonical Doc Roles
 
 - `README.md` at repo root:
@@ -44,8 +31,6 @@ are not the primary operator docs.
   subsystem-specific developer/operator references.
 - `docs/ai_guidance/*.md`:
   implementation policies and technical guidance for contributors.
-- dated docs under `docs/`:
-  historical plans, specs, and revision notes.
 
 ## Current Scope
 
