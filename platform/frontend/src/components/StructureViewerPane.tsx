@@ -114,6 +114,9 @@ function getDesignOriginLabel(design: Design | null | undefined): string | null 
     if (source === 'validation') {
         return 'Protenix Validation';
     }
+    if (source === 'boltzgen') {
+        return 'BoltzGen Candidate';
+    }
     if (source === 'fampnn') {
         return 'FAMPNN Candidate';
     }
@@ -562,6 +565,7 @@ export default function StructureViewerPane({
 
     const metricSectionTitle = (() => {
         if (designLens === 'rfantibody') return 'RFantibody Screen Metrics';
+        if (designLens === 'boltzgen') return 'BoltzGen Metrics';
         if (designLens === 'fampnn') return 'FAMPNN Metrics';
         if (designLens === 'frustrampnn') return 'FrustraMPNN Metrics';
         if (designLens === 'ppiflow') return 'PPIFlow Metrics';
@@ -573,6 +577,8 @@ export default function StructureViewerPane({
             ? (hasResidueConfidence
                 ? 'RF confidence here is stage-native RFantibody output, not a downstream validator score.'
                 : 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.')
+            : designLens === 'boltzgen'
+                ? 'BoltzGen generator cohorts should be read as de novo candidates first: conf_score, affinity priors, and binder size are the main triage signals before downstream refinement.'
             : designLens === 'fampnn'
                 ? 'FA-MPNN pSCE is an angstrom-scale expected sidechain error. Lower is better, and the worst-residue readout catches local outliers the average can hide.'
                 : null;
@@ -636,6 +642,31 @@ export default function StructureViewerPane({
                     label: 'Binder Length',
                     value: formatMetricValue(selectedDesign.binder_length ?? null, 0),
                     accentClass: 'text-amber-300',
+                },
+            ] satisfies StructureMetricCard[];
+        }
+
+        if (designLens === 'boltzgen') {
+            return [
+                {
+                    label: 'Confidence',
+                    value: formatMetricValue(selectedDesign.conf_score ?? selectedDesign.plddt_overall ?? null, 2),
+                    accentClass: getMetricColor('conf_score', selectedDesign.conf_score ?? null),
+                },
+                {
+                    label: 'Affinity',
+                    value: formatMetricValue(selectedDesign.affinity_score ?? null, 2),
+                    accentClass: 'text-emerald-300',
+                },
+                {
+                    label: 'iPTM',
+                    value: formatMetricValue(selectedDesign.iptm ?? selectedDesign.protein_iptm ?? null, 3),
+                    accentClass: 'text-amber-300',
+                },
+                {
+                    label: 'Binder Length',
+                    value: formatMetricValue(selectedDesign.binder_length ?? null, 0),
+                    accentClass: 'text-slate-200',
                 },
             ] satisfies StructureMetricCard[];
         }
