@@ -112,6 +112,22 @@ export interface Translation {
     frame?: 1 | 2 | 3;  // Reading frame (1-3 for both + and - strand)
 }
 
+export interface AnalysisTrack {
+    id: string;
+    name: string;
+    kind: 'reactivity' | 'coverage' | 'mismatch' | 'custom';
+    description?: string;
+    color?: string;
+    sourceFormat?: string;
+    sourceName?: string;
+    sourceUrl?: string;
+    normalization?: string;
+    values: Array<number | null>;
+    minValue?: number | null;
+    maxValue?: number | null;
+    createdAt?: string;
+}
+
 export interface SequenceData {
     name: string;
     description?: string;
@@ -121,6 +137,7 @@ export interface SequenceData {
     features: Feature[];
     primers?: Primer[];
     translations?: Translation[];
+    analysisTracks?: AnalysisTrack[];
 }
 
 export interface VisibilityState {
@@ -333,7 +350,8 @@ export const EMPTY_SEQUENCE: SequenceData = {
     sequenceType: "dna",
     features: [],
     primers: [],
-    translations: []
+    translations: [],
+    analysisTracks: [],
 };
 
 export const DEFAULT_VISIBILITY: VisibilityState = {
