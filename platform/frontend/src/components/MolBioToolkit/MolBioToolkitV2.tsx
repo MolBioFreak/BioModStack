@@ -595,7 +595,6 @@ export function MolBioToolkitV2() {
                 analysisTracks: [],
             };
 
-            console.log('Imported sequence:', sequenceData.name, 'length:', sequenceData.sequence.length);
             resetHistory(sequenceData);
             setSelectedSequenceId(null);
             setSelection(null);
@@ -974,13 +973,37 @@ export function MolBioToolkitV2() {
                                         selection={selection}
                                         onSelectionChange={handleSelection}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
-                                        height={120}
+                                        height={156}
                                     />
                                 )}
 
                                 {/* Sequence Viewer */}
-                                <div className={`flex-1 overflow-hidden ${showRnaStructureViewer ? 'grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]' : ''}`}>
-                                    <div className="min-h-0 overflow-hidden">
+                                {showRnaStructureViewer ? (
+                                    <div className="flex-1 overflow-hidden grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]">
+                                        <div className="min-h-0 overflow-hidden">
+                                            <SequenceViewer
+                                                sequenceData={viewerSequenceData}
+                                                visibility={visibility}
+                                                selectedEnzymes={selectedEnzymes}
+                                                onSelection={handleSelection}
+                                                highlightedRegions={highlightedRegions}
+                                                viewMode={viewMode}
+                                                colorPalette={colorPalette}
+                                                visibleFrames={visibleFrames}
+                                            />
+                                        </div>
+                                        {rnaStructureResult && (
+                                            <div className="min-h-0 overflow-hidden border-t border-slate-700">
+                                                <RnaStructureViewer
+                                                    result={rnaStructureResult}
+                                                    displayMode={rnaDisplayMode}
+                                                    evidenceTrack={selectedRnaEvidenceTrack}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 min-h-0 overflow-hidden">
                                         <SequenceViewer
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}
@@ -992,16 +1015,7 @@ export function MolBioToolkitV2() {
                                             visibleFrames={visibleFrames}
                                         />
                                     </div>
-                                    {showRnaStructureViewer && rnaStructureResult && (
-                                        <div className="min-h-0 overflow-hidden border-t border-slate-700">
-                                            <RnaStructureViewer
-                                                result={rnaStructureResult}
-                                                displayMode={rnaDisplayMode}
-                                                evidenceTrack={selectedRnaEvidenceTrack}
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                )}
                             </>
                         ) : (
                             <div className="flex items-center justify-center h-full text-slate-500">
