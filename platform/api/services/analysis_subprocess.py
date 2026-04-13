@@ -219,7 +219,7 @@ def _compute_chain_metrics(design: Design) -> tuple[dict[str, Any], dict[str, An
         "polymer_chain_count": len(polymer_chains),
         "residue_count": sum(int(value.get("length") or 0) for value in polymer_chains if isinstance(value, dict)),
     }
-    return result, summary, None, result
+    return result, summary, None, {"chain_metrics": result}
 
 
 def _compute_fampnn_psce_profile(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:

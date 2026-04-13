@@ -46,6 +46,33 @@ def copy_optional_file(src: Path, dst: Path) -> bool:
     return True
 
 
+def load_chain_roles(path: Path | None) -> dict[str, dict[str, list[str]]]:
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    chain_roles: dict[str, dict[str, list[str]]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        chain_roles[name] = {
+            "binder_chain_ids": [
+                str(chain_id).strip()
+                for chain_id in entry.get("binder_chain_ids", [])
+                if str(chain_id).strip()
+            ],
+            "target_chain_ids": [
+                str(chain_id).strip()
+                for chain_id in entry.get("target_chain_ids", [])
+                if str(chain_id).strip()
+            ],
+        }
+    return chain_roles
+
+
 def get_chain_ids(structure) -> list[str]:
     chain_ids = []
     seen = set()
@@ -286,7 +313,7 @@ def align_structure(args):
                     full_data_path = find_full_data_sidecar(json_path)
                     if full_data_path is None:
                         raise FileNotFoundError(f"Protenix full-data confidence JSON not found for {json_path.name}")
-                    out_full_data = output_dir / full_data_path.name
+                    out_full_data = output_dir / "aligned_error" / full_data_path.name
                     io = PDBIO()
                     io.set_structure(mobile_structure)
                     io.save(str(out_pdb))
@@ -299,7 +326,7 @@ def align_structure(args):
                     metrics["validator"] = "protenix"
                     metrics["aligned_pdb"] = out_pdb.name
                     metrics["source_cif"] = out_cif.name
-                    metrics["aligned_error_artifact"] = out_full_data.name
+                    metrics["aligned_error_artifact"] = f"aligned_error/{out_full_data.name}"
                     metrics["aligned_error_format"] = "protenix_full_json"
                     with out_json.open("w") as handle:
                         json.dump(metrics, handle, indent=2)
@@ -364,7 +391,7 @@ def align_structure(args):
         full_data_path = find_full_data_sidecar(json_path)
         if full_data_path is None:
             raise FileNotFoundError(f"Protenix full-data confidence JSON not found for {json_path.name}")
-        out_full_data = output_dir / full_data_path.name
+        out_full_data = output_dir / "aligned_error" / full_data_path.name
 
         io = PDBIO()
         io.set_structure(mobile_structure)
@@ -383,7 +410,7 @@ def align_structure(args):
         metrics["target_anchor_enabled"] = geometry_mode in {"conditioned", "frozen"}
         metrics["target_anchor_strict"] = strict_target_rmsd is not None
         metrics["target_replaced_from_reference"] = geometry_mode == "frozen"
-        metrics["aligned_error_artifact"] = out_full_data.name
+        metrics["aligned_error_artifact"] = f"aligned_error/{out_full_data.name}"
         metrics["aligned_error_format"] = "protenix_full_json"
 
         with out_json.open("w") as handle:
@@ -404,6 +431,7 @@ def main() -> None:
     parser.add_argument("--design_type", choices=["binder", "monomer"], required=True)
     parser.add_argument("--binder_chains", default="", help="Comma-separated binder chains")
     parser.add_argument("--target_chains", default="", help="Comma-separated target chains")
+    parser.add_argument("--chain_roles_json", type=Path, default=None, help="Optional JSON sidecar describing per-design binder/target chain roles")
     parser.add_argument("--geometry_mode", choices=["flexible", "conditioned", "frozen"], default="flexible")
     parser.add_argument("--strict_target_rmsd", type=float, default=None)
     parser.add_argument("--ncpus", type=int, default=1, help="Parallel worker count")
@@ -424,6 +452,7 @@ def main() -> None:
         logger.error("No Protenix confidence JSONs found in %s", args.protenix_dir)
         raise SystemExit(1)
 
+    chain_roles = load_chain_roles(args.chain_roles_json.expanduser().resolve() if args.chain_roles_json else None)
     tasks = []
     for json_file in json_files:
         try:
@@ -438,14 +467,18 @@ def main() -> None:
             logger.warning("No source design PDB found for %s", design_name)
             continue
 
+        resolved_roles = chain_roles.get(base_name) or chain_roles.get(design_name) or {}
+        binder_chain_csv = ",".join(resolved_roles.get("binder_chain_ids") or []) or args.binder_chains
+        target_chain_csv = ",".join(resolved_roles.get("target_chain_ids") or []) or args.target_chains
+
         tasks.append(
             (
                 design_path,
                 json_file,
                 args.output_dir,
                 args.design_type,
-                args.binder_chains,
-                args.target_chains,
+                binder_chain_csv,
+                target_chain_csv,
                 args.geometry_mode,
                 args.strict_target_rmsd,
             )
