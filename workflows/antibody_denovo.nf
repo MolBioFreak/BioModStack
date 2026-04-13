@@ -93,6 +93,216 @@ def parseFastaRecords(fasta_file) {
     return records
 }
 
+def normalizeGpuCsvValue(raw) {
+    if (raw == null) {
+        return ''
+    }
+    if (raw instanceof Collection) {
+        return raw.collect { value -> value?.toString()?.trim() }.findAll { value -> value }.join(',')
+    }
+    def text = raw.toString().trim()
+    if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
+        text = text.substring(1, text.length() - 1)
+    }
+    return text
+}
+
+def normalizeLoopSelectionValue(raw) {
+    if (raw == null) {
+        return null
+    }
+    def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
+    def normalized = values.collect { value -> value.toString().trim().toUpperCase() }.findAll { value -> value }
+    return normalized ? normalized.join(',') : null
+}
+
+def normalizePpiFlowRegionModeValue(raw) {
+    def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
+    if (value in ['all_cdrs']) {
+        return 'all_cdrs'
+    }
+    if (value in ['framework', 'framework_only']) {
+        return 'framework_only'
+    }
+    if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) {
+        return 'all_antibody'
+    }
+    return 'selected_cdrs'
+}
+
+def normalizeProtenixMsaBackendValue(raw) {
+    def value = (raw ?: 'auto').toString().trim().toLowerCase()
+    if (value in ['local', 'colabfold_api']) {
+        return value
+    }
+    return 'auto'
+}
+
+def resolveValidationBatchPlanValue(params, validatorRaw, useMsaRaw) {
+    def requested = params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10
+    int requestedSize
+    try {
+        requestedSize = requested.toString().toInteger()
+    } catch (Exception ignored) {
+        requestedSize = 10
+    }
+    requestedSize = Math.max(1, requestedSize)
+
+    def validator = (validatorRaw ?: 'boltz2').toString().trim().toLowerCase()
+    def useMsa = (useMsaRaw == true || useMsaRaw == 'true')
+    def effectiveSize = requestedSize
+    def reason = null
+
+    if (validator == 'protenix' && useMsa) {
+        def backend = normalizeProtenixMsaBackendValue(params.protenix_msa_backend)
+        def rawCap = backend == 'local'
+            ? (params.protenix_local_msa_max_seqs_per_validation_job ?: 1)
+            : (params.protenix_msa_max_seqs_per_validation_job ?: 1)
+        int cap
+        try {
+            cap = rawCap.toString().toInteger()
+        } catch (Exception ignored) {
+            cap = 1
+        }
+        cap = Math.max(1, cap)
+        effectiveSize = Math.min(requestedSize, cap)
+        if (effectiveSize < requestedSize) {
+            reason = "Protenix MSA batching override: ${requestedSize} -> ${effectiveSize} seqs/job (${backend} backend)"
+        }
+    }
+
+    return [requestedSize, effectiveSize, reason]
+}
+
+def normalizeArtifactPathsList(raw) {
+    if (raw == null) {
+        return []
+    }
+    def values = raw instanceof Collection ? raw : [raw]
+    return values.findAll { value -> value != null }.collect { value -> value.toString() }
+}
+
+def buildValidationArtifactManifestJson(Map<String, ?> artifacts) {
+    return groovy.json.JsonOutput.toJson(
+        artifacts.collectEntries { key, value ->
+            [(key): normalizeArtifactPathsList(value)]
+        }
+    )
+}
+
+def ensureParamDefault(params, key, value) {
+    if (!params.containsKey(key)) {
+        params[key] = value
+    }
+}
+
+def initializeAntibodyDenovoParams(params) {
+    ensureParamDefault(params, 'framework_pdb', null)
+    ensureParamDefault(params, 'run_id', null)
+    ensureParamDefault(params, 'analysis_chain_id', 'all_chains')
+    ensureParamDefault(params, 'filter_immunogenic', true)
+    ensureParamDefault(params, 'run_immunogenicity_scoring', false)
+    ensureParamDefault(params, 'run_affinity_maturation', false)
+    ensureParamDefault(params, 'run_post_boltz_maturation', false)
+    ensureParamDefault(params, 'run_post_validation_maturation', params.run_post_boltz_maturation)
+    if (!params.run_post_boltz_maturation && params.run_post_validation_maturation) {
+        params.run_post_boltz_maturation = params.run_post_validation_maturation
+    }
+    if (!params.containsKey('structure_validator') || !params.structure_validator) {
+        params.structure_validator = 'boltz2'
+    }
+    if (!params.containsKey('exploration_mode') || params.exploration_mode == null) {
+        params.exploration_mode = false
+    }
+    ensureParamDefault(params, 'pinned_gpus', null)
+    if (!params.containsKey('job_id')) {
+        params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
+    }
+    ensureParamDefault(params, 'job_name', 'antibody_batch')
+    ensureParamDefault(params, 'fampnn_constraint_mode', 'antibody')
+    ensureParamDefault(params, 'rfantibody_design_loops_custom', null)
+    ensureParamDefault(params, 'rfantibody_loop_length_ranges', null)
+    ensureParamDefault(params, 'seq_design_fampnn', null)
+    ensureParamDefault(params, 'seq_design_antifold', null)
+    ensureParamDefault(params, 'seq_design_proteinmpnn', null)
+    ensureParamDefault(params, 'enable_rfantibody_filter', false)
+    ensureParamDefault(params, 'rfantibody_min_epitope_contacts', null)
+    ensureParamDefault(params, 'rfantibody_max_epitope_distance', null)
+    ensureParamDefault(params, 'rfantibody_contact_distance_threshold', 8.0)
+    ensureParamDefault(params, 'rfantibody_min_target_contacts', null)
+    ensureParamDefault(params, 'rfantibody_max_target_distance', null)
+    ensureParamDefault(params, 'rfantibody_max_epitope_centroid_distance', null)
+    ensureParamDefault(params, 'rfantibody_target_contact_distance_threshold', 12.0)
+    ensureParamDefault(params, 'run_structure_validation', true)
+    ensureParamDefault(params, 'interactive_gating', false)
+    ensureParamDefault(params, 'interactive_swa', false)
+    if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) {
+        params.interactive_gate_stage = 'post_fampnn'
+    }
+    ensureParamDefault(params, 'interactive_gate_continue', false)
+    ensureParamDefault(params, 'protenix_allow_cpu_msa_fallback', false)
+    ensureParamDefault(params, 'protenix_msa_max_seqs_per_validation_job', 1)
+    ensureParamDefault(params, 'protenix_local_msa_max_seqs_per_validation_job', 1)
+    ensureParamDefault(params, 'protenix_local_msa_timeout_seconds', 900)
+    ensureParamDefault(params, 'target_model_number', null)
+    ensureParamDefault(params, 'maturation_selected_loops', null)
+    ensureParamDefault(params, 'selected_cdr_loops', null)
+    ensureParamDefault(params, 'ppiflow_cdr_loops', null)
+    ensureParamDefault(params, 'ppiflow_stage', null)
+    ensureParamDefault(params, 'msa_sensitivity', null)
+    ensureParamDefault(params, 'msa_min_depth_warning', null)
+    ensureParamDefault(params, 'msa_min_depth_fail', null)
+
+    if (!params.containsKey('ppiflow_selected_loops')) {
+        params.ppiflow_selected_loops = normalizeLoopSelectionValue(
+            params.get('maturation_selected_loops') ?: params.get('selected_cdr_loops') ?: params.get('ppiflow_cdr_loops')
+        )
+    } else {
+        params.ppiflow_selected_loops = normalizeLoopSelectionValue(params.ppiflow_selected_loops)
+    }
+    if (!params.containsKey('ppiflow_backbone_region_mode')) {
+        params.ppiflow_backbone_region_mode = params.get('ppiflow_region_mode')
+    }
+    if (!params.containsKey('ppiflow_maturation_region_mode')) {
+        params.ppiflow_maturation_region_mode = params.get('ppiflow_region_mode')
+    }
+    params.ppiflow_backbone_region_mode = normalizePpiFlowRegionModeValue(params.get('ppiflow_backbone_region_mode'))
+    params.ppiflow_maturation_region_mode = normalizePpiFlowRegionModeValue(params.get('ppiflow_maturation_region_mode'))
+    ensureParamDefault(params, 'cdr_positions_by_loop', [:])
+    ensureParamDefault(params, 'manual_cdr_definitions', [])
+
+    def ppiflowBackboneLoopScope = normalizeLoopSelectionValue(params.get('ppiflow_backbone_loop_scope')) ?: params.ppiflow_selected_loops
+    def ppiflowMaturationLoopScope = normalizeLoopSelectionValue(params.get('ppiflow_maturation_loop_scope')) ?: params.ppiflow_selected_loops
+
+    ensureParamDefault(params, 'run_ppiflow_backbone_refine', false)
+    ensureParamDefault(params, 'run_ppiflow_maturation', params.run_maturation)
+    ensureParamDefault(params, 'run_maturation', params.run_ppiflow_maturation ?: false)
+
+    ensureParamDefault(params, 'parallel_mode', 'standard')
+    ensureParamDefault(params, 'designs_per_job', 5)
+    ensureParamDefault(params, 'seqs_per_job', 50)
+    if (!params.containsKey('seqs_per_boltz_job') || params.seqs_per_boltz_job == null) {
+        params.seqs_per_boltz_job = 10
+    }
+    if (!params.containsKey('seqs_per_validation_job') || params.seqs_per_validation_job == null) {
+        params.seqs_per_validation_job = params.seqs_per_boltz_job ?: 10
+    }
+
+    def selectedInputArtifactClass = (params.selected_input_artifact_class ?: '').toString().trim().toLowerCase()
+    def selectedInputDir = params.selected_input_dir ?: params.rfantibody_input_pdbs ?: params.fampnn_collected_pdbs
+    def selectedInputIsSequenceConditioned = (
+        selectedInputArtifactClass in ['sequence_designed_complex', 'validated_complex', 'post_validation_refined_complex']
+        || (!selectedInputArtifactClass && params.fampnn_collected_pdbs != null)
+    )
+
+    return [
+        ppiflowBackboneLoopScope: ppiflowBackboneLoopScope,
+        ppiflowMaturationLoopScope: ppiflowMaturationLoopScope,
+        selectedInputDir: selectedInputDir,
+        selectedInputIsSequenceConditioned: selectedInputIsSequenceConditioned,
+    ]
+}
+
 // Import modules
 include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
@@ -103,12 +313,12 @@ include { THERMOMPNN } from '../modules/thermompnn'
 include { MergeComplex ; AF2_BACKPROP } from '../modules/af2_backprop'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
 include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
-include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
+include { BoltzFromSequence } from '../modules/structure_prediction'
 include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
-include { BatchProtenixValidation } from '../modules/antibody_batch'
+include { BatchBoltzValidation ; BatchProtenixValidation } from '../modules/antibody_batch'
 
 // =============================================================================
 // ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
@@ -1155,19 +1365,8 @@ process CheckProtenixMsaPreflight {
     path "protenix_msa_preflight.json", emit: report
 
     script:
-    def normalizeGpuCsv = { raw ->
-        if (raw == null) return ''
-        if (raw instanceof Collection) {
-            return raw.collect { it?.toString()?.trim() }.findAll { it }.join(',')
-        }
-        def text = raw.toString().trim()
-        if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
-            text = text.substring(1, text.length() - 1)
-        }
-        return text
-    }
-    def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
+    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
+    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     """
     python3 ${params.code_root}/scripts/prep_protenix_batch.py \\
@@ -1354,6 +1553,7 @@ process WaitAndAggregateChildResults {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
     
     input:
@@ -1366,6 +1566,7 @@ process WaitAndAggregateChildResults {
     path "validated_designs/*.pdb", emit: pdbs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
     path "validated_designs/*.npz", emit: aligned_error, optional: true
+    path "validated_designs/aligned_error/*.json", emit: aligned_error_json, optional: true
     path "aggregation_report.json", emit: report
     
     script:
@@ -1375,30 +1576,31 @@ process WaitAndAggregateChildResults {
     
     echo "Waiting for ${expected_child_count} child validation jobs to complete..."
     
-    mkdir -p validated_designs intermediates/boltz intermediates/scores
+    mkdir -p validated_designs validated_designs/aligned_error intermediates/boltz intermediates/scores
     declare -A COPIED_BASENAMES
 
     choose_dest_name() {
-        local child_idx="${'$'}1"
-        local filename="${'$'}2"
+        local base_dir="${'$'}1"
+        local child_idx="${'$'}2"
+        local filename="${'$'}3"
         local stem="\${filename%.*}"
         local ext=""
         if [ "\$stem" != "\$filename" ]; then
             ext=".\${filename##*.}"
         fi
-        local candidate="validated_designs/\$filename"
+        local candidate="\${base_dir}/\$filename"
         if [ ! -e "\$candidate" ]; then
             printf '%s\n' "\$candidate"
             return
         fi
-        candidate="validated_designs/\${child_idx}_\$filename"
+        candidate="\${base_dir}/\${child_idx}_\$filename"
         if [ ! -e "\$candidate" ]; then
             printf '%s\n' "\$candidate"
             return
         fi
         local counter=2
         while true; do
-            candidate="validated_designs/\${child_idx}_\${stem}_\${counter}\${ext}"
+            candidate="\${base_dir}/\${child_idx}_\${stem}_\${counter}\${ext}"
             if [ ! -e "\$candidate" ]; then
                 printf '%s\n' "\$candidate"
                 return
@@ -1438,7 +1640,7 @@ with open('wait_result.json') as f:
             child_idx="\$TOTAL_CHILDREN"
             
             # Search multiple possible locations where validator outputs may be published
-            for subdir in "pdb_files/predictions" "pdb_files" "run/boltz/predictions" "run/boltz" "run/protenix/predictions" "run/protenix" ""; do
+            for subdir in "pdb_files/predictions" "pdb_files/aligned_error" "pdb_files" "run/boltz/predictions" "run/boltz" "run/protenix/predictions/aligned_error" "run/protenix/predictions" "run/protenix" ""; do
                 search_path="\$child_dir/\$subdir"
                 if [ -d "\$search_path" ]; then
                     while IFS= read -r -d '' artifact_path; do
@@ -1446,7 +1648,11 @@ with open('wait_result.json') as f:
                         if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
                             continue
                         fi
-                        dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                        dest_dir="validated_designs"
+                        if [[ "\$artifact_path" == */aligned_error/* ]] && [[ "\$artifact_path" == *.json ]]; then
+                            dest_dir="validated_designs/aligned_error"
+                        fi
+                        dest_path=\$(choose_dest_name "\$dest_dir" "\$child_idx" "\$basename")
                         cp "\$artifact_path" "\$dest_path" 2>/dev/null || true
                         COPIED_BASENAMES[\$basename]=1
                         case "\$artifact_path" in
@@ -1482,8 +1688,11 @@ EOF
     if [ \$TOTAL_PDBS -gt 0 ]; then
         mkdir -p "${params.out_dir}/pdb_files/validated_designs"
         while IFS= read -r -d '' staged_artifact; do
-            cp -f "\$staged_artifact" "${params.out_dir}/pdb_files/validated_designs/"
-        done < <(find validated_designs -maxdepth 1 -type f -print0)
+            rel_path="\${staged_artifact#validated_designs/}"
+            dest_dir="${params.out_dir}/pdb_files/validated_designs/\$(dirname "\$rel_path")"
+            mkdir -p "\$dest_dir"
+            cp -f "\$staged_artifact" "\$dest_dir/"
+        done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
         echo "Triggering result ingestion for parent job..."
         python3 ${params.code_root}/scripts/result_ingester.py \\
@@ -1504,65 +1713,110 @@ process FinalizeSequentialValidationOutputs {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
 
     input:
-    val pdbs
+    val artifact_manifest_json
 
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
     path "validated_designs/*.npz", emit: aligned_error, optional: true
+    path "validated_designs/aligned_error/*.json", emit: aligned_error_json, optional: true
     path "aggregation_report.json", emit: report
 
     script:
-    def pdbList = (pdbs instanceof Collection ? pdbs : [pdbs]).collect { it.toString() }.join('\n')
     """
     #!/bin/bash
     set -euo pipefail
 
+    export JOB_ID="${params.job_id ?: 'unknown'}"
+    export BATCH_NAME="${params.batch_name ?: params.job_name ?: 'sequential_validation'}"
+    export OUTPUT_PATH="${params.out_dir}/pdb_files"
+
     mkdir -p validated_designs
 
-    cat > sequential_pdbs.list <<'EOF'
-${pdbList}
+    cat > validation_artifacts.json <<'EOF'
+${artifact_manifest_json}
 EOF
 
-    SOURCE_DIR="${params.out_dir}/pdb_files/predictions"
-    if [ ! -d "\$SOURCE_DIR" ]; then
-        SOURCE_DIR="${params.out_dir}/pdb_files"
-    fi
+    python3 <<'PY'
+import json
+import os
+import shutil
+from pathlib import Path
 
-    if [ ! -d "\$SOURCE_DIR" ]; then
-        echo "ERROR: no published validation output directory found under ${params.out_dir}/pdb_files" >&2
-        exit 1
-    fi
+manifest = json.loads(Path("validation_artifacts.json").read_text(encoding="utf-8"))
+validated_dir = Path("validated_designs")
+validated_dir.mkdir(parents=True, exist_ok=True)
+aligned_error_dir = validated_dir / "aligned_error"
+aligned_error_dir.mkdir(parents=True, exist_ok=True)
 
-    TOTAL_PDBS=0
-    while IFS= read -r -d '' artifact_path; do
-        cp -f "\$artifact_path" "validated_designs/"
-        case "\$artifact_path" in
-            *.pdb)
-                TOTAL_PDBS=\$((TOTAL_PDBS + 1))
-                ;;
-        esac
-    done < <(find "\$SOURCE_DIR" -maxdepth 1 -type f \\( -name '*.pdb' -o -name '*.cif' -o -name '*.json' -o -name '*.npz' \\) -print0)
+total_pdbs = 0
+report_files: list[str] = []
 
-    cat > aggregation_report.json << EOF
-{
-    "parent_job_id": "${params.job_id ?: 'unknown'}",
-    "batch_name": "${params.batch_name ?: params.job_name ?: 'sequential_validation'}",
-    "children_processed": 1,
-    "total_validated_designs": \$TOTAL_PDBS,
-    "output_path": "${params.out_dir}/pdb_files",
-    "status": "complete"
-}
-EOF
+def choose_dest_name(base_dir: Path, filename: str) -> Path:
+    candidate = base_dir / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        candidate = base_dir / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
-    if [ \$TOTAL_PDBS -gt 0 ]; then
+for key in ("pdbs", "cifs", "scores", "aligned_error"):
+    for raw_path in manifest.get(key) or []:
+        source_path = Path(str(raw_path)).expanduser()
+        if not source_path.exists():
+            print(f"[FinalizeSequentialValidationOutputs] WARNING: missing {key} artifact: {source_path}")
+            continue
+        dest_root = aligned_error_dir if key == "aligned_error" and source_path.suffix.lower() == ".json" else validated_dir
+        dest_path = choose_dest_name(dest_root, source_path.name)
+        shutil.copy2(source_path, dest_path)
+        if source_path.suffix.lower() == ".pdb":
+            total_pdbs += 1
+            if len(report_files) < 50:
+                report_files.append(str(dest_path))
+
+Path("report_files.txt").write_text("\\n".join(report_files), encoding="utf-8")
+Path("aggregation_report.json").write_text(
+    json.dumps(
+        {
+            "parent_job_id": os.environ["JOB_ID"],
+            "batch_name": os.environ["BATCH_NAME"],
+            "children_processed": 1,
+            "total_validated_designs": total_pdbs,
+            "output_path": os.environ["OUTPUT_PATH"],
+            "status": "complete",
+        },
+        indent=2,
+    ),
+    encoding="utf-8",
+)
+print(f"[FinalizeSequentialValidationOutputs] Copied {total_pdbs} validated PDB(s) from explicit manifest")
+PY
+
+    TOTAL_PDBS=\$(python3 - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path("aggregation_report.json").read_text(encoding="utf-8"))
+print(int(report.get("total_validated_designs") or 0))
+PY
+    )
+
+    if [ "\$TOTAL_PDBS" -gt 0 ]; then
         mkdir -p "${params.out_dir}/pdb_files/validated_designs"
         while IFS= read -r -d '' staged_artifact; do
-            cp -f "\$staged_artifact" "${params.out_dir}/pdb_files/validated_designs/"
-        done < <(find validated_designs -maxdepth 1 -type f -print0)
+            rel_path="\${staged_artifact#validated_designs/}"
+            dest_dir="${params.out_dir}/pdb_files/validated_designs/\$(dirname "\$rel_path")"
+            mkdir -p "\$dest_dir"
+            cp -f "\$staged_artifact" "\$dest_dir/"
+        done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
         echo "Triggering result ingestion for parent job..."
         python3 ${params.code_root}/scripts/result_ingester.py \\
@@ -1571,15 +1825,8 @@ EOF
             --api_url "${params.api_url}" \\
             2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
 
-        report_files=()
-        while IFS= read -r -d '' staged_pdb; do
-            report_files+=("\$staged_pdb")
-            if [ "\${#report_files[@]}" -ge 50 ]; then
-                break
-            fi
-        done < <(find validated_designs -maxdepth 1 -type f -name '*.pdb' -print0 | sort -z)
-
-        if [ "\${#report_files[@]}" -gt 0 ]; then
+        if [ -s report_files.txt ]; then
+            mapfile -t report_files < report_files.txt
             python3 ${params.code_root}/scripts/stage_reporter.py \\
                 "${params.job_id ?: 'unknown'}" \\
                 "structure_validation" \\
@@ -1642,133 +1889,6 @@ EOF
     """
 }
 
-// Initialize missing parameters with defaults to suppress warnings
-if (!params.containsKey('framework_pdb')) params.framework_pdb = null
-if (!params.containsKey('run_id')) params.run_id = null
-if (!params.containsKey('analysis_chain_id')) params.analysis_chain_id = 'all_chains'
-if (!params.containsKey('filter_immunogenic')) params.filter_immunogenic = true
-if (!params.containsKey('run_immunogenicity_scoring')) params.run_immunogenicity_scoring = false
-if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturation = false
-if (!params.containsKey('run_post_boltz_maturation')) params.run_post_boltz_maturation = false
-if (!params.containsKey('run_post_validation_maturation')) params.run_post_validation_maturation = params.run_post_boltz_maturation
-if (!params.run_post_boltz_maturation && params.run_post_validation_maturation) params.run_post_boltz_maturation = params.run_post_validation_maturation
-if (!params.containsKey('structure_validator') || !params.structure_validator) params.structure_validator = 'boltz2'
-if (!params.containsKey('exploration_mode') || params.exploration_mode == null) params.exploration_mode = false
-if (!params.containsKey('pinned_gpus')) params.pinned_gpus = null
-if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
-if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
-if (!params.containsKey('fampnn_constraint_mode')) params.fampnn_constraint_mode = 'antibody'
-if (!params.containsKey('rfantibody_design_loops_custom')) params.rfantibody_design_loops_custom = null
-if (!params.containsKey('rfantibody_loop_length_ranges')) params.rfantibody_loop_length_ranges = null
-if (!params.containsKey('seq_design_fampnn')) params.seq_design_fampnn = null
-if (!params.containsKey('seq_design_antifold')) params.seq_design_antifold = null
-if (!params.containsKey('seq_design_proteinmpnn')) params.seq_design_proteinmpnn = null
-if (!params.containsKey('enable_rfantibody_filter')) params.enable_rfantibody_filter = false
-if (!params.containsKey('rfantibody_min_epitope_contacts')) params.rfantibody_min_epitope_contacts = null
-if (!params.containsKey('rfantibody_max_epitope_distance')) params.rfantibody_max_epitope_distance = null
-if (!params.containsKey('rfantibody_contact_distance_threshold')) params.rfantibody_contact_distance_threshold = 8.0
-if (!params.containsKey('rfantibody_min_target_contacts')) params.rfantibody_min_target_contacts = null
-if (!params.containsKey('rfantibody_max_target_distance')) params.rfantibody_max_target_distance = null
-if (!params.containsKey('rfantibody_max_epitope_centroid_distance')) params.rfantibody_max_epitope_centroid_distance = null
-if (!params.containsKey('rfantibody_target_contact_distance_threshold')) params.rfantibody_target_contact_distance_threshold = 12.0
-if (!params.containsKey('run_structure_validation')) params.run_structure_validation = true
-if (!params.containsKey('interactive_gating')) params.interactive_gating = false
-if (!params.containsKey('interactive_swa')) params.interactive_swa = false
-if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
-if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
-if (!params.containsKey('protenix_allow_cpu_msa_fallback')) params.protenix_allow_cpu_msa_fallback = false
-if (!params.containsKey('protenix_msa_max_seqs_per_validation_job')) params.protenix_msa_max_seqs_per_validation_job = 1
-if (!params.containsKey('protenix_local_msa_max_seqs_per_validation_job')) params.protenix_local_msa_max_seqs_per_validation_job = 1
-if (!params.containsKey('protenix_local_msa_timeout_seconds')) params.protenix_local_msa_timeout_seconds = 900
-if (!params.containsKey('target_model_number')) params.target_model_number = null
-if (!params.containsKey('maturation_selected_loops')) params.maturation_selected_loops = null
-if (!params.containsKey('selected_cdr_loops')) params.selected_cdr_loops = null
-if (!params.containsKey('ppiflow_cdr_loops')) params.ppiflow_cdr_loops = null
-if (!params.containsKey('ppiflow_stage')) params.ppiflow_stage = null
-if (!params.containsKey('msa_sensitivity')) params.msa_sensitivity = null
-if (!params.containsKey('msa_min_depth_warning')) params.msa_min_depth_warning = null
-if (!params.containsKey('msa_min_depth_fail')) params.msa_min_depth_fail = null
-def normalizeLoopSelection = { raw ->
-    if (raw == null) return null
-    def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
-    def normalized = values.collect { it.toString().trim().toUpperCase() }.findAll { it }
-    normalized ? normalized.join(',') : null
-}
-def normalizePpiFlowRegionMode = { raw ->
-    def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
-    if (value in ['all_cdrs']) return 'all_cdrs'
-    if (value in ['framework', 'framework_only']) return 'framework_only'
-    if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
-    return 'selected_cdrs'
-}
-def normalizeProtenixMsaBackend = { raw ->
-    def value = (raw ?: 'auto').toString().trim().toLowerCase()
-    if (value in ['local', 'colabfold_api']) return value
-    return 'auto'
-}
-def resolveValidationBatchPlan = { validatorRaw, useMsaRaw ->
-    def requested = params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10
-    int requestedSize
-    try {
-        requestedSize = requested.toString().toInteger()
-    } catch (Exception ignored) {
-        requestedSize = 10
-    }
-    requestedSize = Math.max(1, requestedSize)
-
-    def validator = (validatorRaw ?: 'boltz2').toString().trim().toLowerCase()
-    def useMsa = (useMsaRaw == true || useMsaRaw == 'true')
-    def effectiveSize = requestedSize
-    def reason = null
-
-    if (validator == 'protenix' && useMsa) {
-        def backend = normalizeProtenixMsaBackend(params.protenix_msa_backend)
-        def rawCap = backend == 'local'
-            ? (params.protenix_local_msa_max_seqs_per_validation_job ?: 1)
-            : (params.protenix_msa_max_seqs_per_validation_job ?: 1)
-        int cap
-        try {
-            cap = rawCap.toString().toInteger()
-        } catch (Exception ignored) {
-            cap = 1
-        }
-        cap = Math.max(1, cap)
-        effectiveSize = Math.min(requestedSize, cap)
-        if (effectiveSize < requestedSize) {
-            reason = "Protenix MSA batching override: ${requestedSize} -> ${effectiveSize} seqs/job (${backend} backend)"
-        }
-    }
-
-    [requestedSize, effectiveSize, reason]
-}
-if (!params.containsKey('ppiflow_selected_loops')) {
-    params.ppiflow_selected_loops = normalizeLoopSelection(
-        params.get('maturation_selected_loops') ?: params.get('selected_cdr_loops') ?: params.get('ppiflow_cdr_loops')
-    )
-} else {
-    params.ppiflow_selected_loops = normalizeLoopSelection(params.ppiflow_selected_loops)
-}
-if (!params.containsKey('ppiflow_backbone_region_mode')) params.ppiflow_backbone_region_mode = params.get('ppiflow_region_mode')
-if (!params.containsKey('ppiflow_maturation_region_mode')) params.ppiflow_maturation_region_mode = params.get('ppiflow_region_mode')
-params.ppiflow_backbone_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_backbone_region_mode'))
-params.ppiflow_maturation_region_mode = normalizePpiFlowRegionMode(params.get('ppiflow_maturation_region_mode'))
-if (!params.containsKey('cdr_positions_by_loop')) params.cdr_positions_by_loop = [:]
-if (!params.containsKey('manual_cdr_definitions')) params.manual_cdr_definitions = []
-def ppiflowBackboneLoopScope = normalizeLoopSelection(params.get('ppiflow_backbone_loop_scope')) ?: params.ppiflow_selected_loops
-def ppiflowMaturationLoopScope = normalizeLoopSelection(params.get('ppiflow_maturation_loop_scope')) ?: params.ppiflow_selected_loops
-if (!params.containsKey('run_ppiflow_backbone_refine')) params.run_ppiflow_backbone_refine = false
-if (!params.containsKey('run_ppiflow_maturation')) params.run_ppiflow_maturation = params.run_maturation
-if (!params.containsKey('run_maturation')) params.run_maturation = params.run_ppiflow_maturation ?: false
-
-// Orchestrator-based parallelism settings
-// 'standard' = Nextflow-internal parallelism (current behavior)
-// 'full_orchestrator' = Spawn child jobs via API for per-job GPU assignment
-if (!params.containsKey('parallel_mode')) params.parallel_mode = 'standard'
-if (!params.containsKey('designs_per_job')) params.designs_per_job = 5
-if (!params.containsKey('seqs_per_job')) params.seqs_per_job = 50
-if (!params.containsKey('seqs_per_boltz_job') || params.seqs_per_boltz_job == null) params.seqs_per_boltz_job = 10
-if (!params.containsKey('seqs_per_validation_job') || params.seqs_per_validation_job == null) params.seqs_per_validation_job = params.seqs_per_boltz_job ?: 10
-
 
 workflow ANTIBODY_DENOVO {
     take:
@@ -1777,6 +1897,12 @@ workflow ANTIBODY_DENOVO {
     framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
 
     main:
+    def workflowContext = initializeAntibodyDenovoParams(params)
+    def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
+    def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
+    def selectedInputDir = workflowContext.selectedInputDir
+    def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
+
     // =========================================================================
     // PHASE 1: GENERATION
     // =========================================================================
@@ -1815,7 +1941,7 @@ workflow ANTIBODY_DENOVO {
     def designs_per_gpu = (total_designs / num_gpus).intValue()
     def remainder = total_designs % num_gpus
     def designs_per_job = params.designs_per_job ?: 5
-    def planned_child_jobs = Math.ceil(total_designs / (double) designs_per_job).intValue()
+    def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
     // Resume must preserve the original child batch key so orchestrated child
     // stages can rediscover or resume prior attempts instead of starting over.
     def orchestrator_batch_name = params.batch_name
@@ -1826,8 +1952,8 @@ workflow ANTIBODY_DENOVO {
     // =========================================================================
     // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating
     // =========================================================================
-    def skip_rfantibody = params.skip_rfantibody == true || params.rfantibody_input_pdbs != null || params.fampnn_collected_pdbs != null
-    def skip_rfantibody_input_dir = params.rfantibody_input_pdbs ?: params.fampnn_collected_pdbs
+    def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
+    def skip_rfantibody_input_dir = selectedInputDir
 
     if (skip_rfantibody && skip_rfantibody_input_dir) {
         log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
@@ -1841,7 +1967,7 @@ workflow ANTIBODY_DENOVO {
                 [meta, pdbs]
             }
     } else if (skip_rfantibody) {
-        error("skip_rfantibody=true but no rfantibody_input_pdbs directory provided")
+        error("skip_rfantibody=true but no selected_input_dir-compatible directory was provided")
     } else {
         // =========================================================================
         // PARALLELISM MODE: Choose between Nextflow-internal or Orchestrator spawning
@@ -1892,7 +2018,7 @@ workflow ANTIBODY_DENOVO {
                 log.info("  RFantibody via orchestrator: Collected ${count} PDBs from child jobs")
                 def report_files = count > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage rfantibody: ${e.message}"
@@ -1942,7 +2068,7 @@ workflow ANTIBODY_DENOVO {
                 // Limit number of files reported to avoid command line length limits
                 def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage rfantibody: ${e.message}"
@@ -1966,7 +2092,7 @@ workflow ANTIBODY_DENOVO {
     def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
         params.interactive_gate_continue != true
-    def shouldScreenRFantibody = !params.fampnn_collected_pdbs && (
+    def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
         shouldPauseAfterRFantibody ||
         rfantibodyScreenEnabled ||
         params.rfantibody_min_epitope_contacts != null ||
@@ -2094,7 +2220,7 @@ workflow ANTIBODY_DENOVO {
                     log.info("  PPIFlow backbone refinement: Collected ${count} PDBs from child jobs")
                     def report_files = count > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "backbone_refine", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage backbone_refine: ${e.message}"
@@ -2134,12 +2260,12 @@ workflow ANTIBODY_DENOVO {
         proteinmpnn_seqs = Channel.empty()
         def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
         def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
-        def fampnnCandidateDir = params.fampnn_collected_pdbs ? params.fampnn_collected_pdbs.toString() : null
+        def fampnnCandidateDir = selectedInputIsSequenceConditioned && selectedInputDir ? selectedInputDir.toString() : null
 
-        if (!run_fampnn && params.fampnn_collected_pdbs) {
-            log.info("  Sequence design skipped: Using pre-collected PDBs from ${params.fampnn_collected_pdbs}")
+        if (!run_fampnn && selectedInputIsSequenceConditioned && selectedInputDir) {
+            log.info("  Sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
 
-            pre_collected_pdbs = Channel.fromPath("${params.fampnn_collected_pdbs}/*.pdb")
+            pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
                 .collect()
 
             pre_collected_pdbs.subscribe { pdbs ->
@@ -2158,11 +2284,11 @@ workflow ANTIBODY_DENOVO {
         // CHECK: Skip FAMPNN if pre-collected PDBs are provided
         // This allows resuming from filtering without re-running FAMPNN
         // =====================================================================
-        if (params.fampnn_collected_pdbs) {
-            log.info("  FAMPNN: Using pre-collected PDBs from ${params.fampnn_collected_pdbs}")
+        if (selectedInputIsSequenceConditioned && selectedInputDir) {
+            log.info("  FAMPNN: Using pre-collected PDBs from ${selectedInputDir}")
             
             // Load pre-collected PDBs directly
-            pre_collected_pdbs = Channel.fromPath("${params.fampnn_collected_pdbs}/*.pdb")
+            pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
                 .collect()
             
             pre_collected_pdbs.subscribe { pdbs ->
@@ -2174,7 +2300,7 @@ workflow ANTIBODY_DENOVO {
                 def meta = [id: "fampnn_designs"]
                 [meta, pdbs]
             }
-            fampnnCandidateDir = params.fampnn_collected_pdbs.toString()
+            fampnnCandidateDir = selectedInputDir.toString()
             
             // Skip the spawn/wait/collect/filter block
             
@@ -2243,7 +2369,7 @@ workflow ANTIBODY_DENOVO {
                     log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
                     def report_files = count > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage fampnn: ${e.message}"
@@ -2320,7 +2446,7 @@ workflow ANTIBODY_DENOVO {
         maturation_seqs = Channel.empty()
         def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
         if (run_ppiflow_maturation == true) {
-            def hasPreCollectedFampnnInputs = params.fampnn_collected_pdbs != null
+            def hasPreCollectedFampnnInputs = selectedInputIsSequenceConditioned && selectedInputDir != null
             if (!run_fampnn && !hasPreCollectedFampnnInputs) {
                 log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
                 maturation_seqs = fampnn_seqs
@@ -2373,7 +2499,7 @@ workflow ANTIBODY_DENOVO {
                         log.info("  PPIFlow maturation: Collected ${count} PDBs from child jobs")
                         def report_files = count > 50 ? file_list[0..49] : file_list
                         def args = [params.job_id, "maturation", "complete"] + report_files.collect { it.toString() }
-                        def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                         proc.waitFor()
                     } catch (Exception e) {
                         println "Warning: Failed to report stage maturation: ${e.message}"
@@ -2455,7 +2581,7 @@ workflow ANTIBODY_DENOVO {
             THERMOMPNN.out.stability.subscribe { meta, csv ->
                 try {
                     def args = [params.job_id, "thermompnn", "complete", csv.toString()]
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage thermompnn: ${e.message}"
@@ -2523,7 +2649,7 @@ workflow ANTIBODY_DENOVO {
             AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
                 try {
                     def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage af2_backprop: ${e.message}"
@@ -2559,13 +2685,16 @@ workflow ANTIBODY_DENOVO {
                     }
                 }
 
-            if (structure_validator == 'protenix' && run_antifold) {
-                log.warn("AntiFold emits FASTA only. Protenix validation currently runs on PDB-backed candidates only, so AntiFold sequence-only designs are skipped.")
+            def supportsSequenceOnlyBoltzValidation = structure_validator == 'boltz2' && params.exploration_mode != true
+            if (run_antifold && !supportsSequenceOnlyBoltzValidation) {
+                log.warn("AntiFold emits FASTA only. ${validation_label} validation currently runs on PDB-backed candidates only, so AntiFold sequence-only designs are skipped.")
+            } else if (run_antifold && supportsSequenceOnlyBoltzValidation) {
+                log.info("  AntiFold sequence-only candidates will use MSA-free Boltz validation to avoid shared-MSA identity drift.")
             }
 
-            design_sequences = (params.exploration_mode == true || structure_validator == 'protenix')
-                ? pdb_design_sequences
-                : pdb_design_sequences.mix(sequence_only_designs.map { sequence, name -> tuple(sequence, name, null) })
+            design_sequences = supportsSequenceOnlyBoltzValidation
+                ? pdb_design_sequences.mix(sequence_only_designs.map { sequence, name -> tuple(sequence, name, null) })
+                : pdb_design_sequences
 
             design_sequence_count = design_sequences.count()
             CheckZeroYield(design_sequence_count)
@@ -2573,26 +2702,15 @@ workflow ANTIBODY_DENOVO {
                 .combine(CheckZeroYield.out.ok)
                 .map { sequence, name, pdb, _guard -> tuple(sequence, name, pdb) }
 
-            def msa_file_ch
+            def msa_file_ch = Channel.value(file("${params.code_root}/lib/NO_MSA"))
             if (structure_validator == 'protenix') {
                 log.info("Protenix validation uses its built-in MSA/update pipeline; skipping parent GenerateLocalMSA step.")
-                msa_file_ch = Channel.value(file("${params.code_root}/lib/NO_MSA"))
             } else {
-                first_design_for_msa = design_sequences
-                    .map { sequence, name, pdb ->
-                        tuple(sequence, name, pdb)
-                    }
-                    .first()
-                    .map { sequence, name, pdb ->
-                        tuple(sequence, "antibody_representative")
-                    }
-
-                GenerateLocalMSA(first_design_for_msa)
-                msa_file_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
+                log.info("Boltz validation is running without a shared representative MSA so each candidate is validated without cross-sequence MSA contamination.")
             }
 
             def protenix_use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
-            def validationBatchPlan = resolveValidationBatchPlan(structure_validator, protenix_use_msa)
+            def validationBatchPlan = resolveValidationBatchPlanValue(params, structure_validator, protenix_use_msa)
             def effectiveValidationBatchSize = validationBatchPlan[1] as int
             if (validationBatchPlan[2]) {
                 log.info("  ${validationBatchPlan[2]}")
@@ -2635,7 +2753,10 @@ workflow ANTIBODY_DENOVO {
                 log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
 
                 collected_pdbs = pdb_designs_for_boltz
-                    .flatMap { meta, files -> files instanceof List ? files : [files] }
+                    .flatMap { meta, files ->
+                        def fileList = files instanceof List ? files : [files]
+                        return fileList
+                    }
                     .collect()
 
                 msa_for_spawn = msa_file_ch
@@ -2654,7 +2775,7 @@ workflow ANTIBODY_DENOVO {
                     boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
                     boltz_num_samples: params.boltz_num_samples ?: 1,
                     boltz_use_potentials: params.boltz_use_potentials ?: false,
-                    boltz_use_msa: params.boltz_use_msa ?: false,
+                    boltz_use_msa: false,
                     boltz_step_scale: params.boltz_step_scale,
                     protenix_model_weights: params.protenix_model_weights,
                     protenix_seeds: params.protenix_seeds,
@@ -2668,7 +2789,10 @@ workflow ANTIBODY_DENOVO {
                     protenix_enable_fusion: params.protenix_enable_fusion,
                     target_pdb: params.target_pdb,
                     target_model_number: params.target_model_number,
+                    antibody_chains: params.antibody_chains,
                     antigen_chains: params.antigen_chains,
+                    target_chains: params.antigen_chains,
+                    protenix_binder_source_chains: params.protenix_binder_source_chains ?: params.antibody_chains,
                     protenix_auto_oom_retry: params.protenix_auto_oom_retry,
                     protenix_oom_retry_attempts: params.protenix_oom_retry_attempts,
                     msa_preset: params.msa_preset,
@@ -2744,10 +2868,10 @@ workflow ANTIBODY_DENOVO {
             } else {
                 log.info("Refinement Mode: Running ${validation_label} validation sequentially...")
 
-	                if (structure_validator == 'protenix') {
-	                    collected_validation_pdbs = pdb_design_sequences
-	                        .map { sequence, name, pdb -> pdb }
-	                        .buffer(size: effectiveValidationBatchSize, remainder: true)
+                if (structure_validator == 'protenix') {
+                    collected_validation_pdbs = pdb_design_sequences
+                        .map { sequence, name, pdb -> pdb }
+                        .buffer(size: effectiveValidationBatchSize, remainder: true)
 
                     msa_for_validation = msa_file_ch
                     ready_validation_inputs = collected_validation_pdbs
@@ -2756,47 +2880,86 @@ workflow ANTIBODY_DENOVO {
                         .combine(protenixMsaReadySignal)
                         .map { payload -> tuple(payload[0], payload[1]) }
 
-	                    BatchProtenixValidation(
-	                        ready_validation_inputs.map { pdbs, msa_file -> pdbs },
-	                        ready_validation_inputs.map { pdbs, msa_file -> msa_file }
-	                    )
+                    BatchProtenixValidation(
+                        ready_validation_inputs.map { pdbs, msa_file -> pdbs },
+                        ready_validation_inputs.map { pdbs, msa_file -> msa_file }
+                    )
 
-	                    sequential_validation_outputs = BatchProtenixValidation.out.pdbs
-	                        .collect()
-	                        .filter { pdbs -> pdbs && pdbs.size() > 0 }
-
-	                    FinalizeSequentialValidationOutputs(sequential_validation_outputs)
-
-	                    validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
-	                        .flatten()
-	                        .map { pdb ->
-	                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-	                            def meta = [id: name]
-	                            [meta, pdb]
+                    sequential_validation_manifest = BatchProtenixValidation.out.pdbs.collect()
+                        .combine(BatchProtenixValidation.out.cifs.collect().ifEmpty([]))
+                        .combine(BatchProtenixValidation.out.scores.collect().ifEmpty([]))
+                        .combine(BatchProtenixValidation.out.aligned_error.collect().ifEmpty([]))
+                        .map { pdbs, cifs, scores, aligned_error ->
+                            buildValidationArtifactManifestJson([
+                                pdbs: pdbs,
+                                cifs: cifs,
+                                scores: scores,
+                                aligned_error: aligned_error,
+                            ])
                         }
+                        .filter { manifest_json ->
+                            def data = new groovy.json.JsonSlurper().parseText(manifest_json)
+                            (data.pdbs ?: []).size() > 0
+                        }
+
+                    FinalizeSequentialValidationOutputs(sequential_validation_manifest)
                 } else {
-                    boltz_inputs = design_sequences
-                        .combine(msa_file_ch)
-                        .map { sequence, name, pdb, msa_file ->
-                            tuple(sequence, name, msa_file)
+                    params.boltz_use_msa = false
+
+                    pdb_backed_validation_designs = design_sequences
+                        .filter { sequence, name, pdb -> pdb != null }
+                    sequence_only_validation_designs = design_sequences
+                        .filter { sequence, name, pdb -> pdb == null }
+                        .map { sequence, name, pdb -> tuple(sequence, name) }
+
+                    def boltz_validation_pdbs = Channel.empty()
+                    def boltz_validation_scores = Channel.empty()
+                    def boltz_validation_aligned_error = Channel.empty()
+
+                    pdb_validation_batches = pdb_backed_validation_designs
+                        .map { sequence, name, pdb -> pdb }
+                        .buffer(size: effectiveValidationBatchSize, remainder: true)
+
+                    BatchBoltzValidation(
+                        pdb_validation_batches,
+                        msa_file_ch
+                    )
+                    boltz_validation_pdbs = boltz_validation_pdbs.mix(BatchBoltzValidation.out.pdbs)
+                    boltz_validation_scores = boltz_validation_scores.mix(BatchBoltzValidation.out.scores)
+                    boltz_validation_aligned_error = boltz_validation_aligned_error.mix(BatchBoltzValidation.out.aligned_error)
+
+                    if (run_antifold) {
+                        BoltzFromSequence(sequence_only_validation_designs)
+                        boltz_validation_pdbs = boltz_validation_pdbs.mix(BoltzFromSequence.out.pdbs)
+                        boltz_validation_scores = boltz_validation_scores.mix(BoltzFromSequence.out.jsons)
+                    }
+
+                    sequential_validation_manifest = boltz_validation_pdbs.collect()
+                        .combine(boltz_validation_scores.collect().ifEmpty([]))
+                        .combine(boltz_validation_aligned_error.collect().ifEmpty([]))
+                        .map { pdbs, scores, aligned_error ->
+                            buildValidationArtifactManifestJson([
+                                pdbs: pdbs,
+                                cifs: [],
+                                scores: scores,
+                                aligned_error: aligned_error,
+                            ])
+                        }
+                        .filter { manifest_json ->
+                            def data = new groovy.json.JsonSlurper().parseText(manifest_json)
+                            (data.pdbs ?: []).size() > 0
                         }
 
-	                    BoltzFromSequenceWithMSA(boltz_inputs)
-
-	                    sequential_validation_outputs = BoltzFromSequenceWithMSA.out.pdbs
-	                        .collect()
-	                        .filter { pdbs -> pdbs && pdbs.size() > 0 }
-
-	                    FinalizeSequentialValidationOutputs(sequential_validation_outputs)
-
-	                    validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
-	                        .flatten()
-	                        .map { pdb ->
-	                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-	                            def meta = [id: name]
-	                            [meta, pdb]
-                        }
+                    FinalizeSequentialValidationOutputs(sequential_validation_manifest)
                 }
+
+                validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
+                    .flatten()
+                    .map { pdb ->
+                        def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                        def meta = [id: name]
+                        [meta, pdb]
+                    }
             }
         } else {
             if (run_antifold) {
@@ -2818,6 +2981,8 @@ workflow ANTIBODY_DENOVO {
 
             StageStructureValidationArtifacts(staged_validation_pdbs)
 
+            validation_gate_candidate_count = staged_validation_pdbs
+                .map { pdbs -> pdbs.size() as Integer }
             validation_gate_candidate_dir = StageStructureValidationArtifacts.out.dir
                 .map { _dir -> "${params.out_dir}/collected/structure_validation" }
         }
@@ -2827,7 +2992,7 @@ workflow ANTIBODY_DENOVO {
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
-                validation_gate_candidate_dir.map { _dir -> 1 },
+                validation_gate_candidate_count,
                 validation_gate_candidate_dir,
                 "",
                 "",
@@ -2882,7 +3047,7 @@ workflow ANTIBODY_DENOVO {
                     def file_list = pdbs instanceof List ? pdbs : [pdbs]
                     def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                     def args = [params.job_id, "maturation_post_validation", "complete"] + report_files.collect { it.toString() }
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage maturation_post_validation: ${e.message}"
@@ -2935,7 +3100,7 @@ workflow ANTIBODY_DENOVO {
                 def file_list = pdbs instanceof List ? pdbs : [pdbs]
                 def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "openmm_relaxation", "complete"] + report_files.collect { it.toString() }
-                def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                 proc.waitFor()
             } catch (Exception e) {
                 println "Warning: Failed to report stage openmm_relaxation: ${e.message}"
@@ -2965,7 +3130,7 @@ workflow ANTIBODY_DENOVO {
             OpenMMScore.out.scores_json.subscribe { jsons ->
                 try {
                     def args = [params.job_id, "openmm_mmgbsa", "complete"]
-                    def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
                     proc.waitFor()
                 } catch (Exception e) {
                     println "Warning: Failed to report stage openmm_mmgbsa: ${e.message}"
@@ -3132,14 +3297,14 @@ workflow {
 
     // Collect outputs
     ANTIBODY_DENOVO.out.designs
-        .map { meta, pdb -> pdb }
+        .map { designMeta, pdb -> pdb }
         .flatten()
         .collectFile(name: 'final_designs.txt', storeDir: params.out_dir) { it.name + '\n' }
 
     if (params.run_structure_validation == false) {
         FinalizeTerminalAntibodyOutputs(
             ANTIBODY_DENOVO.out.designs
-                .map { meta, pdb -> pdb }
+                .map { designMeta, pdb -> pdb }
                 .flatten()
                 .collect()
         )

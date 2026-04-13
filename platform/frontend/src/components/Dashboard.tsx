@@ -94,7 +94,6 @@ export function Dashboard() {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [showNgsJobs, setShowNgsJobs] = useState(true);
-    const [visibleCount, setVisibleCount] = useState(25); // Start with 25 jobs visible
     // Debug mode is read from localStorage (toggled via Layout's DebugMenu or browser dev tools)
     const debugMode = (() => {
         try {
@@ -355,13 +354,27 @@ export function Dashboard() {
     return (
         <div className="min-h-screen bg-slate-950 px-6 pt-3 pb-6">
             {/* System Overview & GPU Status */}
-            <DashboardTelemetry />
+            <section className="mb-6">
+                <DashboardTelemetry />
+            </section>
 
-            {/* GPU Scheduler */}
-            <GpuSchedulerControls />
-
-            {/* GPU Orchestrator Job Queue */}
-            <JobQueuePanel />
+            <section className="relative mb-8">
+                <div className="pointer-events-none absolute inset-x-3 bottom-0 top-4 rounded-[2rem] border border-slate-800/80 bg-slate-900/70 shadow-[0_30px_90px_rgba(2,6,23,0.45)]" />
+                <div className="relative rounded-[2rem] border border-[var(--border-primary)] bg-[var(--bg-secondary)]/74 p-3 shadow-2xl shadow-black/10 md:p-4">
+                    <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+                        <div className="order-2 xl:order-1">
+                            <QuickViewer
+                                selectedJobId={quickViewJobId}
+                                onJobChange={setQuickViewJobId}
+                            />
+                        </div>
+                        <div className="order-1 space-y-4 xl:order-2">
+                            <GpuSchedulerControls className="m-0" />
+                            <JobQueuePanel className="m-0" />
+                        </div>
+                    </div>
+                </div>
+            </section>
 
             {/* Logs Modal - Full screen popup */}
             {logsModalJobId && (
@@ -742,16 +755,6 @@ export function Dashboard() {
                 </div>
             )}
 
-            {/* Quick Viewer - Compact structure preview */}
-            <section className="mb-8">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <QuickViewer
-                        selectedJobId={quickViewJobId}
-                        onJobChange={setQuickViewJobId}
-                    />
-                </div>
-            </section>
-
             {/* Jobs Section */}
             <section>
                 <div className="flex items-center justify-between mb-4">
@@ -781,13 +784,11 @@ export function Dashboard() {
                         const matchesNgs = showNgsJobs || !isNgsJob(job);
                         return matchesSearch && matchesStatus && matchesNgs;
                     });
-                    const displayedJobs = filteredJobs.slice(0, visibleCount);
-                    const hasMore = filteredJobs.length > visibleCount;
 
                     return (
-                        <>
+                        <div className="space-y-3">
                             <JobQueueTable
-                                jobs={displayedJobs}
+                                jobs={filteredJobs}
                                 loading={jobsLoading}
                                 onCancel={handleCancel}
                                 onResubmit={handleResubmit}
@@ -801,49 +802,15 @@ export function Dashboard() {
                                 quickViewJobId={quickViewJobId}
                                 debugMode={debugMode}
                             />
-
-                            {/* Pagination Controls */}
-                            <div className="flex items-center justify-between mt-4 px-2">
-                                <span className="text-sm text-slate-400">
-                                    Showing {displayedJobs.length} of {filteredJobs.length} jobs
+                            <div className="flex items-center justify-between px-2 text-sm text-slate-400">
+                                <span>
+                                    Showing {filteredJobs.length} filtered jobs
                                 </span>
-                                <div className="flex items-center gap-3">
-                                    {/* Quick page size buttons */}
-                                    <div className="flex gap-1">
-                                        {[25, 50, 100].map(n => (
-                                            <button
-                                                key={n}
-                                                onClick={() => setVisibleCount(n)}
-                                                className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount === n
-                                                    ? 'bg-accent/30 text-accent'
-                                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
-                                                    }`}
-                                            >
-                                                {n}
-                                            </button>
-                                        ))}
-                                        <button
-                                            onClick={() => setVisibleCount(filteredJobs.length)}
-                                            className={`px-2 py-1 text-xs rounded transition-colors ${visibleCount >= filteredJobs.length
-                                                ? 'bg-accent/30 text-accent'
-                                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
-                                                }`}
-                                        >
-                                            All
-                                        </button>
-                                    </div>
-
-                                    {hasMore && (
-                                        <button
-                                            onClick={() => setVisibleCount(prev => prev + 25)}
-                                            className="px-4 py-2 bg-gradient-to-r from-accent to-blue-600 hover:from-accent hover:to-blue-500 text-white text-sm rounded-lg transition-all hover:scale-105"
-                                        >
-                                            Load More (+25)
-                                        </button>
-                                    )}
-                                </div>
+                                <span>
+                                    Scroll inside the jobs panel to browse the full queue
+                                </span>
                             </div>
-                        </>
+                        </div>
                     );
                 })()}
             </section>

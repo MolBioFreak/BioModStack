@@ -1,61 +1,158 @@
 # BioModStack
 
-BioModStack is a protein modification and design platform that combines
-Nextflow-driven workflows, a FastAPI control plane, and a React UI for running
-and inspecting protein design pipelines.
+BioModStack (BMS) is a workstation-first platform for biomolecular design,
+refinement, analysis, sequencing, and lab-adjacent operations. It combines:
 
-## Quick Start (Local)
+- Nextflow workflows for heavy compute and staged pipelines
+- a FastAPI control plane for orchestration, metadata, and artifact serving
+- a React UI for submission, review, analytics, mol bio, NGS, and robotics
+- optional GTK launchers for local workstation control
+
+The repo is not just a protein-design launcher. The live system spans structure
+design, binder refinement, sequence design, docking, analysis, nanopore
+sequencing, molecular biology tooling, and a BioXP robotics control surface.
+
+## Current Tool Surface
+
+### Backbone and generative design
+
+- RFantibody
+- RFdiffusion
+- BindCraft
+- BoltzGen
+- Oligo Designer / RFDpoly
+- Protein local redesign
+
+### Sequence design and redesign
+
+- FAMPNN
+- AntiFold
+- ProteinMPNN
+- IgGM
+- FrustraMPNN
+
+### Prediction and validation
+
+- Boltz-2
+- Protenix
+- AlphaFold2
+- RF3
+- ImmuneBuilder-facing antibody structure prediction
+
+### Docking and post-processing
+
+- DiffDock
+- Uni-Dock
+- OpenMM
+- ThermoMPNN
+- AntiBERTy
+- ANARCI / ANARCII
+
+## What BMS Covers
+
+### Structure design and refinement
+
+- Antibody de novo and refinement workflows built around RFantibody, FAMPNN,
+  AntiFold, ProteinMPNN, Boltz-2, Protenix, AntiBERTy, ThermoMPNN, IgGM,
+  OpenMM, and PPIFlow.
+- Generic design and prediction surfaces for RFdiffusion, RF3, AlphaFold2,
+  Boltz-2, Protenix, BindCraft, BoltzGen, RFDpoly/Oligo Designer, DiffDock,
+  and Uni-Dock.
+- Constrained local redesign and staged validation flows for existing
+  complexes.
+
+### Analysis and review
+
+- Job, design, and lineage tracking in the API database.
+- Persisted design analyses, review metadata, and stage-aware output tracking.
+- Results/analytics views for structure confidence, lineage, and stage outputs.
+
+### Molecular biology
+
+- Sequence library management for DNA and RNA constructs.
+- Construct import, editing, annotation, primers, digest, PCR, Gibson, Golden
+  Gate, search, and GC-content visualization.
+
+### Sequencing / NGS
+
+- Oxford Nanopore launch and review surface for POD5, BAM, and FASTQ inputs.
+- Dorado basecalling/alignment, modkit methylation reporting, plasmid QC, and
+  IGV-ready artifacts.
+
+### Robotics
+
+- BioXP remote cockpit for daemon linkage, remote status, cameras, motion
+  control, thermal/chiller controls, and interlock-aware device actions.
+
+## Quick Start
+
+From the repo root:
 
 ```bash
-# From the repo root
 ./start_ui.sh
+```
 
-# Or launch the GUI control panel
+Optional local desktop launcher:
+
+```bash
 ./start_ui_gui.sh
 ```
 
-Service URLs:
+Default local URLs:
+
 - UI: `http://localhost:5173/bms/`
 - API: `http://localhost:8000`
 - API docs: `http://localhost:8000/docs`
+- Infra monitor: `http://localhost:5173/bms/infra`
 
-## Infra Monitor
+## Runtime Layout
 
-The `/infra` route is a dedicated live telemetry page inside BMS for workstation
-CPU, memory, and GPU monitoring.
+BMS is path-configurable, but the workstation layout is designed around a data
+root separate from the repo. On the current workstation this is typically
+`/mnt/BioModStack` on the NVMe data volume.
+
+Important paths and env vars:
+
+- `BMS_HOME`: repo root override
+- `BMS_DATA`: data root override
+- `BMS_INPUTS`: runtime-upload/input root
+- `BMS_WEIGHTS`: model weights root
+- `BMS_CONTAINER_DIR`: Apptainer container root
+- `BMS_DB_PATH` or `DATABASE_URL`: database location
+- `BMS_MSA_CACHE`, `BMS_COLABFOLD_DB`, `BMS_SABDAB_CACHE`: supporting data
+- `BMS_FAN_CONTROL_BACKEND`: workstation fan backend
+
+See [docs/Workstation Set Up and Install Guide.md](<docs/Workstation Set Up and Install Guide.md>)
+for the current install and runtime setup.
 
 ## Documentation
 
-- Installation: `docs/installation.md`
-- Parameters: `docs/parameters.md`
-- Modes: `docs/modes.md`
-- DB rules: `docs/ai_guidance/Database_Instructions.md`
-- Pathing rules: `docs/ai_guidance/Centralization_and_Standardization.md`
-- Model inventory: `docs/ai_guidance/Model_Integrations.md`
-- FrustraMPNN plan: `docs/FrustraMPNN_Integration_Plan.md`
+Start with the docs index:
 
-## UI Base Path (`/bms/`)
+- [docs/README.md](docs/README.md)
 
-The frontend is served at `/bms/` (configured in `platform/frontend/vite.config.ts`).
-If you use a reverse proxy or Tailscale Serve, keep the `/bms/` base path
-consistent with your proxy configuration.
+Canonical docs:
 
-## Desktop Launcher (Optional)
+- [Platform Overview](docs/Platform_Overview.md)
+- [Workstation Setup and Runtime](<docs/Workstation Set Up and Install Guide.md>)
+- [Structure Design and Refinement](docs/Structure_Design_and_Refinement.md)
+- [Lab Automation, Mol Bio, and Sequencing](docs/Lab_Automation_MolBio_and_Sequencing.md)
+- [Results and Analysis](docs/Results_and_Analysis.md)
+- [Documentation Harmonization Strategy](docs/Documentation_Harmonization_Strategy.md)
 
-If you install a desktop launcher, the `.desktop` entries live here:
-- App menu: `~/.local/share/applications/biomodstack.desktop`
-- Autostart: `~/.config/autostart/biomodstack-panel.desktop`
+Platform-specific docs:
 
-If you move the repo, update the `Exec` and `Icon` paths in those files to
-point at the new location (they should reference `biomodstack_panel.py` and the
-icon in `platform/assets/icons/`).
+- [API README](platform/api/README.md)
+- [Frontend README](platform/frontend/README.md)
 
-## Pathing & Portability
+Reference inventory:
 
-BioModStack is path-agnostic. These environment variables override defaults:
-- `BMS_HOME`, `BMS_DATA`
-- `BMS_WEIGHTS`, `BMS_COLABFOLD_DB`, `BMS_MSA_CACHE`, `BMS_SABDAB_CACHE`
-- `DATABASE_URL` or `BMS_DB_PATH`
-- `BMS_FAN_CONTROL_BACKEND` (`nvidia-settings` or `coolercontrol`)
+- [Model Integrations](docs/ai_guidance/Model_Integrations.md)
 
-See `docs/installation.md` for examples.
+## Repository Entry Points
+
+- Workflow entrypoint: [main.nf](main.nf)
+- API entrypoint: [platform/api/main.py](platform/api/main.py)
+- Frontend entrypoint: [platform/frontend/src/App.tsx](platform/frontend/src/App.tsx)
+- Local launcher script: [start_ui.sh](start_ui.sh)
+- GTK control panel: [biomodstack_panel.py](biomodstack_panel.py)

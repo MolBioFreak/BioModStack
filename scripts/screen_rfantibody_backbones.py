@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -36,6 +37,23 @@ def normalize_chain_hint(raw: str) -> str | None:
         return None
     parts = [part.strip() for part in raw.split(",") if part.strip()]
     return parts[0] if parts else None
+
+
+def parse_chain_hints(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple)):
+        tokens = [str(part).strip() for part in raw if str(part).strip()]
+    else:
+        tokens = [part.strip() for part in re.split(r"[,;|\s]+", str(raw)) if part.strip()]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return ordered
 
 
 def normalize_screen_reference_scope(raw: str | None) -> str:
@@ -472,16 +490,17 @@ def per_hotspot_metrics(
     return hotspot_metrics, covered_count
 
 
-def infer_antibody_chains(all_chains: list[str], antibody_chain_hint: str | None) -> list[str]:
+def infer_antibody_chains(
+    all_chains: list[str],
+    antibody_chain_hint: str | list[str] | tuple[str, ...] | None,
+) -> list[str]:
     antibody_chains: list[str] = []
     for chain_id in ["H", "L"]:
         if chain_id in all_chains and chain_id not in antibody_chains:
             antibody_chains.append(chain_id)
 
     if not antibody_chains:
-        ordered_hints: list[str] = []
-        if antibody_chain_hint:
-            ordered_hints.extend([part.strip() for part in antibody_chain_hint.split(",") if part.strip()])
+        ordered_hints = parse_chain_hints(antibody_chain_hint)
         ordered_hints.append("A")
         for chain_id in ordered_hints:
             if chain_id in all_chains and chain_id not in antibody_chains:
@@ -493,11 +512,12 @@ def infer_antibody_chains(all_chains: list[str], antibody_chain_hint: str | None
 def infer_target_chain(
     all_chains: list[str],
     antibody_chain_ids: list[str],
-    target_chain_hint: str | None,
+    target_chain_hint: str | list[str] | tuple[str, ...] | None,
     epitope_residues: list[str],
 ) -> str | None:
-    if target_chain_hint and target_chain_hint in all_chains:
-        return target_chain_hint
+    for hinted_chain in parse_chain_hints(target_chain_hint):
+        if hinted_chain in all_chains and hinted_chain not in antibody_chain_ids:
+            return hinted_chain
 
     for res_spec in epitope_residues:
         res_spec = res_spec.strip()
@@ -521,7 +541,7 @@ def map_epitope_residue_numbers(
     design_target_ca,
     target_chain_id: str,
     reference_target_pdb: Path | None,
-    reference_target_chain: str | None,
+    reference_target_chain: str | list[str] | tuple[str, ...] | None,
 ) -> tuple[set[int], str]:
     direct_numbers = {
         resnum
@@ -537,7 +557,11 @@ def map_epitope_residue_numbers(
     reference_structure = load_structure(reference_target_pdb)
     reference_chains = [str(chain_id) for chain_id in np.unique(reference_structure.chain_id)]
     reference_specs = parse_residue_specs(epitope_residues)
-    reference_chain = reference_target_chain if reference_target_chain in reference_chains else None
+    reference_chain = None
+    for hinted_chain in parse_chain_hints(reference_target_chain):
+        if hinted_chain in reference_chains:
+            reference_chain = hinted_chain
+            break
     if reference_chain is None:
         for chain_id, _resnum in reference_specs:
             if chain_id and chain_id in reference_chains:
@@ -845,8 +869,8 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     epitope_residues = parse_residue_list(args.epitope_residues)
-    antibody_chain = normalize_chain_hint(args.antibody_chains)
-    target_chain = (args.target_chain or "").strip() or None
+    antibody_chain = parse_chain_hints(args.antibody_chains)
+    target_chain = parse_chain_hints(args.target_chain)
     reference_target_pdb = Path(args.reference_target_pdb).expanduser().resolve() if args.reference_target_pdb else None
     screen_reference_scope = normalize_screen_reference_scope(args.screen_reference_scope)
 

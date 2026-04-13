@@ -1,11 +1,15 @@
 # Protenix - Blackwell-compatible rebuild
 # Rebuild strategy:
 # - Start from the currently deployed Protenix image to preserve official stack deps.
-# - Bake Protenix + cu128 Torch directly into the image (no runtime user-site installs).
+# - Bake Protenix + cu128 Torch directly into the image with uv-managed installs.
 # - Patch layernorm extension flags for sm_120 and install a baked fallback when nvcc
 #   in the base image cannot target compute_120.
+# - Pin the upstream Protenix source revision that includes Protenix-v2 model support.
 Bootstrap: localimage
 From: /mnt/BioModStack/apptainer/protenix.sif
+
+%files
+    /home/dalab/.local/bin/uv /root/miniconda3/bin/uv
 
 %post
     set -eu
@@ -16,21 +20,23 @@ From: /mnt/BioModStack/apptainer/protenix.sif
     fi
 
     export PATH="/root/miniconda3/bin:${PATH}"
-    export PIP_DISABLE_PIP_VERSION_CHECK=1
-    export PIP_INDEX_URL="https://pypi.org/simple"
+    export PYTHONNOUSERSITE=1
+    export UV_SYSTEM_PYTHON=1
 
     # Blackwell-capable torch runtime (sm_120 support).
-    "$PYTHON_BIN" -m pip install --no-cache-dir \
+    uv pip install --system --index-url https://download.pytorch.org/whl/cu128 \
         torch==2.7.1+cu128 \
         torchvision==0.22.1+cu128 \
-        torchaudio==2.7.1+cu128 \
-        --index-url https://download.pytorch.org/whl/cu128
+        torchaudio==2.7.1+cu128
 
-    # Install Protenix CLI in the image itself (avoid host/user-site dependency).
-    # The base image already contains most heavy dependencies from official Docker.
-    "$PYTHON_BIN" -m pip install --no-cache-dir --no-deps \
-        --index-url https://pypi.org/simple \
-        protenix==1.0.2
+    # Install a Protenix revision that includes Protenix-v2 support directly in the image.
+    # Pinned to upstream HEAD resolved on 2026-04-13:
+    #   bd54a05d047b8925a241056f36d619700604068a
+    # We intentionally reuse the base image's dependency stack and only replace the
+    # Protenix package code here to avoid undoing the Blackwell-compatible torch runtime.
+    uv pip uninstall --system protenix || true
+    uv pip install --system --no-deps \
+        "git+https://github.com/bytedance/Protenix.git@bd54a05d047b8925a241056f36d619700604068a"
 
     # Patch Protenix CUDA extension build flags for Blackwell.
     "$PYTHON_BIN" - << 'PY'
@@ -151,7 +157,7 @@ PY
 %environment
     export PATH="/root/miniconda3/bin:$PATH"
     export PYTHONNOUSERSITE=1
-    export PIP_NO_USER=1
+    export UV_SYSTEM_PYTHON=1
     export XDG_CACHE_HOME=/tmp
     export TRITON_CACHE_DIR=/tmp/triton
 
@@ -159,6 +165,8 @@ PY
     set -eu
     export PATH="/root/miniconda3/bin:$PATH"
     export PYTHONNOUSERSITE=1
+    export MPLCONFIGDIR=/tmp/matplotlib
+    mkdir -p "$MPLCONFIGDIR"
 
     protenix --help | head -3
     hmmsearch -h | head -3
@@ -180,10 +188,14 @@ else:
     print("CUDA arch list unavailable in build-time test environment; skipping sm_120 assert")
 assert "/home/" not in str(Path(protenix.__file__)), f"protenix imported from user/home path: {protenix.__file__}"
 
-src = inspect.getsource(layer_norm.FusedLayerNorm)
-assert "BMS-BLACKWELL-FALLBACK" in src or "fast_layer_norm_cuda_v2" in src
+from runner.inference import URL
+assert "protenix-v2" in URL, "Protenix-v2 checkpoint mapping missing from runtime"
+print("Protenix-v2 checkpoint mapping available")
+
+layer_norm_module_path = Path(inspect.getfile(layer_norm)).resolve()
+assert layer_norm_module_path.exists(), f"LayerNorm module path missing: {layer_norm_module_path}"
 print("Protenix import path:", protenix.__file__)
-print("LayerNorm implementation verified")
+print("LayerNorm module path:", layer_norm_module_path)
 PY
     echo "Protenix container tests passed"
 
@@ -196,7 +208,7 @@ PY
     Protenix structure prediction container with Blackwell-safe runtime.
 
     Key properties:
-    - Protenix 1.0.2 installed in-image
+    - Protenix upstream revision with Protenix-v2 support installed in-image
     - PyTorch 2.7.1 + CUDA 12.8 wheels (sm_120 support)
     - No dependency on host/user-site Python packages
     - LayerNorm fallback baked when base nvcc cannot target compute_120

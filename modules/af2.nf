@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process RunAF2 {
     label 'AF2'
     label 'gpu'
@@ -78,7 +89,7 @@ process FilterAF2 {
 
     script:
     // Only pass parameters if filter values are provided
-    def paramString = Utils.formatFilterParams(
+    def paramString = formatFilterParams(
         params,
         "af2",
         [
@@ -104,4 +115,3 @@ process FilterAF2 {
         2>&1 | tee filter_af2_${task.index}.log
     """
 }
-

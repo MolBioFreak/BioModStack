@@ -33,11 +33,14 @@ export interface Job {
     source_stage_mode?: string | null;
     source_selection_manifest_path?: string | null;
     source_selection_count?: number | null;
+    selected_input_artifact_class?: string | null;
+    selected_input_schema_version?: number | null;
     selection_source_type?: string | null;
     selection_source_job_id?: string | null;
     selection_dataset_name?: string | null;
     selected_loop_scope?: Record<string, unknown> | null;
     provenance?: Record<string, unknown> | null;
+    saved_selection_sets?: SavedReviewFilterSet[] | null;
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
@@ -263,6 +266,21 @@ export const extractChain = async (
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
+
+export interface BoltzGenPreviewResponse {
+    yaml_text: string;
+    scaffold_specs: Array<Record<string, any>>;
+    resolved_params: Record<string, any>;
+    notes: string[];
+    check_ok: boolean;
+    check_stdout?: string | null;
+    check_stderr?: string | null;
+}
+
+export const previewBoltzGenDesignSpec = (payload: {
+    params: Record<string, any>;
+    validate?: boolean;
+}) => api.post<BoltzGenPreviewResponse>('/api/boltzgen/preview', payload);
 
 export type AntibodyIterationAction =
     | 'validate_boltz2'
@@ -618,6 +636,8 @@ export interface Design {
     source_stage_mode?: string | null;
     source_pdb_path?: string | null;
     source_design_name?: string | null;
+    artifact_class?: string | null;
+    artifact_schema_version?: number | null;
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;
@@ -727,6 +747,9 @@ export interface DesignFilters {
     rfd_rog_max?: number;
     favorites_only?: boolean;
     artifact_group?: string;
+    artifact_class?: string;
+    stage_family?: string;
+    source_stage_family?: string;
     sort_by?: DesignSortField;
     sort_desc?: boolean;
     limit?: number;
@@ -1367,10 +1390,31 @@ export interface SequencePrimer {
     id: string;
     name: string;
     sequence: string;
+    sequence_type?: 'dna' | 'rna';
     start: number;
     end: number;
+    strand?: number;
     tm?: number;
     gc_percent?: number;
+    tm_algorithm?: string;
+    tm_salt_correction?: string;
+    tm_settings?: PrimerTmSettings;
+}
+
+export interface SequenceAnalysisTrack {
+    id: string;
+    name: string;
+    kind: 'reactivity' | 'coverage' | 'mismatch' | 'custom';
+    description?: string | null;
+    color?: string | null;
+    source_format?: string | null;
+    source_name?: string | null;
+    source_url?: string | null;
+    normalization?: string | null;
+    values: Array<number | null>;
+    min_value?: number | null;
+    max_value?: number | null;
+    created_at?: string | null;
 }
 
 export interface NucleotideSequence {
@@ -1383,10 +1427,13 @@ export interface NucleotideSequence {
     length: number;
     features: SequenceFeature[] | null;
     primers: SequencePrimer[] | null;
+    analysis_tracks?: SequenceAnalysisTrack[] | null;
     organism: string | null;
     accession: string | null;
     source_file: string | null;
     gc_content: number | null;
+    entity_kind?: string;
+    topology?: 'circular' | 'linear';
     created_at: string;
     updated_at: string | null;
 }
@@ -1395,12 +1442,18 @@ export interface NucleotideSequenceListItem {
     id: string;
     name: string;
     description: string | null;
-    sequence_type: string;
+    sequence_type: 'dna' | 'rna';
     is_circular: boolean;
     length: number;
     gc_content: number | null;
     feature_count: number;
+    organism: string | null;
+    accession: string | null;
+    source_file: string | null;
+    entity_kind: string;
+    topology: 'circular' | 'linear';
     created_at: string;
+    updated_at: string | null;
 }
 
 export interface NucleotideSequenceCreate {
@@ -1411,13 +1464,24 @@ export interface NucleotideSequenceCreate {
     is_circular?: boolean;
     features?: SequenceFeature[];
     primers?: SequencePrimer[];
+    analysis_tracks?: SequenceAnalysisTrack[];
     organism?: string;
     accession?: string;
     source_file?: string;
 }
 
-export const fetchNucleotideSequences = (limit: number = 100, offset: number = 0) =>
-    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params: { limit, offset } });
+export interface FetchNucleotideSequencesParams {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sequence_type?: 'dna' | 'rna';
+    topology?: 'all' | 'circular' | 'linear';
+    sort_by?: 'updated_at' | 'created_at' | 'name' | 'length' | 'gc_content' | 'feature_count';
+    sort_desc?: boolean;
+}
+
+export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
+    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);
@@ -1436,6 +1500,91 @@ export const addSequenceFeature = (sequenceId: string, feature: Omit<SequenceFea
 
 export const deleteSequenceFeature = (sequenceId: string, featureId: string) =>
     api.delete(`/api/sequences/${sequenceId}/features/${featureId}`);
+
+export interface RnaStructureSettings {
+    temperature_c: number;
+    no_lonely_pairs: boolean;
+    dangles: number;
+    circular?: boolean | null;
+    max_bp_span?: number | null;
+    gamma: number;
+    probability_cutoff: number;
+    max_pairs: number;
+}
+
+export interface RnaStructurePrediction {
+    dot_bracket: string;
+    energy_kcal_mol?: number | null;
+    score?: number | null;
+    distance?: number | null;
+    paired_count: number;
+}
+
+export interface RnaPartitionSummary {
+    dot_bracket: string;
+    ensemble_free_energy_kcal_mol: number;
+    mean_bp_distance: number;
+    probability_cutoff: number;
+    pair_count: number;
+    truncated: boolean;
+}
+
+export interface RnaPairProbability {
+    i: number;
+    j: number;
+    probability: number;
+}
+
+export interface RnaBaseProbability {
+    index: number;
+    base: string;
+    paired_probability: number;
+    unpaired_probability: number;
+    positional_entropy?: number | null;
+}
+
+export interface RnaStructureResult {
+    source_sequence_id?: string | null;
+    name?: string | null;
+    sequence: string;
+    length: number;
+    circular: boolean;
+    settings: RnaStructureSettings;
+    mfe: RnaStructurePrediction;
+    centroid?: RnaStructurePrediction | null;
+    mea?: RnaStructurePrediction | null;
+    partition?: RnaPartitionSummary | null;
+    pair_probabilities: RnaPairProbability[];
+    bases: RnaBaseProbability[];
+    warnings: string[];
+}
+
+export interface RnaStructureOptionsResponse {
+    defaults: RnaStructureSettings;
+    limits: {
+        max_global_fold_length: number;
+        max_partition_length: number;
+        max_bounded_fold_length: number;
+        max_bp_span: number;
+    };
+}
+
+export interface RnaStructureRequest {
+    sequence_id?: string;
+    name?: string;
+    sequence?: string;
+    is_circular?: boolean;
+    settings?: Partial<RnaStructureSettings>;
+}
+
+export const fetchRnaStructureOptions = () =>
+    api.get<RnaStructureOptionsResponse>('/api/molbio/rna-structure/options');
+
+export const foldRnaStructure = (data: RnaStructureRequest & { include_partition?: boolean }) =>
+    api.post<RnaStructureResult>('/api/molbio/rna-structure/fold', data);
+
+export const partitionRnaStructure = (data: RnaStructureRequest) =>
+    api.post<RnaStructureResult>('/api/molbio/rna-structure/partition', data);
 
 // Antibody API
 export interface AntibodyOverlaySelection {
@@ -1814,13 +1963,80 @@ export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') 
 // PRIMER LIBRARY API (MolBio Toolkit)
 // ============================================================
 
+export interface PrimerTmSettings {
+    algorithm: string;
+    salt_correction: string;
+    primer_concentration_nM: number;
+    template_concentration_nM: number;
+    na_mM: number;
+    k_mM: number;
+    tris_mM: number;
+    mg_mM: number;
+    dntps_mM: number;
+    dmso_percent: number;
+    formamide_percent: number;
+    self_complementary: boolean;
+}
+
+export interface PrimerTmOption {
+    id: string;
+    label: string;
+    description: string;
+    sequence_types: Array<'dna' | 'rna'>;
+    polymer_pairing?: string | null;
+}
+
+export interface PrimerTmSaltCorrectionOption {
+    id: string;
+    label: string;
+    description: string;
+}
+
+export interface PrimerTmOptionsResponse {
+    algorithms: PrimerTmOption[];
+    salt_corrections: PrimerTmSaltCorrectionOption[];
+    defaults: {
+        dna: PrimerTmSettings;
+        rna: PrimerTmSettings;
+    };
+}
+
+export interface PrimerTmInput {
+    id?: string;
+    name?: string;
+    sequence: string;
+    sequence_type?: 'dna' | 'rna';
+    complement_sequence?: string;
+    shift?: number;
+}
+
+export interface PrimerTmResult {
+    id?: string | null;
+    name?: string | null;
+    sequence: string;
+    sequence_type: 'dna' | 'rna';
+    length: number;
+    gc_percent: number;
+    tm: number | null;
+    algorithm: string;
+    algorithm_label: string;
+    salt_correction: string;
+    salt_correction_label: string;
+    polymer_pairing: string;
+    warnings: string[];
+}
+
 export interface Primer {
     id: string;
     name: string;
     sequence: string;
+    sequence_type: 'dna' | 'rna';
     length: number;
     tm: number | null;
     gc_percent: number | null;
+    tm_algorithm: string | null;
+    tm_salt_correction: string | null;
+    tm_settings: PrimerTmSettings | null;
     primer_type: string;
     description: string | null;
     target_sequence_id: string | null;
@@ -1836,6 +2052,7 @@ export interface Primer {
 export interface PrimerCreate {
     name: string;
     sequence: string;
+    sequence_type?: 'dna' | 'rna';
     primer_type?: string;
     description?: string;
     target_sequence_id?: string;
@@ -1843,11 +2060,13 @@ export interface PrimerCreate {
     binding_end?: number;
     binding_strand?: number;
     tags?: string[];
+    tm_settings?: PrimerTmSettings;
 }
 
 export interface PrimerUpdate {
     name?: string;
     sequence?: string;
+    sequence_type?: 'dna' | 'rna';
     primer_type?: string;
     description?: string;
     target_sequence_id?: string;
@@ -1856,7 +2075,16 @@ export interface PrimerUpdate {
     binding_strand?: number;
     tags?: string[];
     is_favorite?: boolean;
+    tm_settings?: PrimerTmSettings;
 }
+
+export const fetchPrimerTmOptions = () =>
+    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options');
+
+export const calculatePrimerTm = (data: {
+    primers: PrimerTmInput[];
+    settings?: PrimerTmSettings;
+}) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
 
 export const fetchPrimers = (params?: {
     search?: string;
