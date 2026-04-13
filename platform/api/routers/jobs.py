@@ -3951,6 +3951,44 @@ def _validate_protenix_template_requirements(model_id: str, params: dict) -> Non
     )
 
 
+def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> None:
+    model_normalized = (model_id or "").strip().lower()
+    pred_method = str(params.get("pred_method", "")).strip().lower()
+    structure_validator = str(params.get("structure_validator", "")).strip().lower()
+    predictor = str(params.get("predictor", "")).strip().lower()
+    uses_protenix = (
+        model_normalized == "protenix"
+        or pred_method == "protenix"
+        or structure_validator == "protenix"
+        or predictor == "protenix"
+    )
+    if not uses_protenix:
+        return
+
+    selected_model = str(params.get("protenix_model_weights") or "").strip()
+    if selected_model != "protenix-v2":
+        return
+
+    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
+    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
+    checkpoint_path = code_root / ".protenix_cache" / "checkpoint" / "protenix-v2.pt"
+    if checkpoint_path.exists():
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "validation_errors": [
+                (
+                    "Protenix v2 was selected, but the local checkpoint was not found at "
+                    f"{checkpoint_path}. Stage protenix-v2.pt locally before using v2, "
+                    "or switch back to protenix_base_20250630_v1.0.0."
+                )
+            ]
+        },
+    )
+
+
 def _resolve_alias_path_for_runtime(value: str) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -4172,6 +4210,7 @@ async def create_job(
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
+    _validate_protenix_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
 
@@ -5215,6 +5254,7 @@ async def resubmit_job(
         logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
 
     _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
+    _validate_protenix_checkpoint_requirements(original_job.model_id, resubmit_params)
     _validate_fampnn_checkpoint_requirements(original_job.model_id, resubmit_params)
     _validate_antibody_runtime_paths(original_job.model_id, resubmit_params)
 
