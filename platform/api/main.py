@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa, ribocentre, frustrampnn, bioxp, analyses
+from routers import analyses, analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, smiles_converter, system, templates, user_sequences, user_templates
 from services.analysis_worker import AnalysisWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
@@ -138,7 +138,9 @@ app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
+app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
+app.include_router(rna_structure.router)
 app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
 app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis

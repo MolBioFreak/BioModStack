@@ -46,6 +46,7 @@ process PrepBoltzGenInput {
         ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
         ${covalent_bonds ? "--covalent_bonds '${covalent_bonds}'" : ''} \\
         ${nanobody_framework ? "--nanobody_framework '${nanobody_framework}'" : ''} \\
+        ${params.boltzgen_nanobody_scaffold_specs ? "--nanobody_scaffold_specs '${params.boltzgen_nanobody_scaffold_specs}'" : ''} \\
         ${cdr_h1_length ? "--cdr_h1_length '${cdr_h1_length}'" : ''} \\
         ${cdr_h2_length ? "--cdr_h2_length '${cdr_h2_length}'" : ''} \\
         ${cdr_h3_length ? "--cdr_h3_length '${cdr_h3_length}'" : ''} \\
@@ -82,7 +83,7 @@ process RunBoltzGen {
 
     script:
     def numDesigns = params.boltzgen_num_designs ?: 10
-    def batchSize = params.boltzgen_batch_size ?: 1
+    def diffusionBatchSize = params.boltzgen_diffusion_batch_size ?: params.boltzgen_batch_size ?: 1
     def protocol = params.boltzgen_protocol ?: 'auto'
     def stepScale = params.boltzgen_step_scale ?: ''
     def noiseScale = params.boltzgen_noise_scale ?: ''
@@ -100,7 +101,7 @@ process RunBoltzGen {
         ${configArg} \\
         --out_dir output \\
         --num_designs ${numDesigns} \\
-        ${batchSize > 1 ? "--batch_size ${batchSize}" : ""} \\
+        ${diffusionBatchSize > 1 ? "--diffusion_batch_size ${diffusionBatchSize}" : ""} \\
         --protocol ${protocol} \\
         ${stepScale ? "--step_scale ${stepScale}" : ''} \\
         ${noiseScale ? "--noise_scale ${noiseScale}" : ''} \\
@@ -133,7 +134,7 @@ process FilterBoltzGen {
     // Build filter parameters
     def minPlddt = params.boltzgen_min_plddt ?: ''
     def minConfScore = params.boltzgen_min_conf_score ?: ''
-    def maxRmsd = params.boltzgen_max_rmsd ?: ''
+    def maxRmsd = params.boltzgen_refolding_rmsd_threshold ?: params.boltzgen_max_rmsd ?: ''
     def budget = params.boltzgen_budget ?: ''
     def alpha = params.boltzgen_alpha ?: '0.01'
     def filterBiased = params.boltzgen_filter_biased != false ? 'true' : 'false'
