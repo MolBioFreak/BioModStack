@@ -19,9 +19,15 @@ nextflow.enable.dsl = 2
 
 include { BatchBoltzValidation ; BatchProtenixValidation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
 
-if (!params.containsKey('structure_validator') || !params.structure_validator) params.structure_validator = 'boltz2'
-if (!params.containsKey('run_immunogenicity_scoring')) params.run_immunogenicity_scoring = false
-if (!params.containsKey('run_thermompnn')) params.run_thermompnn = false
+def resolveBooleanParam(value, defaultValue = false) {
+    if (value == null) {
+        return defaultValue
+    }
+    if (value instanceof Boolean) {
+        return value
+    }
+    return value.toString().equalsIgnoreCase('true')
+}
 
 workflow ANTIBODY_CHILD {
     take:
@@ -44,8 +50,8 @@ workflow ANTIBODY_CHILD {
     // =========================================================================
     // Step 1: Batch Structure Validation
     // =========================================================================
-    def validated_pdbs_ch = Channel.empty()
-    def validation_scores_ch = Channel.empty()
+    def validated_pdbs_ch = channel.empty()
+    def validation_scores_ch = channel.empty()
 
     if (structure_validator == 'protenix') {
         BatchProtenixValidation(pdb_files, msa_file)
@@ -63,25 +69,25 @@ workflow ANTIBODY_CHILD {
     // Use the *validated* structures from Boltz (folded) for downstream scoring
 
     // ThermoMPNN stability scoring - only if enabled
-    def run_thermompnn = params.run_thermompnn ?: false
+    def run_thermompnn = resolveBooleanParam(params.run_thermompnn, false)
     if (run_thermompnn) {
         BatchStability(validated_pdbs_ch)
         thermompnn_scores = BatchStability.out.scores
     }
     else {
         // Empty channel placeholder
-        thermompnn_scores = Channel.empty()
+        thermompnn_scores = channel.empty()
     }
 
     // AntiBERTy immunogenicity scoring - only if enabled  
-    def run_immunogenicity = params.run_immunogenicity_scoring ?: false
+    def run_immunogenicity = resolveBooleanParam(params.run_immunogenicity_scoring, false)
     if (run_immunogenicity) {
         BatchImmunogenicity(validated_pdbs_ch)
         antiberty_scores = BatchImmunogenicity.out.scores
     }
     else {
         // Empty channel placeholder
-        antiberty_scores = Channel.empty()
+        antiberty_scores = channel.empty()
     }
 
     emit:

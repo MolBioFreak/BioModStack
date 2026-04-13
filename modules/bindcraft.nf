@@ -275,8 +275,10 @@ process RunBindCraft {
 
     // Container with AF2 weights mounted
     container "${params.container_dir}/bindcraft.sif"
-    def afParamsDir = params.alphafold_params ?: "${params.weights_root}/alphafold/params"
-    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${afParamsDir}:/app/params --writable-tmpfs" }
+    containerOptions {
+        def afParamsDir = params.alphafold_params ?: "${params.weights_root}/alphafold/params"
+        "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${afParamsDir}:/app/params --writable-tmpfs"
+    }
 
     input:
     path target_settings
@@ -361,9 +363,6 @@ process FilterBindCraft {
     path "*.log"
 
     script:
-    def budgetArg = budget ? "--budget ${budget}" : ""
-    def alphaArg = alpha ? "--alpha ${alpha}" : "--alpha 0.01"
-
     """
     #!/usr/bin/env python3
     import json
