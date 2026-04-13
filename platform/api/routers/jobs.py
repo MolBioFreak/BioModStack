@@ -23,6 +23,17 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+from antibody_pipeline_contract import (
+    ANTIBODY_REFINEMENT_PIPELINE,
+    ANTIBODY_PIPELINE_CONTRACT_VERSION,
+    BACKBONE_COMPLEX,
+    SEQUENCE_DESIGNED_COMPLEX,
+    infer_antibody_artifact_class_from_stage,
+    infer_selected_input_artifact_class,
+    is_antibody_pipeline_mode,
+    normalize_antibody_artifact_class,
+    normalize_antibody_pipeline_contract_version,
+)
 from database import get_session, Job, Design
 from paths import (
     get_code_root,
@@ -108,6 +119,17 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _format_artifact_identity(artifact_class: Optional[str], stage_family: Optional[str], stage_mode: Optional[str]) -> str:
+    parts: List[str] = []
+    normalized_artifact_class = normalize_antibody_artifact_class(artifact_class)
+    if normalized_artifact_class:
+        parts.append(normalized_artifact_class)
+    stage_identity = _format_stage_identity(stage_family, stage_mode)
+    if stage_identity and stage_identity != "unknown":
+        parts.append(stage_identity)
+    return " from ".join(parts) if parts else "unknown"
+
+
 def _child_job_has_reusable_outputs(job: Any) -> bool:
     child_stage = (_coerce_nonempty_text(getattr(job, "child_stage", None)) or "").strip().lower()
     if child_stage not in {"maturation", "backbone_refine"}:
@@ -173,7 +195,7 @@ def _job_uses_child_batches(model_id: str, mode: str, params: dict) -> bool:
     if parallel_mode and parallel_mode.lower() == "full_orchestrator":
         return True
 
-    if mode == "antibody_denovo_pipeline":
+    if is_antibody_pipeline_mode(mode):
         return True
 
     if model_id == "bindcraft" and bool(params.get("bindcraft_use_swa")):
@@ -764,6 +786,15 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         return {}
 
     normalized = dict(params)
+    if not normalized.get("antibody_chains") and normalized.get("binder_chains"):
+        normalized["antibody_chains"] = str(normalized.get("binder_chains")).strip()
+    if not normalized.get("antigen_chains") and normalized.get("target_chains"):
+        normalized["antigen_chains"] = str(normalized.get("target_chains")).strip()
+    if not normalized.get("antibody_chains") and normalized.get("antibody_chain"):
+        normalized["antibody_chains"] = str(normalized.get("antibody_chain")).strip()
+    if not normalized.get("antigen_chains") and normalized.get("antigen_chain"):
+        normalized["antigen_chains"] = str(normalized.get("antigen_chain")).strip()
+
     structure_validator = str(
         normalized.get("structure_validator")
         or normalized.get("validation_predictor")
@@ -912,6 +943,24 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
     if not _coerce_nonempty_text(normalized.get("selected_input_stage_mode")) and _coerce_nonempty_text(normalized.get("source_stage_mode")):
         normalized["selected_input_stage_mode"] = normalized.get("source_stage_mode")
 
+    selected_input_artifact_class = infer_selected_input_artifact_class(
+        selected_input_artifact_class=normalized.get("selected_input_artifact_class"),
+        selected_input_stage_family=normalized.get("selected_input_stage_family"),
+        selected_input_stage_mode=normalized.get("selected_input_stage_mode"),
+        rfantibody_input_pdbs=normalized.get("rfantibody_input_pdbs"),
+        fampnn_collected_pdbs=normalized.get("fampnn_collected_pdbs"),
+    )
+    selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        normalized.get("selected_input_schema_version")
+    )
+    if selected_input_artifact_class:
+        normalized["selected_input_artifact_class"] = selected_input_artifact_class
+        normalized["selected_input_schema_version"] = (
+            selected_input_schema_version or ANTIBODY_PIPELINE_CONTRACT_VERSION
+        )
+    elif selected_input_schema_version is not None:
+        normalized["selected_input_schema_version"] = selected_input_schema_version
+
     if _coerce_nonempty_text(normalized.get("selected_input_manifest")) and not _coerce_nonempty_text(normalized.get("source_selection_manifest_path")):
         normalized["source_selection_manifest_path"] = normalized.get("selected_input_manifest")
 
@@ -934,7 +983,8 @@ def _is_antibody_launch(model_id: str, params: Optional[Dict[str, Any]]) -> bool
             "antibody_child",
             "rfantibody_child",
         }
-        or mode_normalized in {"antibody_denovo_pipeline", "rfantibody_backbone"}
+        or is_antibody_pipeline_mode(mode_normalized)
+        or mode_normalized == "rfantibody_backbone"
     )
 
 
@@ -1334,6 +1384,14 @@ def _resolve_design_stage_metadata(design: Any) -> tuple[Optional[str], Optional
     return family or review_stage_family, mode or review_stage_mode
 
 
+def _resolve_design_artifact_class(design: Any) -> Optional[str]:
+    explicit = normalize_antibody_artifact_class(getattr(design, "artifact_class", None))
+    if explicit:
+        return explicit
+    family, mode = _resolve_design_stage_metadata(design)
+    return infer_antibody_artifact_class_from_stage(family, mode)
+
+
 def _requires_immediate_ppiflow_backbone_refine(action: str, params: Dict[str, Any]) -> bool:
     action_normalized = (action or "").strip().lower()
     if action_normalized == "ppiflow_backbone_refine":
@@ -1385,35 +1443,53 @@ def _validate_antibody_iteration_source_compatibility(action: str, params: Dict[
     source_stage_mode = _normalize_stage_family(
         params.get("selected_input_stage_mode") or params.get("source_stage_mode")
     )
-    source_identity = _format_stage_identity(source_stage_family, source_stage_mode)
+    source_artifact_class = infer_selected_input_artifact_class(
+        selected_input_artifact_class=params.get("selected_input_artifact_class"),
+        selected_input_stage_family=source_stage_family,
+        selected_input_stage_mode=source_stage_mode,
+        rfantibody_input_pdbs=params.get("rfantibody_input_pdbs"),
+        fampnn_collected_pdbs=params.get("fampnn_collected_pdbs"),
+    )
+    source_identity = _format_artifact_identity(source_artifact_class, source_stage_family, source_stage_mode)
     action_label = ANTIBODY_ITERATION_ACTION_LABELS.get((action or "").strip().lower(), action or "launch")
 
-    if _requires_immediate_ppiflow_backbone_refine(action, params) and source_stage_family not in {None, "rfantibody"}:
+    if _requires_immediate_ppiflow_backbone_refine(action, params) and source_artifact_class not in {None, BACKBONE_COMPLEX}:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{action_label} only accepts RFantibody backbone inputs. "
-                f"Selected input stage is {source_identity}. "
+                f"{action_label} only accepts backbone-complex inputs. "
+                f"Selected input is {source_identity}. "
                 "Use FAMPNN redesign first, then optionally run post-FA-MPNN PPIFlow maturation."
             ),
         )
-
-    if _requires_post_ppiflow_backbone_reattempt(action, params) and source_stage_family != "ppiflow":
+    if _requires_immediate_ppiflow_backbone_refine(action, params) and source_stage_family == "ppiflow":
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{action_label} in post-PPIFlow reattempt mode only accepts PPIFlow-derived inputs. "
-                f"Selected input stage is {source_identity}. "
+                f"{action_label} does not accept recursive PPIFlow backbone-refine inputs. "
+                f"Selected input is {source_identity}. "
+                "Use post-PPIFlow reattempt mode for loop-selective retries, or return to sequence design/maturation."
+            ),
+        )
+
+    if _requires_post_ppiflow_backbone_reattempt(action, params) and (
+        source_artifact_class != BACKBONE_COMPLEX or source_stage_family != "ppiflow"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{action_label} in post-PPIFlow reattempt mode only accepts PPIFlow-derived backbone-complex inputs. "
+                f"Selected input is {source_identity}. "
                 "Choose RFantibody backbone refine for RF outputs, or switch this relaunch to FA-MPNN/post-FA-MPNN maturation."
             ),
         )
 
-    if _requires_direct_ppiflow_maturation(action, params) and source_stage_family not in {"fampnn"}:
+    if _requires_direct_ppiflow_maturation(action, params) and source_artifact_class != SEQUENCE_DESIGNED_COMPLEX:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{action_label} requires FA-MPNN-designed inputs when it runs directly on the selected structures. "
-                f"Selected input stage is {source_identity}. "
+                f"{action_label} requires sequence-designed complex inputs when it runs directly on the selected structures. "
+                f"Selected input is {source_identity}. "
                 "If you are relaunching from PPIFlow backbone outputs, include sequence design first or use FAMPNN redesign."
             ),
         )
@@ -1437,6 +1513,9 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
     model_normalized = (model_id or "").strip().lower()
     if mode_normalized == "maturation_child":
         return "ppiflow", "maturation"
+    if model_normalized == "boltzgen":
+        boltzgen_mode = str(params.get("boltzgen_mode") or mode_normalized or "").strip().lower()
+        return "boltzgen", boltzgen_mode or "generation"
     if "fampnn" in model_normalized:
         return "fampnn", mode_normalized or "sequence_design"
     if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:
@@ -1590,13 +1669,23 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
     mode = (job.mode or "").strip().lower()
     params = job.params if isinstance(job.params, dict) else {}
     rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    boltzgen_mode = str(params.get("boltzgen_mode") or mode or "").strip().lower()
+    framework_type = str(params.get("framework_type") or "").strip().lower()
     has_antibody_params = any(_is_meaningful_param_value(params.get(key)) for key in ("framework_type", "antibody_chains", "epitope_residues"))
+    is_boltzgen_nanobody = (
+        model_id == "boltzgen"
+        and (
+            boltzgen_mode in {"nanobody_binder", "antibody_binder"}
+            or framework_type == "nanobody"
+        )
+    )
     return (
         model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
         or "antibody" in model_id
         or "antibody" in mode
-        or rfd_mode == "antibody_denovo_pipeline"
+        or is_antibody_pipeline_mode(rfd_mode)
         or has_antibody_params
+        or is_boltzgen_nanobody
     )
 
 
@@ -1635,7 +1724,7 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     if not _looks_like_antibody_job(root_job):
         raise HTTPException(
             status_code=422,
-            detail="Selected job is not part of an antibody workflow lineage.",
+            detail="Selected job is not part of an antibody or nanobody refinement-compatible lineage.",
         )
     return source_job, root_job
 
@@ -1654,15 +1743,41 @@ def _normalize_design_ids(values: List[str]) -> List[str]:
     return normalized
 
 
-def _iter_saved_review_filter_sets(job: Optional[Job]) -> List[SavedReviewFilterSet]:
-    if job is None or not isinstance(job.awaiting_payload, dict):
-        return []
-    raw_sets = job.awaiting_payload.get("review_filter_sets")
-    if not isinstance(raw_sets, list):
+def _saved_review_filter_entries(job: Optional[Job]) -> List[Dict[str, Any]]:
+    if job is None:
         return []
 
+    saved_entries = getattr(job, "saved_selection_sets", None)
+    if isinstance(saved_entries, list):
+        return list(saved_entries)
+
+    if isinstance(job.awaiting_payload, dict):
+        raw_sets = job.awaiting_payload.get("review_filter_sets")
+        if isinstance(raw_sets, list):
+            return list(raw_sets)
+
+    return []
+
+
+def _persist_saved_review_filter_entries(job: Job, entries: List[Dict[str, Any]]) -> None:
+    pruned_entries = list(entries[:50])
+    job.saved_selection_sets = pruned_entries
+
+    if isinstance(job.awaiting_payload, dict):
+        payload = dict(job.awaiting_payload or {})
+        payload["review_filter_sets"] = pruned_entries
+        job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
+        _write_gate_snapshot(job)
+
+
+def _serialized_saved_review_filter_sets(job: Optional[Job]) -> Optional[List[Dict[str, Any]]]:
+    entries = _saved_review_filter_entries(job)
+    return entries or None
+
+
+def _iter_saved_review_filter_sets(job: Optional[Job]) -> List[SavedReviewFilterSet]:
     saved_sets: List[SavedReviewFilterSet] = []
-    for entry in raw_sets:
+    for entry in _saved_review_filter_entries(job):
         try:
             saved_sets.append(SavedReviewFilterSet.model_validate(entry))
         except Exception:
@@ -1760,6 +1875,13 @@ def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
         "iteration_source_design_ids",
         "iteration_action",
         "iteration_selection_dir",
+        "selected_input_dir",
+        "selected_input_manifest",
+        "selected_input_artifact_class",
+        "selected_input_schema_version",
+        "selected_input_source_job_id",
+        "selected_input_stage_family",
+        "selected_input_stage_mode",
         "lineage_root_job_id",
         "stage_family",
         "stage_mode",
@@ -2265,6 +2387,18 @@ def _derive_source_stage_payload(
     source_stage_job_id = source_job_ids[0] if len(source_job_ids) == 1 else source_job.id
     source_stage_family = source_stage_families[0] if len(source_stage_families) == 1 else job_stage_family
     source_stage_mode = source_stage_modes[0] if len(source_stage_modes) == 1 else job_stage_mode
+    design_artifact_classes = _dedupe_preserve_order(
+        [
+            artifact_class
+            for artifact_class in (_resolve_design_artifact_class(design) for design in designs)
+            if artifact_class
+        ]
+    )
+    selected_input_artifact_class = (
+        design_artifact_classes[0]
+        if len(design_artifact_classes) == 1
+        else infer_antibody_artifact_class_from_stage(source_stage_family, source_stage_mode)
+    )
     source_selection_manifest_path = str(_selection_manifest_path(selection_dir)) if selection_dir is not None else None
 
     return {
@@ -2278,6 +2412,10 @@ def _derive_source_stage_payload(
         "selected_input_stage_family": source_stage_family,
         "selected_input_stage_mode": source_stage_mode,
         "selected_input_source_job_id": source_stage_job_id,
+        "selected_input_artifact_class": selected_input_artifact_class,
+        "selected_input_schema_version": (
+            ANTIBODY_PIPELINE_CONTRACT_VERSION if selected_input_artifact_class else None
+        ),
     }
 
 
@@ -2290,12 +2428,18 @@ def _build_selection_manifest_item(
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     design_stage_family, design_stage_mode = _resolve_design_stage_metadata(design)
+    design_artifact_class = _resolve_design_artifact_class(design)
     item: Dict[str, Any] = {
         "design_id": design.id,
         "design_name": design.name,
         "design_job_id": design.job_id,
         "design_stage_family": design_stage_family,
         "design_stage_mode": design_stage_mode,
+        "design_artifact_class": design_artifact_class,
+        "design_artifact_schema_version": (
+            getattr(design, "artifact_schema_version", None)
+            or (ANTIBODY_PIPELINE_CONTRACT_VERSION if design_artifact_class else None)
+        ),
         "lineage_root_job_id": design.lineage_root_job_id,
         "parent_design_id": design.parent_design_id,
         "origin_design_id": design.origin_design_id,
@@ -2332,6 +2476,8 @@ def _write_selection_manifest(
         "source_stage_job_id": (source_stage_payload or {}).get("source_stage_job_id"),
         "source_stage_family": (source_stage_payload or {}).get("source_stage_family"),
         "source_stage_mode": (source_stage_payload or {}).get("source_stage_mode"),
+        "selected_input_artifact_class": (source_stage_payload or {}).get("selected_input_artifact_class"),
+        "selected_input_schema_version": (source_stage_payload or {}).get("selected_input_schema_version"),
         "source_selection_manifest_path": str(_selection_manifest_path(selection_dir)),
         "source_selection_count": len(manifest_items),
         "designs": manifest_items,
@@ -3395,6 +3541,8 @@ def _build_antibody_iteration_job(
         "selected_input_stage_family": source_stage_payload.get("selected_input_stage_family"),
         "selected_input_stage_mode": source_stage_payload.get("selected_input_stage_mode"),
         "selected_input_source_job_id": source_stage_payload.get("selected_input_source_job_id"),
+        "selected_input_artifact_class": source_stage_payload.get("selected_input_artifact_class"),
+        "selected_input_schema_version": source_stage_payload.get("selected_input_schema_version"),
     })
 
     for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
@@ -3492,10 +3640,12 @@ def _build_antibody_iteration_job(
     suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
     job_name = f"{root_job.name}_{suffix}"
 
+    launch_params["rfd_mode"] = ANTIBODY_REFINEMENT_PIPELINE
+
     return JobCreate(
         name=job_name,
         model_id="template_antibody_denovo",
-        mode="antibody_denovo_pipeline",
+        mode=ANTIBODY_REFINEMENT_PIPELINE,
         params=launch_params,
         pinned_gpu=root_job.pinned_gpu,
     )
@@ -3801,6 +3951,44 @@ def _validate_protenix_template_requirements(model_id: str, params: dict) -> Non
     )
 
 
+def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> None:
+    model_normalized = (model_id or "").strip().lower()
+    pred_method = str(params.get("pred_method", "")).strip().lower()
+    structure_validator = str(params.get("structure_validator", "")).strip().lower()
+    predictor = str(params.get("predictor", "")).strip().lower()
+    uses_protenix = (
+        model_normalized == "protenix"
+        or pred_method == "protenix"
+        or structure_validator == "protenix"
+        or predictor == "protenix"
+    )
+    if not uses_protenix:
+        return
+
+    selected_model = str(params.get("protenix_model_weights") or "").strip()
+    if selected_model != "protenix-v2":
+        return
+
+    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
+    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
+    checkpoint_path = code_root / ".protenix_cache" / "checkpoint" / "protenix-v2.pt"
+    if checkpoint_path.exists():
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "validation_errors": [
+                (
+                    "Protenix v2 was selected, but the local checkpoint was not found at "
+                    f"{checkpoint_path}. Stage protenix-v2.pt locally before using v2, "
+                    "or switch back to protenix_base_20250630_v1.0.0."
+                )
+            ]
+        },
+    )
+
+
 def _resolve_alias_path_for_runtime(value: str) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -3964,11 +4152,14 @@ async def list_jobs(
             source_stage_mode=job.source_stage_mode,
             source_selection_manifest_path=job.source_selection_manifest_path,
             source_selection_count=job.source_selection_count,
+            selected_input_artifact_class=job.selected_input_artifact_class,
+            selected_input_schema_version=job.selected_input_schema_version,
             selection_source_type=job.selection_source_type,
             selection_source_job_id=job.selection_source_job_id,
             selection_dataset_name=job.selection_dataset_name,
             selected_loop_scope=job.selected_loop_scope,
             provenance=job.provenance,
+            saved_selection_sets=_serialized_saved_review_filter_sets(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs=stage_outputs,
@@ -4019,6 +4210,7 @@ async def create_job(
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
+    _validate_protenix_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
 
@@ -4090,11 +4282,14 @@ async def create_job(
                 source_stage_mode=existing_child.source_stage_mode,
                 source_selection_manifest_path=existing_child.source_selection_manifest_path,
                 source_selection_count=existing_child.source_selection_count,
+                selected_input_artifact_class=existing_child.selected_input_artifact_class,
+                selected_input_schema_version=existing_child.selected_input_schema_version,
                 selection_source_type=existing_child.selection_source_type,
                 selection_source_job_id=existing_child.selection_source_job_id,
                 selection_dataset_name=existing_child.selection_dataset_name,
                 selected_loop_scope=existing_child.selected_loop_scope,
                 provenance=existing_child.provenance,
+                saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -4202,7 +4397,7 @@ async def create_job(
     vram_estimate = estimate_vram(estimate_model_id, sequence_length, job_data.params)
 
     # ─── CPU-only override: orchestration/launcher jobs should not consume GPU slots ─────
-    if job_data.mode == "antibody_denovo_pipeline" and str(job_data.params.get("parallel_mode") or "").strip().lower() == "full_orchestrator":
+    if is_antibody_pipeline_mode(job_data.mode) and str(job_data.params.get("parallel_mode") or "").strip().lower() == "full_orchestrator":
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
@@ -4470,6 +4665,12 @@ async def create_job(
         provenance_source_selection_count = _coerce_positive_int(
             job_params.get("source_selection_count") if isinstance(job_params, dict) else None
         )
+        provenance_selected_input_artifact_class = normalize_antibody_artifact_class(
+            job_params.get("selected_input_artifact_class") if isinstance(job_params, dict) else None
+        )
+        provenance_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+            job_params.get("selected_input_schema_version") if isinstance(job_params, dict) else None
+        )
         provenance_payload = {
             "job_id": job_id,
             "job_name": job_name,
@@ -4489,6 +4690,8 @@ async def create_job(
             "source_stage_mode": provenance_source_stage_mode,
             "source_selection_manifest_path": provenance_source_selection_manifest_path,
             "source_selection_count": provenance_source_selection_count,
+            "selected_input_artifact_class": provenance_selected_input_artifact_class,
+            "selected_input_schema_version": provenance_selected_input_schema_version,
             "iteration_action": job_params.get("iteration_action") if isinstance(job_params, dict) else None,
         }
 
@@ -4528,6 +4731,8 @@ async def create_job(
             source_stage_mode=provenance_source_stage_mode,
             source_selection_manifest_path=provenance_source_selection_manifest_path,
             source_selection_count=provenance_source_selection_count,
+            selected_input_artifact_class=provenance_selected_input_artifact_class,
+            selected_input_schema_version=provenance_selected_input_schema_version,
             selection_source_type=provenance_selection_source_type,
             selection_source_job_id=provenance_selection_source_job_id,
             selection_dataset_name=provenance_selection_dataset_name,
@@ -4592,11 +4797,14 @@ async def create_job(
         source_stage_mode=first_job.source_stage_mode,
         source_selection_manifest_path=first_job.source_selection_manifest_path,
         source_selection_count=first_job.source_selection_count,
+        selected_input_artifact_class=first_job.selected_input_artifact_class,
+        selected_input_schema_version=first_job.selected_input_schema_version,
         selection_source_type=first_job.selection_source_type,
         selection_source_job_id=first_job.selection_source_job_id,
         selection_dataset_name=first_job.selection_dataset_name,
         selected_loop_scope=first_job.selected_loop_scope,
         provenance=first_job.provenance,
+        saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -4857,11 +5065,14 @@ async def get_job(
         source_stage_mode=job.source_stage_mode,
         source_selection_manifest_path=job.source_selection_manifest_path,
         source_selection_count=job.source_selection_count,
+        selected_input_artifact_class=job.selected_input_artifact_class,
+        selected_input_schema_version=job.selected_input_schema_version,
         selection_source_type=job.selection_source_type,
         selection_source_job_id=job.selection_source_job_id,
         selection_dataset_name=job.selection_dataset_name,
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
+        saved_selection_sets=_serialized_saved_review_filter_sets(job),
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -5043,6 +5254,7 @@ async def resubmit_job(
         logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
 
     _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
+    _validate_protenix_checkpoint_requirements(original_job.model_id, resubmit_params)
     _validate_fampnn_checkpoint_requirements(original_job.model_id, resubmit_params)
     _validate_antibody_runtime_paths(original_job.model_id, resubmit_params)
 
@@ -5058,6 +5270,12 @@ async def resubmit_job(
         resubmit_sequence_length,
         resubmit_params,
     )
+    resubmit_selected_input_artifact_class = normalize_antibody_artifact_class(
+        resubmit_params.get("selected_input_artifact_class")
+    )
+    resubmit_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        resubmit_params.get("selected_input_schema_version")
+    )
 
     new_job = Job(
         id=str(uuid.uuid4()),
@@ -5071,6 +5289,8 @@ async def resubmit_job(
         # Preserve batch info if any
         batch_id=original_job.batch_id,
         batch_name=original_job.batch_name,
+        selected_input_artifact_class=resubmit_selected_input_artifact_class,
+        selected_input_schema_version=resubmit_selected_input_schema_version,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
@@ -5371,16 +5591,14 @@ async def save_review_filter_set(
     request: SaveReviewFilterSetRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Persist a named frozen review dataset for paused review workflows."""
+    """Persist a named frozen review dataset for review or completed generator workflows."""
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    payload = dict(job.awaiting_payload or {})
-    existing_sets = payload.get("review_filter_sets")
-    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+    filter_sets = _saved_review_filter_entries(job)
 
     filter_name = str(request.name or "").strip() or f"Saved dataset {len(filter_sets) + 1}"
     saved_entry = {
@@ -5393,12 +5611,10 @@ async def save_review_filter_set(
         "filter_state": dict(request.filter_state or {}),
     }
     filter_sets.insert(0, saved_entry)
-    payload["review_filter_sets"] = filter_sets[:50]
-    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
-    _write_gate_snapshot(job)
+    _persist_saved_review_filter_entries(job, filter_sets)
     await session.commit()
 
-    saved_models = [SavedReviewFilterSet.model_validate(entry) for entry in payload["review_filter_sets"]]
+    saved_models = _iter_saved_review_filter_sets(job)
     return SaveReviewFilterSetResponse(
         message=f"Saved review dataset '{filter_name}'.",
         filter_set=SavedReviewFilterSet.model_validate(saved_entry),
@@ -5412,28 +5628,24 @@ async def delete_review_filter_set(
     filter_set_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Remove a saved review dataset from a paused parent job."""
+    """Remove a saved review dataset from a review or completed generator job."""
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    payload = dict(job.awaiting_payload or {})
-    existing_sets = payload.get("review_filter_sets")
-    filter_sets = list(existing_sets) if isinstance(existing_sets, list) else []
+    filter_sets = _saved_review_filter_entries(job)
     next_sets = [entry for entry in filter_sets if str(entry.get("id") or "") != filter_set_id]
     if len(next_sets) == len(filter_sets):
         raise HTTPException(status_code=404, detail="Saved review dataset not found")
 
-    payload["review_filter_sets"] = next_sets
-    job.awaiting_payload = refresh_gate_payload(payload, job.output_dir)
-    _write_gate_snapshot(job)
+    _persist_saved_review_filter_entries(job, next_sets)
     await session.commit()
 
     return DeleteReviewFilterSetResponse(
         message="Deleted saved review dataset.",
-        filter_sets=[SavedReviewFilterSet.model_validate(entry) for entry in next_sets],
+        filter_sets=_iter_saved_review_filter_sets(job),
     )
 
 
@@ -5694,7 +5906,7 @@ async def get_job_stages(
     
     display_stages = []
     
-    if job.mode in ["antibody_denovo", "antibody_denovo_pipeline"]:
+    if job.mode in ["antibody_denovo"] or is_antibody_pipeline_mode(job.mode):
         # Dynamic stage construction for antibody workflow
         display_stages.append("rfantibody")
         
@@ -5969,6 +6181,12 @@ async def resume_job(
     merged_params = _normalize_structure_geometry_params(merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
     _validate_antibody_runtime_paths(job.model_id, merged_params)
+    resume_selected_input_artifact_class = normalize_antibody_artifact_class(
+        merged_params.get("selected_input_artifact_class")
+    )
+    resume_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        merged_params.get("selected_input_schema_version")
+    )
 
     new_job = Job(
         id=new_job_id,
@@ -5987,6 +6205,8 @@ async def resume_job(
         output_dir=output_dir,
         batch_id=job.batch_id,
         batch_name=job.batch_name,
+        selected_input_artifact_class=resume_selected_input_artifact_class,
+        selected_input_schema_version=resume_selected_input_schema_version,
         parent_job_id=job.parent_job_id,
         child_stage=job.child_stage,
         # Don't copy completed_stages/stage_outputs - they will be re-populated

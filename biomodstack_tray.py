@@ -29,7 +29,7 @@ try:
     from pystray import MenuItem as Item, Menu
     from PIL import Image, ImageDraw
 except ImportError:
-    print("Missing dependencies. Install with: pip install pystray pillow")
+    print("Missing dependencies. Install with: uv pip install pystray pillow")
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════════════════════

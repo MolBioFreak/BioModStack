@@ -31,7 +31,7 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
     switch (action.type) {
         case 'SET':
             // Don't add to history if identical to present
-            if (JSON.stringify(action.payload) === JSON.stringify(state.present)) {
+            if (sequenceDataEquals(action.payload, state.present)) {
                 return state;
             }
             return {
@@ -66,6 +66,123 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
         default:
             return state;
     }
+}
+
+function featureEquals(a: SequenceData['features'][number], b: SequenceData['features'][number]): boolean {
+    return (
+        a.id === b.id &&
+        a.name === b.name &&
+        a.type === b.type &&
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.color === b.color &&
+        a.description === b.description &&
+        JSON.stringify(a.notes ?? null) === JSON.stringify(b.notes ?? null)
+    );
+}
+
+function primerEquals(a: NonNullable<SequenceData['primers']>[number], b: NonNullable<SequenceData['primers']>[number]): boolean {
+    return (
+        a.id === b.id &&
+        a.name === b.name &&
+        a.sequence === b.sequence &&
+        a.sequenceType === b.sequenceType &&
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.tm === b.tm &&
+        a.gc_percent === b.gc_percent &&
+        a.tm_algorithm === b.tm_algorithm &&
+        a.tm_salt_correction === b.tm_salt_correction &&
+        JSON.stringify(a.tm_settings ?? null) === JSON.stringify(b.tm_settings ?? null)
+    );
+}
+
+function translationEquals(a: NonNullable<SequenceData['translations']>[number], b: NonNullable<SequenceData['translations']>[number]): boolean {
+    return (
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.frame === b.frame
+    );
+}
+
+function analysisTrackEquals(a: NonNullable<SequenceData['analysisTracks']>[number], b: NonNullable<SequenceData['analysisTracks']>[number]): boolean {
+    if (
+        a.id !== b.id ||
+        a.name !== b.name ||
+        a.kind !== b.kind ||
+        a.description !== b.description ||
+        a.color !== b.color ||
+        a.sourceFormat !== b.sourceFormat ||
+        a.sourceName !== b.sourceName ||
+        a.sourceUrl !== b.sourceUrl ||
+        a.normalization !== b.normalization ||
+        a.minValue !== b.minValue ||
+        a.maxValue !== b.maxValue ||
+        a.createdAt !== b.createdAt
+    ) {
+        return false;
+    }
+
+    if (a.values.length !== b.values.length) return false;
+    for (let index = 0; index < a.values.length; index += 1) {
+        if (a.values[index] !== b.values[index]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function sequenceDataEquals(a: SequenceData, b: SequenceData): boolean {
+    if (a === b) return true;
+    if (
+        a.name !== b.name ||
+        a.description !== b.description ||
+        a.sequence !== b.sequence ||
+        a.circular !== b.circular ||
+        a.sequenceType !== b.sequenceType
+    ) {
+        return false;
+    }
+
+    if (a.features.length !== b.features.length) return false;
+    for (let index = 0; index < a.features.length; index += 1) {
+        if (!featureEquals(a.features[index], b.features[index])) {
+            return false;
+        }
+    }
+
+    const aPrimers = a.primers || [];
+    const bPrimers = b.primers || [];
+    if (aPrimers.length !== bPrimers.length) return false;
+    for (let index = 0; index < aPrimers.length; index += 1) {
+        if (!primerEquals(aPrimers[index], bPrimers[index])) {
+            return false;
+        }
+    }
+
+    const aTranslations = a.translations || [];
+    const bTranslations = b.translations || [];
+    if (aTranslations.length !== bTranslations.length) return false;
+    for (let index = 0; index < aTranslations.length; index += 1) {
+        if (!translationEquals(aTranslations[index], bTranslations[index])) {
+            return false;
+        }
+    }
+
+    const aTracks = a.analysisTracks || [];
+    const bTracks = b.analysisTracks || [];
+    if (aTracks.length !== bTracks.length) return false;
+    for (let index = 0; index < aTracks.length; index += 1) {
+        if (!analysisTrackEquals(aTracks[index], bTracks[index])) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

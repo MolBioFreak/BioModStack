@@ -12,8 +12,10 @@ if str(API_ROOT) not in sys.path:
 
 from routers.jobs import (
     _normalize_structure_geometry_params,
+    _validate_protenix_checkpoint_requirements,
     _validate_protenix_template_requirements,
 )
+from fastapi import HTTPException
 from services.nextflow import _write_sequence_batch_payloads, build_nextflow_command
 
 
@@ -158,3 +160,35 @@ def test_protenix_fixed_target_geometry_does_not_require_global_template_db() ->
     )
 
     _validate_protenix_template_requirements("protenix", params)
+
+
+def test_protenix_v2_requires_local_checkpoint(tmp_path: Path) -> None:
+    params = {
+        "pred_method": "protenix",
+        "protenix_model_weights": "protenix-v2",
+        "code_root": str(tmp_path),
+    }
+
+    try:
+        _validate_protenix_checkpoint_requirements("protenix", params)
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        detail = exc.detail
+        assert isinstance(detail, dict)
+        assert "protenix-v2.pt" in detail["validation_errors"][0]
+    else:
+        raise AssertionError("Expected missing Protenix v2 checkpoint to raise HTTPException")
+
+
+def test_protenix_v2_passes_when_local_checkpoint_exists(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / ".protenix_cache" / "checkpoint" / "protenix-v2.pt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_bytes(b"stub")
+
+    params = {
+        "pred_method": "protenix",
+        "protenix_model_weights": "protenix-v2",
+        "code_root": str(tmp_path),
+    }
+
+    _validate_protenix_checkpoint_requirements("protenix", params)

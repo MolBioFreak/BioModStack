@@ -16,6 +16,7 @@ import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
+import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 
 interface FileBrowserProps {
     onSelect: (path: string) => void;
@@ -323,7 +324,7 @@ export function JobSubmission() {
 
                 // Determine routing
                 // 1. Antibody De Novo Template
-                if (data.mode === 'antibody_denovo' || data.mode === 'antibody_denovo_pipeline' || data.params?.antibody_pipeline_steps) {
+                if (data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
                     setClonedValues({ ...data.params, name: data.name });
@@ -776,15 +777,15 @@ export function JobSubmission() {
                                                     { tool: 'Boltz-2 / RF3 / Protenix' }
                                                 ]
                                             },
-                                            // RFantibody+ (De Novo Antibody Design)
+                                            // De Novo Nanobody Toolkit
                                             {
                                                 id: 'antibody_denovo',
-                                                name: 'RFantibody+',
-                                                description: 'Generate and iteratively refine antibody binders with RFantibody backbones, FAMPNN sequence design, optional PPIFlow maturation, and validator-driven review.',
+                                                name: 'De Novo Nanobody Toolkit',
+                                                description: 'Launch RFantibody or BoltzGen nanobody generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
                                                 icon: 'flask',
                                                 color: '#14B8A6', // Teal (was Emerald)
                                                 stages: [
-                                                    { tool: 'RFantibody Backbones' },
+                                                    { tool: 'RFantibody / BoltzGen' },
                                                     { tool: 'FAMPNN' },
                                                     { tool: 'PPIFlow (Opt.)' },
                                                     { tool: 'Protenix / Boltz2' },

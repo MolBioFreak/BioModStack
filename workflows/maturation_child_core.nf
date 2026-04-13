@@ -4,132 +4,115 @@ nextflow.enable.dsl = 2
 include { IdentifyAnchorResidues ; RunPartialFlow ; PrepMaturationRedesign ; RunMaturationFAMPNN ; ScoreMaturationImprovement ; ScorePartialFlowImprovement ; FilterByMaturation } from '../modules/ppiflow.nf'
 include { ANARCII } from '../modules/utils/anarci'
 
+def normalizeMaturationLoopSpec(raw) {
+    if (raw == null) {
+        return null
+    }
+    def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
+    def normalized = values
+        .collect { value -> value.toString().trim().toUpperCase() }
+        .findAll { value -> value }
+    return normalized ? normalized.join(',') : null
+}
+
+def normalizeMaturationRegionMode(raw) {
+    def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
+    if (value in ['all_cdrs']) {
+        return 'all_cdrs'
+    }
+    if (value in ['framework', 'framework_only']) {
+        return 'framework_only'
+    }
+    if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) {
+        return 'all_antibody'
+    }
+    return 'selected_cdrs'
+}
+
+def parseMaturationBackboneManifest(manifestFile) {
+    if (manifestFile == null) {
+        return []
+    }
+    def parsed = new groovy.json.JsonSlurper().parse(new File(manifestFile.toString()))
+    if (!(parsed instanceof List)) {
+        return []
+    }
+    return parsed
+        .findAll { entry -> entry instanceof Map && entry.path }
+        .collect { entry -> [file(entry.path.toString()), entry] }
+}
+
+def resolveMaturationAnchorCount(anchorsJson) {
+    if (anchorsJson == null) {
+        return 0
+    }
+    try {
+        def parsed = new groovy.json.JsonSlurper().parse(new File(anchorsJson.toString()))
+        def count = parsed instanceof Map ? parsed.anchor_count : 0
+        return count instanceof Number ? count.intValue() : (count?.toString()?.isInteger() ? count.toString().toInteger() : 0)
+    }
+    catch (Throwable ignored) {
+        return 0
+    }
+}
+
+def normalizeMaturationScoredSamples(raw) {
+    if (raw == null) {
+        return []
+    }
+    def items
+    if (raw instanceof Collection) {
+        items = raw.toList()
+    }
+    else if (raw instanceof Iterable) {
+        items = raw.collect { item -> item }
+    }
+    else {
+        items = [raw]
+    }
+    if (items instanceof List && items.size() >= 4 && items[0] instanceof Map && !((items[0] as Map).containsKey('meta'))) {
+        return items
+            .collate(4, false)
+            .findAll { chunk -> chunk.size() == 4 && chunk[0] instanceof Map }
+            .collect { chunk ->
+                def scoreValue = chunk[3]
+                [
+                    meta: chunk[0],
+                    backbone_pdb: chunk[1],
+                    score_json: chunk[2],
+                    score: scoreValue instanceof Number ? scoreValue.doubleValue() : (scoreValue as Double),
+                ]
+            }
+    }
+    return items.collect { item ->
+        if (item instanceof List && item.size() >= 4 && item[0] instanceof Map) {
+            return [
+                meta: item[0],
+                backbone_pdb: item[1],
+                score_json: item[2],
+                score: item[3] instanceof Number ? item[3].doubleValue() : (item[3] as Double)
+            ]
+        }
+        if (item instanceof Map && item.meta instanceof Map && item.backbone_pdb && item.score_json) {
+            return [
+                meta: item.meta,
+                backbone_pdb: item.backbone_pdb,
+                score_json: item.score_json,
+                score: item.score instanceof Number ? item.score.doubleValue() : (item.score as Double)
+            ]
+        }
+        return null
+    }.findAll { item -> item != null }
+}
+
 workflow MATURATION_CHILD_CORE {
     take:
     pdb_list
 
     main:
-    def coercePathList = { raw ->
-        if (raw == null) {
-            return []
-        }
-        if (raw instanceof java.nio.file.Path || raw instanceof File) {
-            return [raw]
-        }
-        if (raw instanceof Collection) {
-            return raw.toList()
-        }
-        if (raw instanceof Iterable) {
-            return raw.collect { it }
-        }
-        try {
-            def asList = raw.toList()
-            if (asList instanceof List) {
-                return asList
-            }
-        }
-        catch (Throwable ignored) {
-        }
-        return [raw]
-    }
-    def normalizeLoopSpec = { raw ->
-        if (raw == null) {
-            return null
-        }
-        def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
-        def normalized = values.collect { it.toString().trim().toUpperCase() }.findAll { it }
-        normalized ? normalized.join(',') : null
-    }
-    def normalizeRegionMode = { raw ->
-        def value = (raw ?: 'selected_cdrs').toString().trim().toLowerCase()
-        if (value in ['all_cdrs']) return 'all_cdrs'
-        if (value in ['framework', 'framework_only']) return 'framework_only'
-        if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
-        return 'selected_cdrs'
-    }
     def strictAnchorRequirement = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
-    def parseBackboneManifest = { manifestFile ->
-        if (manifestFile == null) {
-            return []
-        }
-        def parsed = new groovy.json.JsonSlurper().parse(new File(manifestFile.toString()))
-        if (!(parsed instanceof List)) {
-            return []
-        }
-        return parsed
-            .findAll { it instanceof Map && it.path }
-            .collect { entry ->
-                [file(entry.path.toString()), entry]
-            }
-    }
-    def resolveAnchorCount = { anchorsJson ->
-        if (anchorsJson == null) {
-            return 0
-        }
-        try {
-            def parsed = new groovy.json.JsonSlurper().parse(new File(anchorsJson.toString()))
-            def count = parsed instanceof Map ? parsed.anchor_count : 0
-            return count instanceof Number ? count.intValue() : (count?.toString()?.isInteger() ? count.toString().toInteger() : 0)
-        }
-        catch (Throwable ignored) {
-            return 0
-        }
-    }
-    def normalizeScoredSamples = { raw ->
-        if (raw == null) {
-            return []
-        }
-        def items
-        if (raw instanceof Collection) {
-            items = raw.toList()
-        }
-        else if (raw instanceof Iterable) {
-            items = raw.collect { it }
-        }
-        else {
-            items = [raw]
-        }
-        if (items instanceof List && items.size() >= 4 && items[0] instanceof Map && !((items[0] as Map).containsKey('meta'))) {
-            def grouped = []
-            for (int idx = 0; idx + 3 < items.size(); idx += 4) {
-                def meta = items[idx]
-                def backbonePdb = items[idx + 1]
-                def scoreJson = items[idx + 2]
-                def scoreValue = items[idx + 3]
-                if (!(meta instanceof Map)) {
-                    continue
-                }
-                grouped << [
-                    meta: meta,
-                    backbone_pdb: backbonePdb,
-                    score_json: scoreJson,
-                    score: scoreValue instanceof Number ? scoreValue.doubleValue() : (scoreValue as Double),
-                ]
-            }
-            return grouped
-        }
-        items.collect { item ->
-            if (item instanceof List && item.size() >= 4 && item[0] instanceof Map) {
-                return [
-                    meta: item[0],
-                    backbone_pdb: item[1],
-                    score_json: item[2],
-                    score: item[3] instanceof Number ? item[3].doubleValue() : (item[3] as Double)
-                ]
-            }
-            if (item instanceof Map && item.meta instanceof Map && item.backbone_pdb && item.score_json) {
-                return [
-                    meta: item.meta,
-                    backbone_pdb: item.backbone_pdb,
-                    score_json: item.score_json,
-                    score: item.score instanceof Number ? item.score.doubleValue() : (item.score as Double)
-                ]
-            }
-            return null
-        }.findAll { it != null }
-    }
-    def selectedLoopsSpec = normalizeLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
-    def ppiflowRegionMode = normalizeRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
+    def selectedLoopsSpec = normalizeMaturationLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
+    def ppiflowRegionMode = normalizeMaturationRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
     params.ppiflow_region_mode = ppiflowRegionMode
     if (selectedLoopsSpec) {
         params.ppiflow_selected_loops = selectedLoopsSpec
@@ -149,7 +132,7 @@ workflow MATURATION_CHILD_CORE {
 
     IdentifyAnchorResidues(anchor_inputs)
     def usable_anchor_inputs = IdentifyAnchorResidues.out.anchor_inputs.filter { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json ->
-        def anchorCount = resolveAnchorCount(anchors_json)
+        def anchorCount = resolveMaturationAnchorCount(anchors_json)
         if (strictAnchorRequirement && anchorCount <= 0) {
             log.warn("PPIFlow skipping ${meta.id} because strict anchor selection produced zero anchors")
             return false
@@ -168,7 +151,7 @@ workflow MATURATION_CHILD_CORE {
     // matured backbone at a time using the explicit manifest emitted by
     // RunPartialFlow, rather than relying on grouped glob semantics.
     def partial_backbones = RunPartialFlow.out.backbones.flatMap { meta, _backbone_dir, manifest_json ->
-        def pdbList = parseBackboneManifest(manifest_json)
+        def pdbList = parseMaturationBackboneManifest(manifest_json)
         pdbList.collect { backbone_pdb, manifestEntry ->
             def sampleMeta = new LinkedHashMap(meta)
             sampleMeta.parent_id = meta.id
@@ -241,7 +224,7 @@ workflow MATURATION_CHILD_CORE {
         partial_selected = partial_scored
             .collect()
             .map { items ->
-                def normalizedItems = normalizeScoredSamples(items)
+                def normalizedItems = normalizeMaturationScoredSamples(items)
                 normalizedItems
                     .sort { a, b -> a.score <=> b.score }
                     .take(redesign_top_n)

@@ -58,11 +58,14 @@ class Job(Base):
     source_stage_mode = Column(String(64), nullable=True, index=True)
     source_selection_manifest_path = Column(String(500), nullable=True)
     source_selection_count = Column(Integer, nullable=True)
+    selected_input_artifact_class = Column(String(64), nullable=True, index=True)
+    selected_input_schema_version = Column(Integer, nullable=True)
     selection_source_type = Column(String(64), nullable=True)  # saved_dataset, selected_designs, etc.
     selection_source_job_id = Column(String(36), nullable=True, index=True)
     selection_dataset_name = Column(String(255), nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)  # Selected loops / stage scope for re-orchestration
     provenance = Column(JSON, nullable=True)  # Optional lineage/provenance snapshot for the job
+    saved_selection_sets = Column(JSON, default=list)
     queue_status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|failed|paused
     paused = Column(Boolean, default=False)  # User manually paused this job
     pinned_gpu = Column(Integer, nullable=True)  # User override: force job to specific GPU (0-3)
@@ -136,6 +139,8 @@ class Design(Base):
     source_stage_mode = Column(String(64), nullable=True, index=True)
     source_pdb_path = Column(String(500), nullable=True)
     source_design_name = Column(String(255), nullable=True)
+    artifact_class = Column(String(64), nullable=True, index=True)
+    artifact_schema_version = Column(Integer, nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)
     provenance = Column(JSON, nullable=True)
     
@@ -425,6 +430,10 @@ class NucleotideSequence(Base):
     # Primers associated with this sequence
     # Format: [{"id": "p1", "name": "Fwd", "sequence": "ATCG...", "start": 0, "end": 20, "tm": 58.5}]
     primers = Column(JSON, nullable=True)
+
+    # Analysis/evidence tracks aligned to the nucleotide sequence
+    # Format: [{"id": "t1", "name": "SHAPE", "kind": "reactivity", "values": [0.1, 0.2, ...]}]
+    analysis_tracks = Column(JSON, nullable=True)
     
     # Metadata
     organism = Column(String(255), nullable=True)
@@ -451,11 +460,15 @@ class Primer(Base):
     id = Column(String(36), primary_key=True)
     name = Column(String(255), nullable=False)
     sequence = Column(String(500), nullable=False)  # 5' to 3' sequence
+    sequence_type = Column(String(10), nullable=False, default="dna")  # dna, rna
     
     # Calculated properties (cached for filtering)
     length = Column(Integer, nullable=False)
     tm = Column(Float, nullable=True)  # Melting temperature (°C)
     gc_percent = Column(Float, nullable=True)  # GC content percentage
+    tm_algorithm = Column(String(100), nullable=True)
+    tm_salt_correction = Column(String(100), nullable=True)
+    tm_settings = Column(JSON, nullable=True)
     
     # Primer type and usage
     primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
@@ -500,6 +513,8 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
     await _ensure_table_columns(conn, "designs", Design.__table__.columns)
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
+    await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
+    await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):
