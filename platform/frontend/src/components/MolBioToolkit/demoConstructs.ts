@@ -205,16 +205,6 @@ function overlaySequence(base: string, insert: string, start: number): string {
     return `${base.slice(0, start)}${insert}${base.slice(start + insert.length)}`;
 }
 
-function estimateTm(sequence: string): number {
-    const upper = sequence.toUpperCase();
-    const a = (upper.match(/A/g) || []).length;
-    const t = (upper.match(/T/g) || []).length;
-    const g = (upper.match(/G/g) || []).length;
-    const c = (upper.match(/C/g) || []).length;
-    if (upper.length < 14) return 2 * (a + t) + 4 * (g + c);
-    return Number((64.9 + (41 * (g + c - 16.4)) / upper.length).toFixed(1));
-}
-
 function buildConstruct(spec: DemoConstructSpec): SequenceData {
     let sequence = generateBackbone(spec.totalLength, spec.seed);
     const features: Feature[] = [];
@@ -262,10 +252,10 @@ function buildConstruct(spec: DemoConstructSpec): SequenceData {
             id: `${spec.seed}-primer-${index + 1}`,
             name: template.name,
             sequence: primerSequence,
+            sequenceType: 'dna',
             start,
             end,
             strand,
-            tm: estimateTm(primerSequence),
             gc_percent: calculateGcPercent(primerSequence),
         };
     });

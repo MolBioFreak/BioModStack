@@ -2,11 +2,14 @@
  * Shared TypeScript types for MolBioToolkit
  */
 
+import type { SequenceAnalysisTrack } from '../../lib/api';
+
 // Import types from SequenceViewer for re-export and use
 import type {
     Feature,
     Primer,
     Translation,
+    AnalysisTrack,
     SequenceData,
     VisibilityState,
     SelectionInfo
@@ -22,6 +25,7 @@ export type {
     Feature,
     Primer,
     Translation,
+    AnalysisTrack,
     SequenceData,
     VisibilityState,
     SelectionInfo
@@ -41,6 +45,7 @@ export interface NucleotideSequenceResponse {
     length: number;
     features: Feature[] | null;
     primers: Primer[] | null;
+    analysis_tracks?: SequenceAnalysisTrack[] | null;
     organism: string | null;
     accession: string | null;
     source_file: string | null;
@@ -126,6 +131,7 @@ export type ActivePanel =
     | 'pcr'
     | 'primers'
     | 'ligation'
+    | 'rna'
     | 'features'
     | 'edit'
     | 'search'
