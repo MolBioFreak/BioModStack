@@ -12,6 +12,42 @@ The repo is not just a protein-design launcher. The live system spans structure
 design, binder refinement, sequence design, docking, analysis, nanopore
 sequencing, molecular biology tooling, and a BioXP robotics control surface.
 
+## Current Tool Surface
+
+### Backbone and generative design
+
+- RFantibody
+- RFdiffusion
+- BindCraft
+- BoltzGen
+- Oligo Designer / RFDpoly
+- Protein local redesign
+
+### Sequence design and redesign
+
+- FAMPNN
+- AntiFold
+- ProteinMPNN
+- IgGM
+- FrustraMPNN
+
+### Prediction and validation
+
+- Boltz-2
+- Protenix
+- AlphaFold2
+- RF3
+- ImmuneBuilder-facing antibody structure prediction
+
+### Docking and post-processing
+
+- DiffDock
+- Uni-Dock
+- OpenMM
+- ThermoMPNN
+- AntiBERTy
+- ANARCI / ANARCII
+
 ## What BMS Covers
 
 ### Structure design and refinement
@@ -112,12 +148,6 @@ Platform-specific docs:
 Reference inventory:
 
 - [Model Integrations](docs/ai_guidance/Model_Integrations.md)
-
-## Documentation Status
-
-The repo still contains many dated plan/spec/revision notes under `docs/`.
-Those are historical design artifacts unless they are linked from
-[docs/README.md](docs/README.md) as current documentation.
 
 ## Repository Entry Points
 
