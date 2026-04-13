@@ -11,8 +11,6 @@ import type {
     NucleotideSequenceListItem,
     DigestFragment,
     PCRProduct,
-    Feature,
-    Primer
 } from '../types';
 import {
     fetchNucleotideSequences,
@@ -21,6 +19,7 @@ import {
     updateNucleotideSequence,
     deleteNucleotideSequence,
     type FetchNucleotideSequencesParams,
+    type NucleotideSequenceCreate,
 } from '../../../lib/api';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,18 +75,7 @@ export function useSequenceOperations() {
     }, []);
 
     // Create new sequence
-    const createSequence = useCallback(async (data: {
-        name: string;
-        sequence: string;
-        description?: string;
-        sequence_type?: 'dna' | 'rna';
-        is_circular?: boolean;
-        features?: Feature[];
-        primers?: Primer[];
-        organism?: string;
-        accession?: string;
-        source_file?: string;
-    }): Promise<NucleotideSequenceResponse | null> => {
+    const createSequence = useCallback(async (data: NucleotideSequenceCreate): Promise<NucleotideSequenceResponse | null> => {
         setLoading(true);
         setError(null);
         try {
@@ -104,18 +92,7 @@ export function useSequenceOperations() {
     // Update sequence
     const updateSequence = useCallback(async (
         id: string,
-        data: Partial<{
-            name: string;
-            sequence: string;
-            description: string;
-            sequence_type: 'dna' | 'rna';
-            is_circular: boolean;
-            features: Feature[];
-            primers: Primer[];
-            organism: string;
-            accession: string;
-            source_file: string;
-        }>
+        data: Partial<NucleotideSequenceCreate>
     ): Promise<NucleotideSequenceResponse | null> => {
         setLoading(true);
         setError(null);
