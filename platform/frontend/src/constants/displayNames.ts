@@ -6,7 +6,8 @@
 // Mode display names (job.mode -> human readable)
 export const MODE_DISPLAY_NAMES: Record<string, string> = {
     // Antibody workflows
-    'antibody_denovo_pipeline': 'De Novo Antibody',
+    'antibody_denovo_pipeline': 'De Novo Nanobody Toolkit',
+    'antibody_refinement_pipeline': 'Antibody Refinement',
     'validation_batch': 'Batch Validation',
     'antibody_child': 'Antibody Validation',
     'antibody_design': 'Antibody Design',
@@ -70,7 +71,8 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'thermompnn': 'ThermoMPNN',
     'antifold': 'AntiFold',
     'iggm': 'IgGM',
-    'antibody_denovo': 'Antibody Pipeline',
+    'antibody_denovo': 'De Novo Nanobody Toolkit',
+    'template_antibody_denovo': 'De Novo Nanobody Toolkit',
     'antibody_child': 'Antibody Validation',
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',

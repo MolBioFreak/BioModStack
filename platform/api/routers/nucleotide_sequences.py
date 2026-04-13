@@ -4,11 +4,11 @@ Nucleotide Sequences API for BioDesigner.
 Provides CRUD operations for DNA/RNA sequences with feature annotations.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from datetime import datetime
 import uuid
 
@@ -31,6 +31,7 @@ class FeatureSchema(BaseModel):
     end: int
     strand: int = 1  # 1 for forward, -1 for reverse
     color: Optional[str] = None
+    description: Optional[str] = None
     notes: Optional[dict] = None
 
 
@@ -41,6 +42,7 @@ class PrimerSchema(BaseModel):
     sequence: str
     start: int
     end: int
+    strand: int = 1
     tm: Optional[float] = None
     gc_percent: Optional[float] = None
 
@@ -91,6 +93,8 @@ class NucleotideSequenceResponse(BaseModel):
     operation: Optional[str]
     operation_params: Optional[dict]
     version: Optional[int]
+    entity_kind: str
+    topology: str
     created_at: datetime
     updated_at: Optional[datetime]
 
@@ -108,7 +112,13 @@ class NucleotideSequenceListItem(BaseModel):
     length: int
     gc_content: Optional[float]
     feature_count: int
+    organism: Optional[str]
+    accession: Optional[str]
+    source_file: Optional[str]
+    entity_kind: str
+    topology: str
     created_at: datetime
+    updated_at: Optional[datetime]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -128,9 +138,59 @@ def calculate_gc_content(sequence: str) -> float:
 def clean_sequence(sequence: str, seq_type: str = "dna") -> str:
     """Clean and validate nucleotide sequence."""
     seq = sequence.upper().replace(" ", "").replace("\n", "").replace("\r", "")
-    valid_chars = set("ATCGN") if seq_type == "dna" else set("AUCGN")
+    valid_chars = set("ATCGNRYMKSWHBVD") if seq_type == "dna" else set("AUCGNRYMKSWHBVD")
     cleaned = "".join(c for c in seq if c in valid_chars)
     return cleaned
+
+
+def normalize_sequence_type(sequence_type: Optional[str], sequence: str) -> str:
+    """Normalize a requested sequence type or infer one from sequence content."""
+    normalized = (sequence_type or "").strip().lower()
+    if normalized in {"dna", "rna"}:
+        return normalized
+
+    upper = sequence.upper()
+    if "U" in upper and "T" not in upper:
+        return "rna"
+    return "dna"
+
+
+def entity_kind_for(sequence_type: str, is_circular: bool) -> str:
+    """Derive a UI-friendly construct kind without requiring a DB migration."""
+    if sequence_type == "rna":
+        return "circular_rna" if is_circular else "rna"
+    return "plasmid" if is_circular else "dna"
+
+
+def topology_for(is_circular: bool) -> str:
+    return "circular" if is_circular else "linear"
+
+
+def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
+    """Serialize a DB sequence row with computed frontend-facing metadata."""
+    return NucleotideSequenceResponse(
+        id=seq.id,
+        name=seq.name,
+        description=seq.description,
+        sequence=seq.sequence,
+        sequence_type=seq.sequence_type,
+        is_circular=seq.is_circular,
+        length=seq.length,
+        features=seq.features,
+        primers=seq.primers,
+        organism=seq.organism,
+        accession=seq.accession,
+        source_file=seq.source_file,
+        gc_content=seq.gc_content,
+        parent_id=seq.parent_id,
+        operation=seq.operation,
+        operation_params=seq.operation_params,
+        version=seq.version,
+        entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular),
+        topology=topology_for(seq.is_circular),
+        created_at=seq.created_at,
+        updated_at=seq.updated_at,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -140,17 +200,54 @@ def clean_sequence(sequence: str, seq_type: str = "dna") -> str:
 @router.get("/", response_model=List[NucleotideSequenceListItem])
 async def list_sequences(
     session: AsyncSession = Depends(get_session),
-    limit: int = 100,
-    offset: int = 0
+    search: Optional[str] = Query(None, description="Search by name, description, accession, organism, or source file"),
+    sequence_type: Optional[str] = Query(None, description="Filter by polymer type: dna or rna"),
+    topology: str = Query("all", description="Filter by topology: all, circular, linear"),
+    sort_by: str = Query("updated_at", description="Sort by updated_at, created_at, name, length, gc_content, or feature_count"),
+    sort_desc: bool = Query(True, description="Sort descending"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     """List all nucleotide sequences."""
-    result = await session.execute(
-        select(NucleotideSequence)
-        .order_by(NucleotideSequence.updated_at.desc().nullsfirst(), NucleotideSequence.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    query = select(NucleotideSequence)
+
+    normalized_type = sequence_type.strip().lower() if sequence_type else None
+    if normalized_type in {"dna", "rna"}:
+        query = query.where(NucleotideSequence.sequence_type == normalized_type)
+
+    if topology == "circular":
+        query = query.where(NucleotideSequence.is_circular.is_(True))
+    elif topology == "linear":
+        query = query.where(NucleotideSequence.is_circular.is_(False))
+
+    if search:
+        search_pattern = f"%{search.strip()}%"
+        query = query.where(or_(
+            NucleotideSequence.name.ilike(search_pattern),
+            NucleotideSequence.description.ilike(search_pattern),
+            NucleotideSequence.organism.ilike(search_pattern),
+            NucleotideSequence.accession.ilike(search_pattern),
+            NucleotideSequence.source_file.ilike(search_pattern),
+        ))
+
+    result = await session.execute(query)
     sequences = result.scalars().all()
+
+    def sort_value(seq: NucleotideSequence):
+        if sort_by == "name":
+            return (seq.name or "").lower()
+        if sort_by == "length":
+            return seq.length or 0
+        if sort_by == "gc_content":
+            return seq.gc_content or 0.0
+        if sort_by == "feature_count":
+            return len(seq.features) if seq.features else 0
+        if sort_by == "created_at":
+            return seq.created_at or datetime.min
+        return seq.updated_at or seq.created_at or datetime.min
+
+    sequences = sorted(sequences, key=sort_value, reverse=sort_desc)
+    paginated = sequences[offset:offset + limit]
     
     return [
         NucleotideSequenceListItem(
@@ -162,9 +259,15 @@ async def list_sequences(
             length=seq.length,
             gc_content=seq.gc_content,
             feature_count=len(seq.features) if seq.features else 0,
-            created_at=seq.created_at
+            organism=seq.organism,
+            accession=seq.accession,
+            source_file=seq.source_file,
+            entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular),
+            topology=topology_for(seq.is_circular),
+            created_at=seq.created_at,
+            updated_at=seq.updated_at,
         )
-        for seq in sequences
+        for seq in paginated
     ]
 
 
@@ -175,7 +278,8 @@ async def create_sequence(
 ):
     """Create a new nucleotide sequence."""
     # Clean and validate sequence
-    cleaned_seq = clean_sequence(data.sequence, data.sequence_type)
+    normalized_type = normalize_sequence_type(data.sequence_type, data.sequence)
+    cleaned_seq = clean_sequence(data.sequence, normalized_type)
     if not cleaned_seq:
         raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
     
@@ -186,7 +290,7 @@ async def create_sequence(
         name=data.name,
         description=data.description,
         sequence=cleaned_seq,
-        sequence_type=data.sequence_type,
+        sequence_type=normalized_type,
         is_circular=data.is_circular,
         length=len(cleaned_seq),
         features=[f.model_dump() for f in data.features] if data.features else [],
@@ -201,7 +305,7 @@ async def create_sequence(
     await session.commit()
     await session.refresh(seq)
     
-    return seq
+    return serialize_sequence(seq)
 
 
 @router.get("/{sequence_id}", response_model=NucleotideSequenceResponse)
@@ -218,7 +322,7 @@ async def get_sequence(
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
     
-    return seq
+    return serialize_sequence(seq)
 
 
 @router.put("/{sequence_id}", response_model=NucleotideSequenceResponse)
@@ -241,13 +345,14 @@ async def update_sequence(
         seq.name = data.name
     if data.description is not None:
         seq.description = data.description
+    next_sequence_type = normalize_sequence_type(data.sequence_type or seq.sequence_type, data.sequence or seq.sequence)
     if data.sequence is not None:
-        cleaned_seq = clean_sequence(data.sequence, data.sequence_type or seq.sequence_type)
+        cleaned_seq = clean_sequence(data.sequence, next_sequence_type)
         seq.sequence = cleaned_seq
         seq.length = len(cleaned_seq)
         seq.gc_content = calculate_gc_content(cleaned_seq)
     if data.sequence_type is not None:
-        seq.sequence_type = data.sequence_type
+        seq.sequence_type = next_sequence_type
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
     if data.features is not None:
@@ -262,7 +367,7 @@ async def update_sequence(
     await session.commit()
     await session.refresh(seq)
     
-    return seq
+    return serialize_sequence(seq)
 
 
 @router.delete("/{sequence_id}")
@@ -312,7 +417,7 @@ async def add_feature(
     await session.commit()
     await session.refresh(seq)
     
-    return seq
+    return serialize_sequence(seq)
 
 
 @router.delete("/{sequence_id}/features/{feature_id}")

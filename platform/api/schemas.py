@@ -96,6 +96,7 @@ class JobResponse(BaseModel):
     selection_dataset_name: Optional[str] = None
     selected_loop_scope: Optional[dict] = None
     provenance: Optional[dict] = None
+    saved_selection_sets: Optional[List[dict]] = None
     # GPU assignment
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None

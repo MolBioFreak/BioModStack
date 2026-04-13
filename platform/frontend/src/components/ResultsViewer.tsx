@@ -33,6 +33,7 @@ import {
     type AnalysisLens,
     type OutputSourceFilter,
 } from './designOutputSource';
+import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -387,7 +388,7 @@ const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
     const rfdMode = String(params.rfd_mode || '').toLowerCase();
 
     return (
-        rfdMode === 'antibody_denovo_pipeline' ||
+        isAntibodyPipelineMode(rfdMode) ||
         modelId.includes('antibody') ||
         mode.includes('antibody') ||
         Boolean(params.antibody_chains)
@@ -1639,12 +1640,19 @@ export function ResultsViewer() {
         const mode = (activeJob.mode || '').toLowerCase();
         const name = (activeJob.name || '').toLowerCase();
         const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
+        const boltzgenMode = String(activeJob.params?.boltzgen_mode || activeJob.mode || '').toLowerCase();
+        const frameworkType = String(activeJob.params?.framework_type || '').toLowerCase();
+        const isBoltzGenNanobody = modelId === 'boltzgen' && (
+            boltzgenMode === 'nanobody_binder' ||
+            frameworkType === 'nanobody'
+        );
         return (
             modelId.includes('antibody') ||
             modelId === 'fampnn_child' ||
             mode.includes('antibody') ||
             name.includes('antibody') ||
-            rfdMode === 'antibody_denovo_pipeline'
+            isAntibodyPipelineMode(rfdMode) ||
+            isBoltzGenNanobody
         );
     }, [activeJob]);
     const isProteinLocalRedesignContext = useMemo(() => {
@@ -3876,8 +3884,8 @@ export function ResultsViewer() {
                 return;
             }
             const message = variables.mode === 'all_filtered'
-                ? `Added ${designIds.length.toLocaleString()} filtered outputs to the re-orchestration set.`
-                : `Added the top ${designIds.length.toLocaleString()} filtered outputs to the re-orchestration set.`;
+                ? `Added ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`
+                : `Added the top ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`;
             setIterationMessage({ kind: 'success', text: message });
         },
         onError: (error) => {
@@ -3978,11 +3986,11 @@ export function ResultsViewer() {
 
     const openPipelineReorchestration = (savedFilterSet?: SavedReviewFilterSet | null) => {
         if (!activeJob) {
-            setIterationMessage({ kind: 'error', text: 'Select a job before opening Pipeline Re-orchestration.' });
+            setIterationMessage({ kind: 'error', text: 'Select a job before opening Antibody Refinement.' });
             return;
         }
         if (reviewSelectionRequired && !savedFilterSet) {
-            setIterationMessage({ kind: 'error', text: 'Select a live RF review set or saved dataset before opening Pipeline Re-orchestration.' });
+            setIterationMessage({ kind: 'error', text: 'Select a live RF review set or saved dataset before opening Antibody Refinement.' });
             return;
         }
 
@@ -3991,7 +3999,7 @@ export function ResultsViewer() {
         if (launchDesignIds.length === 0 && !resolvedSavedFilterSet) {
             setIterationMessage({
                 kind: 'error',
-                text: 'Select at least one design or load a saved dataset before opening Pipeline Re-orchestration.',
+                text: 'Select at least one design or load a saved dataset before opening Antibody Refinement.',
             });
             return;
         }
@@ -4577,15 +4585,15 @@ export function ResultsViewer() {
                         {showReviewWorkingSetPanel && (
                             <div className="mb-4 rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-4">
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                    <div>
-                                        <div className="text-sm font-medium text-indigo-100">
-                                            {isProteinLocalRedesignReviewContext ? 'Review Working Set' : 'Pipeline Re-orchestration'}
-                                        </div>
-                                        <p className="mt-1 text-xs text-slate-400">
-                                            {isProteinLocalRedesignReviewContext
-                                                ? 'Filter the paused review table, promote the outputs you want to keep into a working set, then continue the paused Protein Local Redesign workflow from that subset.'
-                                                : 'Sort and filter the current output set, then promote visible, filtered, or top-ranked outputs into a working set for relaunch through the main workflow UI.'}
-                                        </p>
+                                        <div>
+                                            <div className="text-sm font-medium text-indigo-100">
+                                                {isProteinLocalRedesignReviewContext ? 'Review Working Set' : 'Antibody Refinement'}
+                                            </div>
+                                            <p className="mt-1 text-xs text-slate-400">
+                                                {isProteinLocalRedesignReviewContext
+                                                    ? 'Filter the paused review table, promote the outputs you want to keep into a working set, then continue the paused Protein Local Redesign workflow from that subset.'
+                                                    : 'Sort and filter the current output set, then promote visible, filtered, or top-ranked outputs into a working set for the antibody refinement workflow.'}
+                                            </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-indigo-500/30 bg-slate-900/70 px-2 py-1 text-indigo-100">
                                                 {selectedDesignIds.length} selected
@@ -4719,13 +4727,13 @@ export function ResultsViewer() {
                                                                         {appliedSavedFilterSetId === filterSet.id ? 'Loaded' : 'Load Dataset'}
                                                                     </button>
                                                                     {isAntibodyContext && (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => openPipelineReorchestration(filterSet)}
-                                                                            className="rounded border border-indigo-500/40 bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-100"
-                                                                        >
-                                                                            Re-orchestrate
-                                                                        </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => openPipelineReorchestration(filterSet)}
+                                                                        className="rounded border border-indigo-500/40 bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-100"
+                                                                    >
+                                                                        Refine Dataset
+                                                                    </button>
                                                                     )}
                                                                     <button
                                                                         type="button"
@@ -4796,16 +4804,16 @@ export function ResultsViewer() {
                                                 disabled={!canLaunchWorkingSet}
                                                 className="flex items-center gap-1.5 rounded-lg border border-indigo-500/60 bg-indigo-500/20 px-4 py-2 text-xs font-semibold text-indigo-100 transition-colors hover:border-indigo-400 hover:bg-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm shadow-indigo-900/20"
                                                 title={selectedDesignIds.length > 0
-                                                    ? 'Re-orchestrate a new workflow run using the highlighted outputs as the input set.'
+                                                    ? 'Open the antibody refinement workflow using the highlighted outputs as the locked input set.'
                                                     : loadedSavedReviewFilterSet
-                                                        ? `Re-orchestrate a new workflow run from the loaded saved dataset '${loadedSavedReviewFilterSet.name}'.`
-                                                        : 'Load a saved dataset or select outputs before re-orchestrating.'}
+                                                        ? `Open antibody refinement from the loaded saved dataset '${loadedSavedReviewFilterSet.name}'.`
+                                                        : 'Load a saved dataset or select outputs before opening antibody refinement.'}
                                             >
                                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                                                 </svg>
-                                                Pipeline Re-orchestration
+                                                Open Antibody Refinement
                                             </button>
                                         ) : (
                                             <button

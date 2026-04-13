@@ -548,6 +548,26 @@ async def camera_reset(request: Request):
 async def camera_stop(request: Request):
     return await proxy_request("POST", "/camera/stop", await request.json(), timeout=20.0)
 
+@router.post("/protocol/compile")
+async def protocol_compile(request: Request):
+    return await proxy_request("POST", "/protocol/compile", await request.json(), timeout=45.0)
+
+@router.post("/protocol/execute")
+async def protocol_execute(request: Request):
+    return await proxy_request("POST", "/protocol/execute", await request.json(), timeout=90.0)
+
+@router.get("/protocol/jobs")
+async def protocol_jobs(limit: int = 20):
+    return await proxy_request("GET", "/protocol/jobs", params={"limit": limit}, timeout=30.0)
+
+@router.get("/protocol/jobs/{job_id}")
+async def protocol_job_detail(job_id: str):
+    return await proxy_request("GET", f"/protocol/jobs/{job_id}", timeout=30.0)
+
+@router.post("/protocol/jobs/{job_id}/review")
+async def protocol_job_review(job_id: str, request: Request):
+    return await proxy_request("POST", f"/protocol/jobs/{job_id}/review", await request.json(), timeout=90.0)
+
 @router.get("/camera/mjpeg")
 async def camera_mjpeg(
     request: Request,

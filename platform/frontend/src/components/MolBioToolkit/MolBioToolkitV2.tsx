@@ -4,7 +4,7 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
@@ -14,6 +14,8 @@ import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { DigestPanel, PCRPanel, PrimerPanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
+import { MolecularInputModal } from './MolecularInputModal';
+import { DEMO_PLASMIDS } from './demoConstructs';
 import type {
     SequenceData,
     VisibilityState,
@@ -25,62 +27,10 @@ import type {
     Primer
 } from './types';
 import { EMPTY_SEQUENCE } from './types';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DEMO PLASMIDS - For testing when no sequences exist
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const DEMO_PLASMIDS: SequenceData[] = [
-    {
-        name: 'pUC19',
-        sequence: 'TCGCGCGTTTCGGTGATGACGGTGAAAACCTCTGACACATGCAGCTCCCGGAGACGGTCACAGCTTGTCTGTAAGCGGATGCCGGGAGCAGACAAGCCCGTCAGGGCGCGTCAGCGGGTGTTGGCGGGTGTCGGGGCTGGCTTAACTATGCGGCATCAGAGCAGATTGTACTGAGAGTGCACCATATGCGGTGTGAAATACCGCACAGATGCGTAAGGAGAAAATACCGCATCAGGCGCCATTCGCCATTCAGGCTGCGCAACTGTTGGGAAGGGCGATCGGTGCGGGCCTCTTCGCTATTACGCCAGCTGGCGAAAGGGGGATGTGCTGCAAGGCGATTAAGTTGGGTAACGCCAGGGTTTTCCCAGTCACGACGTTGTAAAACGACGGCCAGTGAATTCGAGCTCGGTACCCGGGGATCCTCTAGAGTCGACCTGCAGGCATGCAAGCTTGGCGTAATCATGGTCATAGCTGTTTCCTGTGTGAAATTGTTATCCGCTCACAATTCCACACAACATACGAGCCGGAAGCATAAAGTGTAAAGCCTGGGGTGCCTAATGAGTGAGCTAACTCACATTAATTGCGTTGCGCTCACTGCCCGCTTTCCAGTCGGGAAACCTGTCGTGCCAGCTGCATTAATGAATCGGCCAACGCGCGGGGAGAGGCGGTTTGCGTATTGGGCGCTCTTCCGCTTCCTCGCTCACTGACTCGCTGCGCTCGGTCGTTCGGCTGCGGCGAGCGGTATCAGCTCACTCAAAGGCGGTAATACGGTTATCCACAGAATCAGGGGATAACGCAGGAAAGAACATGTGAGCAAAAGGCCAGCAAAAGGCCAGGAACCGTAAAAAGGCCGCGTTGCTGGCGTTTTTCCATAGGCTCCGCCCCCCTGACGAGCATCACAAAAATCGACGCTCAAGTCAGAGGTGGCGAAACCCGACAGGACTATAAAGATACCAGGCGTTTCCCCCTGGAAGCTCCCTCGTGCGCTCTCCTGTTCCGACCCTGCCGCTTACCGGATACCTGTCCGCCTTTCTCCCTTCGGGAAGCGTGGCGCTTTCTCATAGCTCACGCTGTAGGTATCTCAGTTCGGTGTAGGTCGTTCGCTCCAAGCTGGGCTGTGTGCACGAACCCCCCGTTCAGCCCGACCGCTGCGCCTTATCCGGTAACTATCGTCTTGAGTCCAACCCGGTAAGACACGACTTATCGCCACTGGCAGCAGCCACTGGTAACAGGATTAGCAGAGCGAGGTATGTAGGCGGTGCTACAGAGTTCTTGAAGTGGTGGCCTAACTACGGCTACACTAGAAGAACAGTATTTGGTATCTGCGCTCTGCTGAAGCCAGTTACCTTCGGAAAAAGAGTTGGTAGCTCTTGATCCGGCAAACAAACCACCGCTGGTAGCGGTGGTTTTTTTGTTTGCAAGCAGCAGATTACGCGCAGAAAAAAAGGATCTCAAGAAGATCCTTTGATCTTTTCTACGGGGTCTGACGCTCAGTGGAACGAAAACTCACGTTAAGGGATTTTGGTCATGAGATTATCAAAAAGGATCTTCACCTAGATCCTTTTAAATTAAAAATGAAGTTTTAAATCAATCTAAAGTATATATGAGTAAACTTGGTCTGACAGTTACCAATGCTTAATCAGTGAGGCACCTATCTCAGCGATCTGTCTATTTCGTTCATCCATAGTTGCCTGACTCCCCGTCGTGTAGATAACTACGATACGGGAGGGCTTACCATCTGGCCCCAGTGCTGCAATGATACCGCGAGACCCACGCTCACCGGCTCCAGATTTATCAGCAATAAACCAGCCAGCCGGAAGGGCCGAGCGCAGAAGTGGTCCTGCAACTTTATCCGCCTCCATCCAGTCTATTAATTGTTGCCGGGAAGCTAGAGTAAGTAGTTCGCCAGTTAATAGTTTGCGCAACGTTGTTGCCATTGCTACAGGCATCGTGGTGTCACGCTCGTCGTTTGGTATGGCTTCATTCAGCTCCGGTTCCCAACGATCAAGGCGAGTTACATGATCCCCCATGTTGTGCAAAAAAGCGGTTAGCTCCTTCGGTCCTCCGATCGTTGTCAGAAGTAAGTTGGCCGCAGTGTTATCACTCATGGTTATGGCAGCACTGCATAATTCTCTTACTGTCATGCCATCCGTAAGATGCTTTTCTGTGACTGGTGAGTACTCAACCAAGTCATTCTGAGAATAGTGTATGCGGCGACCGAGTTGCTCTTGCCCGGCGTCAATACGGGATAATACCGCGCCACATAGCAGAACTTTAAAAGTGCTCATCATTGGAAAACGTTCTTCGGGGCGAAAACTCTCAAGGATCTTACCGCTGTTGAGATCCAGTTCGATGTAACCCACTCGTGCACCCAACTGATCTTCAGCATCTTTTACTTTCACCAGCGTTTCTGGGTGAGCAAAAACAGGAAGGCAAAATGCCGCAAAAAAGGGAATAAGGGCGACACGGAAATGTTGAATACTCATACTCTTCCTTTTTCAATATTATTGAAGCATTTATCAGGGTTATTGTCTCATGAGCGGATACATATTTGAATGTATTTAGAAAAATAAACAAATAGGGGTTCCGCGCACATTTCCCCGAAAAGTGCCACCTGACGTC',
-        circular: true,
-        sequenceType: 'dna',
-        features: [
-            { id: 'f1', name: 'lac promoter', type: 'promoter', start: 430, end: 495, strand: 1, color: '#8b5cf6' },
-            { id: 'f2', name: 'MCS', type: 'misc_feature', start: 496, end: 545, strand: 1, color: '#3b82f6' },
-            { id: 'f3', name: 'lacZ alpha', type: 'CDS', start: 545, end: 795, strand: 1, color: '#22c55e' },
-            { id: 'f4', name: 'AmpR', type: 'CDS', start: 1830, end: 2690, strand: -1, color: '#ef4444' },
-            { id: 'f5', name: 'ori', type: 'rep_origin', start: 995, end: 1580, strand: 1, color: '#ec4899' }
-        ],
-        primers: [],
-        translations: []
-    },
-    {
-        name: 'pET-28a',
-        sequence: 'ATCCGGATATATTTCTGTCTCTGAATCAGAAACATCTCGATTGAAATCCCCTGCGCCAGGAGTGTCTCCGAACTTTAATAGCAAGGTTCAGAATTTGATGCCGAAGGATTTCGATCAGCTCGCTGATGATTTTCAGCAACATGATTGGCGCTCAGACCGCCTGGCCACCGCAGGCGGTGGAGTGCAATGTCGTGCAATGCCACGCAAGCTTGTCGAGAAGTACTAGAGCCACCATGCGGTCCGGCAGATCTGAATTCGAGCTCCGTCGACAAGCTTGCGGCCGCACTCGAGCACCACCACCACCACCACTGAGATCCGGCTGCTAACAAAGCCCGAAAGGAAGCTGAGTTGGCTGCTGCCACCGCTGAGCAATAACTAGCATAACCCCTTGGGGCCTCTAAACGGGTCTTGAGGGGTTTTTTGCTGAAAGGAGGAACTATATCCGGATTGGCGAATGGGACGCGCCCTGTAGCGGCGCATTAAGCGCGGCGGGTGTGGTGGTTACGCGCAGCGTGACCGCTACACTTGCCAGCGCCCTAGCGCCCGCTCCTTTCGCTTTCTTCCCTTCCTTTCTCGCCACGTTCGCCGGCTTTCCCCGTCAAGCTCTAAATCGGGGGCTCCCTTTAGGGTTCCGATTTAGTGCTTTACGGCACCTCGACCCCAAAAAACTTGATTAGGGTGATGGTTCACGTAGTGGGCCATCGCCCTGATAGACGGTTTTTCGCCCTTTGACGTTGGAGTCCACGTTCTTTAATAGTGGACTCTTGTTCCAAACTGGAACAACACTCAACCCTATCTCGGTCTATTCTTTTGATTTATAAGGGATTTTGCCGATTTCGGCCTATTGGTTAAAAAATGAGCTGATTTAACAAAAATTTAACGCGAATTTTAACAAAATATTAACGTTTACAATTTCAGGTGGCACTTTTCGGGGAAATGTGCGCGGAACCCCTATTTGTTTATTTTTCTAAATACATTCAAATATGTATCCGCTCATGAATTAATTCTTAGAAAAACTCATCGAGCATCAAATGAAACTGCAATTTATTCATATCAGGATTATCAATACCATATTTTTGAAAAAGCCGTTTCTGTAATGAAGGAGAAAACTCACCGAGGCAGTTCCATAGGATGGCAAGATCCTGGTATCGGTCTGCGATTCCGACTCGTCCAACATCAATACAACCTATTAATTTCCCCTCGTCAAAAATAAGGTTATCAAGTGAGAAATCACCATGAGTGACGACTGAATCCGGTGAGAATGGCAAAAGTTTATGCATTTCTTTCCAGACTTGTTCAACAGGCCAGCCATTACGCTCGTCATCAAAATCACTCGCATCAACCAAACCGTTATTCATTCGTGATTGCGCCTGAGCGAGACGAAATACGCGATCGCTGTTAAAAGGACAATTACAAACAGGAATCGAATGCAACCGGCGCAGGAACACTGCCAGCGCATCAACAATATTTTCACCTGAATCAGGATATTCTTCTAATACCTGGAATGCTGTTTTCCCGGGGATCGCAGTGGTGAGTAACCATGCATCATCAGGAGTACGGATAAAATGCTTGATGGTCGGAAGAGGCATAAATTCCGTCAGCCAGTTTAGTCTGACCATCTCATCTGTAACATCATTGGCAACGCTACCTTTGCCATGTTTCAGAAACAACTCTGGCGCATCGGGCTTCCCATACAATCGATAGATTGTCGCACCTGATTGCCCGACATTATCGCGAGCCCATTTATACCCATATAAATCAGCATCCATGTTGGAATTTAATCGCGGCCTAGAGCAAGACGTTTCCCGTTGAATATGGCTCATAACACCCCTTGTATTACTGTTTATGTAAGCAGACAGTTTTATTGTTCATGACCAAAATCCCTTAACGTGAGTTTTCGTTCCACTGAGCGTCAGACCCCGTAGAAAAGATCAAAGGATCTTCTTGAGATCCTTTTTTTCTGCGCGTAATCTGCTGCTTGCAAACAAAAAAACCACCGCTACCAGCGGTGGTTTGTTTGCCGGATCAAGAGCTACCAACTCTTTTTCCGAAGGTAACTGGCTTCAGCAGAGCGCAGATACCAAATACTGTCCTTCTAGTGTAGCCGTAGTTAGGCCACCACTTCAAGAACTCTGTAGCACCGCCTACATACCTCGCTCTGCTAATCCTGTTACCAGTGGCTGCTGCCAGTGGCGATAAGTCGTGTCTTACCGGGTTGGACTCAAGACGATAGTTACCGGATAAGGCGCAGCGGTCGGGCTGAACGGGGGGTTCGTGCACACAGCCCAGCTTGGAGCGAACGACCTACACCGAACT',
-        circular: true,
-        sequenceType: 'dna',
-        features: [
-            { id: 'f1', name: 'T7 promoter', type: 'promoter', start: 205, end: 225, strand: 1, color: '#8b5cf6' },
-            { id: 'f2', name: '6xHis tag', type: 'misc_feature', start: 270, end: 288, strand: 1, color: '#f59e0b' },
-            { id: 'f3', name: 'T7 terminator', type: 'terminator', start: 313, end: 360, strand: 1, color: '#ef4444' },
-            { id: 'f4', name: 'KanR', type: 'CDS', start: 470, end: 1280, strand: -1, color: '#22c55e' },
-            { id: 'f5', name: 'ori', type: 'rep_origin', start: 1500, end: 2100, strand: 1, color: '#ec4899' }
-        ],
-        primers: [
-            { id: 'p1', name: 'T7_Fwd', sequence: 'TAATACGACTCACTATAGGG', start: 205, end: 225, strand: 1, tm: 52.2, gc_percent: 40 },
-            { id: 'p2', name: 'T7_Rev', sequence: 'GCTAGTTATTGCTCAGCGG', start: 313, end: 332, strand: -1, tm: 56.7, gc_percent: 52.6 }
-        ],
-        translations: []
-    },
-    {
-        name: 'GFP Insert (Linear)',
-        sequence: 'ATGAGTAAAGGAGAAGAACTTTTCACTGGAGTTGTCCCAATTCTTGTTGAATTAGATGGTGATGTTAATGGGCACAAATTTTCTGTCAGTGGAGAGGGTGAAGGTGATGCAACATACGGAAAACTTACCCTTAAATTTATTTGCACTACTGGAAAACTACCTGTTCCATGGCCAACACTTGTCACTACTTTCGGTTATGGTGTTCAATGCTTTGCGAGATACCCAGATCATATGAAACAGCATGACTTTTTCAAGAGTGCCATGCCCGAAGGTTATGTACAGGAAAGAACTATATTTTTCAAAGATGACGGGAACTACAAGACACGTGCTGAAGTCAAGTTTGAAGGTGATACCCTTGTTAATAGAATCGAGTTAAAAGGTATTGATTTTAAAGAAGATGGAAACATTCTTGGACACAAATTGGAATACAACTATAACTCACACAATGTATACATCATGGCAGACAAACAAAAGAATGGAATCAAAGTTAACTTCAAAATTAGACACAACATTGAAGATGGAAGCGTTCAACTAGCAGACCATTATCAACAAAATACTCCAATTGGCGATGGCCCTGTCCTTTTACCAGACAACCATTACCTGTCCACACAATCTGCCCTTTCGAAAGATCCCAACGAAAAGAGAGACCACATGGTCCTTCTTGAGTTTGTAACAGCTGCTGGGATTACACATGGCATGGATGAACTATACAAATAA',
-        circular: false,
-        sequenceType: 'dna',
-        features: [
-            { id: 'f1', name: 'GFP CDS', type: 'CDS', start: 0, end: 717, strand: 1, color: '#22c55e' },
-            { id: 'f2', name: 'Start codon', type: 'misc_feature', start: 0, end: 3, strand: 1, color: '#3b82f6' },
-            { id: 'f3', name: 'Stop codon', type: 'misc_feature', start: 714, end: 717, strand: 1, color: '#ef4444' }
-        ],
-        primers: [
-            { id: 'p1', name: 'GFP_Fwd', sequence: 'ATGAGTAAAGGAGAAGAACTTTTC', start: 0, end: 24, strand: 1, tm: 54.3, gc_percent: 33.3 },
-            { id: 'p2', name: 'GFP_Rev', sequence: 'TTATTTGTATAGTTCATCCATGCC', start: 693, end: 717, strand: -1, tm: 53.2, gc_percent: 33.3 }
-        ],
-        translations: []
-    }
-];
+import {
+    inferSequenceTypeFromSequence,
+    sequenceUnitLabel,
+} from './utils/nucleotides';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -91,8 +41,7 @@ interface SequenceLibraryProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onRefresh: () => void;
-    onImport: (file: File) => void;
-    onPasteSequence: (data: { name: string; sequence: string; circular: boolean }) => void;
+    onOpenModal: () => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
 }
@@ -102,108 +51,50 @@ function SequenceLibrary({
     selectedId,
     onSelect,
     onRefresh,
-    onImport,
-    onPasteSequence,
+    onOpenModal,
     onLoadDemo,
     loading
 }: SequenceLibraryProps) {
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const [showDemos, setShowDemos] = useState(false);
-    const [showPasteModal, setShowPasteModal] = useState(false);
-    const [pasteName, setPasteName] = useState('New Plasmid');
-    const [pasteSequence, setPasteSequence] = useState('');
-    const [pasteCircular, setPasteCircular] = useState(true);
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            onImport(file);
-            e.target.value = ''; // Reset for re-upload
-        }
-    };
-
-    const normalizedPastedSequence = pasteSequence
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0 && !line.startsWith('>'))
-        .join('')
-        .replace(/\s+/g, '')
-        .toUpperCase()
-        .replace(/U/g, 'T');
-
-    const handleCreateFromPaste = () => {
-        if (!normalizedPastedSequence) {
-            alert('Paste a nucleotide sequence or FASTA text first.');
-            return;
-        }
-        if (/[^ACGTNRYMKSWHBVD]/.test(normalizedPastedSequence)) {
-            alert('Sequence contains invalid characters. Use DNA bases/IUPAC codes only.');
-            return;
-        }
-
-        onPasteSequence({
-            name: pasteName.trim() || 'Pasted sequence',
-            sequence: normalizedPastedSequence,
-            circular: pasteCircular
-        });
-
-        setShowPasteModal(false);
-        setPasteName('New Plasmid');
-        setPasteSequence('');
-        setPasteCircular(true);
-    };
 
     return (
         <div className="sequence-library w-64 flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
-                <h3 className="font-semibold text-slate-200">Library</h3>
-                <div className="flex items-center gap-1">
-                    <button
-                        onClick={() => setShowPasteModal(true)}
-                        className="p-1.5 hover:bg-slate-700 rounded transition-colors"
-                        title="Paste nucleotide sequence"
-                    >
-                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h8M8 11h8m-8 4h4m4 6H6a2 2 0 01-2-2V5a2 2 0 012-2h8l4 4v12a2 2 0 01-2 2z" />
-                        </svg>
-                    </button>
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="p-1.5 hover:bg-slate-700 rounded transition-colors"
-                        title="Import file (GenBank/FASTA)"
-                    >
-                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                        </svg>
-                    </button>
-                    <button
-                        onClick={onRefresh}
-                        disabled={loading}
-                        className="p-1.5 hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
-                        title="Refresh"
-                    >
-                        <svg className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                    </button>
+                <div>
+                    <h3 className="font-semibold text-slate-200">Construct Shelf</h3>
+                    <p className="text-xs text-slate-500">Recent constructs and clearly labeled synthetic demos</p>
                 </div>
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".gb,.gbk,.genbank,.fasta,.fa,.fna"
-                    onChange={handleFileChange}
-                    className="hidden"
-                />
+                <button
+                    onClick={onRefresh}
+                    disabled={loading}
+                    className="p-1.5 hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
+                    title="Refresh recent constructs"
+                >
+                    <svg className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                </button>
+            </div>
+
+            <div className="p-3 border-b border-slate-700 space-y-3">
+                <button
+                    onClick={onOpenModal}
+                    className="w-full rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
+                >
+                    Open Molecular Input
+                </button>
+                <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3 text-xs text-slate-400">
+                    Search saved constructs, import GenBank or SnapGene files, build DNA or RNA from paste, or pull primers from the library.
+                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
-                {/* Demo plasmids section */}
                 <div className="border-b border-slate-700">
                     <button
                         onClick={() => setShowDemos(!showDemos)}
                         className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
                     >
-                        <span>Demo Plasmids ({DEMO_PLASMIDS.length})</span>
+                        <span>Synthetic Demo Constructs ({DEMO_PLASMIDS.length})</span>
                         <svg className={`w-3 h-3 transition-transform ${showDemos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
@@ -224,11 +115,10 @@ function SequenceLibrary({
                     )}
                 </div>
 
-                {/* Saved sequences */}
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
-                        <p>No saved sequences</p>
-                        <p className="mt-1 text-xs">Paste sequence, import a file, or try demos</p>
+                        <p>No recent constructs</p>
+                        <p className="mt-1 text-xs">Use the molecular input modal to search or create one</p>
                     </div>
                 ) : (
                     sequences.map((seq) => (
@@ -239,7 +129,7 @@ function SequenceLibrary({
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
-                                <span>{seq.length.toLocaleString()} bp</span>
+                                <span>{seq.length.toLocaleString()} {sequenceUnitLabel(seq.sequence_type === 'rna' ? 'rna' : 'dna')}</span>
                                 <span>•</span>
                                 <span className="uppercase">{seq.sequence_type}</span>
                                 {seq.is_circular && (
@@ -249,75 +139,13 @@ function SequenceLibrary({
                                     </>
                                 )}
                             </div>
+                            <div className="mt-1 text-[11px] text-slate-500">
+                                {seq.feature_count} features{seq.updated_at ? ` • ${new Date(seq.updated_at).toLocaleDateString()}` : ''}
+                            </div>
                         </button>
                     ))
                 )}
             </div>
-
-            {showPasteModal && (
-                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-                    <div className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-                            <h4 className="font-semibold text-slate-100">Create Sequence From Paste</h4>
-                            <button
-                                onClick={() => setShowPasteModal(false)}
-                                className="p-1.5 hover:bg-slate-800 rounded transition-colors text-slate-400"
-                                title="Close"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        <div className="p-4 space-y-3">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                <input
-                                    type="text"
-                                    value={pasteName}
-                                    onChange={(e) => setPasteName(e.target.value)}
-                                    placeholder="Sequence name"
-                                    className="md:col-span-2 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100"
-                                />
-                                <label className="flex items-center gap-2 px-3 py-2 bg-slate-800 border border-slate-700 rounded text-sm text-slate-200">
-                                    <input
-                                        type="checkbox"
-                                        checked={pasteCircular}
-                                        onChange={(e) => setPasteCircular(e.target.checked)}
-                                        className="accent-blue-500"
-                                    />
-                                    Circular plasmid
-                                </label>
-                            </div>
-
-                            <textarea
-                                value={pasteSequence}
-                                onChange={(e) => setPasteSequence(e.target.value)}
-                                rows={9}
-                                placeholder="Paste FASTA or raw sequence"
-                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm font-mono text-slate-100 resize-y"
-                            />
-
-                            <p className="text-xs text-slate-400">
-                                {normalizedPastedSequence.length.toLocaleString()} bp detected
-                            </p>
-                        </div>
-                        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-slate-700">
-                            <button
-                                onClick={() => setShowPasteModal(false)}
-                                className="px-3 py-2 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleCreateFromPaste}
-                                className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-                            >
-                                Load Sequence
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
@@ -332,6 +160,7 @@ interface PanelTabsProps {
 }
 
 const PANELS: { id: ActivePanel; label: string }[] = [
+    { id: 'view', label: 'View' },
     { id: 'search', label: 'Find' },
     { id: 'edit', label: 'Edit' },
     { id: 'digest', label: 'Digest' },
@@ -346,7 +175,7 @@ function PanelTabs({ active, onChange }: PanelTabsProps) {
             {PANELS.map(({ id, label }) => (
                 <button
                     key={id}
-                    onClick={() => onChange(active === id ? null : id)}
+                    onClick={() => onChange(active === id ? 'view' : id)}
                     className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${active === id
                         ? 'bg-slate-700 text-slate-100 border-b-2 border-blue-500'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
@@ -452,13 +281,15 @@ export function MolBioToolkitV2() {
     // State
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
+    const [showInputModal, setShowInputModal] = useState(false);
     const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
-    const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+    const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
     const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
     const [visibleFrames, setVisibleFrames] = useState<Set<1 | 2 | 3 | -1 | -2 | -3>>(new Set([1]));
+    const [derivedTranslations, setDerivedTranslations] = useState<SequenceData['translations']>([]);
 
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
@@ -493,30 +324,32 @@ export function MolBioToolkitV2() {
     } = useSequenceOperations();
 
     // Load sequence library on mount
-    useEffect(() => {
-        loadLibrary();
-    }, []);
-
     const loadLibrary = useCallback(async () => {
-        const seqs = await listSequences();
+        const seqs = await listSequences({
+            limit: 24,
+            sort_by: 'updated_at',
+            sort_desc: true,
+        });
         setSequences(seqs);
     }, [listSequences]);
 
-    // Auto-compute ORFs when sequence changes (for Translations toggle)
+    useEffect(() => {
+        loadLibrary();
+    }, [loadLibrary]);
+
+    // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
         if (sequenceData.sequence && sequenceData.sequence.length > 100) {
-            // Only auto-compute if translations are empty
-            if (!sequenceData.translations || sequenceData.translations.length === 0) {
-                const orfs = findORFs(sequenceData.sequence, 100);
-                if (orfs.length > 0) {
-                    setSequenceData({
-                        ...sequenceData,
-                        translations: orfs
-                    });
-                }
-            }
+            setDerivedTranslations(findORFs(sequenceData.sequence, 100));
+        } else {
+            setDerivedTranslations([]);
         }
-    }, [sequenceData.sequence]); // Only depend on sequence string to avoid infinite loop
+    }, [sequenceData.sequence]);
+
+    const viewerSequenceData = useMemo(() => ({
+        ...sequenceData,
+        translations: derivedTranslations,
+    }), [sequenceData, derivedTranslations]);
 
     // Load selected sequence
     const loadSequence = useCallback(async (id: string) => {
@@ -524,6 +357,7 @@ export function MolBioToolkitV2() {
         if (seq) {
             const converted: SequenceData = {
                 name: seq.name,
+                description: seq.description ?? undefined,
                 sequence: seq.sequence,
                 circular: seq.is_circular,
                 sequenceType: seq.sequence_type,
@@ -534,13 +368,20 @@ export function MolBioToolkitV2() {
                     start: f.start,
                     end: f.end,
                     strand: f.strand || 1,
-                    color: f.color
+                    color: f.color,
+                    description: f.description,
+                    notes: f.notes
                 })),
-                primers: seq.primers || [],
+                primers: (seq.primers || []).map((p: Primer) => ({
+                    ...p,
+                    strand: p.strand === -1 ? -1 : 1,
+                })),
                 translations: []
             };
             resetHistory(converted);
             setSelectedSequenceId(id);
+            setSelection(null);
+            setHighlightedRegions([]);
             setIsDirty(false);
         }
     }, [getSequence, resetHistory]);
@@ -549,16 +390,25 @@ export function MolBioToolkitV2() {
     const loadDemo = useCallback((demo: SequenceData) => {
         resetHistory(demo);
         setSelectedSequenceId(null); // Not a saved sequence
+        setSelection(null);
+        setHighlightedRegions([]);
         setIsDirty(false);
     }, [resetHistory]);
 
     // Create a new in-memory sequence from pasted text (can be saved afterward)
-    const handlePasteSequence = useCallback((data: { name: string; sequence: string; circular: boolean }) => {
+    const handlePasteSequence = useCallback((data: {
+        name: string;
+        sequence: string;
+        sequenceType: 'dna' | 'rna';
+        circular: boolean;
+        description?: string;
+    }) => {
         const newSequence: SequenceData = {
             name: data.name,
+            description: data.description,
             sequence: data.sequence,
             circular: data.circular,
-            sequenceType: 'dna',
+            sequenceType: data.sequenceType,
             features: [],
             primers: [],
             translations: []
@@ -566,16 +416,29 @@ export function MolBioToolkitV2() {
 
         resetHistory(newSequence);
         setSelectedSequenceId(null);
+        setSelection(null);
+        setHighlightedRegions([]);
         setIsDirty(true);
     }, [resetHistory]);
+
+    const handleOpenPrimerAsConstruct = useCallback((data: {
+        name: string;
+        sequence: string;
+        description?: string;
+    }) => {
+        handlePasteSequence({
+            name: data.name,
+            description: data.description,
+            sequence: data.sequence.toUpperCase(),
+            sequenceType: inferSequenceTypeFromSequence(data.sequence),
+            circular: false,
+        });
+    }, [handlePasteSequence]);
 
     // Import file using Teselagen bio-parsers
     const handleImport = useCallback(async (file: File) => {
         try {
-            // Read file content as text first (required by bio-parsers)
-            const text = await file.text();
-
-            const result = await anyToJson(text, {
+            const result = await anyToJson(file, {
                 fileName: file.name,
                 parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
             });
@@ -587,11 +450,24 @@ export function MolBioToolkitV2() {
             }
 
             const parsed = results[0].parsedSequence;
+            const normalizedSequence = (parsed.sequence || '').toUpperCase();
+            const inferredType = parsed.isProtein
+                ? 'protein'
+                : parsed.type === 'RNA'
+                    ? 'rna'
+                    : inferSequenceTypeFromSequence(normalizedSequence);
+
+            if (inferredType === 'protein') {
+                alert('Protein records are not supported in the molecular toolkit yet. Import a DNA or RNA construct instead.');
+                return;
+            }
+
             const sequenceData: SequenceData = {
                 name: parsed.name || file.name.replace(/\.[^.]+$/, ''),
-                sequence: (parsed.sequence || '').toUpperCase(),
+                description: parsed.description || undefined,
+                sequence: normalizedSequence,
                 circular: parsed.circular ?? false,
-                sequenceType: 'dna',
+                sequenceType: inferredType,
                 features: (parsed.features || []).map((f: any, i: number) => ({
                     id: f.id || `f_${i}`,
                     name: f.name || f.type || 'feature',
@@ -599,15 +475,28 @@ export function MolBioToolkitV2() {
                     start: f.start,
                     end: f.end,
                     strand: f.strand === -1 ? -1 : 1,
-                    color: f.color || getFeatureColor(f.type || 'misc_feature')
+                    color: f.color || getFeatureColor(f.type || 'misc_feature'),
+                    description: f.description,
+                    notes: f.notes
                 })),
-                primers: [],
+                primers: (parsed.primers || []).map((p: any, i: number) => ({
+                    id: p.id || `p_${i}`,
+                    name: p.name || `Primer ${i + 1}`,
+                    sequence: (p.sequence || '').toUpperCase(),
+                    start: p.start ?? 0,
+                    end: p.end ?? 0,
+                    strand: p.strand === -1 ? -1 : 1,
+                    tm: p.tm,
+                    gc_percent: p.gc_percent
+                })),
                 translations: []
             };
 
             console.log('Imported sequence:', sequenceData.name, 'length:', sequenceData.sequence.length);
             resetHistory(sequenceData);
             setSelectedSequenceId(null);
+            setSelection(null);
+            setHighlightedRegions([]);
             setIsDirty(true);
         } catch (error) {
             console.error('Import error:', error);
@@ -622,6 +511,7 @@ export function MolBioToolkitV2() {
         const normalizedType = sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType;
         const payload = {
             name: sequenceData.name.trim() || 'Untitled sequence',
+            description: sequenceData.description?.trim() || undefined,
             sequence: sequenceData.sequence,
             is_circular: sequenceData.circular,
             sequence_type: normalizedType,
@@ -663,6 +553,7 @@ export function MolBioToolkitV2() {
             ...sequenceData,
             features: [...sequenceData.features, feature]
         });
+        setIsDirty(true);
     }, [sequenceData, setSequenceData]);
 
     // Remove feature handler
@@ -671,6 +562,7 @@ export function MolBioToolkitV2() {
             ...sequenceData,
             features: sequenceData.features.filter(f => f.id !== featureId)
         });
+        setIsDirty(true);
     }, [sequenceData, setSequenceData]);
 
     // Update feature handler (for inline edit)
@@ -690,6 +582,7 @@ export function MolBioToolkitV2() {
             ...sequenceData,
             primers: [...(sequenceData.primers || []), primer]
         });
+        setIsDirty(true);
     }, [sequenceData, setSequenceData]);
 
     // Remove primer handler
@@ -698,6 +591,7 @@ export function MolBioToolkitV2() {
             ...sequenceData,
             primers: (sequenceData.primers || []).filter(p => p.id !== primerId)
         });
+        setIsDirty(true);
     }, [sequenceData, setSequenceData]);
 
     // Auto-annotation state
@@ -719,6 +613,10 @@ export function MolBioToolkitV2() {
     // Run auto-annotation with user settings
     const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
         if (!sequenceData.sequence) return;
+        if (sequenceData.sequenceType === 'rna') {
+            alert('Auto-annotation currently targets plasmid-centric DNA constructs. RNA feature annotation needs a separate database pass.');
+            return;
+        }
 
         setShowAnnotatePanel(false);
         setIsAnnotating(true);
@@ -773,7 +671,14 @@ export function MolBioToolkitV2() {
                 end: f.end,
                 strand: f.strand,
                 color: typeColors[f.type] || '#6b7280',
-                notes: `Detected by pLannotate (${f.identity_pct.toFixed(1)}% identity)${f.is_fragment ? ' [fragment]' : ''}`
+                description: f.description || undefined,
+                notes: {
+                    source: 'pLannotate',
+                    identity_pct: Number(f.identity_pct.toFixed(1)),
+                    match_length_pct: Number(f.match_length_pct.toFixed(1)),
+                    database: f.database,
+                    is_fragment: Boolean(f.is_fragment),
+                }
             }));
 
             // Deduplicate: filter out features that already exist
@@ -783,7 +688,8 @@ export function MolBioToolkitV2() {
                 return !existingFeatures.some(existingF => {
                     // Same name check (case-insensitive)
                     const sameName = existingF.name.toLowerCase() === newF.name.toLowerCase();
-                    if (!sameName) return false;
+                    const sameType = existingF.type === newF.type;
+                    if (!sameName || !sameType) return false;
 
                     // Calculate position overlap
                     const overlapStart = Math.max(existingF.start, newF.start);
@@ -801,10 +707,14 @@ export function MolBioToolkitV2() {
             const skippedCount = newFeatures.length - uniqueNewFeatures.length;
 
             // Merge with existing features
+            const mergedFeatures = [...sequenceData.features, ...uniqueNewFeatures].sort((a, b) =>
+                a.start - b.start || a.end - b.end || a.name.localeCompare(b.name)
+            );
             setSequenceData({
                 ...sequenceData,
-                features: [...sequenceData.features, ...uniqueNewFeatures]
+                features: mergedFeatures
             });
+            setIsDirty(true);
 
             const skippedMsg = skippedCount > 0 ? ` (${skippedCount} duplicates skipped)` : '';
             alert(`Added ${uniqueNewFeatures.length} new features!${skippedMsg} ${message}`);
@@ -851,8 +761,7 @@ export function MolBioToolkitV2() {
                     selectedId={selectedSequenceId}
                     onSelect={loadSequence}
                     onRefresh={loadLibrary}
-                    onImport={handleImport}
-                    onPasteSequence={handlePasteSequence}
+                    onOpenModal={() => setShowInputModal(true)}
                     onLoadDemo={loadDemo}
                     loading={loading}
                 />
@@ -874,6 +783,7 @@ export function MolBioToolkitV2() {
                         onViewModeChange={setViewMode}
                         showGCTrack={showGCTrack}
                         onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
+                        onOpenLibrary={() => setShowInputModal(true)}
                     />
 
 
@@ -884,6 +794,8 @@ export function MolBioToolkitV2() {
                                 {showGCTrack && (
                                     <GCContentTrack
                                         sequence={sequenceData.sequence}
+                                        circular={sequenceData.circular}
+                                        selectedEnzymes={selectedEnzymes}
                                         selection={selection}
                                         onSelectionChange={handleSelection}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
@@ -894,7 +806,7 @@ export function MolBioToolkitV2() {
                                 {/* Sequence Viewer */}
                                 <div className="flex-1 overflow-hidden">
                                     <SequenceViewer
-                                        sequenceData={sequenceData}
+                                        sequenceData={viewerSequenceData}
                                         visibility={visibility}
                                         selectedEnzymes={selectedEnzymes}
                                         onSelection={handleSelection}
@@ -921,7 +833,9 @@ export function MolBioToolkitV2() {
                     {/* Selection info bar */}
                     {selection && (
                         <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400 flex-shrink-0">
-                            Selected: {selection.start + 1} - {selection.end + 1} ({selection.end - selection.start + 1} bp)
+                            {Math.abs(selection.end - selection.start) === 0
+                                ? `Cursor: ${selection.start + 1}`
+                                : `Selected: ${Math.min(selection.start, selection.end) + 1} - ${Math.max(selection.start, selection.end)} (${Math.abs(selection.end - selection.start)} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')})`}
                         </div>
                     )}
                 </div>
@@ -931,7 +845,7 @@ export function MolBioToolkitV2() {
                     <PanelTabs active={activePanel} onChange={setActivePanel} />
 
                     <div className="flex-1 overflow-y-auto">
-                        {activePanel === null && (
+                        {(activePanel === 'view' || activePanel === null) && (
                             <VisibilityPanel
                                 visibility={visibility}
                                 onChange={handleVisibilityChange}
@@ -945,12 +859,7 @@ export function MolBioToolkitV2() {
                             <SearchPanel
                                 sequenceData={sequenceData}
                                 onHighlight={setHighlightedRegions}
-                                onOrfsFound={(orfs) => {
-                                    setSequenceData({
-                                        ...sequenceData,
-                                        translations: orfs
-                                    });
-                                }}
+                                onOrfsFound={setDerivedTranslations}
                             />
                         )}
                         {activePanel === 'edit' && (
@@ -967,6 +876,7 @@ export function MolBioToolkitV2() {
                             <DigestPanel
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
+                                selection={selection}
                                 onHighlight={setHighlightedRegions}
                                 selectedEnzymes={selectedEnzymes}
                                 onEnzymesChange={setSelectedEnzymes}
@@ -1018,6 +928,20 @@ export function MolBioToolkitV2() {
                 hasSequence={!!sequenceData.sequence}
                 sequenceLength={sequenceData.sequence.length}
                 isCircular={sequenceData.circular}
+            />
+
+            <MolecularInputModal
+                isOpen={showInputModal}
+                onClose={() => setShowInputModal(false)}
+                onSelectSequence={loadSequence}
+                onImportFile={handleImport}
+                onCreateSequence={handlePasteSequence}
+                onLoadDemo={loadDemo}
+                onAddPrimerToCurrentSequence={handleAddPrimer}
+                onOpenPrimerAsConstruct={handleOpenPrimerAsConstruct}
+                hasOpenSequence={Boolean(sequenceData.sequence)}
+                currentSequenceData={sequenceData.sequence ? sequenceData : null}
+                demos={DEMO_PLASMIDS}
             />
         </>
     );
