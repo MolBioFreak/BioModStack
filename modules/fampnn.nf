@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process PrepFAMPNN {
     label 'pyrosetta_tools'
 
@@ -163,7 +174,7 @@ process FilterFAMPNN {
 
     script:
     // Build filter parameters - both avg and max residue PSCE
-    def fampnnParam = Utils.formatFilterParams(params, "fampnn", ["max_psce", "max_residue_psce"])
+    def fampnnParam = formatFilterParams(params, "fampnn", ["max_psce", "max_residue_psce"])
 
     """    
     python /scripts/filter_fampnn.py \\

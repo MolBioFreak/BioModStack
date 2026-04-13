@@ -1,3 +1,14 @@
+def formatFilterParams(params, paramPrefix, paramNames) {
+    return paramNames.collect { name ->
+        def paramValue = params["${paramPrefix}_${name}"]
+        if (paramValue != null) {
+            def cmdParam = name.replaceAll('_', '-')
+            return "--${paramPrefix}-${cmdParam} ${paramValue}"
+        }
+        return ""
+    }.findAll { value -> value != "" }.join(' ')
+}
+
 process PrepMPNN {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "mpnn_prep_*.log"
@@ -37,8 +48,8 @@ process RunMPNN {
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "*.log"
 
     // Retry only when allow_retries is enabled (off by default for debugging)
-    errorStrategy = { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }
-    maxRetries = params.allow_retries ? 2 : 0
+    errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }
+    maxRetries { params.allow_retries ? 2 : 0 }
 
     input:
     path pdbs
@@ -94,7 +105,7 @@ process FilterMPNN {
 
     script:
     // Only pass parameters if filter values are provided
-    def mpnnParam = Utils.formatFilterParams(params, "mpnn", ["max_score"])
+    def mpnnParam = formatFilterParams(params, "mpnn", ["max_score"])
 
     """    
     python /scripts/filter_mpnn.py \
@@ -105,4 +116,3 @@ process FilterMPNN {
         2>&1 | tee filter_mpnn_${task.index}.log
     """
 }
-
