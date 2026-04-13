@@ -3,10 +3,12 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
+import { jsonToGenbank } from '@teselagen/bio-parsers';
 
 interface ExportDropdownProps {
     sequenceData: {
         name: string;
+        description?: string;
         sequence: string;
         features?: Array<{
             name: string;
@@ -14,8 +16,21 @@ interface ExportDropdownProps {
             start: number;
             end: number;
             strand: number;
+            color?: string;
+            description?: string;
+            notes?: Record<string, unknown>;
+        }>;
+        primers?: Array<{
+            name: string;
+            sequence: string;
+            start: number;
+            end: number;
+            strand: number;
+            tm?: number;
+            gc_percent?: number;
         }>;
         circular?: boolean;
+        sequenceType?: 'dna' | 'rna' | 'protein';
     };
     className?: string;
 }
@@ -40,49 +55,21 @@ export function ExportDropdown({ sequenceData, className }: ExportDropdownProps)
         let extension: string;
 
         if (format === 'fasta') {
-            content = `>${sequenceData.name}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
+            const header = sequenceData.description
+                ? `>${sequenceData.name} ${sequenceData.description}`
+                : `>${sequenceData.name}`;
+            content = `${header}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
             extension = 'fasta';
         } else {
-            // Simple GenBank format
-            const date = new Date().toLocaleDateString('en-US', {
-                day: '2-digit',
-                month: 'short',
-                year: 'numeric'
-            }).toUpperCase().replace(',', '');
-
-            const lines = [
-                `LOCUS       ${sequenceData.name.substring(0, 16).padEnd(16)} ${sequenceData.sequence.length} bp    DNA     ${sequenceData.circular ? 'circular' : 'linear'}   UNK ${date}`,
-                `DEFINITION  ${sequenceData.name}`,
-                `ACCESSION   .`,
-                `VERSION     .`,
-                `KEYWORDS    .`,
-                `SOURCE      .`,
-                `  ORGANISM  .`,
-                `FEATURES             Location/Qualifiers`
-            ];
-
-            // Add features
-            if (sequenceData.features) {
-                for (const feat of sequenceData.features) {
-                    const location = feat.strand === -1
-                        ? `complement(${feat.start + 1}..${feat.end + 1})`
-                        : `${feat.start + 1}..${feat.end + 1}`;
-                    lines.push(`     ${feat.type.padEnd(16)}${location}`);
-                    lines.push(`                     /label="${feat.name}"`);
-                }
-            }
-
-            // Add origin (sequence)
-            lines.push('ORIGIN');
-            const seq = sequenceData.sequence.toLowerCase();
-            for (let i = 0; i < seq.length; i += 60) {
-                const lineNum = (i + 1).toString().padStart(9);
-                const chunk = seq.slice(i, i + 60).match(/.{1,10}/g)?.join(' ') || '';
-                lines.push(`${lineNum} ${chunk}`);
-            }
-            lines.push('//');
-
-            content = lines.join('\n');
+            content = jsonToGenbank({
+                name: sequenceData.name,
+                description: sequenceData.description,
+                sequence: sequenceData.sequence,
+                circular: sequenceData.circular,
+                type: sequenceData.sequenceType === 'rna' ? 'RNA' : 'DNA',
+                features: sequenceData.features || [],
+                primers: sequenceData.primers || [],
+            }) || '';
             extension = 'gb';
         }
 

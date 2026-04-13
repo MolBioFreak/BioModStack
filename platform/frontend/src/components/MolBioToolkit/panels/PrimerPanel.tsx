@@ -12,6 +12,15 @@ import {
     type Primer as LibraryPrimer,
     type PrimerCreate
 } from '../../../lib/api';
+import {
+    calculateGcPercent,
+    cleanNucleotideSequence,
+    inferSequenceTypeFromSequence,
+    isValidNucleotideSequence,
+    resolvePrimerBindings,
+    reverseComplementSequence,
+    sequenceUnitLabel,
+} from '../utils/nucleotides';
 
 interface PrimerPanelProps {
     sequenceData: SequenceData;
@@ -26,7 +35,7 @@ function calculateTm(primer: string): number {
     if (!primer || primer.length === 0) return 0;
     const upper = primer.toUpperCase();
     const a = (upper.match(/A/g) || []).length;
-    const t = (upper.match(/T/g) || []).length;
+    const t = (upper.match(/[TU]/g) || []).length;
     const g = (upper.match(/G/g) || []).length;
     const c = (upper.match(/C/g) || []).length;
 
@@ -34,20 +43,6 @@ function calculateTm(primer: string): number {
         return 2 * (a + t) + 4 * (g + c);
     }
     return 64.9 + 41 * (g + c - 16.4) / primer.length;
-}
-
-// Calculate GC content
-function calculateGC(primer: string): number {
-    if (!primer || primer.length === 0) return 0;
-    const upper = primer.toUpperCase();
-    const gc = (upper.match(/[GC]/g) || []).length;
-    return Math.round((gc / primer.length) * 100);
-}
-
-// Get reverse complement
-function reverseComplement(seq: string): string {
-    const complement: Record<string, string> = { A: 'T', T: 'A', G: 'C', C: 'G' };
-    return seq.toUpperCase().split('').reverse().map(b => complement[b] || b).join('');
 }
 
 export function PrimerPanel({
@@ -69,6 +64,9 @@ export function PrimerPanel({
     const [librarySearch, setLibrarySearch] = useState('');
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
     const [saveToLibrary, setSaveToLibrary] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    const unitLabel = sequenceUnitLabel(sequenceType);
 
     // Get selected sequence region
     const selectedRegion = useMemo(() => {
@@ -103,8 +101,9 @@ export function PrimerPanel({
     // Use selection as primer
     const useSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
+        setError(null);
         const seq = reverse
-            ? reverseComplement(selectedRegion.sequence)
+            ? reverseComplementSequence(selectedRegion.sequence, sequenceType)
             : selectedRegion.sequence;
         setNewPrimerSeq(seq);
         setIsReverse(reverse);
@@ -113,22 +112,34 @@ export function PrimerPanel({
 
     // Add new primer
     const addPrimer = async () => {
-        if (!newPrimerSeq || newPrimerSeq.length < 10) return;
+        const cleanedPrimer = cleanNucleotideSequence(newPrimerSeq);
+        if (!cleanedPrimer || cleanedPrimer.length < 10) return;
+        if (!isValidNucleotideSequence(newPrimerSeq)) {
+            setError('Primer contains invalid nucleotide characters.');
+            return;
+        }
+        setError(null);
 
-        // Find binding position
-        const upperSeq = sequenceData.sequence.toUpperCase();
-        const searchSeq = isReverse ? reverseComplement(newPrimerSeq) : newPrimerSeq.toUpperCase();
-        const pos = upperSeq.indexOf(searchSeq);
+        const bindings = resolvePrimerBindings(sequenceData.sequence, cleanedPrimer, {
+            reverse: isReverse,
+            sequenceType,
+            circular: sequenceData.circular,
+        });
+        const binding = bindings[0];
+        if (!binding) {
+            setError('No primer annealing site was found on the current construct. Tailed primers are supported, but the 3′ annealing region must match.');
+            return;
+        }
 
         const primer: Primer = {
             id: `primer_${Date.now()}`,
-            name: newPrimerName || `Primer_${sequenceData.primers?.length || 0 + 1}`,
-            sequence: newPrimerSeq.toUpperCase(),
-            start: pos >= 0 ? pos : 0,
-            end: pos >= 0 ? pos + searchSeq.length : searchSeq.length,
+            name: newPrimerName || `Primer_${(sequenceData.primers?.length || 0) + 1}`,
+            sequence: cleanedPrimer,
+            start: binding.start,
+            end: binding.end,
             strand: isReverse ? -1 : 1,
-            tm: calculateTm(newPrimerSeq),
-            gc_percent: calculateGC(newPrimerSeq)
+            tm: calculateTm(cleanedPrimer),
+            gc_percent: calculateGcPercent(cleanedPrimer)
         };
 
         onAddPrimer(primer);
@@ -152,6 +163,7 @@ export function PrimerPanel({
 
         setNewPrimerName('');
         setNewPrimerSeq('');
+        setIsReverse(false);
     };
 
     // Highlight specific primer
@@ -177,18 +189,24 @@ export function PrimerPanel({
 
     // Add library primer to sequence
     const addLibraryPrimerToSequence = (libPrimer: LibraryPrimer) => {
-        const upperSeq = sequenceData.sequence.toUpperCase();
-        const searchSeq = libPrimer.binding_strand === -1
-            ? reverseComplement(libPrimer.sequence)
-            : libPrimer.sequence.toUpperCase();
-        const pos = upperSeq.indexOf(searchSeq);
+        const bindings = resolvePrimerBindings(sequenceData.sequence, libPrimer.sequence, {
+            reverse: libPrimer.binding_strand === -1,
+            sequenceType,
+            circular: sequenceData.circular,
+        });
+        const binding = bindings[0];
+        if (!binding) {
+            setError(`Primer "${libPrimer.name}" does not anneal to the current construct.`);
+            return;
+        }
+        setError(null);
 
         const primer: Primer = {
             id: `primer_${Date.now()}`,
             name: libPrimer.name,
             sequence: libPrimer.sequence,
-            start: pos >= 0 ? pos : (libPrimer.binding_start ?? 0),
-            end: pos >= 0 ? pos + searchSeq.length : (libPrimer.binding_end ?? searchSeq.length),
+            start: binding.start,
+            end: binding.end,
             strand: (libPrimer.binding_strand === -1 ? -1 : 1) as 1 | -1,
             tm: libPrimer.tm ?? undefined,
             gc_percent: libPrimer.gc_percent ?? undefined
@@ -245,13 +263,19 @@ export function PrimerPanel({
                 </button>
             </div>
 
+            {error && (
+                <div className="rounded border border-red-800 bg-red-900/40 px-3 py-2 text-sm text-red-300">
+                    {error}
+                </div>
+            )}
+
             {activeTab === 'sequence' && (
                 <>
                     {/* Selection helper */}
                     {selectedRegion && (
                         <div className="p-3 bg-slate-700/50 rounded space-y-2">
                             <div className="text-sm text-slate-300">
-                                Selected: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} bp)
+                                Selected: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} {unitLabel})
                             </div>
                             <div className="font-mono text-xs text-slate-400 truncate">
                                 {selectedRegion.sequence.slice(0, 50)}{selectedRegion.length > 50 ? '...' : ''}
@@ -316,7 +340,7 @@ export function PrimerPanel({
 
                             {newPrimerSeq && (
                                 <div className="text-xs text-slate-400">
-                                    Tm: {calculateTm(newPrimerSeq).toFixed(1)}°C • GC: {calculateGC(newPrimerSeq)}%
+                                    Tm: {calculateTm(newPrimerSeq).toFixed(1)}°C • GC: {calculateGcPercent(newPrimerSeq)}%
                                 </div>
                             )}
                         </div>
@@ -368,7 +392,7 @@ export function PrimerPanel({
                                                 <span className="text-sm text-slate-200 truncate">{primer.name}</span>
                                             </div>
                                             <div className="text-xs text-slate-400 mt-0.5">
-                                                {primer.sequence.length} bp • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent}%
+                                                {primer.sequence.length} {unitLabel} • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent}%
                                             </div>
                                         </div>
                                         <button
@@ -436,7 +460,7 @@ export function PrimerPanel({
                                             {primer.sequence.slice(0, 30)}{primer.length > 30 ? '...' : ''}
                                         </div>
                                         <div className="text-xs text-slate-500 mt-0.5">
-                                            {primer.length} bp • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent?.toFixed(0)}%
+                                            {primer.length} {sequenceUnitLabel(inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1)}°C • GC: {primer.gc_percent?.toFixed(0)}%
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1 ml-2">
