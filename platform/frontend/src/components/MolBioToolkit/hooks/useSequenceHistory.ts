@@ -31,7 +31,7 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
     switch (action.type) {
         case 'SET':
             // Don't add to history if identical to present
-            if (JSON.stringify(action.payload) === JSON.stringify(state.present)) {
+            if (sequenceDataEquals(action.payload, state.present)) {
                 return state;
             }
             return {
@@ -66,6 +66,82 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
         default:
             return state;
     }
+}
+
+function featureEquals(a: SequenceData['features'][number], b: SequenceData['features'][number]): boolean {
+    return (
+        a.id === b.id &&
+        a.name === b.name &&
+        a.type === b.type &&
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.color === b.color &&
+        a.description === b.description &&
+        JSON.stringify(a.notes ?? null) === JSON.stringify(b.notes ?? null)
+    );
+}
+
+function primerEquals(a: NonNullable<SequenceData['primers']>[number], b: NonNullable<SequenceData['primers']>[number]): boolean {
+    return (
+        a.id === b.id &&
+        a.name === b.name &&
+        a.sequence === b.sequence &&
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.tm === b.tm &&
+        a.gc_percent === b.gc_percent
+    );
+}
+
+function translationEquals(a: NonNullable<SequenceData['translations']>[number], b: NonNullable<SequenceData['translations']>[number]): boolean {
+    return (
+        a.start === b.start &&
+        a.end === b.end &&
+        a.strand === b.strand &&
+        a.frame === b.frame
+    );
+}
+
+function sequenceDataEquals(a: SequenceData, b: SequenceData): boolean {
+    if (a === b) return true;
+    if (
+        a.name !== b.name ||
+        a.description !== b.description ||
+        a.sequence !== b.sequence ||
+        a.circular !== b.circular ||
+        a.sequenceType !== b.sequenceType
+    ) {
+        return false;
+    }
+
+    if (a.features.length !== b.features.length) return false;
+    for (let index = 0; index < a.features.length; index += 1) {
+        if (!featureEquals(a.features[index], b.features[index])) {
+            return false;
+        }
+    }
+
+    const aPrimers = a.primers || [];
+    const bPrimers = b.primers || [];
+    if (aPrimers.length !== bPrimers.length) return false;
+    for (let index = 0; index < aPrimers.length; index += 1) {
+        if (!primerEquals(aPrimers[index], bPrimers[index])) {
+            return false;
+        }
+    }
+
+    const aTranslations = a.translations || [];
+    const bTranslations = b.translations || [];
+    if (aTranslations.length !== bTranslations.length) return false;
+    for (let index = 0; index < aTranslations.length; index += 1) {
+        if (!translationEquals(aTranslations[index], bTranslations[index])) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

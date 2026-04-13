@@ -2,14 +2,20 @@
  * PCRPanel - PCR amplification tool
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import type { SequenceData, HighlightedRegion } from '../types';
+import {
+    calculateGcPercent,
+    isValidNucleotideSequence,
+    resolvePrimerBindings,
+    sequenceUnitLabel,
+} from '../utils/nucleotides';
 
 interface PCRPanelProps {
     sequenceData: SequenceData;
     sequenceId: string | null;
     onHighlight: (regions: HighlightedRegion[]) => void;
-    onPCRComplete?: (product: { sequence: string; length: number }) => void;
+    onPCRComplete?: (product: { sequence: string; length: number; start?: number; end?: number; wrapsOrigin?: boolean }) => void;
 }
 
 // Calculate Tm using basic rule (simplified Nearest Neighbor)
@@ -17,7 +23,7 @@ function calculateTm(primer: string): number {
     if (!primer || primer.length === 0) return 0;
     const upper = primer.toUpperCase();
     const a = (upper.match(/A/g) || []).length;
-    const t = (upper.match(/T/g) || []).length;
+    const t = (upper.match(/[TU]/g) || []).length;
     const g = (upper.match(/G/g) || []).length;
     const c = (upper.match(/C/g) || []).length;
 
@@ -27,33 +33,6 @@ function calculateTm(primer: string): number {
     }
     // Basic Tm formula for longer primers
     return 64.9 + 41 * (g + c - 16.4) / primer.length;
-}
-
-// Calculate GC content
-function calculateGC(primer: string): number {
-    if (!primer || primer.length === 0) return 0;
-    const upper = primer.toUpperCase();
-    const gc = (upper.match(/[GC]/g) || []).length;
-    return Math.round((gc / primer.length) * 100);
-}
-
-// Find primer binding site
-function findBindingSite(sequence: string, primer: string, isReverse: boolean): number | null {
-    if (!sequence || !primer || primer.length < 10) return null;
-
-    const upperSeq = sequence.toUpperCase();
-    const upperPrimer = primer.toUpperCase();
-
-    if (isReverse) {
-        // For reverse primer, find reverse complement
-        const complement: Record<string, string> = { A: 'T', T: 'A', G: 'C', C: 'G' };
-        const revComp = upperPrimer.split('').reverse().map(b => complement[b] || b).join('');
-        const pos = upperSeq.indexOf(revComp);
-        return pos >= 0 ? pos : null;
-    } else {
-        const pos = upperSeq.indexOf(upperPrimer);
-        return pos >= 0 ? pos : null;
-    }
 }
 
 export function PCRPanel({
@@ -67,63 +46,116 @@ export function PCRPanel({
     const [productName, setProductName] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [result, setResult] = useState<{ sequence: string; length: number } | null>(null);
+    const [result, setResult] = useState<{ sequence: string; length: number; start?: number; end?: number; wrapsOrigin?: boolean } | null>(null);
+    const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    const unitLabel = sequenceUnitLabel(sequenceType);
+
+    const fwdBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, forwardPrimer, {
+        reverse: false,
+        sequenceType,
+        circular: sequenceData.circular,
+    }), [forwardPrimer, sequenceData.sequence, sequenceData.circular, sequenceType]);
+
+    const revBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, reversePrimer, {
+        reverse: true,
+        sequenceType,
+        circular: sequenceData.circular,
+    }), [reversePrimer, sequenceData.sequence, sequenceData.circular, sequenceType]);
+
+    const fwdBinding = fwdBindings[0] ?? null;
+    const revBinding = revBindings[0] ?? null;
 
     // Calculate primer properties
     const fwdProps = useMemo(() => ({
         tm: calculateTm(forwardPrimer),
-        gc: calculateGC(forwardPrimer),
+        gc: calculateGcPercent(forwardPrimer),
         length: forwardPrimer.length,
-        bindingSite: findBindingSite(sequenceData.sequence, forwardPrimer, false)
-    }), [forwardPrimer, sequenceData.sequence]);
+        binding: fwdBinding,
+    }), [forwardPrimer, fwdBinding]);
 
     const revProps = useMemo(() => ({
         tm: calculateTm(reversePrimer),
-        gc: calculateGC(reversePrimer),
+        gc: calculateGcPercent(reversePrimer),
         length: reversePrimer.length,
-        bindingSite: findBindingSite(sequenceData.sequence, reversePrimer, true)
-    }), [reversePrimer, sequenceData.sequence]);
+        binding: revBinding,
+    }), [reversePrimer, revBinding]);
 
     // Predicted product size
     const predictedSize = useMemo(() => {
-        if (fwdProps.bindingSite !== null && revProps.bindingSite !== null) {
-            const start = fwdProps.bindingSite;
-            const end = revProps.bindingSite + reversePrimer.length;
-            if (end > start) {
-                return end - start;
+        if (fwdBinding && revBinding) {
+            const templateLength = sequenceData.sequence.length;
+            const templateSpan = sequenceData.circular
+                ? (() => {
+                    let span = (revBinding.end - fwdBinding.start) % templateLength;
+                    if (span === 0) {
+                        span = templateLength;
+                    }
+                    return span;
+                })()
+                : revBinding.end > fwdBinding.start
+                    ? revBinding.end - fwdBinding.start
+                    : null;
+
+            if (templateSpan !== null) {
+                return templateSpan + fwdBinding.overhangLength + revBinding.overhangLength;
             }
         }
         return null;
-    }, [fwdProps.bindingSite, revProps.bindingSite, reversePrimer.length]);
+    }, [fwdBinding, revBinding, sequenceData.circular, sequenceData.sequence.length]);
 
-    // Update highlights when primers change
-    const updateHighlights = () => {
+    const buildBindingHighlights = useCallback(() => {
         const regions: HighlightedRegion[] = [];
+        const sequenceLength = sequenceData.sequence.length;
 
-        if (fwdProps.bindingSite !== null) {
+        const addBinding = (
+            binding: typeof fwdBinding,
+            color: string,
+            label: string,
+        ) => {
+            if (!binding) return;
+            if (binding.end > sequenceLength && sequenceLength > 0) {
+                regions.push({
+                    start: binding.start,
+                    end: sequenceLength,
+                    color,
+                    label,
+                });
+                regions.push({
+                    start: 0,
+                    end: binding.end % sequenceLength,
+                    color,
+                    label,
+                });
+                return;
+            }
             regions.push({
-                start: fwdProps.bindingSite,
-                end: fwdProps.bindingSite + forwardPrimer.length,
-                color: '#22c55e',
-                label: 'Forward primer'
+                start: binding.start,
+                end: binding.end,
+                color,
+                label,
             });
-        }
+        };
 
-        if (revProps.bindingSite !== null) {
-            regions.push({
-                start: revProps.bindingSite,
-                end: revProps.bindingSite + reversePrimer.length,
-                color: '#ef4444',
-                label: 'Reverse primer'
-            });
-        }
+        addBinding(fwdBinding, '#22c55e', 'Forward primer');
+        addBinding(revBinding, '#ef4444', 'Reverse primer');
+        return regions;
+    }, [fwdBinding, revBinding, sequenceData.sequence.length]);
 
-        onHighlight(regions);
-    };
+    useEffect(() => {
+        if (!forwardPrimer && !reversePrimer) {
+            onHighlight([]);
+            return;
+        }
+        onHighlight(buildBindingHighlights());
+    }, [forwardPrimer, reversePrimer, buildBindingHighlights, onHighlight]);
 
     // Run PCR
     const runPCR = async () => {
         if (!forwardPrimer || !reversePrimer) return;
+        if (!isValidNucleotideSequence(forwardPrimer) || !isValidNucleotideSequence(reversePrimer)) {
+            setError('Primers contain invalid nucleotide characters.');
+            return;
+        }
 
         setLoading(true);
         setError(null);
@@ -142,6 +174,7 @@ export function PCRPanel({
             } else {
                 payload.sequence = sequenceData.sequence;
                 payload.name = sequenceData.name;
+                payload.sequence_type = sequenceType;
             }
 
             const res = await fetch('/api/molbio/pcr', {
@@ -156,14 +189,57 @@ export function PCRPanel({
             }
 
             const data = await res.json();
+            const responseProduct = data.product;
+            const persistedSequence = data.sequence;
+            const product = responseProduct
+                ? {
+                    sequence: responseProduct.sequence,
+                    length: responseProduct.length,
+                    start: responseProduct.start,
+                    end: responseProduct.end,
+                    wrapsOrigin: responseProduct.wraps_origin,
+                }
+                : persistedSequence
+                    ? {
+                        sequence: persistedSequence.sequence,
+                        length: persistedSequence.length,
+                    }
+                    : null;
 
-            if (data.sequence) {
-                const product = {
-                    sequence: data.sequence.sequence,
-                    length: data.sequence.length
-                };
+            if (product) {
                 setResult(product);
                 onPCRComplete?.(product);
+
+                const regions: HighlightedRegion[] = [];
+                if (typeof product.start === 'number' && typeof product.end === 'number') {
+                    const label = `PCR product (${product.length.toLocaleString()} ${unitLabel})`;
+                    if (product.wrapsOrigin) {
+                        regions.push({
+                            start: product.start,
+                            end: sequenceData.sequence.length,
+                            color: '#38bdf8',
+                            label,
+                        });
+                        if (product.end > 0) {
+                            regions.push({
+                                start: 0,
+                                end: product.end,
+                                color: '#38bdf8',
+                                label,
+                            });
+                        }
+                    } else {
+                        regions.push({
+                            start: product.start,
+                            end: product.end,
+                            color: '#38bdf8',
+                            label,
+                        });
+                    }
+                }
+                if (regions.length > 0) {
+                    onHighlight(regions);
+                }
             }
 
         } catch (e) {
@@ -173,7 +249,7 @@ export function PCRPanel({
         }
     };
 
-    const canRun = forwardPrimer.length >= 15 && reversePrimer.length >= 15;
+    const canRun = forwardPrimer.length >= 15 && reversePrimer.length >= 15 && Boolean(fwdBinding) && Boolean(revBinding);
     const tmDiff = Math.abs(fwdProps.tm - revProps.tm);
 
     return (
@@ -188,24 +264,28 @@ export function PCRPanel({
                     value={forwardPrimer}
                     onChange={(e) => {
                         setForwardPrimer(e.target.value.toUpperCase());
-                        setTimeout(updateHighlights, 100);
+                        setResult(null);
+                        setError(null);
                     }}
                     placeholder="ATGC..."
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                 />
                 {forwardPrimer && (
                     <div className="flex items-center gap-3 text-xs text-slate-400">
-                        <span>{fwdProps.length} bp</span>
+                        <span>{fwdProps.length} {unitLabel}</span>
                         <span className={fwdProps.tm >= 55 && fwdProps.tm <= 65 ? 'text-emerald-400' : 'text-yellow-400'}>
                             Tm: {fwdProps.tm.toFixed(1)}°C
                         </span>
                         <span className={fwdProps.gc >= 40 && fwdProps.gc <= 60 ? 'text-emerald-400' : 'text-yellow-400'}>
                             GC: {fwdProps.gc}%
                         </span>
-                        {fwdProps.bindingSite !== null ? (
-                            <span className="text-emerald-400">✓ Binds @ {fwdProps.bindingSite + 1}</span>
+                        {fwdProps.binding ? (
+                            <span className="text-emerald-400">
+                                ✓ Anneals @ {fwdProps.binding.start + 1}
+                                {fwdProps.binding.overhangLength > 0 ? ` (+${fwdProps.binding.overhangLength} ${unitLabel} tail)` : ''}
+                            </span>
                         ) : (
-                            <span className="text-red-400">✗ No binding site</span>
+                            <span className="text-red-400">✗ No annealing site</span>
                         )}
                     </div>
                 )}
@@ -219,24 +299,28 @@ export function PCRPanel({
                     value={reversePrimer}
                     onChange={(e) => {
                         setReversePrimer(e.target.value.toUpperCase());
-                        setTimeout(updateHighlights, 100);
+                        setResult(null);
+                        setError(null);
                     }}
                     placeholder="ATGC..."
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                 />
                 {reversePrimer && (
                     <div className="flex items-center gap-3 text-xs text-slate-400">
-                        <span>{revProps.length} bp</span>
+                        <span>{revProps.length} {unitLabel}</span>
                         <span className={revProps.tm >= 55 && revProps.tm <= 65 ? 'text-emerald-400' : 'text-yellow-400'}>
                             Tm: {revProps.tm.toFixed(1)}°C
                         </span>
                         <span className={revProps.gc >= 40 && revProps.gc <= 60 ? 'text-emerald-400' : 'text-yellow-400'}>
                             GC: {revProps.gc}%
                         </span>
-                        {revProps.bindingSite !== null ? (
-                            <span className="text-emerald-400">✓ Binds @ {revProps.bindingSite + 1}</span>
+                        {revProps.binding ? (
+                            <span className="text-emerald-400">
+                                ✓ Anneals @ {revProps.binding.start + 1}
+                                {revProps.binding.overhangLength > 0 ? ` (+${revProps.binding.overhangLength} ${unitLabel} tail)` : ''}
+                            </span>
                         ) : (
-                            <span className="text-red-400">✗ No binding site</span>
+                            <span className="text-red-400">✗ No annealing site</span>
                         )}
                     </div>
                 )}
@@ -253,7 +337,7 @@ export function PCRPanel({
             {predictedSize && (
                 <div className="p-2 bg-slate-700/50 rounded text-sm text-slate-300">
                     <span className="text-slate-400">Predicted product:</span>{' '}
-                    <span className="font-mono text-emerald-400">{predictedSize.toLocaleString()} bp</span>
+                    <span className="font-mono text-emerald-400">{predictedSize.toLocaleString()} {unitLabel}</span>
                 </div>
             )}
 
@@ -290,8 +374,13 @@ export function PCRPanel({
                 <div className="p-3 bg-emerald-900/30 border border-emerald-800/50 rounded space-y-2">
                     <div className="flex items-center justify-between">
                         <span className="text-sm text-emerald-300">PCR Product</span>
-                        <span className="font-mono text-emerald-400">{result.length.toLocaleString()} bp</span>
+                        <span className="font-mono text-emerald-400">{result.length.toLocaleString()} {unitLabel}</span>
                     </div>
+                    {result.wrapsOrigin && (
+                        <div className="text-xs text-emerald-200/80">
+                            Product spans the plasmid origin.
+                        </div>
+                    )}
                 </div>
             )}
         </div>

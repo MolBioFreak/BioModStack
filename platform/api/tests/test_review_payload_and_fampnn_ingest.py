@@ -23,7 +23,9 @@ from routers.jobs import (
     _build_antibody_iteration_job,
     _build_selection_manifest_item,
     _child_job_has_reusable_outputs,
+    _derive_job_stage_tags,
     _derive_source_stage_payload,
+    _looks_like_antibody_job,
     _merge_preserved_gate_payload,
     _normalize_antibody_job_params,
     _prune_iteration_params,
@@ -135,6 +137,36 @@ def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp
     assert job.stage_progress is None
     assert job.error_message is None
     assert job.completed_at is not None
+
+
+def test_looks_like_antibody_job_accepts_boltzgen_nanobody_runs() -> None:
+    job = SimpleNamespace(
+        model_id="boltzgen",
+        mode="nanobody_binder",
+        params={
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+            "antibody_chains": "H",
+            "antigen_chains": "A",
+        },
+    )
+
+    assert _looks_like_antibody_job(job) is True
+
+
+def test_derive_job_stage_tags_marks_boltzgen_nanobody_runs_as_boltzgen() -> None:
+    family, mode = _derive_job_stage_tags(
+        "boltzgen",
+        "nanobody_binder",
+        {
+            "boltzgen_mode": "nanobody_binder",
+            "framework_type": "nanobody",
+        },
+        None,
+    )
+
+    assert family == "boltzgen"
+    assert mode == "nanobody_binder"
 
 
 @pytest.mark.asyncio

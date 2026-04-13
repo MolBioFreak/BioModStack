@@ -17,10 +17,7 @@ from services.molbio_ops import (
     DigestEnzyme,
     digest_sequence,
     pcr_product,
-    ligate_fragments,
     apply_mutations,
-    gibson_assembly,
-    golden_gate_assembly,
 )
 
 
@@ -31,6 +28,7 @@ class SequenceInput(BaseModel):
     sequence_id: Optional[str] = None
     name: Optional[str] = None
     sequence: Optional[str] = None
+    sequence_type: Optional[str] = None
     is_circular: bool = False
 
 
@@ -123,12 +121,40 @@ class DigestFragmentResponse(BaseModel):
     sequence: str
     start: int
     end: int
+    length: int
+    wraps_origin: bool
+
+
+class PCRProductResponse(BaseModel):
+    sequence: str
+    start: int
+    end: int
+    length: int
+    wraps_origin: bool
 
 
 class MolbioOperationResponse(BaseModel):
     sequence: Optional[NucleotideSequenceResponse] = None
     fragments: Optional[List[DigestFragmentResponse]] = None
+    product: Optional[PCRProductResponse] = None
     message: str
+
+
+def normalize_sequence_type(sequence_type: Optional[str], sequence: Optional[str]) -> str:
+    normalized = (sequence_type or "").strip().lower()
+    if normalized in {"dna", "rna"}:
+        return normalized
+
+    sequence_text = (sequence or "").upper()
+    if "U" in sequence_text and "T" not in sequence_text:
+        return "rna"
+    return "dna"
+
+
+def clean_inline_sequence(sequence: str, sequence_type: str) -> str:
+    upper = sequence.upper().replace(" ", "").replace("\n", "").replace("\r", "")
+    valid_chars = set("ATCGNRYMKSWHBVD") if sequence_type == "dna" else set("AUCGNRYMKSWHBVD")
+    return "".join(char for char in upper if char in valid_chars)
 
 
 async def resolve_sequence(data: SequenceInput, session: AsyncSession) -> NucleotideSequence:
@@ -142,7 +168,10 @@ async def resolve_sequence(data: SequenceInput, session: AsyncSession) -> Nucleo
         return seq
     if not data.sequence:
         raise HTTPException(status_code=400, detail="Sequence or sequence_id is required")
-    seq_clean = data.sequence
+    sequence_type = normalize_sequence_type(data.sequence_type, data.sequence)
+    seq_clean = clean_inline_sequence(data.sequence, sequence_type)
+    if not seq_clean:
+        raise HTTPException(status_code=400, detail="Sequence contains no valid nucleotides")
     gc = 0.0
     if seq_clean:
         gc = round(((seq_clean.count('G') + seq_clean.count('C')) / len(seq_clean)) * 100, 2)
@@ -151,10 +180,10 @@ async def resolve_sequence(data: SequenceInput, session: AsyncSession) -> Nucleo
         id=str(uuid.uuid4()),
         name=data.name or "Unnamed Sequence",
         description=None,
-        sequence=data.sequence,
-        sequence_type="dna",
+        sequence=seq_clean,
+        sequence_type=sequence_type,
         is_circular=data.is_circular,
-        length=len(data.sequence),
+        length=len(seq_clean),
         features=[],
         primers=[],
         organism=None,
@@ -175,6 +204,7 @@ def create_child_sequence(
     circular: bool,
     operation: str,
     operation_params: dict,
+    sequence_type: Optional[str] = None,
 ) -> NucleotideSequence:
     def calc_gc(seq: str) -> float:
         if not seq:
@@ -187,15 +217,15 @@ def create_child_sequence(
     return NucleotideSequence(
         id=str(uuid.uuid4()),
         name=name,
-        description=None,
+        description=parent.description if parent else None,
         sequence=sequence,
-        sequence_type="dna",
+        sequence_type=normalize_sequence_type(sequence_type or (parent.sequence_type if parent else None), sequence),
         is_circular=circular,
         length=len(sequence),
         features=[],
         primers=[],
         organism=parent.organism if parent else None,
-        accession=None,
+        accession=parent.accession if parent else None,
         source_file=None,
         gc_content=calc_gc(sequence),
         parent_id=parent_id,
@@ -213,7 +243,16 @@ async def digest(
     parent = await resolve_sequence(request, session)
     enzymes = [DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index) for e in request.enzymes]
     fragments = digest_sequence(parent.sequence, enzymes, circular=parent.is_circular)
-    fragment_payload = [DigestFragmentResponse(sequence=f.sequence, start=f.start, end=f.end) for f in fragments]
+    fragment_payload = [
+        DigestFragmentResponse(
+            sequence=f.sequence,
+            start=f.start,
+            end=f.end,
+            length=len(f.sequence),
+            wraps_origin=f.start >= f.end,
+        )
+        for f in fragments
+    ]
 
     if not request.save:
         return MolbioOperationResponse(
@@ -246,14 +285,31 @@ async def pcr(
     session: AsyncSession = Depends(get_session)
 ):
     parent = await resolve_sequence(request, session)
-    product = pcr_product(parent.sequence, request.primer_fwd, request.primer_rev)
+    try:
+        product = pcr_product(
+            parent.sequence,
+            request.primer_fwd,
+            request.primer_rev,
+            circular=parent.is_circular,
+            sequence_type=parent.sequence_type or "dna",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    product_payload = PCRProductResponse(
+        sequence=product.sequence,
+        start=product.start,
+        end=product.end,
+        length=product.length,
+        wraps_origin=product.wraps_origin,
+    )
     if not request.save:
-        return MolbioOperationResponse(message="PCR complete")
+        return MolbioOperationResponse(product=product_payload, message="PCR complete")
 
     new_name = request.new_name or f"{parent.name}_PCR"
     seq_obj = create_child_sequence(
         parent=parent if request.sequence_id else None,
-        sequence=product,
+        sequence=product.sequence,
         name=new_name,
         circular=False,
         operation="pcr",
@@ -262,7 +318,7 @@ async def pcr(
     session.add(seq_obj)
     await session.commit()
     await session.refresh(seq_obj)
-    return MolbioOperationResponse(sequence=seq_obj, message="PCR complete")
+    return MolbioOperationResponse(sequence=seq_obj, product=product_payload, message="PCR complete")
 
 
 @router.post("/ligate", response_model=MolbioOperationResponse)
@@ -270,30 +326,13 @@ async def ligate(
     request: LigationRequest,
     session: AsyncSession = Depends(get_session)
 ):
-    parent = None
-    if request.parent_id:
-        result = await session.execute(
-            select(NucleotideSequence).where(NucleotideSequence.id == request.parent_id)
-        )
-        parent = result.scalar_one_or_none()
-
-    ligated = ligate_fragments(request.fragments, circular=request.circular)
-    if not request.save:
-        return MolbioOperationResponse(message="Ligation complete")
-
-    new_name = request.new_name or "Ligation_Product"
-    seq_obj = create_child_sequence(
-        parent=parent,
-        sequence=ligated,
-        name=new_name,
-        circular=request.circular,
-        operation="ligate",
-        operation_params={"fragment_count": len(request.fragments)},
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Ligation is disabled because the previous implementation used simplified fragment concatenation "
+            "without end-compatibility validation. Re-enable only after robust ligation logic is implemented."
+        ),
     )
-    session.add(seq_obj)
-    await session.commit()
-    await session.refresh(seq_obj)
-    return MolbioOperationResponse(sequence=seq_obj, message="Ligation complete")
 
 
 @router.post("/mutagenesis", response_model=MolbioOperationResponse)
@@ -305,7 +344,10 @@ async def mutagenesis(
     mutations = [
         {"pos": m.pos, "from": m.from_base, "to": m.to} for m in request.mutations
     ]
-    mutated = apply_mutations(parent.sequence, mutations)
+    try:
+        mutated = apply_mutations(parent.sequence, mutations)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not request.save:
         return MolbioOperationResponse(message="Mutagenesis complete")
 
@@ -329,30 +371,13 @@ async def gibson(
     request: GibsonRequest,
     session: AsyncSession = Depends(get_session)
 ):
-    parent = None
-    if request.parent_id:
-        result = await session.execute(
-            select(NucleotideSequence).where(NucleotideSequence.id == request.parent_id)
-        )
-        parent = result.scalar_one_or_none()
-
-    assembled = gibson_assembly(request.fragments, overlap_length=request.overlap_length)
-    if not request.save:
-        return MolbioOperationResponse(message="Gibson assembly complete")
-
-    new_name = request.new_name or "Gibson_Assembly"
-    seq_obj = create_child_sequence(
-        parent=parent,
-        sequence=assembled,
-        name=new_name,
-        circular=request.circular,
-        operation="gibson",
-        operation_params={"overlap_length": request.overlap_length, "fragment_count": len(request.fragments)},
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Gibson assembly is disabled because the previous implementation only accepted exact overlap-string matches "
+            "and did not perform robust assembly validation."
+        ),
     )
-    session.add(seq_obj)
-    await session.commit()
-    await session.refresh(seq_obj)
-    return MolbioOperationResponse(sequence=seq_obj, message="Gibson assembly complete")
 
 
 @router.post("/golden-gate", response_model=MolbioOperationResponse)
@@ -360,31 +385,13 @@ async def golden_gate(
     request: GoldenGateRequest,
     session: AsyncSession = Depends(get_session)
 ):
-    parent = None
-    if request.parent_id:
-        result = await session.execute(
-            select(NucleotideSequence).where(NucleotideSequence.id == request.parent_id)
-        )
-        parent = result.scalar_one_or_none()
-
-    enzymes = [DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index) for e in request.enzymes]
-    assembled = golden_gate_assembly(request.fragments, enzymes)
-    if not request.save:
-        return MolbioOperationResponse(message="Golden Gate assembly complete")
-
-    new_name = request.new_name or "GoldenGate_Assembly"
-    seq_obj = create_child_sequence(
-        parent=parent,
-        sequence=assembled,
-        name=new_name,
-        circular=request.circular,
-        operation="golden_gate",
-        operation_params={"enzymes": [e.dict() for e in request.enzymes], "fragment_count": len(request.fragments)},
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Golden Gate assembly is disabled because the previous implementation removed recognition sites and concatenated fragments "
+            "without robust overhang validation."
+        ),
     )
-    session.add(seq_obj)
-    await session.commit()
-    await session.refresh(seq_obj)
-    return MolbioOperationResponse(sequence=seq_obj, message="Golden Gate assembly complete")
 
 
 # ============================================================================
@@ -497,6 +504,12 @@ async def auto_annotate(request: AutoAnnotateRequest):
             raise HTTPException(status_code=504, detail="pLannotate timed out")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"pLannotate execution failed: {str(e)}")
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            detail = stderr or stdout or f"pLannotate exited with status {result.returncode}"
+            raise HTTPException(status_code=500, detail=detail[:1000])
         
         # Find and parse CSV output
         csv_files = [f for f in os.listdir(output_dir) if f.endswith("_pLann.csv")]
@@ -559,7 +572,7 @@ def calculate_primer_tm(sequence: str) -> float:
         return 0.0
     upper = sequence.upper()
     a = upper.count('A')
-    t = upper.count('T')
+    t = upper.count('T') + upper.count('U')
     g = upper.count('G')
     c = upper.count('C')
     

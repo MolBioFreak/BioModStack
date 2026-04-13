@@ -12,6 +12,7 @@ from migrations.add_antibody_fields import run_migration as migrate_antibody_fie
 from migrations.add_antibody_artifact_contract import migrate as migrate_antibody_artifact_contract
 from migrations.add_cdr_length_columns import migrate as migrate_cdr_lengths
 from migrations.add_rfd_rog import migrate as migrate_rfd_rog
+from migrations.add_saved_selection_sets import migrate as migrate_saved_selection_sets
 from migrations.add_sequence_provenance import migrate as migrate_sequence_provenance
 from run_migration import migrate as migrate_stage_tracking
 
@@ -31,6 +32,7 @@ MIGRATIONS: List[Migration] = [
     Migration(5, "add_sequence_provenance", migrate_sequence_provenance),
     Migration(6, "add_stage_tracking", migrate_stage_tracking),
     Migration(7, "add_antibody_artifact_contract", migrate_antibody_artifact_contract),
+    Migration(8, "add_saved_selection_sets", migrate_saved_selection_sets),
 ]
 
 

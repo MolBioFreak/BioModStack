@@ -2,31 +2,87 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 
-DNA_COMPLEMENT = str.maketrans("ATCGNatcgn", "TAGCNtagcn")
+IUPAC_BASES: Dict[str, set[str]] = {
+    "A": {"A"},
+    "C": {"C"},
+    "G": {"G"},
+    "T": {"T"},
+    "U": {"T"},
+    "R": {"A", "G"},
+    "Y": {"C", "T"},
+    "S": {"G", "C"},
+    "W": {"A", "T"},
+    "K": {"G", "T"},
+    "M": {"A", "C"},
+    "B": {"C", "G", "T"},
+    "D": {"A", "G", "T"},
+    "H": {"A", "C", "T"},
+    "V": {"A", "C", "G"},
+    "N": {"A", "C", "G", "T"},
+}
+
+IUPAC_COMPLEMENT = str.maketrans(
+    "ACGTRYSWKMBDHVNUacgtryswkmbdhvnu",
+    "TGCAYRSWMKVHDBNAtgcayrswmkvhdbna",
+)
+
+RNA_IUPAC_COMPLEMENT = str.maketrans(
+    "ACGTRYSWKMBDHVNUacgtryswkmbdhvnu",
+    "UGCAYRSWMKVHDBNAugcayrswmkvhdbna",
+)
 
 
 def clean_sequence(seq: str) -> str:
-    return "".join(c for c in seq.upper().replace(" ", "").replace("\n", "").replace("\r", "") if c in "ATCGN")
+    """Normalize sequence text while preserving valid IUPAC ambiguity codes."""
+    return "".join(
+        c
+        for c in seq.upper().replace(" ", "").replace("\n", "").replace("\r", "")
+        if c in IUPAC_BASES
+    )
 
 
-def reverse_complement(seq: str) -> str:
-    return clean_sequence(seq).translate(DNA_COMPLEMENT)[::-1]
+def reverse_complement(seq: str, sequence_type: str = "dna") -> str:
+    complement = RNA_IUPAC_COMPLEMENT if sequence_type == "rna" else IUPAC_COMPLEMENT
+    return clean_sequence(seq).translate(complement)[::-1]
 
 
-def find_all(seq: str, sub: str) -> List[int]:
-    """Return all start indices of substring occurrences (including overlaps)."""
-    indices: List[int] = []
-    start = 0
-    while True:
-        idx = seq.find(sub, start)
-        if idx == -1:
-            break
-        indices.append(idx)
-        start = idx + 1
-    return indices
+def _bases_overlap(template_base: str, pattern_base: str) -> bool:
+    template_set = IUPAC_BASES.get(template_base, {template_base})
+    pattern_set = IUPAC_BASES.get(pattern_base, {pattern_base})
+    return bool(template_set.intersection(pattern_set))
+
+
+def _matches_pattern(sequence: str, pattern: str, start: int) -> bool:
+    return all(
+        _bases_overlap(sequence[start + idx], pattern_base)
+        for idx, pattern_base in enumerate(pattern)
+    )
+
+
+def find_pattern_positions(sequence: str, pattern: str, circular: bool = False) -> List[int]:
+    """Return all pattern start indices, including IUPAC-aware circular matches."""
+    seq = clean_sequence(sequence)
+    pat = clean_sequence(pattern)
+    if not seq or not pat:
+        return []
+    if len(pat) > len(seq):
+        return []
+
+    if circular:
+        search_space = seq + seq[: len(pat) - 1]
+        max_start = len(seq)
+    else:
+        search_space = seq
+        max_start = len(seq) - len(pat) + 1
+
+    return [
+        start
+        for start in range(max_start)
+        if _matches_pattern(search_space, pat, start)
+    ]
 
 
 @dataclass
@@ -43,6 +99,55 @@ class DigestFragment:
     end: int
 
 
+@dataclass
+class PCRProductResult:
+    sequence: str
+    start: int
+    end: int
+    length: int
+    wraps_origin: bool = False
+
+
+@dataclass
+class PrimerBinding:
+    start: int
+    end: int
+    anneal_length: int
+    overhang_length: int
+
+
+def resolve_primer_binding_sites(
+    template: str,
+    primer: str,
+    reverse: bool = False,
+    circular: bool = False,
+    sequence_type: str = "dna",
+    min_anneal_length: int = 8,
+) -> List[PrimerBinding]:
+    seq = clean_sequence(template)
+    primer_seq = clean_sequence(primer)
+    if not seq or not primer_seq:
+        return []
+
+    minimum = max(1, min(len(primer_seq), min_anneal_length))
+    for anneal_length in range(len(primer_seq), minimum - 1, -1):
+        anneal_sequence = primer_seq[-anneal_length:]
+        query = reverse_complement(anneal_sequence, sequence_type) if reverse else anneal_sequence
+        positions = find_pattern_positions(seq, query, circular=circular)
+        if positions:
+            return [
+                PrimerBinding(
+                    start=position,
+                    end=position + anneal_length,
+                    anneal_length=anneal_length,
+                    overhang_length=len(primer_seq) - anneal_length,
+                )
+                for position in positions
+            ]
+
+    return []
+
+
 def digest_sequence(sequence: str, enzymes: List[DigestEnzyme], circular: bool = False) -> List[DigestFragment]:
     seq = clean_sequence(sequence)
     if not seq:
@@ -54,10 +159,14 @@ def digest_sequence(sequence: str, enzymes: List[DigestEnzyme], circular: bool =
         if not site:
             continue
         cut_offset = enzyme.cut_index if enzyme.cut_index is not None else max(1, len(site) // 2)
-        for site_start in find_all(seq, site):
-            cut_pos = site_start + cut_offset
-            if 0 <= cut_pos <= len(seq):
-                cut_positions.append(cut_pos)
+        patterns = {site, reverse_complement(site)}
+        for pattern in patterns:
+            for site_start in find_pattern_positions(seq, pattern, circular=circular):
+                cut_pos = site_start + cut_offset
+                if circular:
+                    cut_positions.append(cut_pos % len(seq))
+                elif 0 <= cut_pos <= len(seq):
+                    cut_positions.append(cut_pos)
 
     cut_positions = sorted(set(cut_positions))
     if not cut_positions:
@@ -88,27 +197,97 @@ def digest_sequence(sequence: str, enzymes: List[DigestEnzyme], circular: bool =
     return fragments
 
 
-def pcr_product(template: str, primer_fwd: str, primer_rev: str) -> str:
+def pcr_product(
+    template: str,
+    primer_fwd: str,
+    primer_rev: str,
+    circular: bool = False,
+    sequence_type: str = "dna",
+) -> PCRProductResult:
     seq = clean_sequence(template)
     fwd = clean_sequence(primer_fwd)
     rev = clean_sequence(primer_rev)
     if not (seq and fwd and rev):
         raise ValueError("Template and primers must be non-empty.")
 
-    fwd_start = seq.find(fwd)
-    if fwd_start == -1:
+    fwd_sites = resolve_primer_binding_sites(
+        seq,
+        fwd,
+        reverse=False,
+        circular=circular,
+        sequence_type=sequence_type,
+    )
+    if not fwd_sites:
         raise ValueError("Forward primer not found in template.")
 
-    rev_rc = reverse_complement(rev)
-    rev_start = seq.find(rev_rc)
-    if rev_start == -1:
+    rev_sites = resolve_primer_binding_sites(
+        seq,
+        rev,
+        reverse=True,
+        circular=circular,
+        sequence_type=sequence_type,
+    )
+    if not rev_sites:
         raise ValueError("Reverse primer binding site not found in template.")
 
-    if rev_start < fwd_start:
+    best_product: Optional[PCRProductResult] = None
+    template_length = len(seq)
+    fwd_overhang_prefix = lambda binding: fwd[: binding.overhang_length]
+    rev_overhang_suffix = lambda binding: reverse_complement(rev[: binding.overhang_length], sequence_type)
+
+    for fwd_binding in fwd_sites:
+        for rev_binding in rev_sites:
+            fwd_start = fwd_binding.start
+            rev_end = rev_binding.end
+
+            if circular:
+                template_span = (rev_end - fwd_start) % template_length
+                if template_span == 0:
+                    template_span = template_length
+                wraps_origin = fwd_start + template_span > template_length
+                wrapped_end = (fwd_start + template_span) % template_length
+                if wraps_origin:
+                    template_segment = seq[fwd_start:] + seq[:wrapped_end]
+                else:
+                    template_segment = seq[fwd_start:fwd_start + template_span]
+                product_sequence = (
+                    fwd_overhang_prefix(fwd_binding)
+                    + template_segment
+                    + rev_overhang_suffix(rev_binding)
+                )
+                candidate = PCRProductResult(
+                    sequence=product_sequence,
+                    start=fwd_start,
+                    end=wrapped_end,
+                    length=len(product_sequence),
+                    wraps_origin=wraps_origin,
+                )
+            else:
+                if rev_end <= fwd_start:
+                    continue
+                template_segment = seq[fwd_start:rev_end]
+                product_sequence = (
+                    fwd_overhang_prefix(fwd_binding)
+                    + template_segment
+                    + rev_overhang_suffix(rev_binding)
+                )
+                candidate = PCRProductResult(
+                    sequence=product_sequence,
+                    start=fwd_start,
+                    end=rev_end,
+                    length=len(product_sequence),
+                    wraps_origin=False,
+                )
+
+            if best_product is None or candidate.length < best_product.length:
+                best_product = candidate
+
+    if best_product is None:
+        if circular:
+            raise ValueError("Unable to construct a circular-template PCR product from the primer pair.")
         raise ValueError("Reverse primer site occurs before forward primer (linear PCR expected).")
 
-    product_end = rev_start + len(rev_rc)
-    return seq[fwd_start:product_end]
+    return best_product
 
 
 def ligate_fragments(fragments: List[str], circular: bool = True) -> str:
