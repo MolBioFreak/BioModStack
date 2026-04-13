@@ -21,6 +21,7 @@ dependencies = [
     "biotite>=0.42.0",  # Structure analysis (PDB/CIF parsing, RMSD, SSE, etc.)
     "biopython>=1.84",
     "aiohttp>=3.13.3",
+    "viennarna>=2.7.0",
 ]
 
 [dependency-groups]

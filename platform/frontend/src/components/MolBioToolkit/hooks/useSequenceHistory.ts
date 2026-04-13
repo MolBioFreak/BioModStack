@@ -87,11 +87,15 @@ function primerEquals(a: NonNullable<SequenceData['primers']>[number], b: NonNul
         a.id === b.id &&
         a.name === b.name &&
         a.sequence === b.sequence &&
+        a.sequenceType === b.sequenceType &&
         a.start === b.start &&
         a.end === b.end &&
         a.strand === b.strand &&
         a.tm === b.tm &&
-        a.gc_percent === b.gc_percent
+        a.gc_percent === b.gc_percent &&
+        a.tm_algorithm === b.tm_algorithm &&
+        a.tm_salt_correction === b.tm_salt_correction &&
+        JSON.stringify(a.tm_settings ?? null) === JSON.stringify(b.tm_settings ?? null)
     );
 }
 
@@ -102,6 +106,34 @@ function translationEquals(a: NonNullable<SequenceData['translations']>[number],
         a.strand === b.strand &&
         a.frame === b.frame
     );
+}
+
+function analysisTrackEquals(a: NonNullable<SequenceData['analysisTracks']>[number], b: NonNullable<SequenceData['analysisTracks']>[number]): boolean {
+    if (
+        a.id !== b.id ||
+        a.name !== b.name ||
+        a.kind !== b.kind ||
+        a.description !== b.description ||
+        a.color !== b.color ||
+        a.sourceFormat !== b.sourceFormat ||
+        a.sourceName !== b.sourceName ||
+        a.sourceUrl !== b.sourceUrl ||
+        a.normalization !== b.normalization ||
+        a.minValue !== b.minValue ||
+        a.maxValue !== b.maxValue ||
+        a.createdAt !== b.createdAt
+    ) {
+        return false;
+    }
+
+    if (a.values.length !== b.values.length) return false;
+    for (let index = 0; index < a.values.length; index += 1) {
+        if (a.values[index] !== b.values[index]) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 function sequenceDataEquals(a: SequenceData, b: SequenceData): boolean {
@@ -137,6 +169,15 @@ function sequenceDataEquals(a: SequenceData, b: SequenceData): boolean {
     if (aTranslations.length !== bTranslations.length) return false;
     for (let index = 0; index < aTranslations.length; index += 1) {
         if (!translationEquals(aTranslations[index], bTranslations[index])) {
+            return false;
+        }
+    }
+
+    const aTracks = a.analysisTracks || [];
+    const bTracks = b.analysisTracks || [];
+    if (aTracks.length !== bTracks.length) return false;
+    for (let index = 0; index < aTracks.length; index += 1) {
+        if (!analysisTrackEquals(aTracks[index], bTracks[index])) {
             return false;
         }
     }

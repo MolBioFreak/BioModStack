@@ -587,7 +587,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         (initialValues?.boltzgen_checkpoint_mode as BoltzgenCheckpointMode) || 'both'
     );
     const [boltzgenSkipInverseFolding, setBoltzgenSkipInverseFolding] = useState(Boolean(initialValues?.boltzgen_skip_inverse_folding));
-    const [boltzgenInverseFoldAvoid, setBoltzgenInverseFoldAvoid] = useState(initialValues?.boltzgen_inverse_fold_avoid || '');
+    const [boltzgenInverseFoldAvoid, setBoltzgenInverseFoldAvoid] = useState<string>(initialValues?.boltzgen_inverse_fold_avoid || '');
     const [boltzgenInverseFoldNumSequences, setBoltzgenInverseFoldNumSequences] = useState(initialValues?.boltzgen_inverse_fold_num_sequences || 1);
     const [boltzgenAvoidCysteine, setBoltzgenAvoidCysteine] = useState(
         initialValues?.boltzgen_avoid_cysteine ?? true
