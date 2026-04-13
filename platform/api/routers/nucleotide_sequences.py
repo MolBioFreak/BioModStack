@@ -40,11 +40,15 @@ class PrimerSchema(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str
     sequence: str
+    sequence_type: Optional[str] = None
     start: int
     end: int
     strand: int = 1
     tm: Optional[float] = None
     gc_percent: Optional[float] = None
+    tm_algorithm: Optional[str] = None
+    tm_salt_correction: Optional[str] = None
+    tm_settings: Optional[dict] = None
 
 
 class NucleotideSequenceCreate(BaseModel):

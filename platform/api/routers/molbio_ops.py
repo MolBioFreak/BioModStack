@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
 import uuid
+from Bio.SeqUtils import MeltingTemp as mt
 
 from database import NucleotideSequence, get_session
 from services.molbio_ops import (
@@ -565,22 +566,236 @@ async def auto_annotate(request: AutoAnnotateRequest):
 
 from database import Primer
 
+TM_ALGORITHM_DEFS = {
+    "wallace": {
+        "label": "Wallace rule",
+        "description": "Rule-of-thumb 2/4 formula for short oligos.",
+        "kind": "wallace",
+        "sequence_types": ["dna", "rna"],
+    },
+    "gc_empirical": {
+        "label": "GC empirical",
+        "description": "Empirical GC-based formula with selectable salt correction.",
+        "kind": "gc",
+        "sequence_types": ["dna", "rna"],
+        "gc_valueset": 7,
+    },
+    "nn_breslauer_1986": {
+        "label": "Nearest-neighbor: Breslauer 1986",
+        "description": "Legacy DNA/DNA nearest-neighbor thermodynamic table.",
+        "kind": "nn",
+        "sequence_types": ["dna"],
+        "nn_table_name": "DNA_NN1",
+        "polymer_pairing": "dna_dna",
+    },
+    "nn_sugimoto_1996": {
+        "label": "Nearest-neighbor: Sugimoto 1996",
+        "description": "DNA/DNA nearest-neighbor parameters from Sugimoto et al.",
+        "kind": "nn",
+        "sequence_types": ["dna"],
+        "nn_table_name": "DNA_NN2",
+        "polymer_pairing": "dna_dna",
+    },
+    "nn_allawi_santalucia_1997": {
+        "label": "Nearest-neighbor: Allawi & SantaLucia 1997",
+        "description": "DNA/DNA nearest-neighbor table used as Biopython's default NN parameter set.",
+        "kind": "nn",
+        "sequence_types": ["dna"],
+        "nn_table_name": "DNA_NN3",
+        "polymer_pairing": "dna_dna",
+    },
+    "nn_santalucia_hicks_2004": {
+        "label": "Nearest-neighbor: SantaLucia & Hicks 2004",
+        "description": "Modern DNA/DNA nearest-neighbor parameter refinement.",
+        "kind": "nn",
+        "sequence_types": ["dna"],
+        "nn_table_name": "DNA_NN4",
+        "polymer_pairing": "dna_dna",
+    },
+    "rna_nn_freier_1986": {
+        "label": "RNA/RNA NN: Freier 1986",
+        "description": "Legacy RNA/RNA nearest-neighbor thermodynamic table.",
+        "kind": "nn",
+        "sequence_types": ["rna"],
+        "nn_table_name": "RNA_NN1",
+        "polymer_pairing": "rna_rna",
+    },
+    "rna_nn_xia_1998": {
+        "label": "RNA/RNA NN: Xia 1998",
+        "description": "RNA/RNA nearest-neighbor parameters from Xia et al.",
+        "kind": "nn",
+        "sequence_types": ["rna"],
+        "nn_table_name": "RNA_NN2",
+        "polymer_pairing": "rna_rna",
+    },
+    "rna_nn_chen_2012": {
+        "label": "RNA/RNA NN: Chen 2012",
+        "description": "Modern RNA/RNA nearest-neighbor parameter set.",
+        "kind": "nn",
+        "sequence_types": ["rna"],
+        "nn_table_name": "RNA_NN3",
+        "polymer_pairing": "rna_rna",
+    },
+    "rna_dna_sugimoto_1995": {
+        "label": "RNA/DNA hybrid NN: Sugimoto 1995",
+        "description": "RNA/DNA hybrid nearest-neighbor table. Sequence must be RNA.",
+        "kind": "nn",
+        "sequence_types": ["rna"],
+        "nn_table_name": "R_DNA_NN1",
+        "polymer_pairing": "rna_dna_hybrid",
+    },
+}
 
-def calculate_primer_tm(sequence: str) -> float:
-    """Calculate Tm using Wallace rule / nearest neighbor approximation."""
-    if not sequence or len(sequence) == 0:
-        return 0.0
-    upper = sequence.upper()
-    a = upper.count('A')
-    t = upper.count('T') + upper.count('U')
-    g = upper.count('G')
-    c = upper.count('C')
-    
-    if len(sequence) < 14:
-        # Wallace rule for short oligos
-        return float(2 * (a + t) + 4 * (g + c))
-    # Modified nearest neighbor approximation
-    return 64.9 + 41 * (g + c - 16.4) / len(sequence)
+TM_SALT_CORRECTION_DEFS = {
+    "none": {
+        "label": "None",
+        "description": "No salt correction.",
+        "method": 0,
+    },
+    "schildkraut_lifson_1965": {
+        "label": "Schildkraut-Lifson 1965",
+        "description": "Legacy monovalent salt correction.",
+        "method": 1,
+    },
+    "wetmur_1991": {
+        "label": "Wetmur 1991",
+        "description": "Monovalent salt correction using the Wetmur formulation.",
+        "method": 2,
+    },
+    "santalucia_1996": {
+        "label": "SantaLucia 1996",
+        "description": "Monovalent salt correction from SantaLucia et al. 1996.",
+        "method": 3,
+    },
+    "santalucia_1998_tm": {
+        "label": "SantaLucia 1998 (Tm)",
+        "description": "SantaLucia 1998 salt correction applied directly to Tm.",
+        "method": 4,
+    },
+    "santalucia_1998_entropy": {
+        "label": "SantaLucia 1998 (entropy)",
+        "description": "SantaLucia 1998 entropy correction. Good general-purpose PCR default.",
+        "method": 5,
+    },
+    "owczarzy_2004": {
+        "label": "Owczarzy 2004",
+        "description": "GC-aware monovalent salt correction.",
+        "method": 6,
+    },
+    "owczarzy_2008": {
+        "label": "Owczarzy 2008",
+        "description": "Mg2+/dNTP-aware salt correction for mixed monovalent/divalent PCR conditions.",
+        "method": 7,
+    },
+}
+
+DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE = {
+    "dna": {
+        "algorithm": "nn_santalucia_hicks_2004",
+        "salt_correction": "owczarzy_2008",
+        "primer_concentration_nM": 250.0,
+        "template_concentration_nM": 0.0,
+        "na_mM": 50.0,
+        "k_mM": 0.0,
+        "tris_mM": 0.0,
+        "mg_mM": 1.5,
+        "dntps_mM": 0.6,
+        "dmso_percent": 0.0,
+        "formamide_percent": 0.0,
+        "self_complementary": False,
+    },
+    "rna": {
+        "algorithm": "rna_nn_chen_2012",
+        "salt_correction": "owczarzy_2008",
+        "primer_concentration_nM": 250.0,
+        "template_concentration_nM": 0.0,
+        "na_mM": 50.0,
+        "k_mM": 0.0,
+        "tris_mM": 0.0,
+        "mg_mM": 1.5,
+        "dntps_mM": 0.6,
+        "dmso_percent": 0.0,
+        "formamide_percent": 0.0,
+        "self_complementary": False,
+    },
+}
+
+
+class PrimerTmSettings(BaseModel):
+    algorithm: str = "nn_santalucia_hicks_2004"
+    salt_correction: str = "owczarzy_2008"
+    primer_concentration_nM: float = 250.0
+    template_concentration_nM: float = 0.0
+    na_mM: float = 50.0
+    k_mM: float = 0.0
+    tris_mM: float = 0.0
+    mg_mM: float = 1.5
+    dntps_mM: float = 0.6
+    dmso_percent: float = 0.0
+    formamide_percent: float = 0.0
+    self_complementary: bool = False
+
+
+class PrimerTmInput(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    sequence: str
+    sequence_type: Optional[str] = None
+    complement_sequence: Optional[str] = None
+    shift: int = 0
+
+
+class PrimerTmResult(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    sequence: str
+    sequence_type: str
+    length: int
+    gc_percent: float
+    tm: Optional[float]
+    algorithm: str
+    algorithm_label: str
+    salt_correction: str
+    salt_correction_label: str
+    polymer_pairing: str
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PrimerTmBatchRequest(BaseModel):
+    primers: List[PrimerTmInput]
+    settings: Optional[PrimerTmSettings] = None
+
+
+class PrimerTmOption(BaseModel):
+    id: str
+    label: str
+    description: str
+    sequence_types: List[str]
+    polymer_pairing: Optional[str] = None
+
+
+class PrimerTmSaltCorrectionOption(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
+class PrimerTmOptionsResponse(BaseModel):
+    algorithms: List[PrimerTmOption]
+    salt_corrections: List[PrimerTmSaltCorrectionOption]
+    defaults: dict[str, PrimerTmSettings]
+
+
+def clean_primer_sequence(sequence: str) -> str:
+    """Normalize primer sequence text."""
+    return (sequence or "").upper().replace(" ", "").replace("\n", "").replace("\r", "")
+
+
+def infer_primer_sequence_type(sequence: str) -> str:
+    upper = clean_primer_sequence(sequence)
+    if "U" in upper and "T" not in upper:
+        return "rna"
+    return "dna"
 
 
 def calculate_gc_percent(sequence: str) -> float:
@@ -592,10 +807,193 @@ def calculate_gc_percent(sequence: str) -> float:
     return round((gc / len(sequence)) * 100, 1)
 
 
+def default_tm_settings_for_sequence_type(sequence_type: str) -> PrimerTmSettings:
+    defaults = DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE.get(sequence_type, DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE["dna"])
+    return PrimerTmSettings(**defaults)
+
+
+def calculate_primer_tm_result(
+    sequence: str,
+    sequence_type: Optional[str] = None,
+    settings: Optional[PrimerTmSettings] = None,
+    complement_sequence: Optional[str] = None,
+    shift: int = 0,
+) -> PrimerTmResult:
+    cleaned = clean_primer_sequence(sequence)
+    resolved_sequence_type = sequence_type or infer_primer_sequence_type(cleaned)
+    resolved_settings = settings or default_tm_settings_for_sequence_type(resolved_sequence_type)
+    gc_percent = calculate_gc_percent(cleaned)
+    warnings: List[str] = []
+
+    if not cleaned:
+        return PrimerTmResult(
+            sequence=cleaned,
+            sequence_type=resolved_sequence_type,
+            length=0,
+            gc_percent=0.0,
+            tm=None,
+            algorithm=resolved_settings.algorithm,
+            algorithm_label=resolved_settings.algorithm,
+            salt_correction=resolved_settings.salt_correction,
+            salt_correction_label=resolved_settings.salt_correction,
+            polymer_pairing="unknown",
+            warnings=["Primer sequence is empty."],
+        )
+
+    if not all(base in "ATCGUMRWSYKVHDBN" for base in cleaned):
+        return PrimerTmResult(
+            sequence=cleaned,
+            sequence_type=resolved_sequence_type,
+            length=len(cleaned),
+            gc_percent=gc_percent,
+            tm=None,
+            algorithm=resolved_settings.algorithm,
+            algorithm_label=resolved_settings.algorithm,
+            salt_correction=resolved_settings.salt_correction,
+            salt_correction_label=resolved_settings.salt_correction,
+            polymer_pairing="unknown",
+            warnings=["Primer contains invalid nucleotide characters."],
+        )
+
+    algorithm_def = TM_ALGORITHM_DEFS.get(resolved_settings.algorithm)
+    salt_def = TM_SALT_CORRECTION_DEFS.get(resolved_settings.salt_correction)
+
+    if algorithm_def is None:
+        return PrimerTmResult(
+            sequence=cleaned,
+            sequence_type=resolved_sequence_type,
+            length=len(cleaned),
+            gc_percent=gc_percent,
+            tm=None,
+            algorithm=resolved_settings.algorithm,
+            algorithm_label=resolved_settings.algorithm,
+            salt_correction=resolved_settings.salt_correction,
+            salt_correction_label=resolved_settings.salt_correction,
+            polymer_pairing="unknown",
+            warnings=[f"Unknown Tm algorithm '{resolved_settings.algorithm}'."],
+        )
+
+    if salt_def is None:
+        return PrimerTmResult(
+            sequence=cleaned,
+            sequence_type=resolved_sequence_type,
+            length=len(cleaned),
+            gc_percent=gc_percent,
+            tm=None,
+            algorithm=resolved_settings.algorithm,
+            algorithm_label=algorithm_def["label"],
+            salt_correction=resolved_settings.salt_correction,
+            salt_correction_label=resolved_settings.salt_correction,
+            polymer_pairing=algorithm_def.get("polymer_pairing", resolved_sequence_type),
+            warnings=[f"Unknown salt correction '{resolved_settings.salt_correction}'."],
+        )
+
+    if resolved_sequence_type not in algorithm_def["sequence_types"]:
+        return PrimerTmResult(
+            sequence=cleaned,
+            sequence_type=resolved_sequence_type,
+            length=len(cleaned),
+            gc_percent=gc_percent,
+            tm=None,
+            algorithm=resolved_settings.algorithm,
+            algorithm_label=algorithm_def["label"],
+            salt_correction=resolved_settings.salt_correction,
+            salt_correction_label=salt_def["label"],
+            polymer_pairing=algorithm_def.get("polymer_pairing", resolved_sequence_type),
+            warnings=[f"Algorithm '{algorithm_def['label']}' does not support {resolved_sequence_type.upper()} primers."],
+        )
+
+    tm_value: Optional[float] = None
+    try:
+        if algorithm_def["kind"] == "wallace":
+            tm_value = float(mt.Tm_Wallace(cleaned, strict=True))
+        elif algorithm_def["kind"] == "gc":
+            tm_value = float(mt.Tm_GC(
+                cleaned,
+                strict=True,
+                valueset=algorithm_def.get("gc_valueset", 7),
+                Na=resolved_settings.na_mM,
+                K=resolved_settings.k_mM,
+                Tris=resolved_settings.tris_mM,
+                Mg=resolved_settings.mg_mM,
+                dNTPs=resolved_settings.dntps_mM,
+                saltcorr=salt_def["method"],
+            ))
+        else:
+            tm_kwargs = {
+                "nn_table": getattr(mt, algorithm_def["nn_table_name"]),
+                "dnac1": resolved_settings.primer_concentration_nM,
+                "dnac2": resolved_settings.template_concentration_nM,
+                "selfcomp": resolved_settings.self_complementary,
+                "Na": resolved_settings.na_mM,
+                "K": resolved_settings.k_mM,
+                "Tris": resolved_settings.tris_mM,
+                "Mg": resolved_settings.mg_mM,
+                "dNTPs": resolved_settings.dntps_mM,
+                "saltcorr": salt_def["method"],
+                "strict": True,
+            }
+            if complement_sequence:
+                tm_kwargs["c_seq"] = clean_primer_sequence(complement_sequence)
+                tm_kwargs["shift"] = shift
+            tm_value = float(mt.Tm_NN(cleaned, **tm_kwargs))
+
+        if resolved_settings.dmso_percent or resolved_settings.formamide_percent:
+            warnings.append("DMSO/formamide corrections are approximate.")
+            tm_value = float(mt.chem_correction(
+                tm_value,
+                DMSO=resolved_settings.dmso_percent,
+                fmd=resolved_settings.formamide_percent,
+                GC=gc_percent,
+            ))
+    except Exception as exc:
+        warnings.append(str(exc))
+
+    return PrimerTmResult(
+        sequence=cleaned,
+        sequence_type=resolved_sequence_type,
+        length=len(cleaned),
+        gc_percent=gc_percent,
+        tm=round(tm_value, 2) if tm_value is not None else None,
+        algorithm=resolved_settings.algorithm,
+        algorithm_label=algorithm_def["label"],
+        salt_correction=resolved_settings.salt_correction,
+        salt_correction_label=salt_def["label"],
+        polymer_pairing=algorithm_def.get("polymer_pairing", resolved_sequence_type),
+        warnings=warnings,
+    )
+
+
+def build_primer_response(primer: Primer) -> "PrimerResponse":
+    return PrimerResponse(
+        id=primer.id,
+        name=primer.name,
+        sequence=primer.sequence,
+        sequence_type=primer.sequence_type or infer_primer_sequence_type(primer.sequence),
+        length=primer.length,
+        tm=primer.tm,
+        gc_percent=primer.gc_percent,
+        tm_algorithm=primer.tm_algorithm,
+        tm_salt_correction=primer.tm_salt_correction,
+        tm_settings=primer.tm_settings,
+        primer_type=primer.primer_type,
+        description=primer.description,
+        target_sequence_id=primer.target_sequence_id,
+        binding_start=primer.binding_start,
+        binding_end=primer.binding_end,
+        binding_strand=primer.binding_strand or 1,
+        tags=primer.tags,
+        is_favorite=primer.is_favorite,
+        created_at=primer.created_at,
+        updated_at=primer.updated_at,
+    )
+
+
 class PrimerCreate(BaseModel):
     """Request to create a new primer."""
     name: str
     sequence: str
+    sequence_type: Optional[str] = None
     primer_type: str = "general"
     description: Optional[str] = None
     target_sequence_id: Optional[str] = None
@@ -603,12 +1001,14 @@ class PrimerCreate(BaseModel):
     binding_end: Optional[int] = None
     binding_strand: int = 1
     tags: Optional[List[str]] = None
+    tm_settings: Optional[PrimerTmSettings] = None
 
 
 class PrimerUpdate(BaseModel):
     """Request to update an existing primer."""
     name: Optional[str] = None
     sequence: Optional[str] = None
+    sequence_type: Optional[str] = None
     primer_type: Optional[str] = None
     description: Optional[str] = None
     target_sequence_id: Optional[str] = None
@@ -617,6 +1017,7 @@ class PrimerUpdate(BaseModel):
     binding_strand: Optional[int] = None
     tags: Optional[List[str]] = None
     is_favorite: Optional[bool] = None
+    tm_settings: Optional[PrimerTmSettings] = None
 
 
 class PrimerResponse(BaseModel):
@@ -624,9 +1025,13 @@ class PrimerResponse(BaseModel):
     id: str
     name: str
     sequence: str
+    sequence_type: str
     length: int
     tm: Optional[float]
     gc_percent: Optional[float]
+    tm_algorithm: Optional[str]
+    tm_salt_correction: Optional[str]
+    tm_settings: Optional[dict[str, Any]]
     primer_type: str
     description: Optional[str]
     target_sequence_id: Optional[str]
@@ -637,6 +1042,55 @@ class PrimerResponse(BaseModel):
     is_favorite: bool
     created_at: datetime
     updated_at: Optional[datetime]
+
+
+@router.get("/primer-tm/options", response_model=PrimerTmOptionsResponse)
+async def primer_tm_options():
+    """Return supported Tm algorithms, salt corrections, and default settings."""
+    return PrimerTmOptionsResponse(
+        algorithms=[
+            PrimerTmOption(
+                id=option_id,
+                label=definition["label"],
+                description=definition["description"],
+                sequence_types=definition["sequence_types"],
+                polymer_pairing=definition.get("polymer_pairing"),
+            )
+            for option_id, definition in TM_ALGORITHM_DEFS.items()
+        ],
+        salt_corrections=[
+            PrimerTmSaltCorrectionOption(
+                id=option_id,
+                label=definition["label"],
+                description=definition["description"],
+            )
+            for option_id, definition in TM_SALT_CORRECTION_DEFS.items()
+        ],
+        defaults={
+            sequence_type: PrimerTmSettings(**settings)
+            for sequence_type, settings in DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE.items()
+        },
+    )
+
+
+@router.post("/primer-tm/calculate", response_model=List[PrimerTmResult])
+async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
+    """Calculate Tm for one or more primers using selectable thermodynamic models."""
+    results: List[PrimerTmResult] = []
+    for primer in request.primers:
+        resolved_sequence_type = primer.sequence_type or infer_primer_sequence_type(primer.sequence)
+        settings = request.settings or default_tm_settings_for_sequence_type(resolved_sequence_type)
+        result = calculate_primer_tm_result(
+            sequence=primer.sequence,
+            sequence_type=resolved_sequence_type,
+            settings=settings,
+            complement_sequence=primer.complement_sequence,
+            shift=primer.shift,
+        )
+        result.id = primer.id
+        result.name = primer.name
+        results.append(result)
+    return results
 
 
 @router.get("/primers", response_model=List[PrimerResponse])
@@ -668,24 +1122,7 @@ async def list_primers(
                    search_lower in p.sequence.lower() or
                    (p.description and search_lower in p.description.lower())]
     
-    return [PrimerResponse(
-        id=p.id,
-        name=p.name,
-        sequence=p.sequence,
-        length=p.length,
-        tm=p.tm,
-        gc_percent=p.gc_percent,
-        primer_type=p.primer_type,
-        description=p.description,
-        target_sequence_id=p.target_sequence_id,
-        binding_start=p.binding_start,
-        binding_end=p.binding_end,
-        binding_strand=p.binding_strand or 1,
-        tags=p.tags,
-        is_favorite=p.is_favorite,
-        created_at=p.created_at,
-        updated_at=p.updated_at
-    ) for p in primers]
+    return [build_primer_response(p) for p in primers]
 
 
 @router.post("/primers", response_model=PrimerResponse)
@@ -695,17 +1132,25 @@ async def create_primer(
 ):
     """Create a new primer in the library."""
     # Validate and clean sequence
-    sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
+    sequence = clean_primer_sequence(request.sequence)
     if not all(c in "ATCGUMRWSYKVHDBN" for c in sequence):
         raise HTTPException(status_code=400, detail="Invalid nucleotide sequence")
-    
+
+    sequence_type = request.sequence_type or infer_primer_sequence_type(sequence)
+    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(sequence_type)
+    tm_result = calculate_primer_tm_result(sequence, sequence_type=sequence_type, settings=tm_settings)
+
     primer = Primer(
         id=str(uuid.uuid4()),
         name=request.name,
         sequence=sequence,
+        sequence_type=sequence_type,
         length=len(sequence),
-        tm=calculate_primer_tm(sequence),
-        gc_percent=calculate_gc_percent(sequence),
+        tm=tm_result.tm,
+        gc_percent=tm_result.gc_percent,
+        tm_algorithm=tm_result.algorithm,
+        tm_salt_correction=tm_result.salt_correction,
+        tm_settings=tm_settings.model_dump(),
         primer_type=request.primer_type,
         description=request.description,
         target_sequence_id=request.target_sequence_id,
@@ -721,24 +1166,7 @@ async def create_primer(
     await session.commit()
     await session.refresh(primer)
     
-    return PrimerResponse(
-        id=primer.id,
-        name=primer.name,
-        sequence=primer.sequence,
-        length=primer.length,
-        tm=primer.tm,
-        gc_percent=primer.gc_percent,
-        primer_type=primer.primer_type,
-        description=primer.description,
-        target_sequence_id=primer.target_sequence_id,
-        binding_start=primer.binding_start,
-        binding_end=primer.binding_end,
-        binding_strand=primer.binding_strand or 1,
-        tags=primer.tags,
-        is_favorite=primer.is_favorite,
-        created_at=primer.created_at,
-        updated_at=primer.updated_at
-    )
+    return build_primer_response(primer)
 
 
 @router.get("/primers/{primer_id}", response_model=PrimerResponse)
@@ -753,24 +1181,7 @@ async def get_primer(
     if not primer:
         raise HTTPException(status_code=404, detail="Primer not found")
     
-    return PrimerResponse(
-        id=primer.id,
-        name=primer.name,
-        sequence=primer.sequence,
-        length=primer.length,
-        tm=primer.tm,
-        gc_percent=primer.gc_percent,
-        primer_type=primer.primer_type,
-        description=primer.description,
-        target_sequence_id=primer.target_sequence_id,
-        binding_start=primer.binding_start,
-        binding_end=primer.binding_end,
-        binding_strand=primer.binding_strand or 1,
-        tags=primer.tags,
-        is_favorite=primer.is_favorite,
-        created_at=primer.created_at,
-        updated_at=primer.updated_at
-    )
+    return build_primer_response(primer)
 
 
 @router.patch("/primers/{primer_id}", response_model=PrimerResponse)
@@ -787,14 +1198,16 @@ async def update_primer(
         raise HTTPException(status_code=404, detail="Primer not found")
     
     # Update fields if provided
+    recalculate_tm = False
     if request.name is not None:
         primer.name = request.name
     if request.sequence is not None:
-        sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
-        primer.sequence = sequence
-        primer.length = len(sequence)
-        primer.tm = calculate_primer_tm(sequence)
-        primer.gc_percent = calculate_gc_percent(sequence)
+        primer.sequence = clean_primer_sequence(request.sequence)
+        primer.length = len(primer.sequence)
+        recalculate_tm = True
+    if request.sequence_type is not None:
+        primer.sequence_type = request.sequence_type
+        recalculate_tm = True
     if request.primer_type is not None:
         primer.primer_type = request.primer_type
     if request.description is not None:
@@ -811,29 +1224,37 @@ async def update_primer(
         primer.tags = request.tags
     if request.is_favorite is not None:
         primer.is_favorite = request.is_favorite
+    if request.tm_settings is not None:
+        primer.tm_settings = request.tm_settings.model_dump()
+        recalculate_tm = True
+
+    if recalculate_tm:
+        sequence_type = primer.sequence_type or infer_primer_sequence_type(primer.sequence)
+        if not sequence_type:
+            sequence_type = infer_primer_sequence_type(primer.sequence)
+            primer.sequence_type = sequence_type
+        tm_settings = request.tm_settings or (
+            PrimerTmSettings(**primer.tm_settings)
+            if primer.tm_settings
+            else default_tm_settings_for_sequence_type(sequence_type)
+        )
+        tm_result = calculate_primer_tm_result(
+            primer.sequence,
+            sequence_type=sequence_type,
+            settings=tm_settings,
+        )
+        primer.length = len(primer.sequence)
+        primer.tm = tm_result.tm
+        primer.gc_percent = tm_result.gc_percent
+        primer.tm_algorithm = tm_result.algorithm
+        primer.tm_salt_correction = tm_result.salt_correction
+        primer.tm_settings = tm_settings.model_dump()
     
     primer.updated_at = datetime.utcnow()
     await session.commit()
     await session.refresh(primer)
     
-    return PrimerResponse(
-        id=primer.id,
-        name=primer.name,
-        sequence=primer.sequence,
-        length=primer.length,
-        tm=primer.tm,
-        gc_percent=primer.gc_percent,
-        primer_type=primer.primer_type,
-        description=primer.description,
-        target_sequence_id=primer.target_sequence_id,
-        binding_start=primer.binding_start,
-        binding_end=primer.binding_end,
-        binding_strand=primer.binding_strand or 1,
-        tags=primer.tags,
-        is_favorite=primer.is_favorite,
-        created_at=primer.created_at,
-        updated_at=primer.updated_at
-    )
+    return build_primer_response(primer)
 
 
 @router.delete("/primers/{primer_id}")
@@ -871,21 +1292,4 @@ async def toggle_primer_favorite(
     await session.commit()
     await session.refresh(primer)
     
-    return PrimerResponse(
-        id=primer.id,
-        name=primer.name,
-        sequence=primer.sequence,
-        length=primer.length,
-        tm=primer.tm,
-        gc_percent=primer.gc_percent,
-        primer_type=primer.primer_type,
-        description=primer.description,
-        target_sequence_id=primer.target_sequence_id,
-        binding_start=primer.binding_start,
-        binding_end=primer.binding_end,
-        binding_strand=primer.binding_strand or 1,
-        tags=primer.tags,
-        is_favorite=primer.is_favorite,
-        created_at=primer.created_at,
-        updated_at=primer.updated_at
-    )
+    return build_primer_response(primer)
