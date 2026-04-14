@@ -7,6 +7,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
+import { featureLength, featureSegments } from '../utils/features';
 
 interface FeaturePanelProps {
     sequenceData: SequenceData;
@@ -26,6 +27,12 @@ interface QualifierRow {
     value: string;
 }
 
+interface SegmentRow {
+    id: string;
+    start: number | '';
+    end: number | '';
+}
+
 interface FeatureDraft {
     name: string;
     type: string;
@@ -35,6 +42,27 @@ interface FeatureDraft {
     color: string;
     description: string;
     qualifiers: QualifierRow[];
+    provenance: QualifierRow[];
+    segments: SegmentRow[];
+}
+
+function selectionToDraftSegments(
+    selection: SelectionInfo,
+    sequenceData: SequenceData,
+): SegmentRow[] {
+    const rawStart = Math.max(0, Math.min(selection.start, sequenceData.sequence.length));
+    const rawEnd = Math.max(0, Math.min(selection.end, sequenceData.sequence.length));
+
+    if (!sequenceData.circular || rawStart < rawEnd) {
+        const start = Math.min(rawStart, rawEnd) + 1;
+        const end = Math.max(rawStart, rawEnd);
+        return [{ id: nextQualifierId(), start, end }];
+    }
+
+    return [
+        { id: nextQualifierId(), start: rawStart + 1, end: sequenceData.sequence.length },
+        { id: nextQualifierId(), start: 1, end: rawEnd },
+    ];
 }
 
 const FEATURE_TYPES = [
@@ -88,6 +116,8 @@ function createEmptyDraft(): FeatureDraft {
         color: '#6b7280',
         description: '',
         qualifiers: [],
+        provenance: [],
+        segments: [],
     };
 }
 
@@ -108,6 +138,14 @@ function notesToRows(notes?: Record<string, unknown>): QualifierRow[] {
         const value = String(rawValue).trim();
         return value ? [{ id: nextQualifierId(), key, value }] : [];
     });
+}
+
+function segmentsToRows(feature: Feature): SegmentRow[] {
+    return featureSegments(feature).map((segment) => ({
+        id: nextQualifierId(),
+        start: segment.start + 1,
+        end: segment.end,
+    }));
 }
 
 function rowsToNotes(rows: QualifierRow[]): Record<string, unknown> | undefined {
@@ -222,6 +260,72 @@ function QualifierEditor({
     );
 }
 
+function SegmentEditor({
+    rows,
+    onChange,
+}: {
+    rows: SegmentRow[];
+    onChange: (rows: SegmentRow[]) => void;
+}) {
+    const addRow = () => onChange([...rows, { id: nextQualifierId(), start: '', end: '' }]);
+    const updateRow = (id: string, patch: Partial<SegmentRow>) => {
+        onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    };
+    const removeRow = (id: string) => {
+        onChange(rows.filter((row) => row.id !== id));
+    };
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Segments</div>
+                <button
+                    onClick={addRow}
+                    className="rounded px-2 py-0.5 text-[11px] text-cyan-300 transition-colors hover:bg-cyan-500/10"
+                    type="button"
+                >
+                    + Segment
+                </button>
+            </div>
+            {rows.length === 0 ? (
+                <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-500">
+                    Single-span feature using start/end fields.
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {rows.map((row) => (
+                        <div key={row.id} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                            <input
+                                type="number"
+                                min={1}
+                                value={row.start}
+                                onChange={(event) => updateRow(row.id, { start: event.target.value === '' ? '' : Number(event.target.value) })}
+                                placeholder="Start"
+                                className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                            />
+                            <input
+                                type="number"
+                                min={1}
+                                value={row.end}
+                                onChange={(event) => updateRow(row.id, { end: event.target.value === '' ? '' : Number(event.target.value) })}
+                                placeholder="End"
+                                className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => removeRow(row.id)}
+                                className="rounded px-2 py-1 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+                            >
+                                Remove
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export function FeaturePanel({
     sequenceData,
     selection,
@@ -248,7 +352,7 @@ export function FeaturePanel({
     );
 
     const stats = useMemo(() => {
-        const totalBp = features.reduce((sum, feature) => sum + (feature.end - feature.start), 0);
+        const totalBp = features.reduce((sum, feature) => sum + featureLength(feature), 0);
         const coverage = sequenceData.sequence.length > 0
             ? ((totalBp / sequenceData.sequence.length) * 100).toFixed(1)
             : '0.0';
@@ -260,7 +364,7 @@ export function FeaturePanel({
         const filtered = features.filter((feature) => {
             if (filterType !== 'all' && feature.type !== filterType) return false;
             if (!query) return true;
-            const preview = qualifierPreview(feature.notes).join(' ').toLowerCase();
+            const preview = qualifierPreview(feature.qualifiers || feature.notes).join(' ').toLowerCase();
             return [
                 feature.name,
                 feature.type,
@@ -279,7 +383,7 @@ export function FeaturePanel({
                     compare = left.type.localeCompare(right.type);
                     break;
                 case 'length':
-                    compare = (left.end - left.start) - (right.end - right.start);
+                    compare = featureLength(left) - featureLength(right);
                     break;
                 default:
                     compare = left.start - right.start;
@@ -299,10 +403,12 @@ export function FeaturePanel({
 
     const useSelection = () => {
         if (!selection || selection.start === selection.end) return;
+        const segments = selectionToDraftSegments(selection, sequenceData);
         setAddDraft((current) => ({
             ...current,
-            start: Math.min(selection.start, selection.end) + 1,
-            end: Math.max(selection.start, selection.end),
+            start: segments[0]?.start ?? '',
+            end: segments[segments.length - 1]?.end ?? '',
+            segments,
         }));
     };
 
@@ -313,20 +419,44 @@ export function FeaturePanel({
     const buildFeature = (draft: FeatureDraft, existingId?: string): Feature | null => {
         const start = Number(draft.start);
         const end = Number(draft.end);
-        if (!draft.name.trim() || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        const normalizedSegments = draft.segments
+            .map((segment) => ({
+                start: Number(segment.start),
+                end: Number(segment.end),
+            }))
+            .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
+            .sort((left, right) => left.start - right.start || left.end - right.end);
+
+        if (!draft.name.trim()) {
             return null;
         }
+        if (normalizedSegments.length === 0 && (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)) {
+            return null;
+        }
+
+        const segments = normalizedSegments.length > 0
+            ? normalizedSegments.map((segment) => ({ start: segment.start - 1, end: segment.end }))
+            : undefined;
+        const bounds = segments && segments.length > 0
+            ? {
+                start: Math.min(...segments.map((segment) => segment.start)),
+                end: Math.max(...segments.map((segment) => segment.end)),
+            }
+            : { start: start - 1, end };
 
         return {
             id: existingId || `feature_${Date.now().toString(36)}`,
             name: draft.name.trim(),
             type: draft.type,
-            start: start - 1,
-            end,
+            start: bounds.start,
+            end: bounds.end,
             strand: draft.strand,
             color: draft.color,
             description: draft.description.trim() || undefined,
             notes: rowsToNotes(draft.qualifiers),
+            qualifiers: rowsToNotes(draft.qualifiers),
+            provenance: rowsToNotes(draft.provenance),
+            segments,
         };
     };
 
@@ -347,7 +477,9 @@ export function FeaturePanel({
             strand: feature.strand,
             color: feature.color || typeColor(feature.type),
             description: feature.description || '',
-            qualifiers: notesToRows(feature.notes),
+            qualifiers: notesToRows(feature.qualifiers || feature.notes),
+            provenance: notesToRows(feature.provenance),
+            segments: segmentsToRows(feature),
         });
     };
 
@@ -520,15 +652,26 @@ export function FeaturePanel({
                         className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
 
+                    <SegmentEditor
+                        rows={addDraft.segments}
+                        onChange={(segments) => setAddDraft((current) => ({ ...current, segments }))}
+                    />
+
                     <QualifierEditor
                         rows={addDraft.qualifiers}
                         onChange={(qualifiers) => setAddDraft((current) => ({ ...current, qualifiers }))}
                     />
 
+                    <QualifierEditor
+                        rows={addDraft.provenance}
+                        onChange={(provenance) => setAddDraft((current) => ({ ...current, provenance }))}
+                        label="Provenance"
+                    />
+
                     <div className="flex gap-2">
                         <button
                             onClick={addFeature}
-                            disabled={!addDraft.name || !addDraft.start || !addDraft.end}
+                            disabled={!addDraft.name || ((!addDraft.start || !addDraft.end) && addDraft.segments.length === 0)}
                             className="flex-1 rounded-lg bg-blue-600 px-3 py-2 font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
                         >
                             Add Feature
@@ -602,7 +745,8 @@ export function FeaturePanel({
                 <div className="space-y-2 max-h-[34rem] overflow-y-auto pr-1">
                     {processedFeatures.map((feature) => {
                         const isEditing = editingFeatureId === feature.id;
-                        const previews = qualifierPreview(feature.notes);
+                        const previews = qualifierPreview(feature.qualifiers || feature.notes);
+                        const segments = featureSegments(feature);
                         return (
                             <div
                                 key={feature.id}
@@ -682,9 +826,20 @@ export function FeaturePanel({
                                             className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                         />
 
+                                        <SegmentEditor
+                                            rows={editDraft.segments}
+                                            onChange={(segments) => setEditDraft((current) => ({ ...current, segments }))}
+                                        />
+
                                         <QualifierEditor
                                             rows={editDraft.qualifiers}
                                             onChange={(qualifiers) => setEditDraft((current) => ({ ...current, qualifiers }))}
+                                        />
+
+                                        <QualifierEditor
+                                            rows={editDraft.provenance}
+                                            onChange={(provenance) => setEditDraft((current) => ({ ...current, provenance }))}
+                                            label="Provenance"
                                         />
 
                                         <div className="flex items-center gap-2">
@@ -729,7 +884,8 @@ export function FeaturePanel({
                                                     <span className="text-xs text-slate-500">{feature.strand === 1 ? '→' : '←'}</span>
                                                 </div>
                                                 <div className="mt-1 text-xs text-slate-400">
-                                                    {feature.start + 1}–{feature.end} • {feature.end - feature.start} bp
+                                                    {feature.start + 1}–{feature.end} • {featureLength(feature)} bp
+                                                    {segments.length > 1 ? ` • ${segments.length} segments` : ''}
                                                 </div>
                                                 {feature.description && (
                                                     <div className="mt-2 text-xs text-slate-300">{feature.description}</div>

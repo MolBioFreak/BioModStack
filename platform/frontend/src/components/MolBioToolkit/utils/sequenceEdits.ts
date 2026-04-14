@@ -1,13 +1,10 @@
 import type { Feature, Primer, SequenceData } from '../types';
+import { remapFeatureAfterDeletion, remapFeatureAfterInsertion, transformFeatureForSelection } from './features';
 import { complementSequence, reverseComplementSequence } from './nucleotides';
 
 type RangeLike = {
     start: number;
     end: number;
-};
-
-type StrandLike = RangeLike & {
-    strand: 1 | -1;
 };
 
 export type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
@@ -22,7 +19,7 @@ function normalizeRange(start: number, end: number, sequenceLength: number) {
     return { start: safeStart, end: safeEnd };
 }
 
-function remapAfterDeletion<T extends RangeLike>(entities: T[], start: number, end: number): T[] {
+function remapRangeEntitiesAfterDeletion<T extends RangeLike>(entities: T[], start: number, end: number): T[] {
     const deletedLength = end - start;
     if (deletedLength <= 0) return entities;
 
@@ -53,7 +50,7 @@ function remapAfterDeletion<T extends RangeLike>(entities: T[], start: number, e
     });
 }
 
-function remapAfterInsertion<T extends RangeLike>(entities: T[], position: number, insertedLength: number): T[] {
+function remapRangeEntitiesAfterInsertion<T extends RangeLike>(entities: T[], position: number, insertedLength: number): T[] {
     if (insertedLength <= 0) return entities;
 
     return entities.map((entity) => {
@@ -95,45 +92,6 @@ function withUpdatedSequenceData(
     };
 }
 
-function flipStrand(strand: 1 | -1): 1 | -1 {
-    return strand === 1 ? -1 : 1;
-}
-
-function remapContainedEntityForTransform<T extends StrandLike>(
-    entity: T,
-    start: number,
-    end: number,
-    operation: TransformOperation,
-): T {
-    if (entity.end <= start || entity.start >= end) {
-        return entity;
-    }
-
-    // Partial overlaps are preserved in place. We only remap entities that are fully
-    // contained within the transformed region so we don't silently destroy annotations.
-    if (entity.start < start || entity.end > end) {
-        return entity;
-    }
-
-    if (operation === 'complement') {
-        return {
-            ...entity,
-            strand: flipStrand(entity.strand),
-        };
-    }
-
-    const relativeStart = entity.start - start;
-    const relativeEnd = entity.end - start;
-    const segmentLength = end - start;
-
-    return {
-        ...entity,
-        start: start + segmentLength - relativeEnd,
-        end: start + segmentLength - relativeStart,
-        strand: flipStrand(entity.strand),
-    };
-}
-
 function transformPrimerSequence(
     primerSequence: string,
     operation: TransformOperation,
@@ -158,9 +116,7 @@ function transformFeaturesForSelection(
     end: number,
     operation: TransformOperation,
 ): Feature[] {
-    return features.map((feature) =>
-        remapContainedEntityForTransform(feature, start, end, operation)
-    );
+    return features.map((feature) => transformFeatureForSelection(feature, start, end, operation));
 }
 
 function transformPrimersForSelection(
@@ -171,7 +127,7 @@ function transformPrimersForSelection(
     sequenceType: SequenceData['sequenceType'],
 ): Primer[] {
     return primers.map((primer) => {
-        const transformed = remapContainedEntityForTransform(primer, start, end, operation);
+        const transformed = transformFeatureForSelection(primer as Feature, start, end, operation) as Primer;
         if (transformed === primer || primer.start < start || primer.end > end) {
             return transformed;
         }
@@ -211,8 +167,8 @@ export function applyInsertEdit(sequenceData: SequenceData, position: number, in
     return withUpdatedSequenceData(
         sequenceData,
         nextSequence,
-        remapAfterInsertion(sequenceData.features, insertAt, insertedLength),
-        remapAfterInsertion(sequenceData.primers || [], insertAt, insertedLength),
+        sequenceData.features.map((feature) => remapFeatureAfterInsertion(feature, insertAt, insertedLength)),
+        remapRangeEntitiesAfterInsertion(sequenceData.primers || [], insertAt, insertedLength),
     );
 }
 
@@ -223,8 +179,10 @@ export function applyDeleteEdit(sequenceData: SequenceData, start: number, end: 
     return withUpdatedSequenceData(
         sequenceData,
         nextSequence,
-        remapAfterDeletion(sequenceData.features, range.start, range.end),
-        remapAfterDeletion(sequenceData.primers || [], range.start, range.end),
+        sequenceData.features
+            .map((feature) => remapFeatureAfterDeletion(feature, range.start, range.end))
+            .filter((feature): feature is Feature => Boolean(feature)),
+        remapRangeEntitiesAfterDeletion(sequenceData.primers || [], range.start, range.end),
     );
 }
 

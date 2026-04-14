@@ -1,5 +1,141 @@
 import type { Feature } from '../types';
 
+type Segment = { start: number; end: number };
+type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
+
+export function featureSegments(feature: Feature): Array<{ start: number; end: number }> {
+    if (feature.segments && feature.segments.length > 0) {
+        return [...feature.segments]
+            .map((segment) => ({ start: segment.start, end: segment.end }))
+            .sort((left, right) => left.start - right.start || left.end - right.end);
+    }
+    return [{ start: feature.start, end: feature.end }];
+}
+
+export function featureBounds(feature: Feature): { start: number; end: number } {
+    const segments = featureSegments(feature);
+    return {
+        start: Math.min(...segments.map((segment) => segment.start)),
+        end: Math.max(...segments.map((segment) => segment.end)),
+    };
+}
+
+export function featureLength(feature: Feature): number {
+    return featureSegments(feature).reduce((sum, segment) => sum + (segment.end - segment.start), 0);
+}
+
+function normalizeSegments(segments: Segment[]): Segment[] {
+    return [...segments]
+        .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
+        .map((segment) => ({ start: segment.start, end: segment.end }))
+        .sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
+function withFeatureSegments(feature: Feature, segments: Segment[]): Feature | null {
+    const normalized = normalizeSegments(segments);
+    if (normalized.length === 0) {
+        return null;
+    }
+
+    const bounds = {
+        start: Math.min(...normalized.map((segment) => segment.start)),
+        end: Math.max(...normalized.map((segment) => segment.end)),
+    };
+    const preserveSegments = Boolean(feature.segments && feature.segments.length > 0) || normalized.length > 1;
+
+    return {
+        ...feature,
+        start: bounds.start,
+        end: bounds.end,
+        segments: preserveSegments ? normalized : undefined,
+    };
+}
+
+function flipStrand(strand: 1 | -1): 1 | -1 {
+    return strand === 1 ? -1 : 1;
+}
+
+function segmentsContainedWithin(feature: Feature, start: number, end: number): boolean {
+    return featureSegments(feature).every((segment) => segment.start >= start && segment.end <= end);
+}
+
+export function remapFeatureAfterInsertion(feature: Feature, position: number, insertedLength: number): Feature {
+    if (insertedLength <= 0) {
+        return feature;
+    }
+
+    const nextSegments = featureSegments(feature).map((segment) => {
+        if (segment.end <= position) {
+            return segment;
+        }
+
+        if (segment.start >= position) {
+            return {
+                start: segment.start + insertedLength,
+                end: segment.end + insertedLength,
+            };
+        }
+
+        return {
+            start: segment.start,
+            end: segment.end + insertedLength,
+        };
+    });
+
+    return withFeatureSegments(feature, nextSegments) || feature;
+}
+
+export function remapFeatureAfterDeletion(feature: Feature, start: number, end: number): Feature | null {
+    const deletedLength = end - start;
+    if (deletedLength <= 0) {
+        return feature;
+    }
+
+    const nextSegments = featureSegments(feature).flatMap((segment) => {
+        if (segment.end <= start) {
+            return [segment];
+        }
+
+        if (segment.start >= end) {
+            return [{
+                start: segment.start - deletedLength,
+                end: segment.end - deletedLength,
+            }];
+        }
+
+        const nextStart = segment.start < start ? segment.start : start;
+        const nextEnd = segment.end > end ? segment.end - deletedLength : start;
+        return nextEnd > nextStart ? [{ start: nextStart, end: nextEnd }] : [];
+    });
+
+    return withFeatureSegments(feature, nextSegments);
+}
+
+export function transformFeatureForSelection(
+    feature: Feature,
+    start: number,
+    end: number,
+    operation: TransformOperation,
+): Feature {
+    if (!segmentsContainedWithin(feature, start, end)) {
+        return feature;
+    }
+
+    const currentSegments = featureSegments(feature);
+    const nextSegments = operation === 'complement'
+        ? currentSegments
+        : currentSegments.map((segment) => ({
+            start: start + (end - segment.end),
+            end: start + (end - segment.start),
+        }));
+
+    const nextFeature = withFeatureSegments(feature, nextSegments) || feature;
+    return {
+        ...nextFeature,
+        strand: flipStrand(feature.strand),
+    };
+}
+
 function normalizeLabel(value: string | undefined): string {
     return (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -68,24 +204,27 @@ function featureIdentityKey(feature: Feature): string {
     return [
         normalizeLabel(feature.name),
         normalizeLabel(feature.type),
-        feature.start,
-        feature.end,
+        featureSegments(feature).map((segment) => `${segment.start}-${segment.end}`).join(','),
         feature.strand,
     ].join('|');
 }
 
 function mergeFeatures(existing: Feature, incoming: Feature): Feature {
+    const bounds = featureBounds(existing);
     return {
         ...existing,
         id: existing.id || incoming.id,
         name: existing.name || incoming.name,
         type: existing.type || incoming.type,
-        start: existing.start,
-        end: existing.end,
+        start: bounds.start,
+        end: bounds.end,
         strand: existing.strand,
         color: existing.color || incoming.color,
         description: preferLongerText(existing.description, incoming.description),
         notes: mergeFeatureNotes(existing.notes, incoming.notes),
+        qualifiers: mergeFeatureNotes(existing.qualifiers, incoming.qualifiers),
+        provenance: mergeFeatureNotes(existing.provenance, incoming.provenance),
+        segments: featureSegments(existing),
     };
 }
 
@@ -100,6 +239,8 @@ export function dedupeFeatures(features: Feature[]): Feature[] {
                 ...feature,
                 name: feature.name?.trim() || 'feature',
                 type: feature.type?.trim() || 'misc_feature',
+                ...featureBounds(feature),
+                segments: featureSegments(feature),
             });
             continue;
         }
