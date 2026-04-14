@@ -9,14 +9,14 @@ import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
-import { useSequenceHistory } from './hooks/useSequenceHistory';
+import { createHistoryState, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
-import { AlignmentPanel, DigestPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
+import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
-import { DEMO_PLASMIDS } from './demoConstructs';
+import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
     fetchPrimerTmOptions,
@@ -43,7 +43,7 @@ import {
     reverseComplementSequence,
     sequenceUnitLabel,
 } from './utils/nucleotides';
-import { dedupeFeatures } from './utils/features';
+import { dedupeFeatures, featureBounds } from './utils/features';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -51,6 +51,8 @@ import { dedupeFeatures } from './utils/features';
 
 interface SequenceLibraryProps {
     sequences: NucleotideSequenceListItem[];
+    demos: SequenceData[];
+    demoLoading: boolean;
     selectedId: string | null;
     onSelect: (id: string) => void;
     onRefresh: () => void;
@@ -61,6 +63,8 @@ interface SequenceLibraryProps {
 
 function SequenceLibrary({
     sequences,
+    demos,
+    demoLoading,
     selectedId,
     onSelect,
     onRefresh,
@@ -107,14 +111,16 @@ function SequenceLibrary({
                         onClick={() => setShowDemos(!showDemos)}
                         className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
                     >
-                        <span>Demo Plasmids ({DEMO_PLASMIDS.length})</span>
+                        <span>Demo Plasmids ({demoLoading ? '…' : demos.length})</span>
                         <svg className={`w-3 h-3 transition-transform ${showDemos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                     </button>
                     {showDemos && (
                         <div className="bg-slate-800/50">
-                            {DEMO_PLASMIDS.map((demo, i) => (
+                            {demoLoading ? (
+                                <div className="px-4 py-3 text-xs text-slate-500">Loading demo dataset…</div>
+                            ) : demos.map((demo, i) => (
                                 <button
                                     key={i}
                                     onClick={() => onLoadDemo(demo)}
@@ -175,8 +181,10 @@ interface PanelTabsProps {
 
 const BASE_PANELS: { id: ActivePanel; label: string }[] = [
     { id: 'view', label: 'View' },
+    { id: 'history', label: 'History' },
     { id: 'search', label: 'Find' },
     { id: 'align', label: 'Align' },
+    { id: 'assembly', label: 'Assembly' },
     { id: 'edit', label: 'Edit' },
     { id: 'digest', label: 'Digest' },
     { id: 'pcr', label: 'PCR' },
@@ -243,6 +251,120 @@ function normalizeFeatureList(features: Feature[]): Feature[] {
     return dedupeFeatures(features);
 }
 
+function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, any>, fallbackId: string): Feature {
+    const rawSegments = Array.isArray(feature.segments)
+        ? feature.segments
+        : Array.isArray(feature.locations)
+            ? feature.locations
+            : [];
+
+    const segments = rawSegments
+        .map((segment: any) => ({
+            start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
+            end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
+        }))
+        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
+        .sort((left: { start: number; end: number }, right: { start: number; end: number }) => left.start - right.start || left.end - right.end);
+
+    const start = typeof feature.start === 'number'
+        ? feature.start
+        : (segments[0]?.start ?? 0);
+    const end = typeof feature.end === 'number'
+        ? feature.end
+        : (segments[segments.length - 1]?.end ?? 0);
+
+    const normalized: Feature = {
+        id: feature.id || fallbackId,
+        name: feature.name || feature.type || 'feature',
+        type: feature.type || 'misc_feature',
+        start,
+        end,
+        strand: feature.strand === -1 ? -1 : 1,
+        color: feature.color || getFeatureColor(feature.type || 'misc_feature'),
+        description: feature.description,
+        notes: feature.notes,
+        qualifiers: feature.qualifiers || feature.notes,
+        provenance: feature.provenance,
+        segments: segments.length > 0 ? segments : undefined,
+    };
+
+    const bounds = featureBounds(normalized);
+    return {
+        ...normalized,
+        start: bounds.start,
+        end: bounds.end,
+    };
+}
+
+function normalizePrimerRecord(primer: Partial<Primer> & Record<string, any>, fallbackId: string): Primer {
+    const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
+    const sites: NonNullable<Primer['sites']> = rawSites
+        .map((site: any) => {
+            const rawStart = Number(site?.start ?? site?.bindingSiteStart ?? primer.start ?? 0);
+            const rawEnd = Number(site?.end ?? site?.bindingSiteEnd ?? primer.end ?? 0);
+            const start = site?.bindingSiteStart != null && site?.start == null ? Math.max(0, rawStart - 1) : rawStart;
+            const end = rawEnd;
+            const strand = site?.strand === -1 || String(site?.strand || '').toLowerCase() === 'bottom' ? -1 : 1;
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+                return null;
+            }
+            return {
+                start,
+                end,
+                strand: strand as 1 | -1,
+                tm: Number.isFinite(site?.tm) ? Number(site.tm) : Number.isFinite(site?.meltingTemperature) ? Number(site.meltingTemperature) : undefined,
+                note: typeof site?.note === 'string' ? site.note : undefined,
+            };
+        })
+        .filter((site): site is NonNullable<NonNullable<Primer['sites']>[number]> => Boolean(site));
+
+    const firstSite = sites[0] || null;
+    return {
+        id: primer.id || fallbackId,
+        name: primer.name || 'Primer',
+        sequence: (primer.sequence || '').toUpperCase(),
+        sequenceType: primer.sequenceType || primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence || ''),
+        start: firstSite?.start ?? primer.start ?? 0,
+        end: firstSite?.end ?? primer.end ?? 0,
+        strand: firstSite?.strand ?? (primer.strand === -1 ? -1 : 1),
+        tm: primer.tm,
+        gc_percent: primer.gc_percent,
+        tm_algorithm: primer.tm_algorithm,
+        tm_salt_correction: primer.tm_salt_correction,
+        tm_settings: primer.tm_settings,
+        notes: primer.notes,
+        provenance: primer.provenance,
+        sites: sites.length > 0 ? sites : undefined,
+    };
+}
+
+function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceData {
+    return {
+        name: seq.name,
+        description: seq.description ?? undefined,
+        sequence: seq.sequence,
+        circular: seq.is_circular,
+        sequenceType: seq.sequence_type,
+        features: normalizeFeatureList((seq.features || []).map((feature: Feature, index: number) => normalizeFeatureRecord(
+            feature as Feature & Record<string, any>,
+            feature.id || `loaded_feature_${index}`,
+        ))),
+        primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
+            primer as Primer & Record<string, any>,
+            primer.id || `loaded_primer_${index}`,
+        )),
+        translations: [],
+        analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
+        organism: seq.organism ?? undefined,
+        accession: seq.accession ?? undefined,
+        sourceFile: seq.source_file ?? undefined,
+        parentId: seq.parent_id ?? null,
+        operation: seq.operation ?? null,
+        operationParams: seq.operation_params ?? null,
+        version: seq.version ?? null,
+    };
+}
+
 function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
     return {
         id: track.id,
@@ -287,6 +409,70 @@ interface SelectionRange {
 interface QuickAddMenuState {
     x: number;
     y: number;
+}
+
+interface WorkspaceTab {
+    id: string;
+    title: string;
+    sequenceId: string | null;
+    dirty: boolean;
+    historyState: HistoryState;
+    sequenceType: SequenceData['sequenceType'];
+}
+
+function nextWorkspaceId(): string {
+    return `workspace_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function WorkspaceTabs({
+    tabs,
+    activeId,
+    onActivate,
+    onClose,
+}: {
+    tabs: WorkspaceTab[];
+    activeId: string;
+    onActivate: (id: string) => void;
+    onClose: (id: string) => void;
+}) {
+    return (
+        <div className="border-b border-slate-700 bg-slate-900/80 px-2 py-1">
+            <div className="flex gap-2 overflow-x-auto pb-1">
+                {tabs.map((tab) => (
+                    <div
+                        key={tab.id}
+                        className={`group flex min-w-[12rem] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                            tab.id === activeId
+                                ? 'border-cyan-500/50 bg-slate-800 text-slate-100'
+                                : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                        }`}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => onActivate(tab.id)}
+                            className="min-w-0 flex-1 text-left"
+                        >
+                            <div className="truncate font-medium">
+                                {tab.title || 'Untitled'}
+                                {tab.dirty ? ' *' : ''}
+                            </div>
+                            <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-slate-500">
+                                {tab.sequenceType}
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onClose(tab.id)}
+                            className="rounded p-1 text-slate-500 transition-colors hover:bg-slate-700 hover:text-slate-200"
+                            title="Close workspace"
+                        >
+                            ×
+                        </button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
 }
 
 function getSelectionRanges(
@@ -425,6 +611,8 @@ export function MolBioToolkitV2() {
     const [rnaStructureResult, setRnaStructureResult] = useState<RnaStructureResult | null>(null);
     const [rnaDisplayMode, setRnaDisplayMode] = useState<RnaStructureDisplayMode>('probability');
     const [selectedRnaTrackId, setSelectedRnaTrackId] = useState<string | null>(null);
+    const [demoPlasmids, setDemoPlasmids] = useState<SequenceData[]>([]);
+    const [demoLoading, setDemoLoading] = useState(true);
 
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
@@ -443,10 +631,24 @@ export function MolBioToolkitV2() {
         set: setSequenceData,
         undo,
         redo,
-        reset: resetHistory,
+        hydrate,
+        historyState,
+        historyJournal,
         canUndo,
         canRedo
     } = useSequenceHistory(EMPTY_SEQUENCE);
+
+    const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([
+        {
+            id: 'workspace_initial',
+            title: EMPTY_SEQUENCE.name,
+            sequenceId: null,
+            dirty: false,
+            historyState: createHistoryState(EMPTY_SEQUENCE, 'Initialize workspace'),
+            sequenceType: EMPTY_SEQUENCE.sequenceType,
+        },
+    ]);
+    const [activeWorkspaceId, setActiveWorkspaceId] = useState('workspace_initial');
 
     // API hooks
     const {
@@ -471,6 +673,127 @@ export function MolBioToolkitV2() {
     useEffect(() => {
         loadLibrary();
     }, [loadLibrary]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadDemos = async () => {
+            try {
+                const demos = await loadDemoPlasmids();
+                if (!cancelled) {
+                    setDemoPlasmids(demos);
+                }
+            } catch (error) {
+                console.error('Failed to load demo plasmids:', error);
+            } finally {
+                if (!cancelled) {
+                    setDemoLoading(false);
+                }
+            }
+        };
+        void loadDemos();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        setWorkspaceTabs((current) => current.map((tab) => (
+            tab.id === activeWorkspaceId
+                ? {
+                    ...tab,
+                    title: sequenceData.name || tab.title,
+                    sequenceId: selectedSequenceId,
+                    dirty: isDirty,
+                    historyState,
+                    sequenceType: sequenceData.sequenceType,
+                }
+                : tab
+        )));
+    }, [activeWorkspaceId, historyState, isDirty, selectedSequenceId, sequenceData.name, sequenceData.sequenceType]);
+
+    const activateWorkspace = useCallback((workspaceId: string) => {
+        const workspace = workspaceTabs.find((tab) => tab.id === workspaceId);
+        if (!workspace) {
+            return;
+        }
+        setActiveWorkspaceId(workspaceId);
+        hydrate(workspace.historyState);
+        setSelectedSequenceId(workspace.sequenceId);
+        setIsDirty(workspace.dirty);
+        setSelection(null);
+        setHighlightedRegions([]);
+        setRnaStructureResult(null);
+        setSelectedRnaTrackId(workspace.historyState.present.analysisTracks?.[0]?.id || null);
+    }, [hydrate, workspaceTabs]);
+
+    const openWorkspace = useCallback((nextSequence: SequenceData, options?: {
+        sequenceId?: string | null;
+        dirty?: boolean;
+        label?: string;
+    }) => {
+        const tabId = nextWorkspaceId();
+        const nextHistory = createHistoryState(nextSequence, options?.label || 'Open workspace');
+        setWorkspaceTabs((current) => [
+            ...current,
+            {
+                id: tabId,
+                title: nextSequence.name || 'Untitled',
+                sequenceId: options?.sequenceId || null,
+                dirty: options?.dirty ?? false,
+                historyState: nextHistory,
+                sequenceType: nextSequence.sequenceType,
+            },
+        ]);
+        setActiveWorkspaceId(tabId);
+        hydrate(nextHistory);
+        setSelectedSequenceId(options?.sequenceId || null);
+        setIsDirty(options?.dirty ?? false);
+        setSelection(null);
+        setHighlightedRegions([]);
+        setRnaStructureResult(null);
+        setSelectedRnaTrackId(nextSequence.analysisTracks?.[0]?.id || null);
+    }, [hydrate]);
+
+    const closeWorkspace = useCallback((workspaceId: string) => {
+        if (workspaceTabs.length === 1) {
+            const emptyHistory = createHistoryState(EMPTY_SEQUENCE, 'Reset workspace');
+            setWorkspaceTabs([{
+                id: workspaceTabs[0].id,
+                title: EMPTY_SEQUENCE.name,
+                sequenceId: null,
+                dirty: false,
+                historyState: emptyHistory,
+                sequenceType: EMPTY_SEQUENCE.sequenceType,
+            }]);
+            setActiveWorkspaceId(workspaceTabs[0].id);
+            hydrate(emptyHistory);
+            setSelectedSequenceId(null);
+            setIsDirty(false);
+            setSelection(null);
+            setHighlightedRegions([]);
+            setRnaStructureResult(null);
+            setSelectedRnaTrackId(null);
+            return;
+        }
+
+        const currentIndex = workspaceTabs.findIndex((tab) => tab.id === workspaceId);
+        const remaining = workspaceTabs.filter((tab) => tab.id !== workspaceId);
+        setWorkspaceTabs(remaining);
+
+        if (workspaceId === activeWorkspaceId) {
+            const nextWorkspace = remaining[Math.max(0, currentIndex - 1)] || remaining[0];
+            if (nextWorkspace) {
+                setActiveWorkspaceId(nextWorkspace.id);
+                hydrate(nextWorkspace.historyState);
+                setSelectedSequenceId(nextWorkspace.sequenceId);
+                setIsDirty(nextWorkspace.dirty);
+                setSelection(null);
+                setHighlightedRegions([]);
+                setRnaStructureResult(null);
+                setSelectedRnaTrackId(nextWorkspace.historyState.present.analysisTracks?.[0]?.id || null);
+            }
+        }
+    }, [activeWorkspaceId, hydrate, workspaceTabs]);
 
     // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
@@ -506,57 +829,34 @@ export function MolBioToolkitV2() {
 
     // Load selected sequence
     const loadSequence = useCallback(async (id: string) => {
+        const existing = workspaceTabs.find((tab) => tab.sequenceId === id);
+        if (existing) {
+            activateWorkspace(existing.id);
+            return;
+        }
         const seq = await getSequence(id);
         if (seq) {
-            const converted: SequenceData = {
-                name: seq.name,
-                description: seq.description ?? undefined,
-                sequence: seq.sequence,
-                circular: seq.is_circular,
-                sequenceType: seq.sequence_type,
-                features: normalizeFeatureList((seq.features || []).map((f: Feature) => ({
-                    id: f.id || String(Math.random()),
-                    name: f.name,
-                    type: f.type || 'misc_feature',
-                    start: f.start,
-                    end: f.end,
-                    strand: f.strand || 1,
-                    color: f.color,
-                    description: f.description,
-                    notes: f.notes
-                }))),
-                primers: (seq.primers || []).map((p: Primer) => ({
-                    ...p,
-                    sequenceType: p.sequenceType ?? (p as Primer & { sequence_type?: 'dna' | 'rna' }).sequence_type ?? inferSequenceTypeFromSequence(p.sequence),
-                    strand: p.strand === -1 ? -1 : 1,
-                })),
-                translations: [],
-                analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
-            };
-            resetHistory(converted);
-            setSelectedSequenceId(id);
-            setSelection(null);
-            setHighlightedRegions([]);
-            setIsDirty(false);
-            setRnaStructureResult(null);
-            setSelectedRnaTrackId(converted.analysisTracks?.[0]?.id || null);
+            const converted = sequenceDataFromApiRecord(seq);
+            openWorkspace(converted, {
+                sequenceId: id,
+                dirty: false,
+                label: `Open ${seq.name}`,
+            });
         }
-    }, [getSequence, resetHistory]);
+    }, [activateWorkspace, getSequence, openWorkspace, workspaceTabs]);
 
     // Load demo plasmid (no API, direct)
     const loadDemo = useCallback((demo: SequenceData) => {
-        resetHistory({
+        openWorkspace({
             ...demo,
             features: normalizeFeatureList(demo.features || []),
             analysisTracks: demo.analysisTracks || [],
+        }, {
+            sequenceId: null,
+            dirty: false,
+            label: `Open demo ${demo.name}`,
         });
-        setSelectedSequenceId(null); // Not a saved sequence
-        setSelection(null);
-        setHighlightedRegions([]);
-        setIsDirty(false);
-        setRnaStructureResult(null);
-        setSelectedRnaTrackId(demo.analysisTracks?.[0]?.id || null);
-    }, [resetHistory]);
+    }, [openWorkspace]);
 
     // Create a new in-memory sequence from pasted text (can be saved afterward)
     const handlePasteSequence = useCallback((data: {
@@ -578,14 +878,12 @@ export function MolBioToolkitV2() {
             analysisTracks: [],
         };
 
-        resetHistory(newSequence);
-        setSelectedSequenceId(null);
-        setSelection(null);
-        setHighlightedRegions([]);
-        setIsDirty(true);
-        setRnaStructureResult(null);
-        setSelectedRnaTrackId(null);
-    }, [resetHistory]);
+        openWorkspace(newSequence, {
+            sequenceId: null,
+            dirty: true,
+            label: `Create ${data.name}`,
+        });
+    }, [openWorkspace]);
 
     const handleOpenPrimerAsConstruct = useCallback((data: {
         name: string;
@@ -634,47 +932,23 @@ export function MolBioToolkitV2() {
                 sequence: normalizedSequence,
                 circular: parsed.circular ?? false,
                 sequenceType: inferredType,
-                features: normalizeFeatureList((parsed.features || []).map((f: any, i: number) => ({
-                    id: f.id || `f_${i}`,
-                    name: f.name || f.type || 'feature',
-                    type: f.type || 'misc_feature',
-                    start: f.start,
-                    end: f.end,
-                    strand: f.strand === -1 ? -1 : 1,
-                    color: f.color || getFeatureColor(f.type || 'misc_feature'),
-                    description: f.description,
-                    notes: f.notes
-                }))),
-                primers: (parsed.primers || []).map((p: any, i: number) => ({
-                    id: p.id || `p_${i}`,
-                    name: p.name || `Primer ${i + 1}`,
-                    sequence: (p.sequence || '').toUpperCase(),
-                    sequenceType: p.sequenceType || p.sequence_type || inferSequenceTypeFromSequence(p.sequence || ''),
-                    start: p.start ?? 0,
-                    end: p.end ?? 0,
-                    strand: p.strand === -1 ? -1 : 1,
-                    tm: p.tm,
-                    gc_percent: p.gc_percent,
-                    tm_algorithm: p.tm_algorithm,
-                    tm_salt_correction: p.tm_salt_correction,
-                    tm_settings: p.tm_settings,
-                })),
+                features: normalizeFeatureList((parsed.features || []).map((f: any, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
+                primers: (parsed.primers || []).map((p: any, i: number) => normalizePrimerRecord(p, `p_${i}`)),
                 translations: [],
                 analysisTracks: [],
+                sourceFile: file.name,
             };
 
-            resetHistory(sequenceData);
-            setSelectedSequenceId(null);
-            setSelection(null);
-            setHighlightedRegions([]);
-            setIsDirty(true);
-            setRnaStructureResult(null);
-            setSelectedRnaTrackId(null);
+            openWorkspace(sequenceData, {
+                sequenceId: null,
+                dirty: true,
+                label: `Import ${sequenceData.name}`,
+            });
         } catch (error) {
             console.error('Import error:', error);
             alert(`Failed to parse file: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-    }, [resetHistory]);
+    }, [openWorkspace]);
 
     // Save sequence
     const saveSequence = useCallback(async () => {
@@ -687,22 +961,38 @@ export function MolBioToolkitV2() {
             sequence: sequenceData.sequence,
             is_circular: sequenceData.circular,
             sequence_type: normalizedType,
-            features: normalizeFeatureList(sequenceData.features),
+            features: normalizeFeatureList(sequenceData.features).map((feature) => ({
+                ...feature,
+                qualifiers: feature.qualifiers,
+                provenance: feature.provenance,
+                segments: feature.segments,
+                notes: feature.notes || feature.qualifiers,
+            })),
             primers: sequenceData.primers?.map((primer) => ({
                 ...primer,
                 sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+                notes: primer.notes,
+                provenance: primer.provenance,
+                sites: primer.sites,
             })),
             analysis_tracks: (sequenceData.analysisTracks || []).map(trackToApi),
+            organism: sequenceData.organism,
+            accession: sequenceData.accession,
+            source_file: sequenceData.sourceFile,
         };
 
         let saved = false;
         if (selectedSequenceId) {
             const updated = await updateSequence(selectedSequenceId, payload);
-            saved = Boolean(updated);
+            if (updated) {
+                setSequenceData(sequenceDataFromApiRecord(updated), 'Sync saved sequence');
+                saved = true;
+            }
         } else {
             const created = await createSequence(payload);
             if (created) {
                 setSelectedSequenceId(created.id);
+                setSequenceData(sequenceDataFromApiRecord(created), 'Save new sequence');
                 saved = true;
             }
         }
@@ -741,7 +1031,7 @@ export function MolBioToolkitV2() {
     const handleAddFeature = useCallback((feature: Feature) => {
         setSequenceData({
             ...sequenceData,
-            features: normalizeFeatureList([...sequenceData.features, feature])
+            features: normalizeFeatureList([...sequenceData.features, normalizeFeatureRecord(feature, feature.id)])
         });
         setIsDirty(true);
     }, [sequenceData, setSequenceData]);
@@ -760,7 +1050,7 @@ export function MolBioToolkitV2() {
         setSequenceData({
             ...sequenceData,
             features: normalizeFeatureList(sequenceData.features.map(f =>
-                f.id === updatedFeature.id ? updatedFeature : f
+                f.id === updatedFeature.id ? normalizeFeatureRecord(updatedFeature, updatedFeature.id) : f
             ))
         });
         setIsDirty(true);
@@ -932,7 +1222,20 @@ export function MolBioToolkitV2() {
                     match_length_pct: Number(f.match_length_pct.toFixed(1)),
                     database: f.database,
                     is_fragment: Boolean(f.is_fragment),
-                }
+                },
+                qualifiers: {
+                    source: 'pLannotate',
+                    identity_pct: Number(f.identity_pct.toFixed(1)),
+                    match_length_pct: Number(f.match_length_pct.toFixed(1)),
+                    database: f.database,
+                    is_fragment: Boolean(f.is_fragment),
+                },
+                provenance: {
+                    workflow: 'auto_annotate',
+                    engine: 'pLannotate',
+                    detailed: settings.detailed,
+                    min_identity: settings.minIdentity,
+                },
             }));
 
             // Deduplicate: filter out features that already exist
@@ -1026,6 +1329,31 @@ export function MolBioToolkitV2() {
         [selectedRnaTrackId, viewerSequenceData.analysisTracks],
     );
 
+    const alignmentTargets = useMemo(
+        () => workspaceTabs
+            .filter((tab) => tab.id !== activeWorkspaceId)
+            .map((tab) => ({
+                id: tab.id,
+                label: tab.title,
+                sequence: tab.historyState.present.sequence,
+                circular: tab.historyState.present.circular,
+                sequenceType: tab.historyState.present.sequenceType,
+            }))
+            .filter((target) => Boolean(target.sequence)),
+        [activeWorkspaceId, workspaceTabs],
+    );
+    const workspaceSummaries = useMemo(
+        () => workspaceTabs.map((tab) => ({
+            id: tab.id,
+            title: tab.title,
+            sequenceId: tab.sequenceId,
+            dirty: tab.dirty,
+            sequenceType: tab.sequenceType,
+            sequenceLength: tab.historyState.present.sequence.length,
+        })),
+        [workspaceTabs],
+    );
+
     const showRnaStructureViewer = Boolean(
         sequenceData.sequenceType === 'rna' &&
         activePanel === 'rna' &&
@@ -1075,9 +1403,22 @@ export function MolBioToolkitV2() {
 
     const toolPanelWidthClass = activePanel === 'primers'
         ? 'w-[30rem]'
-        : activePanel === 'align' || activePanel === 'rna'
+        : activePanel === 'assembly'
+            ? 'w-[34rem]'
+            : activePanel === 'align' || activePanel === 'rna' || activePanel === 'history'
             ? 'w-[26rem]'
             : 'w-72';
+
+    const handleLoadAssemblyProduct = useCallback((product: SequenceData, savedSequenceId?: string | null) => {
+        openWorkspace(product, {
+            sequenceId: savedSequenceId || null,
+            dirty: !savedSequenceId,
+            label: `Open ${product.name}`,
+        });
+        if (savedSequenceId) {
+            void loadLibrary();
+        }
+    }, [loadLibrary, openWorkspace]);
 
     const handleQuickAddPrimer = useCallback(async (strand: 1 | -1) => {
         if (!selectionPlacement || !selectedSequenceFragment) {
@@ -1114,6 +1455,13 @@ export function MolBioToolkitV2() {
                 tm_algorithm: tmResult?.algorithm,
                 tm_salt_correction: tmResult?.salt_correction,
                 tm_settings: primerTmSettings,
+                notes: {
+                    source: 'quick_add',
+                },
+                provenance: {
+                    workflow: 'quick_add',
+                    wraps_origin: selectionPlacement.wrapsOrigin,
+                },
             };
 
             handleAddPrimer(primer);
@@ -1145,6 +1493,10 @@ export function MolBioToolkitV2() {
         }
 
         setQuickAddBusy('feature');
+        const segments = selectionRanges.map((range) => ({
+            start: range.start,
+            end: range.end,
+        }));
         const feature: Feature = {
             id: `feature_${Date.now().toString(36)}`,
             name: `Feature_${selectionCoordinateKey}`,
@@ -1153,26 +1505,41 @@ export function MolBioToolkitV2() {
             end: selectionPlacement.end,
             strand: 1,
             color: getFeatureColor('misc_feature'),
-            notes: selectionPlacement.wrapsOrigin ? { wraps_origin: true } : undefined,
+            notes: {
+                source: 'quick_add',
+            },
+            qualifiers: {
+                source: 'quick_add',
+            },
+            provenance: {
+                workflow: 'quick_add',
+                wraps_origin: selectionPlacement.wrapsOrigin,
+            },
+            segments: segments.length > 1 ? segments : undefined,
         };
 
         handleAddFeature(feature);
-        setHighlightedRegions([{
+        setHighlightedRegions((feature.segments && feature.segments.length > 0 ? feature.segments : [{
             start: feature.start,
             end: feature.end,
+        }]).map((segment) => ({
+            start: segment.start,
+            end: segment.end,
             color: feature.color || '#6b7280',
             label: feature.name,
-        }]);
+        })));
         closeQuickAddMenu();
-    }, [closeQuickAddMenu, handleAddFeature, selectionCoordinateKey, selectionPlacement]);
+    }, [closeQuickAddMenu, handleAddFeature, selectionCoordinateKey, selectionPlacement, selectionRanges]);
 
     return (
         <>
             <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
                 {/* Left: Sequence Library */}
                 <SequenceLibrary
-                    sequences={sequences}
-                    selectedId={selectedSequenceId}
+                        sequences={sequences}
+                        demos={demoPlasmids}
+                        demoLoading={demoLoading}
+                        selectedId={selectedSequenceId}
                     onSelect={loadSequence}
                     onRefresh={loadLibrary}
                     onOpenModal={() => setShowInputModal(true)}
@@ -1198,6 +1565,14 @@ export function MolBioToolkitV2() {
                         showGCTrack={showGCTrack}
                         onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
                         onOpenLibrary={() => setShowInputModal(true)}
+                        historyJournal={historyJournal}
+                    />
+
+                    <WorkspaceTabs
+                        tabs={workspaceTabs}
+                        activeId={activeWorkspaceId}
+                        onActivate={activateWorkspace}
+                        onClose={closeWorkspace}
                     />
 
 
@@ -1314,6 +1689,13 @@ export function MolBioToolkitV2() {
                                             >
                                                 PCR
                                             </button>
+                                            <button
+                                                onClick={() => setActivePanel('assembly')}
+                                                className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-500"
+                                                title="Send the selected span into assembly workflows"
+                                            >
+                                                Assembly
+                                            </button>
                                         </>
                                     )}
                                     <button
@@ -1357,6 +1739,25 @@ export function MolBioToolkitV2() {
                                 selection={selection}
                                 onHighlight={setHighlightedRegions}
                                 onAddFeatures={handleAddFeatures}
+                                comparisonTargets={alignmentTargets}
+                            />
+                        )}
+                        {activePanel === 'history' && (
+                            <HistoryPanel
+                                sequenceData={sequenceData}
+                                selectedSequenceId={selectedSequenceId}
+                                historyJournal={historyJournal}
+                                workspaces={workspaceSummaries}
+                                activeWorkspaceId={activeWorkspaceId}
+                                onActivateWorkspace={activateWorkspace}
+                            />
+                        )}
+                        {activePanel === 'assembly' && (
+                            <AssemblyPanel
+                                sequenceData={sequenceData}
+                                selection={selection}
+                                selectedSequenceId={selectedSequenceId}
+                                onLoadProduct={handleLoadAssemblyProduct}
                             />
                         )}
                         {activePanel === 'edit' && (
@@ -1514,6 +1915,15 @@ export function MolBioToolkitV2() {
                             </button>
                             <button
                                 onClick={() => {
+                                    setActivePanel('assembly');
+                                    closeQuickAddMenu();
+                                }}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
+                            >
+                                Open Assembly Workspace
+                            </button>
+                            <button
+                                onClick={() => {
                                     setSelection(null);
                                     closeQuickAddMenu();
                                 }}
@@ -1548,7 +1958,7 @@ export function MolBioToolkitV2() {
                 onOpenPrimerAsConstruct={handleOpenPrimerAsConstruct}
                 hasOpenSequence={Boolean(sequenceData.sequence)}
                 currentSequenceData={sequenceData.sequence ? sequenceData : null}
-                demos={DEMO_PLASMIDS}
+                demos={demoPlasmids}
             />
         </>
     );

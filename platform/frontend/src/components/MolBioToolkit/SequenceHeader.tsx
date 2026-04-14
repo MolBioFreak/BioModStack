@@ -3,6 +3,7 @@
  */
 
 import { ExportDropdown } from './ExportDropdown';
+import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
 import { sequenceUnitLabel } from './utils/nucleotides';
 
@@ -24,6 +25,7 @@ interface SequenceHeaderProps {
     showGCTrack?: boolean;
     onGCTrackToggle?: () => void;
     onOpenLibrary?: () => void;
+    historyJournal?: HistoryEntry[];
 }
 
 function calculateGC(sequence: string): number {
@@ -48,6 +50,7 @@ export function SequenceHeader({
     showGCTrack = true,
     onGCTrackToggle,
     onOpenLibrary,
+    historyJournal = [],
 }: SequenceHeaderProps) {
     const gcContent = calculateGC(sequenceData.sequence);
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
@@ -81,6 +84,18 @@ export function SequenceHeader({
                         <>
                             <span>•</span>
                             <span>{sequenceData.primers.length} primers</span>
+                        </>
+                    )}
+                    {sequenceData.version != null && (
+                        <>
+                            <span>•</span>
+                            <span>v{sequenceData.version}</span>
+                        </>
+                    )}
+                    {sequenceData.operation && (
+                        <>
+                            <span>•</span>
+                            <span>{sequenceData.operation.replace(/_/g, ' ')}</span>
                         </>
                     )}
                 </div>
@@ -205,7 +220,7 @@ export function SequenceHeader({
                 )}
 
                 {/* Export */}
-                <ExportDropdown sequenceData={sequenceData} />
+                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} />
 
                 {/* Save */}
                 {onSave && (
