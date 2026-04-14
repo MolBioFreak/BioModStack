@@ -127,6 +127,7 @@ export interface PCRProduct {
 
 export type ActivePanel =
     | 'view'
+    | 'align'
     | 'digest'
     | 'pcr'
     | 'primers'

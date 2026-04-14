@@ -16,9 +16,16 @@ from Bio.SeqUtils import MeltingTemp as mt
 from database import NucleotideSequence, get_session
 from services.molbio_ops import (
     DigestEnzyme,
+    clean_sequence,
     digest_sequence,
     pcr_product,
     apply_mutations,
+    reverse_complement,
+)
+from services.sequence_alignment import (
+    AlignmentSettings,
+    SequenceAlignmentError,
+    align_sequences,
 )
 
 
@@ -139,6 +146,71 @@ class MolbioOperationResponse(BaseModel):
     fragments: Optional[List[DigestFragmentResponse]] = None
     product: Optional[PCRProductResponse] = None
     message: str
+
+
+class AlignmentSettingsSchema(BaseModel):
+    mode: str = "placement"
+    strand: str = "auto"
+    reference_is_circular: bool = False
+    match_score: float = 2.0
+    mismatch_score: float = -1.0
+    gap_open_score: float = -6.0
+    gap_extend_score: float = -1.0
+
+
+class SequenceAlignmentRequest(BaseModel):
+    reference_name: Optional[str] = None
+    reference_sequence: str
+    query_name: Optional[str] = None
+    query_sequence: str
+    settings: AlignmentSettingsSchema = Field(default_factory=AlignmentSettingsSchema)
+
+
+class AlignmentVariantResponse(BaseModel):
+    type: str
+    start: int
+    end: int
+    reference_wraps_origin: bool = False
+    query_start: int
+    query_end: int
+    reference: str
+    query: str
+    label: str
+    length: int
+
+
+class SequenceAlignmentResponse(BaseModel):
+    reference_name: Optional[str] = None
+    query_name: Optional[str] = None
+    reference_sequence: str
+    query_sequence: str
+    reference_aligned: str
+    query_aligned: str
+    midline: str
+    score: float
+    mode: str
+    strand: str
+    reference_start: int
+    reference_end: int
+    reference_wraps_origin: bool
+    query_start: int
+    query_end: int
+    query_soft_clip_left: int = 0
+    query_soft_clip_right: int = 0
+    reference_flank_left: int = 0
+    reference_flank_right: int = 0
+    alignment_length: int
+    matches: int
+    mismatches: int
+    gap_columns: int
+    aligned_columns: int
+    reference_aligned_bases: int
+    query_aligned_bases: int
+    identity_pct: float
+    ungapped_identity: float
+    reference_coverage: float
+    query_coverage: float
+    variants: List[AlignmentVariantResponse] = Field(default_factory=list)
 
 
 def normalize_sequence_type(sequence_type: Optional[str], sequence: Optional[str]) -> str:
@@ -392,6 +464,33 @@ async def golden_gate(
             "Golden Gate assembly is disabled because the previous implementation removed recognition sites and concatenated fragments "
             "without robust overhang validation."
         ),
+    )
+
+
+@router.post("/alignment", response_model=SequenceAlignmentResponse)
+async def align_molecular_sequences(request: SequenceAlignmentRequest):
+    """Align two nucleotide sequences and return rendered alignment plus variant events."""
+    try:
+        result = align_sequences(
+            request.reference_sequence,
+            request.query_sequence,
+            AlignmentSettings(
+                mode=request.settings.mode,
+                strand=request.settings.strand,
+                reference_is_circular=request.settings.reference_is_circular,
+                match_score=request.settings.match_score,
+                mismatch_score=request.settings.mismatch_score,
+                gap_open_score=request.settings.gap_open_score,
+                gap_extend_score=request.settings.gap_extend_score,
+            ),
+        )
+    except SequenceAlignmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SequenceAlignmentResponse(
+        reference_name=request.reference_name,
+        query_name=request.query_name,
+        **result,
     )
 
 
@@ -964,6 +1063,286 @@ def calculate_primer_tm_result(
     )
 
 
+class PrimerDesignRequest(SequenceInput):
+    target_start: int = 0
+    target_end: Optional[int] = None
+    primer_min_length: int = 18
+    primer_max_length: int = 28
+    product_min_length: int = 120
+    product_max_length: int = 1500
+    flank_search_span: int = 80
+    gc_min_percent: float = 35.0
+    gc_max_percent: float = 65.0
+    tm_target_c: float = 62.0
+    tm_max_delta_c: float = 3.0
+    gc_clamp_min: int = 1
+    max_poly_x: int = 4
+    max_pairs: int = 8
+    overhang_forward: str = ""
+    overhang_reverse: str = ""
+    tm_settings: Optional[PrimerTmSettings] = None
+
+
+class PrimerDesignCandidateResponse(BaseModel):
+    sequence: str
+    anneal_sequence: str
+    start: int
+    end: int
+    strand: int
+    length: int
+    anneal_length: int
+    overhang_length: int
+    tm: float
+    gc_percent: float
+    gc_clamp: int
+    max_homopolymer: int
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PrimerDesignPairResponse(BaseModel):
+    rank: int
+    penalty: float
+    tm_delta: float
+    product_start: int
+    product_end: int
+    product_length: int
+    forward: PrimerDesignCandidateResponse
+    reverse: PrimerDesignCandidateResponse
+
+
+class PrimerDesignResponse(BaseModel):
+    sequence_name: Optional[str] = None
+    sequence_type: str
+    target_start: int
+    target_end: int
+    target_length: int
+    pair_count: int
+    pairs: List[PrimerDesignPairResponse] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+def _max_homopolymer_run(sequence: str) -> int:
+    longest = 0
+    current = 0
+    previous = None
+    for base in sequence:
+        if base == previous:
+            current += 1
+        else:
+            current = 1
+            previous = base
+        longest = max(longest, current)
+    return longest
+
+
+def _gc_clamp(sequence: str, window: int = 5) -> int:
+    return sum(1 for base in sequence[-window:] if base in {"G", "C"})
+
+
+def _linear_segment(sequence: str, start: int, end: int) -> Optional[str]:
+    if start < 0 or end > len(sequence) or start >= end:
+        return None
+    return sequence[start:end]
+
+
+def _design_candidate(
+    anneal_sequence: str,
+    start: int,
+    end: int,
+    strand: int,
+    overhang: str,
+    sequence_type: str,
+    tm_settings: PrimerTmSettings,
+    gc_min: float,
+    gc_max: float,
+    gc_clamp_min: int,
+    max_poly_x: int,
+    tm_target_c: float,
+    tm_max_delta_c: float,
+) -> Optional[dict[str, Any]]:
+    primer_sequence = (overhang + anneal_sequence).upper()
+    tm_result = calculate_primer_tm_result(
+        anneal_sequence,
+        sequence_type=sequence_type,
+        settings=tm_settings,
+    )
+    if tm_result.tm is None:
+        return None
+
+    gc_percent = calculate_gc_percent(anneal_sequence)
+    if gc_percent < gc_min or gc_percent > gc_max:
+        return None
+
+    clamp = _gc_clamp(primer_sequence)
+    if clamp < gc_clamp_min:
+        return None
+
+    homopolymer = _max_homopolymer_run(primer_sequence)
+    if homopolymer > max_poly_x:
+        return None
+
+    if abs(tm_result.tm - tm_target_c) > tm_max_delta_c:
+        return None
+
+    return {
+        "sequence": primer_sequence,
+        "anneal_sequence": anneal_sequence,
+        "start": start,
+        "end": end,
+        "strand": strand,
+        "length": len(primer_sequence),
+        "anneal_length": len(anneal_sequence),
+        "overhang_length": len(overhang),
+        "tm": round(tm_result.tm, 2),
+        "gc_percent": gc_percent,
+        "gc_clamp": clamp,
+        "max_homopolymer": homopolymer,
+        "warnings": tm_result.warnings,
+    }
+
+
+def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name: Optional[str]) -> PrimerDesignResponse:
+    sequence_type = normalize_sequence_type(request.sequence_type, request.sequence)
+    template = clean_inline_sequence(request.sequence or "", sequence_type)
+    if not template:
+        raise HTTPException(status_code=400, detail="Sequence contains no valid nucleotides")
+
+    sequence_length = len(template)
+    target_end = request.target_end if request.target_end is not None else sequence_length
+    if request.target_start < 0 or target_end > sequence_length or request.target_start >= target_end:
+        raise HTTPException(status_code=400, detail="Target range is invalid for the current sequence")
+    if request.primer_min_length < 12 or request.primer_max_length < request.primer_min_length:
+        raise HTTPException(status_code=400, detail="Primer length range is invalid")
+    if request.product_min_length < 40 or request.product_max_length < request.product_min_length:
+        raise HTTPException(status_code=400, detail="Product length range is invalid")
+
+    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(sequence_type)
+    forward_candidates: list[dict[str, Any]] = []
+    reverse_candidates: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    if request.is_circular:
+        warnings.append("Primer design currently excludes origin-wrapping candidates on circular templates.")
+
+    forward_start_min = max(0, request.target_start - request.flank_search_span)
+    forward_start_max = min(sequence_length, request.target_start + 1)
+    reverse_end_min = max(0, target_end)
+    reverse_end_max = min(sequence_length, target_end + request.flank_search_span)
+
+    for start in range(forward_start_min, forward_start_max):
+        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+            end = start + anneal_length
+            anneal_sequence = _linear_segment(template, start, end)
+            if anneal_sequence is None:
+                continue
+            if end > request.target_start + 4:
+                continue
+            candidate = _design_candidate(
+                anneal_sequence=anneal_sequence,
+                start=start,
+                end=end,
+                strand=1,
+                overhang=clean_primer_sequence(request.overhang_forward),
+                sequence_type=sequence_type,
+                tm_settings=tm_settings,
+                gc_min=request.gc_min_percent,
+                gc_max=request.gc_max_percent,
+                gc_clamp_min=request.gc_clamp_min,
+                max_poly_x=request.max_poly_x,
+                tm_target_c=request.tm_target_c,
+                tm_max_delta_c=request.tm_max_delta_c,
+            )
+            if candidate:
+                forward_candidates.append(candidate)
+
+    for end in range(reverse_end_min, reverse_end_max + 1):
+        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+            start = end - anneal_length
+            anneal_template = _linear_segment(template, start, end)
+            if anneal_template is None:
+                continue
+            if start < target_end - 4:
+                continue
+            anneal_sequence = reverse_complement(anneal_template, sequence_type)
+            candidate = _design_candidate(
+                anneal_sequence=anneal_sequence,
+                start=start,
+                end=end,
+                strand=-1,
+                overhang=clean_primer_sequence(request.overhang_reverse),
+                sequence_type=sequence_type,
+                tm_settings=tm_settings,
+                gc_min=request.gc_min_percent,
+                gc_max=request.gc_max_percent,
+                gc_clamp_min=request.gc_clamp_min,
+                max_poly_x=request.max_poly_x,
+                tm_target_c=request.tm_target_c,
+                tm_max_delta_c=request.tm_max_delta_c,
+            )
+            if candidate:
+                reverse_candidates.append(candidate)
+
+    forward_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
+    reverse_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
+
+    pair_candidates: list[dict[str, Any]] = []
+    for forward in forward_candidates[:48]:
+        for reverse in reverse_candidates[:48]:
+            product_length = reverse["end"] - forward["start"]
+            if product_length < request.product_min_length or product_length > request.product_max_length:
+                continue
+            if forward["start"] > request.target_start or reverse["end"] < target_end:
+                continue
+
+            tm_delta = abs(forward["tm"] - reverse["tm"])
+            penalty = round(
+                abs(forward["tm"] - request.tm_target_c)
+                + abs(reverse["tm"] - request.tm_target_c)
+                + tm_delta * 2.5
+                + abs(product_length - (target_end - request.target_start)) / max(20.0, request.flank_search_span),
+                3,
+            )
+            pair_candidates.append({
+                "penalty": penalty,
+                "tm_delta": round(tm_delta, 2),
+                "product_start": forward["start"],
+                "product_end": reverse["end"],
+                "product_length": product_length,
+                "forward": forward,
+                "reverse": reverse,
+            })
+
+    pair_candidates.sort(key=lambda pair: (pair["penalty"], pair["tm_delta"], pair["product_length"]))
+    top_pairs = pair_candidates[:request.max_pairs]
+    pairs = [
+        PrimerDesignPairResponse(
+            rank=index + 1,
+            penalty=pair["penalty"],
+            tm_delta=pair["tm_delta"],
+            product_start=pair["product_start"],
+            product_end=pair["product_end"],
+            product_length=pair["product_length"],
+            forward=PrimerDesignCandidateResponse(**pair["forward"]),
+            reverse=PrimerDesignCandidateResponse(**pair["reverse"]),
+        )
+        for index, pair in enumerate(top_pairs)
+    ]
+
+    if not pairs:
+        warnings.append("No primer pairs met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks.")
+
+    return PrimerDesignResponse(
+        sequence_name=sequence_name,
+        sequence_type=sequence_type,
+        target_start=request.target_start,
+        target_end=target_end,
+        target_length=target_end - request.target_start,
+        pair_count=len(pairs),
+        pairs=pairs,
+        warnings=warnings,
+    )
+
+
 def build_primer_response(primer: Primer) -> "PrimerResponse":
     return PrimerResponse(
         id=primer.id,
@@ -1091,6 +1470,26 @@ async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
         result.name = primer.name
         results.append(result)
     return results
+
+
+@router.post("/primer-design", response_model=PrimerDesignResponse)
+async def design_primers(
+    request: PrimerDesignRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Design PCR primer pairs around a target region using the configured Tm model."""
+    sequence_name = request.name
+    if request.sequence_id:
+        sequence = await resolve_sequence(request, session)
+        request = request.model_copy(update={
+            "sequence": sequence.sequence,
+            "sequence_type": sequence.sequence_type,
+            "is_circular": sequence.is_circular,
+            "name": sequence.name,
+        })
+        sequence_name = sequence.name
+
+    return design_primer_pairs_for_request(request, sequence_name)
 
 
 @router.get("/primers", response_model=List[PrimerResponse])
