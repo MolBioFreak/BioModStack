@@ -5,6 +5,11 @@ Last Updated: 2026-04-13
 Status: Draft
 Priority: High
 
+Related:
+
+- production-readiness follow-on spec:
+  [MolBioToolkit_Production_Readiness_Spec_2026-04-14.md](./MolBioToolkit_Production_Readiness_Spec_2026-04-14.md)
+
 ## Executive Summary
 
 This spec expands the original alpha target into a larger revision set for the molecular biology toolkit in BioModStack.
