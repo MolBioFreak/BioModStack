@@ -5,7 +5,7 @@
  */
 
 import { SeqViz } from "seqviz";
-import { useMemo } from "react";
+import { useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import type { PrimerTmSettings } from '../../lib/api';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -161,8 +161,10 @@ interface SequenceViewerProps {
     visibility: VisibilityState;
     selectedEnzymes?: string[];
     searchQuery?: string;
+    selection?: SelectionInfo | null;
     onSelection?: (sel: SelectionInfo) => void;
     onSearch?: (results: { start: number; end: number }[]) => void;
+    onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
     highlightedRegions?: { start: number; end: number; color: string }[];
     className?: string;
     viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
@@ -194,8 +196,10 @@ export function SequenceViewer({
     visibility,
     selectedEnzymes = [],
     searchQuery,
+    selection,
     onSelection,
     onSearch,
+    onContextMenu,
     highlightedRegions,
     className,
     viewMode,
@@ -298,6 +302,7 @@ export function SequenceViewer({
         <div
             className={`sequence-viewer ${className || ''}`}
             style={{ height: '100%', width: '100%', position: 'relative' }}
+            onContextMenu={onContextMenu}
         >
             <SeqViz
                 name={sequenceData.name}
@@ -308,9 +313,19 @@ export function SequenceViewer({
                 viewer={viewMode || (sequenceData.circular ? "both" : "linear")}
                 showComplement={visibility.reverseComplement}
                 rotateOnScroll
+                disableExternalFonts
+                zoom={{ linear: 62 }}
 
                 // Base pair colors from selected palette
                 bpColors={COLOR_PALETTES[colorPalette].colors as Record<string, string>}
+
+                selection={selection
+                    ? {
+                        start: selection.start,
+                        end: selection.end,
+                        clockwise: selection.clockwise,
+                    }
+                    : undefined}
 
                 // Selection handling with type info
                 onSelection={(sel) => {
