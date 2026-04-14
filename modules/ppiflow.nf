@@ -14,6 +14,7 @@ process IdentifyAnchorResidues {
     output:
     tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs
     tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores
+    tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment
 
     script:
     def frameworkType = params.get('framework_type')
