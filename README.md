@@ -24,8 +24,11 @@ sequencing, molecular biology tooling, and a BioXP robotics control surface.
   resume paths.
 - Generic binder generation and redesign:
   RFdiffusion, BindCraft, BoltzGen, and constrained protein local redesign.
+<<<<<<< HEAD
 - Experimental non-binder protein CAD:
   La-Proteina and DISCO through one experimental workflow family.
+=======
+>>>>>>> origin/main
 - Oligomer / nucleic-acid-aware generation:
   Oligo Designer / RFDpoly.
 
@@ -76,7 +79,10 @@ The current top-level model registry includes:
 - `mutagenesis`
 - `nanopore`
 - `oligo_design`
+<<<<<<< HEAD
 - `protein_cad_experimental`
+=======
+>>>>>>> origin/main
 - `protein_local_redesign`
 - `proteinmpnn`
 - `protenix`
