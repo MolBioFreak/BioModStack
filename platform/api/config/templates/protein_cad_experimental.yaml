@@ -1,0 +1,289 @@
+# Experimental Protein CAD workflow
+
+id: protein_cad_experimental
+name: Protein CAD Experimental
+icon: cube
+color: "#06B6D4"
+experimental: true
+description: >
+  Experimental de novo protein design workflow for La-Proteina and DISCO. This
+  path compiles BMS inputs into the native request formats for each backend,
+  runs generation, normalizes outputs into BMS artifacts, and serves as the
+  first landing point for future constraint-driven protein CAD work.
+goal: >
+  Establish the first BMS-integrated protein CAD workflow by compiling
+  human-defined design intent into native La-Proteina and DISCO generation
+  requests, then normalizing the outputs into reusable BMS artifacts.
+status: >
+  Experimental alpha. Backend request compilation and generation output
+  normalization are wired, but interactive 3D constraint editing,
+  validation/refolding loops, and broader CAD tooling are still under active
+  iteration.
+
+stages:
+  - name: Request Compile
+    tool: BMS Compiler
+    description: Normalize lengths, motifs, ligands, or nucleic-acid inputs into backend-native requests.
+  - name: Backend Generation
+    tool: La-Proteina / DISCO
+    description: Run the selected experimental generator in its upstream-documented inference mode.
+  - name: Artifact Normalize
+    tool: BMS Output Normalizer
+    description: Convert backend-native outputs into stable BMS design IDs, manifests, and metadata sidecars.
+
+preset_params:
+  template_model_id: protein_cad_experimental
+  template_mode_id: design
+
+user_params:
+  - name: backend
+    label: Backend
+    type: enum
+    required: true
+    default: disco
+    description: Experimental generator backend.
+    enum:
+      - disco
+      - laproteina
+    enum_labels:
+      disco: DISCO
+      laproteina: La-Proteina
+
+  - name: design_task
+    label: Design Task
+    type: enum
+    required: true
+    default: unconditional
+    description: Task family to compile for the selected backend.
+    enum:
+      - unconditional
+      - motif_scaffolding
+      - ligand_conditioned
+      - dna_conditioned
+      - rna_conditioned
+      - custom_json
+    enum_labels:
+      unconditional: Unconditional monomer
+      motif_scaffolding: Motif scaffolding
+      ligand_conditioned: Ligand-conditioned
+      dna_conditioned: DNA-conditioned
+      rna_conditioned: RNA-conditioned
+      custom_json: Custom native JSON
+
+  - name: num_designs
+    label: Number Of Designs
+    type: integer
+    required: true
+    default: 8
+    minimum: 1
+    maximum: 512
+    description: Number of designs or seeds to generate.
+
+  - name: target_lengths
+    label: Target Lengths
+    type: string
+    required: true
+    default: "100,200"
+    description: >
+      Comma-separated length sweep. For DISCO this builds masked protein-chain
+      jobs. For La-Proteina unconditional presets this becomes nres_lens.
+
+  - name: laproteina_preset
+    label: La-Proteina Preset
+    type: enum
+    required: false
+    default: ucond_tri
+    description: Upstream La-Proteina inference preset.
+    enum:
+      - ucond_tri
+      - ucond_notri
+      - ucond_notri_long
+      - motif_idx_aa
+      - motif_idx_tip
+      - motif_uidx_aa
+      - motif_uidx_tip
+    condition:
+      param: backend
+      values:
+        - laproteina
+
+  - name: laproteina_samples_per_length
+    label: Samples Per Length
+    type: integer
+    required: false
+    default: 8
+    minimum: 1
+    maximum: 512
+    description: Number of La-Proteina samples drawn for each requested length.
+    condition:
+      param: backend
+      values:
+        - laproteina
+
+  - name: laproteina_num_steps
+    label: Sampling Steps
+    type: integer
+    required: false
+    default: 400
+    minimum: 50
+    maximum: 2000
+    description: Sampling steps for La-Proteina generation configs.
+    condition:
+      param: backend
+      values:
+        - laproteina
+
+  - name: laproteina_motif_task_name
+    label: Upstream Motif Task
+    type: string
+    required: false
+    description: >
+      Optional upstream motif task key from La-Proteina's motif_dict. Leave
+      empty if you are defining a custom motif below.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_motif_pdb
+    label: Custom Motif PDB
+    type: file
+    required: false
+    description: Custom motif/reference PDB for La-Proteina motif scaffolding.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_contig_string
+    label: Contig String
+    type: string
+    required: false
+    description: Custom motif contig string for La-Proteina.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_segment_order
+    label: Segment Order
+    type: string
+    required: false
+    description: Optional custom segment order string such as A;B;C.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_atom_selection_mode
+    label: Atom Selection
+    type: enum
+    required: false
+    default: all_atom
+    description: Atom-selection mode for a custom motif task.
+    enum:
+      - all_atom
+      - tip_atoms
+      - backbone
+      - sidechain
+      - ca_only
+      - random
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_motif_min_length
+    label: Motif Min Length
+    type: integer
+    required: false
+    minimum: 1
+    maximum: 2000
+    description: Minimum total length for a custom motif task.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: laproteina_motif_max_length
+    label: Motif Max Length
+    type: integer
+    required: false
+    minimum: 1
+    maximum: 2000
+    description: Maximum total length for a custom motif task.
+    condition:
+      param: design_task
+      values:
+        - motif_scaffolding
+
+  - name: disco_experiment
+    label: DISCO Experiment
+    type: enum
+    required: false
+    default: designable
+    description: Designability-versus-diversity preset from upstream DISCO.
+    enum:
+      - designable
+      - diverse
+    condition:
+      param: backend
+      values:
+        - disco
+
+  - name: disco_effort
+    label: DISCO Effort
+    type: enum
+    required: false
+    default: fast
+    description: Compute preset. Conditional DISCO tasks should generally use max.
+    enum:
+      - fast
+      - max
+    condition:
+      param: backend
+      values:
+        - disco
+
+  - name: disco_input_json_path
+    label: Native DISCO Input JSON
+    type: file
+    required: false
+    description: >
+      Existing DISCO JSON input. Required for custom_json mode and optional for
+      advanced direct launches.
+    condition:
+      param: design_task
+      values:
+        - custom_json
+
+  - name: disco_ligand_sdf
+    label: Ligand SDF
+    type: file
+    required: false
+    description: Ligand SDF file used for ligand-conditioned DISCO generation.
+    condition:
+      param: design_task
+      values:
+        - ligand_conditioned
+
+  - name: disco_ligand_name
+    label: Ligand Name
+    type: string
+    required: false
+    description: Human-readable label for the ligand-conditioned campaign.
+    condition:
+      param: design_task
+      values:
+        - ligand_conditioned
+
+  - name: disco_na_sequence
+    label: DNA/RNA Sequence
+    type: text
+    required: false
+    description: Nucleic-acid sequence used for DNA- or RNA-conditioned DISCO generation.
+    condition:
+      param: design_task
+      values:
+        - dna_conditioned
+        - rna_conditioned
