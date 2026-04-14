@@ -2115,6 +2115,8 @@ async def ingest_maturation_data(
         output_path / "ppiflow" / "results",
         output_path / "collected" / "backbone_refine",
         output_path / "collected" / "maturation",
+        output_path / "collected" / "ppiflow_generator_raw",
+        output_path / "collected" / "ppiflow_generator_filtered",
         output_path,
     ]
     
@@ -2565,14 +2567,20 @@ async def ingest_published_maturation_structures(
 
 def _discover_collected_ppiflow_structures(output_path: Path) -> list[tuple[str, Path]]:
     discovered: list[tuple[str, Path]] = []
-    for stage_name in ("backbone_refine", "maturation"):
+    seen_design_names: set[str] = set()
+    for stage_name in ("backbone_refine", "maturation", "ppiflow_generator_filtered", "ppiflow_generator_raw"):
         stage_dir = output_path / "collected" / stage_name
         if not stage_dir.exists():
             continue
         for ext in ("*.pdb", "*.cif", "*.mmcif"):
             for structure_path in sorted(stage_dir.glob(ext)):
-                if _is_final_ppiflow_structure_path(structure_path):
-                    discovered.append((stage_name, structure_path))
+                if not _is_final_ppiflow_structure_path(structure_path):
+                    continue
+                design_name = structure_path.stem
+                if design_name in seen_design_names:
+                    continue
+                seen_design_names.add(design_name)
+                discovered.append((stage_name, structure_path))
     return discovered
 
 
@@ -2609,6 +2617,10 @@ async def ingest_collected_ppiflow_structures(
         design_name = structure_path.stem
         if design_name in existing_names:
             continue
+
+        ingested_stage_mode = stage_name
+        if stage_name in {"ppiflow_generator_raw", "ppiflow_generator_filtered"}:
+            ingested_stage_mode = "generator_backbone_refine"
 
         fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
         fam_payload = _load_json_payload(fam_json_path)
@@ -2673,8 +2685,12 @@ async def ingest_collected_ppiflow_structures(
             backbone_id=parse_backbone_id(design_name),
             **_design_lineage_fields(job_context, lineage),
             stage_family="ppiflow",
-            stage_mode=stage_name,
+            stage_mode=ingested_stage_mode,
             selected_loop_scope=job_context.get("selected_loop_scope"),
+            artifact_class=(
+                infer_antibody_artifact_class_from_stage("ppiflow", ingested_stage_mode)
+                or job_context.get("artifact_class")
+            ),
             provenance={
                 **job_context.get("provenance", {}),
                 "artifact_group": "ppiflow",

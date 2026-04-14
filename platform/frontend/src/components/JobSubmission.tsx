@@ -272,7 +272,7 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
-    const [wizardMode, setWizardMode] = useState<'templates' | 'manual'>('templates');
+    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>('templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
@@ -369,6 +369,90 @@ export function JobSubmission() {
         bindcraft: 'bindcraft',
         protein_local_redesign: 'protein_local_redesign',
     };
+    const hardcodedWorkflowTemplates = [
+        {
+            id: 'mutagenesis',
+            name: 'Mutagenesis Library',
+            description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
+            icon: 'dna',
+            color: '#8B5CF6',
+            stages: [{ tool: 'Library Gen' }, { tool: 'Structure Prediction' }],
+        },
+        {
+            id: 'structure_prediction',
+            name: 'Structure Prediction',
+            description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
+            icon: 'microscope',
+            color: '#F59E0B',
+            stages: [{ tool: 'Boltz-2 / RF3 / Protenix' }],
+        },
+        {
+            id: 'antibody_denovo',
+            name: 'De Novo Nanobody Toolkit',
+            description: 'Launch RFantibody, BoltzGen nanobody, or seeded PPIFlow generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
+            icon: 'flask',
+            color: '#14B8A6',
+            stages: [
+                { tool: 'RFantibody / BoltzGen / PPIFlow' },
+                { tool: 'FAMPNN' },
+                { tool: 'PPIFlow (Opt.)' },
+                { tool: 'Protenix / Boltz2' },
+                { tool: 'Review + QC' }
+            ],
+        },
+        {
+            id: 'boltzgen_design',
+            name: 'BoltzGEN',
+            description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
+            icon: 'pill',
+            color: '#EC4899',
+            stages: [{ tool: 'BoltzGen' }, { tool: 'Filtering' }, { tool: 'Docking' }],
+        },
+        {
+            id: 'bindcraft',
+            name: 'BindCraft',
+            description: 'Design minibinders and peptides via AF2 hallucination, ProteinMPNN sequence optimization, and PyRosetta filtering.',
+            icon: 'binder',
+            color: '#10B981',
+            stages: [{ tool: 'AF2 Hallucination' }, { tool: 'MPNN' }, { tool: 'Filtering' }],
+        },
+        {
+            id: 'oligo_design',
+            name: 'Oligo Designer',
+            description: 'Design DNA, RNA, proteins, and mixed nucleoprotein assemblies using RFDpoly diffusion with Boltz-2 validation.',
+            icon: 'dna',
+            color: '#6366F1',
+            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
+        },
+        {
+            id: 'protein_local_redesign',
+            name: 'Protein Local Redesign',
+            description: 'Use RFdiffusion3 to locally remodel a selected region of an existing structure, redesign sequence with FA-MPNN or ProteinMPNN, and optionally validate with Boltz-2.',
+            icon: 'cube',
+            color: '#22C55E',
+            stages: [
+                { tool: 'Region Resolve' },
+                { tool: 'RFdiffusion3' },
+                { tool: 'FAMPNN / MPNN' },
+                { tool: 'Boltz-2 (Opt.)' }
+            ],
+        }
+    ];
+    const visibleApiTemplates = useMemo(() => {
+        const templates = templatesData?.data ?? [];
+        return templates.filter((t: any) =>
+            !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
+            (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
+        );
+    }, [templatesData]);
+    const workflowTemplateCards = useMemo(
+        () => [...visibleApiTemplates.filter((t: any) => !t.experimental), ...hardcodedWorkflowTemplates],
+        [visibleApiTemplates]
+    );
+    const experimentalTemplateCards = useMemo(
+        () => visibleApiTemplates.filter((t: any) => t.experimental),
+        [visibleApiTemplates]
+    );
 
     const routeUserTemplate = (template: any) => {
         const dedicatedTemplateId =
@@ -401,6 +485,7 @@ export function JobSubmission() {
         // Skip fetch for hardcoded templates - they don't exist in the API
         enabled: !!selectedTemplateId && !hardcodedTemplates.includes(selectedTemplateId),
     });
+    const templateDetail = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
 
     // Fetch ligand presets for dynamic dropdown
     const { data: ligandPresetsData } = useQuery({
@@ -442,14 +527,24 @@ export function JobSubmission() {
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
-        if (selectedTemplateData?.data?.user_params) {
+        if (templateDetail?.user_params) {
             const defaults: Record<string, any> = {};
-            selectedTemplateData.data.user_params.forEach((p: any) => {
+            templateDetail.user_params.forEach((p: any) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             setParams(defaults);
         }
-    }, [selectedTemplateData]);
+    }, [templateDetail]);
+
+    useEffect(() => {
+        if (!selectedTemplateId || hardcodedTemplates.includes(selectedTemplateId)) {
+            return;
+        }
+        const matchedTemplate = visibleApiTemplates.find((template: any) => template.id === selectedTemplateId);
+        if (matchedTemplate) {
+            setWizardMode(matchedTemplate.experimental ? 'experimental' : 'templates');
+        }
+    }, [selectedTemplateId, visibleApiTemplates]);
 
     // Handle param change
     const updateParam = (key: string, value: any) => {
@@ -481,8 +576,9 @@ export function JobSubmission() {
     }, [visibleParams]);
 
     // Check if ready to submit - works for both template mode and manual mode
+    const isTemplateMode = wizardMode === 'templates' || wizardMode === 'experimental';
     const isReady = jobName && (
-        (wizardMode === 'templates' && selectedTemplateId) ||
+        (isTemplateMode && selectedTemplateId) ||
         (wizardMode === 'manual' && selectedModelId && selectedModeId)
     );
 
@@ -490,18 +586,25 @@ export function JobSubmission() {
         if (!isReady) return;
 
         // Get template data - handle both axios response wrapper and direct data
-        const templateData = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
+        const templateData = templateDetail;
 
-        if (wizardMode === 'templates' && templateData) {
+        if (isTemplateMode && templateData) {
             // Template mode: merge preset params with user params
             const mergedParams = { ...templateData.preset_params, ...params };
+            const templateModelIdOverride = mergedParams.template_model_id;
+            const templateModeIdOverride = mergedParams.template_mode_id;
+            delete mergedParams.template_model_id;
+            delete mergedParams.template_mode_id;
 
             // Determine the Nextflow profile based on template type
             // Priority: rfd_mode (binder/monomer) > diffusion_method (boltzgen) > pred_method (structure prediction/validation) > skip_rfd (fampnn_predict)
             let nextflowProfile = '';
             let effectiveModelId = 'template_' + (selectedTemplateId || 'unknown');
 
-            if (mergedParams.rfd_mode) {
+            if (templateModelIdOverride && templateModeIdOverride) {
+                effectiveModelId = templateModelIdOverride;
+                nextflowProfile = templateModeIdOverride;
+            } else if (mergedParams.rfd_mode) {
                 // Binder or monomer design templates
                 nextflowProfile = mergedParams.rfd_mode;
                 effectiveModelId = 'rfdiffusion';
@@ -781,11 +884,11 @@ export function JobSubmission() {
                                             {
                                                 id: 'antibody_denovo',
                                                 name: 'De Novo Nanobody Toolkit',
-                                                description: 'Launch RFantibody or BoltzGen nanobody generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
+                                                description: 'Launch RFantibody, BoltzGen nanobody, or seeded PPIFlow generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
                                                 icon: 'flask',
                                                 color: '#14B8A6', // Teal (was Emerald)
                                                 stages: [
-                                                    { tool: 'RFantibody / BoltzGen' },
+                                                    { tool: 'RFantibody / BoltzGen / PPIFlow' },
                                                     { tool: 'FAMPNN' },
                                                     { tool: 'PPIFlow (Opt.)' },
                                                     { tool: 'Protenix / Boltz2' },
