@@ -146,6 +146,14 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         return 'rfantibody';
     }
 
+    if (sourceStage === 'post_boltzgen') {
+        return 'boltzgen';
+    }
+
+    if (sourceStage === 'post_ppiflow_generator') {
+        return 'ppiflow';
+    }
+
     if (sourceStage === 'post_fampnn' || artifactGroup === 'candidate') {
         return 'fampnn';
     }
@@ -284,11 +292,20 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
     }
 
     if (
+        stage === 'post_boltzgen' ||
         containsAny(stageFamily, ['boltzgen']) ||
         containsAny(stageMode, ['nanobody_binder', 'antibody_binder']) ||
         (modelId === 'boltzgen' && ['nanobody_binder', 'antibody_binder'].includes(boltzgenMode))
     ) {
         return 'boltzgen';
+    }
+
+    if (
+        stage === 'post_ppiflow_generator' ||
+        containsAny(stageMode, ['generator_backbone_refine']) ||
+        (modelId === 'ppiflow' && mode === 'generator_backbone_refine')
+    ) {
+        return 'ppiflow';
     }
 
     if (

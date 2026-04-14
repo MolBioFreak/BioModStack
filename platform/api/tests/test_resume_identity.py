@@ -18,12 +18,14 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from routers.jobs import (
+    _awaiting_stage_to_resume_hint,
     _dedupe_child_attempts,
     _ensure_job_resume_identity,
     _normalize_output_dir_reference,
     _plan_output_dir_cleanup,
     _reconcile_child_jobs_from_history,
     _resume_defaults_from_awaiting_payload,
+    _should_spawn_antibody_refinement_on_resume,
 )
 from services.stage_review import (
     _compute_antibody_ca_rog,
@@ -78,6 +80,66 @@ def test_ensure_job_resume_identity_preserves_root_batch_name() -> None:
         assert normalized["job_name"] == "RBX1 beta large"
         assert normalized["resume_root_job_id"] == "root-job-123"
         assert normalized["batch_name"] == "RBX1 beta large_root-job-123"
+
+
+def test_should_spawn_antibody_refinement_on_resume_for_boltzgen_review_gate() -> None:
+    paused_boltzgen_job = DummyChild(
+        id="paused-boltzgen",
+        name="CD3E boltzgen batch",
+        child_stage="boltzgen",
+        parent_job_id=None,
+        batch_name=None,
+        created_at=datetime(2026, 4, 13, 10, 0, 0),
+        status="awaiting_input",
+        awaiting_input=True,
+        awaiting_stage="post_boltzgen",
+        params={
+            "framework_type": "nanobody",
+            "boltzgen_mode": "nanobody_binder",
+            "antibody_chains": "H",
+        },
+    )
+    paused_boltzgen_job.model_id = "boltzgen"  # type: ignore[attr-defined]
+    paused_boltzgen_job.mode = "nanobody_binder"  # type: ignore[attr-defined]
+
+    assert _should_spawn_antibody_refinement_on_resume(paused_boltzgen_job) is True
+
+    paused_boltzgen_job.awaiting_stage = "post_fampnn"
+    assert _should_spawn_antibody_refinement_on_resume(paused_boltzgen_job) is False
+
+
+def test_should_spawn_antibody_refinement_on_resume_for_ppiflow_generator_review_gate() -> None:
+    paused_ppiflow_job = DummyChild(
+        id="paused-ppiflow",
+        name="EGFR ppiflow seeded batch",
+        child_stage="ppiflow",
+        parent_job_id=None,
+        batch_name=None,
+        created_at=datetime(2026, 4, 14, 9, 0, 0),
+        status="awaiting_input",
+        awaiting_input=True,
+        awaiting_stage="post_ppiflow_generator",
+        params={
+            "framework_type": "nanobody",
+            "antibody_chains": "H",
+            "stage_family": "ppiflow",
+            "stage_mode": "generator_backbone_refine",
+        },
+    )
+    paused_ppiflow_job.model_id = "ppiflow"  # type: ignore[attr-defined]
+    paused_ppiflow_job.mode = "generator_backbone_refine"  # type: ignore[attr-defined]
+
+    assert _should_spawn_antibody_refinement_on_resume(paused_ppiflow_job) is True
+
+
+def test_awaiting_stage_to_resume_hint_supports_generator_and_validation_gates() -> None:
+    assert _awaiting_stage_to_resume_hint("post_rfantibody") == "rfantibody"
+    assert _awaiting_stage_to_resume_hint("post_boltzgen") == "boltzgen"
+    assert _awaiting_stage_to_resume_hint("post_ppiflow_generator") == "ppiflow"
+    assert _awaiting_stage_to_resume_hint("post_fampnn") == "fampnn"
+    assert _awaiting_stage_to_resume_hint("post_structure_validation") == "structure_validation"
+    assert _awaiting_stage_to_resume_hint("pre_protenix_msa") == "structure_validation"
+    assert _awaiting_stage_to_resume_hint("unknown_stage") is None
 
 
 def test_dedupe_child_attempts_keeps_latest_attempt_per_slot() -> None:
