@@ -1383,7 +1383,14 @@ export interface SequenceFeature {
     end: number;
     strand: number;
     color?: string;
+    description?: string;
     notes?: Record<string, any>;
+    qualifiers?: Record<string, any>;
+    provenance?: Record<string, any>;
+    segments?: Array<{
+        start: number;
+        end: number;
+    }>;
 }
 
 export interface SequencePrimer {
@@ -1399,6 +1406,15 @@ export interface SequencePrimer {
     tm_algorithm?: string;
     tm_salt_correction?: string;
     tm_settings?: PrimerTmSettings;
+    notes?: Record<string, any>;
+    provenance?: Record<string, any>;
+    sites?: Array<{
+        start: number;
+        end: number;
+        strand: number;
+        tm?: number;
+        note?: string;
+    }>;
 }
 
 export interface SequenceAnalysisTrack {
@@ -1432,6 +1448,10 @@ export interface NucleotideSequence {
     accession: string | null;
     source_file: string | null;
     gc_content: number | null;
+    parent_id?: string | null;
+    operation?: string | null;
+    operation_params?: Record<string, unknown> | null;
+    version?: number | null;
     entity_kind?: string;
     topology?: 'circular' | 'linear';
     created_at: string;
@@ -1468,6 +1488,110 @@ export interface NucleotideSequenceCreate {
     organism?: string;
     accession?: string;
     source_file?: string;
+}
+
+export interface AssemblyFragmentEnd {
+    type: 'blunt' | 'sticky_5' | 'sticky_3';
+    overhang?: string;
+    label?: string;
+}
+
+export interface AssemblyFragmentInput {
+    id: string;
+    name: string;
+    sequence: string;
+    orientation?: 'forward' | 'reverse';
+    circular?: boolean;
+    role?: string;
+    source_sequence_id?: string;
+    source_name?: string;
+    source_start?: number;
+    source_end?: number;
+    source_wraps_origin?: boolean;
+    left_end?: AssemblyFragmentEnd | null;
+    right_end?: AssemblyFragmentEnd | null;
+    metadata?: Record<string, unknown>;
+}
+
+export interface AssemblyFragmentResult {
+    id: string;
+    name: string;
+    orientation: 'forward' | 'reverse' | string;
+    role?: string | null;
+    source_sequence_id?: string | null;
+    source_name?: string | null;
+    source_start?: number | null;
+    source_end?: number | null;
+    source_wraps_origin?: boolean;
+    left_end?: AssemblyFragmentEnd | null;
+    right_end?: AssemblyFragmentEnd | null;
+    metadata?: Record<string, unknown> | null;
+}
+
+export interface AssemblyJunction {
+    left_fragment_id: string;
+    right_fragment_id: string;
+    left_fragment_name: string;
+    right_fragment_name: string;
+    mode: 'ligation' | 'gibson' | 'golden_gate' | string;
+    left_end_type?: string | null;
+    right_end_type?: string | null;
+    overhang_sequence?: string | null;
+    overlap_sequence?: string | null;
+    overlap_length: number;
+    junction_sequence: string;
+    validation: string;
+    notes: string[];
+}
+
+export interface AssemblyProduct {
+    sequence: string;
+    circular: boolean;
+    length: number;
+    mode: 'ligation' | 'gibson' | 'golden_gate' | string;
+    fragments: AssemblyFragmentResult[];
+    junctions: AssemblyJunction[];
+    warnings: string[];
+    validation_notes: string[];
+}
+
+export interface AssemblyOperationResponse {
+    product: AssemblyProduct;
+    saved_sequence?: NucleotideSequence | null;
+    message: string;
+}
+
+export interface LigationAssemblyRequest {
+    fragments: AssemblyFragmentInput[];
+    circular?: boolean;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GibsonAssemblyRequest {
+    fragments: AssemblyFragmentInput[];
+    circular?: boolean;
+    minimum_overlap?: number;
+    preferred_overlap?: number | null;
+    maximum_overlap?: number | null;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GoldenGateAssemblyRequest {
+    fragments: AssemblyFragmentInput[];
+    circular?: boolean;
+    enzyme_name?: string;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GoldenGateAssemblyOptionsResponse {
+    enzymes: Array<{
+        name: string;
+        site: string;
+        overhang_length: number;
+    }>;
 }
 
 export interface FetchNucleotideSequencesParams {
@@ -1510,6 +1634,11 @@ export interface RnaStructureSettings {
     gamma: number;
     probability_cutoff: number;
     max_pairs: number;
+    shape_method?: string | null;
+    shape_slope?: number;
+    shape_intercept?: number;
+    shape_reactivities?: Array<number | null> | null;
+    hard_constraints?: string | null;
 }
 
 export interface RnaStructurePrediction {
@@ -1567,6 +1696,7 @@ export interface RnaStructureOptionsResponse {
         max_bounded_fold_length: number;
         max_bp_span: number;
     };
+    shape_methods: string[];
 }
 
 export interface RnaStructureRequest {
@@ -1577,6 +1707,180 @@ export interface RnaStructureRequest {
     settings?: Partial<RnaStructureSettings>;
 }
 
+export interface SequenceAlignmentSettings {
+    mode: 'global' | 'local' | 'placement' | 'fragment';
+    strand?: 'auto' | 'forward' | 'reverse';
+    reference_is_circular?: boolean;
+    match_score: number;
+    mismatch_score: number;
+    gap_open_score: number;
+    gap_extend_score: number;
+}
+
+export interface SequenceAlignmentVariant {
+    type: 'substitution' | 'insertion' | 'deletion' | string;
+    start: number;
+    end: number;
+    reference_wraps_origin?: boolean;
+    query_start: number;
+    query_end: number;
+    reference: string;
+    query: string;
+    label: string;
+    length: number;
+}
+
+export interface SequenceAlignmentResult {
+    reference_name?: string | null;
+    query_name?: string | null;
+    reference_sequence: string;
+    query_sequence: string;
+    reference_aligned: string;
+    query_aligned: string;
+    midline: string;
+    score: number;
+    mode: 'global' | 'local' | 'placement' | 'fragment' | string;
+    strand?: 'forward' | 'reverse' | string;
+    reference_start: number;
+    reference_end: number;
+    reference_wraps_origin?: boolean;
+    query_start: number;
+    query_end: number;
+    query_soft_clip_left?: number;
+    query_soft_clip_right?: number;
+    reference_flank_left?: number;
+    reference_flank_right?: number;
+    alignment_length: number;
+    matches: number;
+    mismatches: number;
+    gap_columns: number;
+    aligned_columns?: number;
+    reference_aligned_bases?: number;
+    query_aligned_bases?: number;
+    identity_pct?: number;
+    ungapped_identity: number;
+    reference_coverage: number;
+    query_coverage: number;
+    variants: SequenceAlignmentVariant[];
+}
+
+export interface PrimerDesignRequest {
+    sequence_id?: string;
+    name?: string;
+    sequence?: string;
+    sequence_type?: 'dna' | 'rna';
+    is_circular?: boolean;
+    target_start: number;
+    target_end?: number;
+    primer_min_length?: number;
+    primer_max_length?: number;
+    product_min_length?: number;
+    product_max_length?: number;
+    flank_search_span?: number;
+    gc_min_percent?: number;
+    gc_max_percent?: number;
+    tm_target_c?: number;
+    tm_max_delta_c?: number;
+    gc_clamp_min?: number;
+    max_poly_x?: number;
+    max_pairs?: number;
+    overhang_forward?: string;
+    overhang_reverse?: string;
+    tm_settings?: PrimerTmSettings;
+}
+
+export interface PrimerDesignCandidate {
+    sequence: string;
+    anneal_sequence: string;
+    start: number;
+    end: number;
+    strand: 1 | -1;
+    length: number;
+    anneal_length: number;
+    overhang_length: number;
+    tm: number;
+    gc_percent: number;
+    gc_clamp: number;
+    max_homopolymer: number;
+    max_self_complement: number;
+    three_prime_self_complement: number;
+    max_hairpin_stem: number;
+    hairpin_loop_size?: number | null;
+    binding_site_count?: number | null;
+    off_target_site_count?: number | null;
+    warnings: string[];
+}
+
+export interface PrimerDesignPair {
+    rank: number;
+    penalty: number;
+    tm_delta: number;
+    product_start: number;
+    product_end: number;
+    product_length: number;
+    heterodimer_complement: number;
+    three_prime_heterodimer: number;
+    warnings: string[];
+    forward: PrimerDesignCandidate;
+    reverse: PrimerDesignCandidate;
+}
+
+export interface PrimerDesignResponse {
+    sequence_name?: string | null;
+    sequence_type: 'dna' | 'rna';
+    target_start: number;
+    target_end: number;
+    target_length: number;
+    pair_count: number;
+    pairs: PrimerDesignPair[];
+    warnings: string[];
+}
+
+export interface PrimerQcBindingPosition {
+    start: number;
+    end: number;
+    strand: number;
+    anneal_length: number;
+    overhang_length: number;
+    reverse_primer_binding: boolean;
+}
+
+export interface PrimerQcMetrics {
+    sequence: string;
+    sequence_type: 'dna' | 'rna' | string;
+    length: number;
+    gc_percent: number;
+    max_self_complement: number;
+    three_prime_self_complement: number;
+    max_hairpin_stem: number;
+    hairpin_loop_size?: number | null;
+    binding_site_count?: number | null;
+    off_target_site_count?: number | null;
+    binding_positions: PrimerQcBindingPosition[];
+    warnings: string[];
+}
+
+export interface PrimerQcEntry {
+    id?: string | null;
+    name?: string | null;
+    qc: PrimerQcMetrics;
+}
+
+export interface PrimerPairQcEntry {
+    left_id?: string | null;
+    left_name?: string | null;
+    right_id?: string | null;
+    right_name?: string | null;
+    heterodimer_complement: number;
+    three_prime_heterodimer: number;
+    warnings: string[];
+}
+
+export interface PrimerQcResponse {
+    primers: PrimerQcEntry[];
+    pairwise: PrimerPairQcEntry[];
+}
+
 export const fetchRnaStructureOptions = () =>
     api.get<RnaStructureOptionsResponse>('/api/molbio/rna-structure/options');
 
@@ -1585,6 +1889,35 @@ export const foldRnaStructure = (data: RnaStructureRequest & { include_partition
 
 export const partitionRnaStructure = (data: RnaStructureRequest) =>
     api.post<RnaStructureResult>('/api/molbio/rna-structure/partition', data);
+
+export const alignMolBioSequences = (data: {
+    reference_name?: string;
+    reference_sequence: string;
+    query_name?: string;
+    query_sequence: string;
+    settings?: Partial<SequenceAlignmentSettings>;
+}) => api.post<SequenceAlignmentResult>('/api/molbio/alignment', data);
+
+export const simulateLigationAssembly = (data: LigationAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data);
+
+export const saveLigationAssembly = (data: LigationAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data);
+
+export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data);
+
+export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+
+export const fetchGoldenGateAssemblyOptions = () =>
+    api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');
+
+export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data);
+
+export const saveGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data);
 
 // Antibody API
 export interface AntibodyOverlaySelection {
@@ -2085,6 +2418,22 @@ export const calculatePrimerTm = (data: {
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
 }) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
+
+export const calculatePrimerQc = (data: {
+    primers: Array<{
+        id?: string;
+        name?: string;
+        sequence: string;
+        sequence_type?: 'dna' | 'rna';
+    }>;
+    template_sequence?: string;
+    template_sequence_type?: 'dna' | 'rna';
+    template_is_circular?: boolean;
+    include_pairwise?: boolean;
+}) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data);
+
+export const designPrimers = (data: PrimerDesignRequest) =>
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data);
 
 export const fetchPrimers = (params?: {
     search?: string;

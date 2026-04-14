@@ -794,8 +794,11 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                         >
                             Back
                         </button>
-                        <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--success)')}>
+                        <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
                             RFD3 Local Editing
+                        </span>
+                        <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
+                            Experimental Alpha
                         </span>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs">
@@ -815,6 +818,15 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                     <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
                         Choose an existing complex visually, assign the redesign and context chains, then define the editable region directly on the structure using the same Mol* and residue-selection interaction model used elsewhere in the platform.
                     </p>
+                    <div className="mt-4 max-w-4xl rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--warning)]">Experimental Workflow</p>
+                        <p className="mt-2 text-sm leading-6 text-[var(--text-primary)]">
+                            <span className="font-semibold">Goal:</span> make constrained local protein editing a first-class BMS workflow by combining visual region selection, RFdiffusion3 remodeling, sequence redesign, and optional validation inside one reusable entrypoint.
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                            <span className="font-semibold text-[var(--text-primary)]">Current status:</span> early alpha. The structure-driven redesign loop is usable, but broader refinement logic, validation semantics, and downstream review behavior are still being hardened.
+                        </p>
+                    </div>
                 </div>
             </div>
 

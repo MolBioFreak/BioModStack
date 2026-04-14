@@ -14,11 +14,29 @@ import uuid
 from Bio.SeqUtils import MeltingTemp as mt
 
 from database import NucleotideSequence, get_session
+from services.assembly.common import fragment_provenance_payload
+from services.assembly.gibson import simulate_gibson
+from services.assembly.golden_gate import TYPE_IIS_ENZYMES, get_type_iis_enzyme, simulate_golden_gate
+from services.assembly.ligation import simulate_ligation
+from services.assembly.types import (
+    AssemblyError,
+    AssemblyFragment,
+    AssemblyJunction,
+    FragmentEnd,
+)
 from services.molbio_ops import (
     DigestEnzyme,
+    clean_sequence,
     digest_sequence,
     pcr_product,
     apply_mutations,
+    reverse_complement,
+)
+from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
+from services.sequence_alignment import (
+    AlignmentSettings,
+    SequenceAlignmentError,
+    align_sequences,
 )
 
 
@@ -141,6 +159,167 @@ class MolbioOperationResponse(BaseModel):
     message: str
 
 
+class AssemblyFragmentEndSchema(BaseModel):
+    type: str
+    overhang: str = ""
+    label: Optional[str] = None
+
+
+class AssemblyFragmentSchema(BaseModel):
+    id: str
+    name: str
+    sequence: str
+    orientation: str = "forward"
+    circular: bool = False
+    role: Optional[str] = None
+    source_sequence_id: Optional[str] = None
+    source_name: Optional[str] = None
+    source_start: Optional[int] = None
+    source_end: Optional[int] = None
+    source_wraps_origin: bool = False
+    left_end: Optional[AssemblyFragmentEndSchema] = None
+    right_end: Optional[AssemblyFragmentEndSchema] = None
+    metadata: Optional[dict[str, Any]] = None
+
+
+class AssemblyFragmentResponse(BaseModel):
+    id: str
+    name: str
+    orientation: str
+    role: Optional[str] = None
+    source_sequence_id: Optional[str] = None
+    source_name: Optional[str] = None
+    source_start: Optional[int] = None
+    source_end: Optional[int] = None
+    source_wraps_origin: bool = False
+    left_end: Optional[AssemblyFragmentEndSchema] = None
+    right_end: Optional[AssemblyFragmentEndSchema] = None
+    metadata: Optional[dict[str, Any]] = None
+
+
+class AssemblyJunctionResponse(BaseModel):
+    left_fragment_id: str
+    right_fragment_id: str
+    left_fragment_name: str
+    right_fragment_name: str
+    mode: str
+    left_end_type: Optional[str] = None
+    right_end_type: Optional[str] = None
+    overhang_sequence: Optional[str] = None
+    overlap_sequence: Optional[str] = None
+    overlap_length: int = 0
+    junction_sequence: str
+    validation: str = "validated"
+    notes: List[str] = Field(default_factory=list)
+
+
+class AssemblyProductResponse(BaseModel):
+    sequence: str
+    circular: bool
+    length: int
+    mode: str
+    fragments: List[AssemblyFragmentResponse]
+    junctions: List[AssemblyJunctionResponse]
+    warnings: List[str] = Field(default_factory=list)
+    validation_notes: List[str] = Field(default_factory=list)
+
+
+class AssemblyOperationResponse(BaseModel):
+    product: AssemblyProductResponse
+    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    message: str
+
+
+class LigationAssemblyRequest(BaseModel):
+    fragments: List[AssemblyFragmentSchema]
+    circular: bool = True
+    new_name: Optional[str] = None
+    save_description: Optional[str] = None
+
+
+class GibsonAssemblyRequest(BaseModel):
+    fragments: List[AssemblyFragmentSchema]
+    circular: bool = True
+    minimum_overlap: int = 20
+    preferred_overlap: Optional[int] = 28
+    maximum_overlap: Optional[int] = 80
+    new_name: Optional[str] = None
+    save_description: Optional[str] = None
+
+
+class GoldenGateAssemblyRequest(BaseModel):
+    fragments: List[AssemblyFragmentSchema]
+    circular: bool = True
+    enzyme_name: str = "BsaI"
+    new_name: Optional[str] = None
+    save_description: Optional[str] = None
+
+
+class AlignmentSettingsSchema(BaseModel):
+    mode: str = "placement"
+    strand: str = "auto"
+    reference_is_circular: bool = False
+    match_score: float = 2.0
+    mismatch_score: float = -1.0
+    gap_open_score: float = -6.0
+    gap_extend_score: float = -1.0
+
+
+class SequenceAlignmentRequest(BaseModel):
+    reference_name: Optional[str] = None
+    reference_sequence: str
+    query_name: Optional[str] = None
+    query_sequence: str
+    settings: AlignmentSettingsSchema = Field(default_factory=AlignmentSettingsSchema)
+
+
+class AlignmentVariantResponse(BaseModel):
+    type: str
+    start: int
+    end: int
+    reference_wraps_origin: bool = False
+    query_start: int
+    query_end: int
+    reference: str
+    query: str
+    label: str
+    length: int
+
+
+class SequenceAlignmentResponse(BaseModel):
+    reference_name: Optional[str] = None
+    query_name: Optional[str] = None
+    reference_sequence: str
+    query_sequence: str
+    reference_aligned: str
+    query_aligned: str
+    midline: str
+    score: float
+    mode: str
+    strand: str
+    reference_start: int
+    reference_end: int
+    reference_wraps_origin: bool
+    query_start: int
+    query_end: int
+    query_soft_clip_left: int = 0
+    query_soft_clip_right: int = 0
+    reference_flank_left: int = 0
+    reference_flank_right: int = 0
+    alignment_length: int
+    matches: int
+    mismatches: int
+    gap_columns: int
+    aligned_columns: int
+    reference_aligned_bases: int
+    query_aligned_bases: int
+    identity_pct: float
+    ungapped_identity: float
+    reference_coverage: float
+    query_coverage: float
+    variants: List[AlignmentVariantResponse] = Field(default_factory=list)
+
+
 def normalize_sequence_type(sequence_type: Optional[str], sequence: Optional[str]) -> str:
     normalized = (sequence_type or "").strip().lower()
     if normalized in {"dna", "rna"}:
@@ -236,6 +415,152 @@ def create_child_sequence(
     )
 
 
+def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragment:
+    return AssemblyFragment(
+        id=fragment.id,
+        name=fragment.name,
+        sequence=fragment.sequence,
+        orientation=fragment.orientation,  # type: ignore[arg-type]
+        circular=fragment.circular,
+        role=fragment.role,
+        source_sequence_id=fragment.source_sequence_id,
+        source_name=fragment.source_name,
+        source_start=fragment.source_start,
+        source_end=fragment.source_end,
+        source_wraps_origin=fragment.source_wraps_origin,
+        left_end=None if fragment.left_end is None else FragmentEnd(
+            type=fragment.left_end.type,  # type: ignore[arg-type]
+            overhang=fragment.left_end.overhang,
+            label=fragment.left_end.label,
+        ),
+        right_end=None if fragment.right_end is None else FragmentEnd(
+            type=fragment.right_end.type,  # type: ignore[arg-type]
+            overhang=fragment.right_end.overhang,
+            label=fragment.right_end.label,
+        ),
+        metadata=fragment.metadata or {},
+    )
+
+
+def assembly_junction_to_response(junction: AssemblyJunction) -> AssemblyJunctionResponse:
+    return AssemblyJunctionResponse(
+        left_fragment_id=junction.left_fragment_id,
+        right_fragment_id=junction.right_fragment_id,
+        left_fragment_name=junction.left_fragment_name,
+        right_fragment_name=junction.right_fragment_name,
+        mode=junction.mode,
+        left_end_type=junction.left_end_type,
+        right_end_type=junction.right_end_type,
+        overhang_sequence=junction.overhang_sequence,
+        overlap_sequence=junction.overlap_sequence,
+        overlap_length=junction.overlap_length,
+        junction_sequence=junction.junction_sequence,
+        validation=junction.validation,
+        notes=junction.notes,
+    )
+
+
+def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductResponse:
+    return AssemblyProductResponse(
+        sequence=product.sequence,
+        circular=product.circular,
+        length=len(product.sequence),
+        mode=product.mode,
+        fragments=[
+            AssemblyFragmentResponse(
+                id=fragment.id,
+                name=fragment.name,
+                orientation=fragment.orientation,
+                role=fragment.role,
+                source_sequence_id=fragment.source_sequence_id,
+                source_name=fragment.source_name,
+                source_start=fragment.source_start,
+                source_end=fragment.source_end,
+                source_wraps_origin=fragment.source_wraps_origin,
+                left_end=None if fragment.left_end is None else AssemblyFragmentEndSchema(
+                    type=fragment.left_end.type,
+                    overhang=fragment.left_end.overhang,
+                    label=fragment.left_end.label,
+                ),
+                right_end=None if fragment.right_end is None else AssemblyFragmentEndSchema(
+                    type=fragment.right_end.type,
+                    overhang=fragment.right_end.overhang,
+                    label=fragment.right_end.label,
+                ),
+                metadata=fragment.metadata or None,
+            )
+            for fragment in product.fragments
+        ],
+        junctions=[assembly_junction_to_response(junction) for junction in product.junctions],
+        warnings=product.warnings,
+        validation_notes=product.validation_notes,
+    )
+
+
+async def persist_assembly_product(
+    session: AsyncSession,
+    *,
+    product: "AssemblyProduct",
+    name: Optional[str],
+    save_description: Optional[str],
+):
+    source_ids = [fragment.source_sequence_id for fragment in product.fragments if fragment.source_sequence_id]
+    distinct_source_ids = sorted(set(source_ids))
+    parent: Optional[NucleotideSequence] = None
+    if len(distinct_source_ids) == 1:
+        result = await session.execute(
+            select(NucleotideSequence).where(NucleotideSequence.id == distinct_source_ids[0])
+        )
+        parent = result.scalar_one_or_none()
+
+    operation_params = {
+        "mode": product.mode,
+        "fragments": fragment_provenance_payload(product.fragments),
+        "junctions": [junction.model_dump() for junction in [assembly_junction_to_response(item) for item in product.junctions]],
+        "warnings": product.warnings,
+        "validation_notes": product.validation_notes,
+        "topology": "circular" if product.circular else "linear",
+    }
+
+    sequence_name = (name or "").strip() or f"{product.mode.replace('_', ' ').title()} product"
+    if parent is not None:
+        sequence_row = create_child_sequence(
+            parent=parent,
+            sequence=product.sequence,
+            name=sequence_name,
+            circular=product.circular,
+            operation=product.mode,
+            operation_params=operation_params,
+        )
+        if save_description is not None:
+            sequence_row.description = save_description
+    else:
+        sequence_row = NucleotideSequence(
+            id=str(uuid.uuid4()),
+            name=sequence_name,
+            description=save_description,
+            sequence=product.sequence,
+            sequence_type="dna",
+            is_circular=product.circular,
+            length=len(product.sequence),
+            features=[],
+            primers=[],
+            organism=None,
+            accession=None,
+            source_file=None,
+            gc_content=round(((product.sequence.count("G") + product.sequence.count("C")) / max(len(product.sequence), 1)) * 100, 2),
+            parent_id=None,
+            operation=product.mode,
+            operation_params=operation_params,
+            version=1,
+        )
+
+    session.add(sequence_row)
+    await session.commit()
+    await session.refresh(sequence_row)
+    return sequence_row
+
+
 @router.post("/digest", response_model=MolbioOperationResponse)
 async def digest(
     request: DigestRequest,
@@ -322,17 +647,45 @@ async def pcr(
     return MolbioOperationResponse(sequence=seq_obj, product=product_payload, message="PCR complete")
 
 
-@router.post("/ligate", response_model=MolbioOperationResponse)
-async def ligate(
-    request: LigationRequest,
-    session: AsyncSession = Depends(get_session)
+@router.post("/assembly/ligation/simulate", response_model=AssemblyOperationResponse)
+async def simulate_ligation_assembly(request: LigationAssemblyRequest):
+    try:
+        product = simulate_ligation(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            circular=request.circular,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        message=f"Validated ligation across {len(product.fragments)} fragments",
+    )
+
+
+@router.post("/assembly/ligation/save", response_model=AssemblyOperationResponse)
+async def save_ligation_assembly(
+    request: LigationAssemblyRequest,
+    session: AsyncSession = Depends(get_session),
 ):
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Ligation is disabled because the previous implementation used simplified fragment concatenation "
-            "without end-compatibility validation. Re-enable only after robust ligation logic is implemented."
-        ),
+    try:
+        product = simulate_ligation(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            circular=request.circular,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    saved = await persist_assembly_product(
+        session,
+        product=product,
+        name=request.new_name,
+        save_description=request.save_description,
+    )
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        saved_sequence=saved,
+        message=f"Saved ligation product '{saved.name}'",
     )
 
 
@@ -367,16 +720,137 @@ async def mutagenesis(
     return MolbioOperationResponse(sequence=seq_obj, message="Mutagenesis complete")
 
 
+@router.post("/assembly/gibson/simulate", response_model=AssemblyOperationResponse)
+async def simulate_gibson_assembly(request: GibsonAssemblyRequest):
+    try:
+        product = simulate_gibson(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            circular=request.circular,
+            minimum_overlap=request.minimum_overlap,
+            preferred_overlap=request.preferred_overlap,
+            maximum_overlap=request.maximum_overlap,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        message=f"Validated Gibson assembly across {len(product.fragments)} fragments",
+    )
+
+
+@router.post("/assembly/gibson/save", response_model=AssemblyOperationResponse)
+async def save_gibson_assembly(
+    request: GibsonAssemblyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        product = simulate_gibson(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            circular=request.circular,
+            minimum_overlap=request.minimum_overlap,
+            preferred_overlap=request.preferred_overlap,
+            maximum_overlap=request.maximum_overlap,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    saved = await persist_assembly_product(
+        session,
+        product=product,
+        name=request.new_name,
+        save_description=request.save_description,
+    )
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        saved_sequence=saved,
+        message=f"Saved Gibson product '{saved.name}'",
+    )
+
+
+@router.get("/assembly/golden-gate/options")
+async def golden_gate_options():
+    return {
+        "enzymes": [
+            {
+                "name": enzyme.name,
+                "site": enzyme.site,
+                "overhang_length": enzyme.overhang_length,
+            }
+            for enzyme in TYPE_IIS_ENZYMES.values()
+        ]
+    }
+
+
+@router.post("/assembly/golden-gate/simulate", response_model=AssemblyOperationResponse)
+async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
+    try:
+        product = simulate_golden_gate(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            enzyme_name=request.enzyme_name,
+            circular=request.circular,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    enzyme = get_type_iis_enzyme(request.enzyme_name)
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        message=f"Validated {enzyme.name} Golden Gate assembly across {len(product.fragments)} fragments",
+    )
+
+
+@router.post("/assembly/golden-gate/save", response_model=AssemblyOperationResponse)
+async def save_golden_gate_assembly(
+    request: GoldenGateAssemblyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        product = simulate_golden_gate(
+            [build_assembly_fragment(fragment) for fragment in request.fragments],
+            enzyme_name=request.enzyme_name,
+            circular=request.circular,
+        )
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    saved = await persist_assembly_product(
+        session,
+        product=product,
+        name=request.new_name,
+        save_description=request.save_description,
+    )
+    return AssemblyOperationResponse(
+        product=assembly_product_to_response(product),
+        saved_sequence=saved,
+        message=f"Saved Golden Gate product '{saved.name}'",
+    )
+
+
+@router.post("/ligate", response_model=MolbioOperationResponse)
+async def ligate(
+    request: LigationRequest,
+    session: AsyncSession = Depends(get_session)
+):
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "The legacy /ligate route is deprecated because it does not carry fragment-end metadata. "
+            "Use /api/molbio/assembly/ligation/simulate or /save with explicit fragment ends."
+        ),
+    )
+
+
 @router.post("/gibson", response_model=MolbioOperationResponse)
 async def gibson(
     request: GibsonRequest,
     session: AsyncSession = Depends(get_session)
 ):
     raise HTTPException(
-        status_code=501,
+        status_code=400,
         detail=(
-            "Gibson assembly is disabled because the previous implementation only accepted exact overlap-string matches "
-            "and did not perform robust assembly validation."
+            "The legacy /gibson route is deprecated because it does not carry validated overlap contracts. "
+            "Use /api/molbio/assembly/gibson/simulate or /save."
         ),
     )
 
@@ -387,11 +861,38 @@ async def golden_gate(
     session: AsyncSession = Depends(get_session)
 ):
     raise HTTPException(
-        status_code=501,
+        status_code=400,
         detail=(
-            "Golden Gate assembly is disabled because the previous implementation removed recognition sites and concatenated fragments "
-            "without robust overhang validation."
+            "The legacy /golden-gate route is deprecated because it does not carry explicit post-digestion fragment metadata. "
+            "Use /api/molbio/assembly/golden-gate/simulate or /save."
         ),
+    )
+
+
+@router.post("/alignment", response_model=SequenceAlignmentResponse)
+async def align_molecular_sequences(request: SequenceAlignmentRequest):
+    """Align two nucleotide sequences and return rendered alignment plus variant events."""
+    try:
+        result = align_sequences(
+            request.reference_sequence,
+            request.query_sequence,
+            AlignmentSettings(
+                mode=request.settings.mode,
+                strand=request.settings.strand,
+                reference_is_circular=request.settings.reference_is_circular,
+                match_score=request.settings.match_score,
+                mismatch_score=request.settings.mismatch_score,
+                gap_open_score=request.settings.gap_open_score,
+                gap_extend_score=request.settings.gap_extend_score,
+            ),
+        )
+    except SequenceAlignmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SequenceAlignmentResponse(
+        reference_name=request.reference_name,
+        query_name=request.query_name,
+        **result,
     )
 
 
@@ -964,6 +1465,325 @@ def calculate_primer_tm_result(
     )
 
 
+class PrimerDesignRequest(SequenceInput):
+    target_start: int = 0
+    target_end: Optional[int] = None
+    primer_min_length: int = 18
+    primer_max_length: int = 28
+    product_min_length: int = 120
+    product_max_length: int = 1500
+    flank_search_span: int = 80
+    gc_min_percent: float = 35.0
+    gc_max_percent: float = 65.0
+    tm_target_c: float = 62.0
+    tm_max_delta_c: float = 3.0
+    gc_clamp_min: int = 1
+    max_poly_x: int = 4
+    max_pairs: int = 8
+    overhang_forward: str = ""
+    overhang_reverse: str = ""
+    tm_settings: Optional[PrimerTmSettings] = None
+
+
+class PrimerDesignCandidateResponse(BaseModel):
+    sequence: str
+    anneal_sequence: str
+    start: int
+    end: int
+    strand: int
+    length: int
+    anneal_length: int
+    overhang_length: int
+    tm: float
+    gc_percent: float
+    gc_clamp: int
+    max_homopolymer: int
+    max_self_complement: int = 0
+    three_prime_self_complement: int = 0
+    max_hairpin_stem: int = 0
+    hairpin_loop_size: Optional[int] = None
+    binding_site_count: Optional[int] = None
+    off_target_site_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PrimerDesignPairResponse(BaseModel):
+    rank: int
+    penalty: float
+    tm_delta: float
+    product_start: int
+    product_end: int
+    product_length: int
+    heterodimer_complement: int = 0
+    three_prime_heterodimer: int = 0
+    warnings: List[str] = Field(default_factory=list)
+    forward: PrimerDesignCandidateResponse
+    reverse: PrimerDesignCandidateResponse
+
+
+class PrimerDesignResponse(BaseModel):
+    sequence_name: Optional[str] = None
+    sequence_type: str
+    target_start: int
+    target_end: int
+    target_length: int
+    pair_count: int
+    pairs: List[PrimerDesignPairResponse] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+def _max_homopolymer_run(sequence: str) -> int:
+    longest = 0
+    current = 0
+    previous = None
+    for base in sequence:
+        if base == previous:
+            current += 1
+        else:
+            current = 1
+            previous = base
+        longest = max(longest, current)
+    return longest
+
+
+def _gc_clamp(sequence: str, window: int = 5) -> int:
+    return sum(1 for base in sequence[-window:] if base in {"G", "C"})
+
+
+def _linear_segment(sequence: str, start: int, end: int) -> Optional[str]:
+    if start < 0 or end > len(sequence) or start >= end:
+        return None
+    return sequence[start:end]
+
+
+def _design_candidate(
+    anneal_sequence: str,
+    start: int,
+    end: int,
+    strand: int,
+    overhang: str,
+    sequence_type: str,
+    tm_settings: PrimerTmSettings,
+    gc_min: float,
+    gc_max: float,
+    gc_clamp_min: int,
+    max_poly_x: int,
+    tm_target_c: float,
+    tm_max_delta_c: float,
+    template_sequence: str,
+    circular_template: bool,
+) -> Optional[dict[str, Any]]:
+    primer_sequence = (overhang + anneal_sequence).upper()
+    tm_result = calculate_primer_tm_result(
+        anneal_sequence,
+        sequence_type=sequence_type,
+        settings=tm_settings,
+    )
+    if tm_result.tm is None:
+        return None
+
+    gc_percent = calculate_gc_percent(anneal_sequence)
+    if gc_percent < gc_min or gc_percent > gc_max:
+        return None
+
+    clamp = _gc_clamp(primer_sequence)
+    if clamp < gc_clamp_min:
+        return None
+
+    homopolymer = _max_homopolymer_run(primer_sequence)
+    if homopolymer > max_poly_x:
+        return None
+
+    if abs(tm_result.tm - tm_target_c) > tm_max_delta_c:
+        return None
+
+    qc = evaluate_primer_qc(
+        primer_sequence,
+        sequence_type=sequence_type,  # type: ignore[arg-type]
+        template_sequence=template_sequence,
+        circular_template=circular_template,
+    )
+
+    return {
+        "sequence": primer_sequence,
+        "anneal_sequence": anneal_sequence,
+        "start": start,
+        "end": end,
+        "strand": strand,
+        "length": len(primer_sequence),
+        "anneal_length": len(anneal_sequence),
+        "overhang_length": len(overhang),
+        "tm": round(tm_result.tm, 2),
+        "gc_percent": gc_percent,
+        "gc_clamp": clamp,
+        "max_homopolymer": homopolymer,
+        "max_self_complement": qc.max_self_complement,
+        "three_prime_self_complement": qc.three_prime_self_complement,
+        "max_hairpin_stem": qc.max_hairpin_stem,
+        "hairpin_loop_size": qc.hairpin_loop_size,
+        "binding_site_count": qc.binding_site_count,
+        "off_target_site_count": qc.off_target_site_count,
+        "warnings": [*tm_result.warnings, *qc.warnings],
+    }
+
+
+def design_primer_pairs_for_request(request: PrimerDesignRequest, sequence_name: Optional[str]) -> PrimerDesignResponse:
+    sequence_type = normalize_sequence_type(request.sequence_type, request.sequence)
+    template = clean_inline_sequence(request.sequence or "", sequence_type)
+    if not template:
+        raise HTTPException(status_code=400, detail="Sequence contains no valid nucleotides")
+
+    sequence_length = len(template)
+    target_end = request.target_end if request.target_end is not None else sequence_length
+    if request.target_start < 0 or target_end > sequence_length or request.target_start >= target_end:
+        raise HTTPException(status_code=400, detail="Target range is invalid for the current sequence")
+    if request.primer_min_length < 12 or request.primer_max_length < request.primer_min_length:
+        raise HTTPException(status_code=400, detail="Primer length range is invalid")
+    if request.product_min_length < 40 or request.product_max_length < request.product_min_length:
+        raise HTTPException(status_code=400, detail="Product length range is invalid")
+
+    tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(sequence_type)
+    forward_candidates: list[dict[str, Any]] = []
+    reverse_candidates: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    if request.is_circular:
+        warnings.append("Primer design currently excludes origin-wrapping candidates on circular templates.")
+
+    forward_start_min = max(0, request.target_start - request.flank_search_span)
+    forward_start_max = min(sequence_length, request.target_start + 1)
+    reverse_end_min = max(0, target_end)
+    reverse_end_max = min(sequence_length, target_end + request.flank_search_span)
+
+    for start in range(forward_start_min, forward_start_max):
+        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+            end = start + anneal_length
+            anneal_sequence = _linear_segment(template, start, end)
+            if anneal_sequence is None:
+                continue
+            if end > request.target_start + 4:
+                continue
+            candidate = _design_candidate(
+                anneal_sequence=anneal_sequence,
+                start=start,
+                end=end,
+                strand=1,
+                overhang=clean_primer_sequence(request.overhang_forward),
+                sequence_type=sequence_type,
+                tm_settings=tm_settings,
+                gc_min=request.gc_min_percent,
+                gc_max=request.gc_max_percent,
+                gc_clamp_min=request.gc_clamp_min,
+                max_poly_x=request.max_poly_x,
+                tm_target_c=request.tm_target_c,
+                tm_max_delta_c=request.tm_max_delta_c,
+                template_sequence=template,
+                circular_template=request.is_circular,
+            )
+            if candidate:
+                forward_candidates.append(candidate)
+
+    for end in range(reverse_end_min, reverse_end_max + 1):
+        for anneal_length in range(request.primer_min_length, request.primer_max_length + 1):
+            start = end - anneal_length
+            anneal_template = _linear_segment(template, start, end)
+            if anneal_template is None:
+                continue
+            if start < target_end - 4:
+                continue
+            anneal_sequence = reverse_complement(anneal_template, sequence_type)
+            candidate = _design_candidate(
+                anneal_sequence=anneal_sequence,
+                start=start,
+                end=end,
+                strand=-1,
+                overhang=clean_primer_sequence(request.overhang_reverse),
+                sequence_type=sequence_type,
+                tm_settings=tm_settings,
+                gc_min=request.gc_min_percent,
+                gc_max=request.gc_max_percent,
+                gc_clamp_min=request.gc_clamp_min,
+                max_poly_x=request.max_poly_x,
+                tm_target_c=request.tm_target_c,
+                tm_max_delta_c=request.tm_max_delta_c,
+                template_sequence=template,
+                circular_template=request.is_circular,
+            )
+            if candidate:
+                reverse_candidates.append(candidate)
+
+    forward_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
+    reverse_candidates.sort(key=lambda candidate: (abs(candidate["tm"] - request.tm_target_c), candidate["start"]))
+
+    pair_candidates: list[dict[str, Any]] = []
+    for forward in forward_candidates[:48]:
+        for reverse in reverse_candidates[:48]:
+            product_length = reverse["end"] - forward["start"]
+            if product_length < request.product_min_length or product_length > request.product_max_length:
+                continue
+            if forward["start"] > request.target_start or reverse["end"] < target_end:
+                continue
+
+            tm_delta = abs(forward["tm"] - reverse["tm"])
+            pair_qc = evaluate_primer_pair_qc(forward["sequence"], reverse["sequence"])
+            penalty = round(
+                abs(forward["tm"] - request.tm_target_c)
+                + abs(reverse["tm"] - request.tm_target_c)
+                + tm_delta * 2.5
+                + pair_qc.heterodimer_complement * 1.8
+                + pair_qc.three_prime_heterodimer * 2.8
+                + max(forward.get("off_target_site_count") or 0, 0) * 1.2
+                + max(reverse.get("off_target_site_count") or 0, 0) * 1.2
+                + abs(product_length - (target_end - request.target_start)) / max(20.0, request.flank_search_span),
+                3,
+            )
+            pair_candidates.append({
+                "penalty": penalty,
+                "tm_delta": round(tm_delta, 2),
+                "product_start": forward["start"],
+                "product_end": reverse["end"],
+                "product_length": product_length,
+                "heterodimer_complement": pair_qc.heterodimer_complement,
+                "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
+                "warnings": [*forward["warnings"], *reverse["warnings"], *pair_qc.warnings],
+                "forward": forward,
+                "reverse": reverse,
+            })
+
+    pair_candidates.sort(key=lambda pair: (pair["penalty"], pair["tm_delta"], pair["product_length"]))
+    top_pairs = pair_candidates[:request.max_pairs]
+    pairs = [
+        PrimerDesignPairResponse(
+            rank=index + 1,
+            penalty=pair["penalty"],
+            tm_delta=pair["tm_delta"],
+            product_start=pair["product_start"],
+            product_end=pair["product_end"],
+            product_length=pair["product_length"],
+            heterodimer_complement=pair["heterodimer_complement"],
+            three_prime_heterodimer=pair["three_prime_heterodimer"],
+            warnings=pair["warnings"],
+            forward=PrimerDesignCandidateResponse(**pair["forward"]),
+            reverse=PrimerDesignCandidateResponse(**pair["reverse"]),
+        )
+        for index, pair in enumerate(top_pairs)
+    ]
+
+    if not pairs:
+        warnings.append("No primer pairs met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks.")
+
+    return PrimerDesignResponse(
+        sequence_name=sequence_name,
+        sequence_type=sequence_type,
+        target_start=request.target_start,
+        target_end=target_end,
+        target_length=target_end - request.target_start,
+        pair_count=len(pairs),
+        pairs=pairs,
+        warnings=warnings,
+    )
+
+
 def build_primer_response(primer: Primer) -> "PrimerResponse":
     return PrimerResponse(
         id=primer.id,
@@ -1044,6 +1864,62 @@ class PrimerResponse(BaseModel):
     updated_at: Optional[datetime]
 
 
+class PrimerQcPosition(BaseModel):
+    start: int
+    end: int
+    strand: int
+    anneal_length: int
+    overhang_length: int
+    reverse_primer_binding: bool
+
+
+class PrimerQcResultResponse(BaseModel):
+    sequence: str
+    sequence_type: str
+    length: int
+    gc_percent: float
+    max_self_complement: int
+    three_prime_self_complement: int
+    max_hairpin_stem: int
+    hairpin_loop_size: Optional[int] = None
+    binding_site_count: Optional[int] = None
+    off_target_site_count: Optional[int] = None
+    binding_positions: List[PrimerQcPosition] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PrimerPairQcResultResponse(BaseModel):
+    heterodimer_complement: int
+    three_prime_heterodimer: int
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PrimerQcEntry(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    sequence: str
+    sequence_type: Optional[str] = None
+
+
+class PrimerQcRequest(BaseModel):
+    primers: List[PrimerQcEntry]
+    template_sequence: Optional[str] = None
+    template_sequence_type: Optional[str] = None
+    template_is_circular: bool = False
+    include_pairwise: bool = True
+
+
+class PrimerQcEntryResponse(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    qc: PrimerQcResultResponse
+
+
+class PrimerQcBatchResponse(BaseModel):
+    primers: List[PrimerQcEntryResponse]
+    pairwise: List[dict[str, Any]] = Field(default_factory=list)
+
+
 @router.get("/primer-tm/options", response_model=PrimerTmOptionsResponse)
 async def primer_tm_options():
     """Return supported Tm algorithms, salt corrections, and default settings."""
@@ -1091,6 +1967,87 @@ async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
         result.name = primer.name
         results.append(result)
     return results
+
+
+@router.post("/primer-qc", response_model=PrimerQcBatchResponse)
+async def calculate_primer_qc(request: PrimerQcRequest):
+    """Calculate exact complementarity and template-binding QC metrics for primers or oligos."""
+    template_sequence = None
+    template_sequence_type = normalize_sequence_type(request.template_sequence_type, request.template_sequence or "")
+    if request.template_sequence:
+        template_sequence = clean_inline_sequence(request.template_sequence, template_sequence_type)
+
+    primer_results: List[PrimerQcEntryResponse] = []
+    normalized_sequences: List[tuple[Optional[str], Optional[str], str, str]] = []
+    for primer in request.primers:
+        sequence_type = primer.sequence_type or infer_primer_sequence_type(primer.sequence)
+        qc = evaluate_primer_qc(
+            primer.sequence,
+            sequence_type=sequence_type,  # type: ignore[arg-type]
+            template_sequence=template_sequence,
+            circular_template=request.template_is_circular,
+        )
+        primer_results.append(
+            PrimerQcEntryResponse(
+                id=primer.id,
+                name=primer.name,
+                qc=PrimerQcResultResponse(
+                    sequence=qc.sequence,
+                    sequence_type=qc.sequence_type,
+                    length=qc.length,
+                    gc_percent=qc.gc_percent,
+                    max_self_complement=qc.max_self_complement,
+                    three_prime_self_complement=qc.three_prime_self_complement,
+                    max_hairpin_stem=qc.max_hairpin_stem,
+                    hairpin_loop_size=qc.hairpin_loop_size,
+                    binding_site_count=qc.binding_site_count,
+                    off_target_site_count=qc.off_target_site_count,
+                    binding_positions=[PrimerQcPosition(**position) for position in qc.binding_positions],
+                    warnings=qc.warnings,
+                ),
+            )
+        )
+        normalized_sequences.append((primer.id, primer.name, qc.sequence, qc.sequence_type))
+
+    pairwise: List[dict[str, Any]] = []
+    if request.include_pairwise and len(normalized_sequences) >= 2:
+        for index, left in enumerate(normalized_sequences[:-1]):
+            for right in normalized_sequences[index + 1:]:
+                pair_qc = evaluate_primer_pair_qc(left[2], right[2])
+                pairwise.append({
+                    "left_id": left[0],
+                    "left_name": left[1],
+                    "right_id": right[0],
+                    "right_name": right[1],
+                    "heterodimer_complement": pair_qc.heterodimer_complement,
+                    "three_prime_heterodimer": pair_qc.three_prime_heterodimer,
+                    "warnings": pair_qc.warnings,
+                })
+
+    return PrimerQcBatchResponse(
+        primers=primer_results,
+        pairwise=pairwise,
+    )
+
+
+@router.post("/primer-design", response_model=PrimerDesignResponse)
+async def design_primers(
+    request: PrimerDesignRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Design PCR primer pairs around a target region using the configured Tm model."""
+    sequence_name = request.name
+    if request.sequence_id:
+        sequence = await resolve_sequence(request, session)
+        request = request.model_copy(update={
+            "sequence": sequence.sequence,
+            "sequence_type": sequence.sequence_type,
+            "is_circular": sequence.is_circular,
+            "name": sequence.name,
+        })
+        sequence_name = sequence.name
+
+    return design_primer_pairs_for_request(request, sequence_name)
 
 
 @router.get("/primers", response_model=List[PrimerResponse])

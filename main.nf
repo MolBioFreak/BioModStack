@@ -39,6 +39,7 @@ include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedB
 
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
+include { PROTEIN_CAD_EXPERIMENTAL } from './workflows/protein_cad_experimental.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -47,6 +48,7 @@ include { ANTIBODY_DENOVO ; NormalizeTargetPDB as NormalizeAntibodyTargetPDB } f
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 include { RFANTIBODY_BACKBONE } from './workflows/rfantibody_backbone.nf'
 include { MATURATION_CHILD_CORE } from './workflows/maturation_child_core.nf'
+include { PPIFLOW_GENERATOR_DESIGN } from './workflows/ppiflow_generator_design.nf'
 
 include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
 
@@ -453,6 +455,20 @@ workflow {
     }
 
     /////////////////////////////
+    // PROTEIN CAD EXPERIMENTAL //
+    /////////////////////////////
+    if (params.rfd_mode == 'protein_cad_experimental') {
+        println("Running Protein CAD Experimental Workflow")
+        println("* Backend: ${params.pcad_backend}")
+        println("* Task: ${params.pcad_task}")
+        println("* Num designs: ${params.pcad_num_designs}")
+        println("* Target lengths: ${params.pcad_target_lengths}")
+
+        PROTEIN_CAD_EXPERIMENTAL()
+        return null
+    }
+
+    /////////////////////////////
     // RFANTIBODY STANDALONE    //
     /////////////////////////////
     // Standalone RFantibody backbone generation for orchestrator-spawned child jobs
@@ -565,6 +581,25 @@ workflow {
         MATURATION_CHILD_CORE(pdb_list)
 
         println("PPIFlow maturation child job complete")
+        return null
+    }
+
+    /////////////////////////////////
+    // PPIFlow SEEDED GENERATOR    //
+    /////////////////////////////////
+    if (params.rfd_mode == 'ppiflow_generator') {
+        def ppiflowSeedPath = params.get('ppiflow_seed_complex_path')
+        def ppiflowSeedDir = params.get('ppiflow_seed_input_dir') ?: params.get('selected_input_dir')
+        println("Running PPIFlow Seeded Generator")
+        println("* Seed complex path: ${ppiflowSeedPath ?: 'not provided'}")
+        println("* Seed complex dir: ${ppiflowSeedDir ?: 'not provided'}")
+        println("* Samples per target: ${params.ppiflow_samples_per_target ?: 1}")
+
+        if (!ppiflowSeedPath && !ppiflowSeedDir) {
+            error("PPIFlow seeded generator requires --ppiflow_seed_complex_path or --ppiflow_seed_input_dir")
+        }
+
+        PPIFLOW_GENERATOR_DESIGN()
         return null
     }
 
