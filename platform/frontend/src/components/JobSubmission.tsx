@@ -272,7 +272,7 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
-    const [wizardMode, setWizardMode] = useState<'templates' | 'manual'>('templates');
+    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>('templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
@@ -369,6 +369,93 @@ export function JobSubmission() {
         bindcraft: 'bindcraft',
         protein_local_redesign: 'protein_local_redesign',
     };
+    const hardcodedWorkflowTemplates = [
+        {
+            id: 'mutagenesis',
+            name: 'Mutagenesis Library',
+            description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
+            icon: 'dna',
+            color: '#8B5CF6',
+            stages: [{ tool: 'Library Gen' }, { tool: 'Structure Prediction' }],
+        },
+        {
+            id: 'structure_prediction',
+            name: 'Structure Prediction',
+            description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
+            icon: 'microscope',
+            color: '#F59E0B',
+            stages: [{ tool: 'Boltz-2 / RF3 / Protenix' }],
+        },
+        {
+            id: 'antibody_denovo',
+            name: 'De Novo Nanobody Toolkit',
+            description: 'Launch RFantibody, BoltzGen nanobody, or seeded PPIFlow generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
+            icon: 'flask',
+            color: '#14B8A6',
+            stages: [
+                { tool: 'RFantibody / BoltzGen / PPIFlow' },
+                { tool: 'FAMPNN' },
+                { tool: 'PPIFlow (Opt.)' },
+                { tool: 'Protenix / Boltz2' },
+                { tool: 'Review + QC' }
+            ],
+        },
+        {
+            id: 'boltzgen_design',
+            name: 'BoltzGEN',
+            description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
+            icon: 'pill',
+            color: '#EC4899',
+            stages: [{ tool: 'BoltzGen' }, { tool: 'Filtering' }, { tool: 'Docking' }],
+        },
+        {
+            id: 'bindcraft',
+            name: 'BindCraft',
+            description: 'Design minibinders and peptides via AF2 hallucination, ProteinMPNN sequence optimization, and PyRosetta filtering.',
+            icon: 'binder',
+            color: '#10B981',
+            stages: [{ tool: 'AF2 Hallucination' }, { tool: 'MPNN' }, { tool: 'Filtering' }],
+        },
+        {
+            id: 'oligo_design',
+            name: 'Oligo Designer',
+            description: 'Design DNA, RNA, proteins, and mixed nucleoprotein assemblies using RFDpoly diffusion with Boltz-2 validation.',
+            icon: 'dna',
+            color: '#6366F1',
+            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
+        },
+    ];
+    const hardcodedExperimentalTemplates = [
+        {
+            id: 'protein_local_redesign',
+            name: 'Protein Local Redesign',
+            description: 'Use RFdiffusion3 to locally remodel a selected region of an existing structure, redesign sequence with FA-MPNN or ProteinMPNN, and optionally validate with Boltz-2.',
+            icon: 'cube',
+            color: '#22C55E',
+            experimental: true,
+            stages: [
+                { tool: 'Region Resolve' },
+                { tool: 'RFdiffusion3' },
+                { tool: 'FAMPNN / MPNN' },
+                { tool: 'Boltz-2 (Opt.)' }
+            ],
+        }
+    ];
+    const visibleApiTemplates = useMemo(() => {
+        const templates = templatesData?.data ?? [];
+        return templates.filter((t: any) =>
+            !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
+            (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
+        );
+    }, [templatesData]);
+    const workflowTemplateCards = useMemo(
+        () => [...visibleApiTemplates.filter((t: any) => !t.experimental), ...hardcodedWorkflowTemplates],
+        [visibleApiTemplates]
+    );
+    const experimentalTemplateCards = useMemo(
+        () => [...visibleApiTemplates.filter((t: any) => t.experimental), ...hardcodedExperimentalTemplates],
+        [visibleApiTemplates]
+    );
 
     const routeUserTemplate = (template: any) => {
         const dedicatedTemplateId =
@@ -401,6 +488,7 @@ export function JobSubmission() {
         // Skip fetch for hardcoded templates - they don't exist in the API
         enabled: !!selectedTemplateId && !hardcodedTemplates.includes(selectedTemplateId),
     });
+    const templateDetail = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
 
     // Fetch ligand presets for dynamic dropdown
     const { data: ligandPresetsData } = useQuery({
@@ -425,7 +513,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = modelsData?.data ?? [];
+    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign'].includes(model.id));
     const selectedModel = models.find((m: any) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: any) => m.id === selectedModeId);
 
@@ -442,18 +530,128 @@ export function JobSubmission() {
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
-        if (selectedTemplateData?.data?.user_params) {
+        if (templateDetail?.user_params) {
             const defaults: Record<string, any> = {};
-            selectedTemplateData.data.user_params.forEach((p: any) => {
+            templateDetail.user_params.forEach((p: any) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             setParams(defaults);
         }
-    }, [selectedTemplateData]);
+    }, [templateDetail]);
+
+    useEffect(() => {
+        if (!selectedTemplateId || hardcodedTemplates.includes(selectedTemplateId)) {
+            return;
+        }
+        const matchedTemplate = visibleApiTemplates.find((template: any) => template.id === selectedTemplateId);
+        if (matchedTemplate) {
+            setWizardMode(matchedTemplate.experimental ? 'experimental' : 'templates');
+        }
+    }, [selectedTemplateId, visibleApiTemplates]);
 
     // Handle param change
     const updateParam = (key: string, value: any) => {
         setParams(prev => ({ ...prev, [key]: value }));
+    };
+
+    const getTemplateIconLabel = (template: any) => {
+        if (template.id === 'protein_cad_experimental') return 'PC';
+        return template.icon === 'target' ? 'TG'
+            : template.icon === 'flask' ? 'RF'
+                : template.icon === 'dna' ? 'MU'
+                    : template.icon === 'microscope' ? 'SP'
+                        : template.icon === 'pill' ? 'BG'
+                            : template.icon === 'binder' ? 'BC'
+                                : template.icon === 'cube' ? 'PL'
+                                    : 'OL';
+    };
+
+    const renderTemplateCard = (template: any) => {
+        const isSelected = selectedTemplateId === template.id;
+        return (
+            <div
+                key={template.id}
+                onClick={() => handleTemplateCardSelect(template.id)}
+                className={`cursor-pointer rounded-lg border-2 p-4 transition-all ${
+                    template.experimental
+                        ? isSelected
+                            ? 'border-orange-400/60 bg-orange-500/10 shadow-xl'
+                            : 'border-orange-500/25 bg-orange-500/5 hover:border-orange-400/50 hover:shadow-lg'
+                        : isSelected
+                            ? 'scale-[1.02] border-[var(--accent-primary)] shadow-xl'
+                            : 'border-[var(--border-primary)] hover:scale-[1.01] hover:border-[var(--border-secondary)] hover:shadow-lg'
+                } bg-[var(--card-bg)] text-[var(--text-primary)]`}
+                style={{
+                    boxShadow: isSelected
+                        ? template.experimental
+                            ? '0 10px 34px rgba(251, 146, 60, 0.18)'
+                            : '0 8px 30px color-mix(in srgb, var(--accent-primary) 35%, transparent)'
+                        : undefined
+                }}
+            >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                        <div
+                            className="flex h-10 w-10 items-center justify-center rounded text-sm font-bold"
+                            style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                        >
+                            {getTemplateIconLabel(template)}
+                        </div>
+                        <h3 className="font-bold text-base" style={{ color: template.color }}>{template.name}</h3>
+                    </div>
+                    {template.experimental && (
+                        <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">
+                            Experimental Alpha
+                        </span>
+                    )}
+                </div>
+                <p className="mb-2 text-xs opacity-70 line-clamp-2">{template.description}</p>
+                <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
+                    {template.stages.map((stage: any, idx: number) => (
+                        <div key={idx} className="flex items-center">
+                            <span
+                                className="rounded px-1.5 py-0.5 font-medium"
+                                style={{ backgroundColor: `${template.color}15`, color: template.color }}
+                            >
+                                {stage.tool}
+                            </span>
+                            {idx < template.stages.length - 1 && (
+                                <span className="mx-0.5 opacity-40" style={{ color: template.color }}>→</span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const getModelCardBadge = (model: any) => {
+        const identity = `${model.id ?? ''} ${model.name ?? ''}`.toLowerCase();
+        if (identity.includes('proteinmpnn') || identity.includes('ligandmpnn') || identity.includes('fampnn') || identity.includes('full-atom mpnn')) {
+            return 'SEQ';
+        }
+        if (identity.includes('bindcraft') || identity.includes('rfantibody') || identity.includes('antibody')) {
+            return 'BIND';
+        }
+        if (identity.includes('boltz2') || identity.includes('alphafold') || identity.includes('rosettafold') || identity.includes('protenix') || identity.includes('rf3')) {
+            return 'FOLD';
+        }
+        if (identity.includes('boltzgen')) {
+            return 'GEN';
+        }
+        if (identity.includes('diffdock') || identity.includes('uni-dock') || identity.includes('unidock')) {
+            return 'DOCK';
+        }
+        if (identity.includes('nanopore') || identity.includes('ngs')) {
+            return 'NGS';
+        }
+        if (identity.includes('oligo') || identity.includes('dna') || identity.includes('rna')) {
+            return 'NA';
+        }
+        if (identity.includes('rfdiffusion') || identity.includes('redesign') || identity.includes('design')) {
+            return 'DES';
+        }
+        return model.ui_icon === 'cube' ? '3D' : 'ML';
     };
 
     // Filter params for current mode
@@ -481,8 +679,9 @@ export function JobSubmission() {
     }, [visibleParams]);
 
     // Check if ready to submit - works for both template mode and manual mode
+    const isTemplateMode = wizardMode === 'templates' || wizardMode === 'experimental';
     const isReady = jobName && (
-        (wizardMode === 'templates' && selectedTemplateId) ||
+        (isTemplateMode && selectedTemplateId) ||
         (wizardMode === 'manual' && selectedModelId && selectedModeId)
     );
 
@@ -490,18 +689,25 @@ export function JobSubmission() {
         if (!isReady) return;
 
         // Get template data - handle both axios response wrapper and direct data
-        const templateData = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
+        const templateData = templateDetail;
 
-        if (wizardMode === 'templates' && templateData) {
+        if (isTemplateMode && templateData) {
             // Template mode: merge preset params with user params
             const mergedParams = { ...templateData.preset_params, ...params };
+            const templateModelIdOverride = mergedParams.template_model_id;
+            const templateModeIdOverride = mergedParams.template_mode_id;
+            delete mergedParams.template_model_id;
+            delete mergedParams.template_mode_id;
 
             // Determine the Nextflow profile based on template type
             // Priority: rfd_mode (binder/monomer) > diffusion_method (boltzgen) > pred_method (structure prediction/validation) > skip_rfd (fampnn_predict)
             let nextflowProfile = '';
             let effectiveModelId = 'template_' + (selectedTemplateId || 'unknown');
 
-            if (mergedParams.rfd_mode) {
+            if (templateModelIdOverride && templateModeIdOverride) {
+                effectiveModelId = templateModelIdOverride;
+                nextflowProfile = templateModeIdOverride;
+            } else if (mergedParams.rfd_mode) {
                 // Binder or monomer design templates
                 nextflowProfile = mergedParams.rfd_mode;
                 effectiveModelId = 'rfdiffusion';
@@ -636,13 +842,34 @@ export function JobSubmission() {
                 <section>
                     <div className="flex gap-2 mb-4">
                         <button
-                            onClick={() => { setWizardMode('templates'); setSelectedModelId(null); setSelectedModeId(null); }}
+                            onClick={() => {
+                                setWizardMode('templates');
+                                setSelectedModelId(null);
+                                setSelectedModeId(null);
+                                setSelectedTemplateId(null);
+                                setClonedValues(undefined);
+                            }}
                             className={`min-w-[9.5rem] rounded-lg border px-4 py-2.5 text-sm font-medium transition-all ${wizardMode === 'templates'
                                 ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
                                 : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
                                 }`}
                         >
                             Workflows
+                        </button>
+                        <button
+                            onClick={() => {
+                                setWizardMode('experimental');
+                                setSelectedModelId(null);
+                                setSelectedModeId(null);
+                                setSelectedTemplateId(null);
+                                setClonedValues(undefined);
+                            }}
+                            className={`min-w-[9.5rem] rounded-lg border px-4 py-2.5 text-sm font-medium transition-all ${wizardMode === 'experimental'
+                                ? 'border-orange-400/40 bg-orange-500/12 text-orange-300'
+                                : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
+                                }`}
+                        >
+                            Experimental
                         </button>
                         <button
                             onClick={() => {
@@ -660,7 +887,7 @@ export function JobSubmission() {
                     </div>
 
                     {/* Templates Mode */}
-                    {wizardMode === 'templates' && (
+                    {(wizardMode === 'templates' || wizardMode === 'experimental') && (
                         <div className="space-y-4">
                             {selectedTemplateId === 'mutagenesis' ? (
                                 <MutagenesisTemplate
@@ -744,155 +971,26 @@ export function JobSubmission() {
                                 />
                             ) : (
                                 <>
-                                    <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
+                                    <p className="text-slate-300 text-base font-medium mb-4">
+                                        {wizardMode === 'experimental'
+                                            ? 'Experimental workflows are isolated here on purpose. These are real integrations, but they are still alpha-grade systems intended for iterative frontier work.'
+                                            : 'Choose a preset workflow for your experiment goal:'}
+                                    </p>
+                                    {wizardMode === 'experimental' && (
+                                        <div className="rounded-xl border border-orange-400/20 bg-orange-500/8 px-4 py-3 text-sm text-orange-100">
+                                            <span className="font-semibold text-orange-200">Frontier mode:</span> this tab is reserved for workflows that are wired into BMS end to end, but are still evolving in interface, validation, and downstream review semantics.
+                                        </div>
+                                    )}
                                     <div className="grid grid-cols-2 gap-3">
-                                        {[
-                                            // Dynamic templates from API - filter out hidden/removed templates
-                                            ...(templatesData?.data ?? []).filter((t: any) =>
-                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation, structure_prediction
-                                                !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
-                                                // Hide dna_polymerase unless debug mode
-                                                (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
-                                            ),
-                                            // Mutagenesis Template
-                                            {
-                                                id: 'mutagenesis',
-                                                name: 'Mutagenesis Library',
-                                                description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
-                                                icon: 'dna',
-                                                color: '#8B5CF6', // Purple (was Indigo)
-                                                stages: [
-                                                    { tool: 'Library Gen' },
-                                                    { tool: 'Structure Prediction' }
-                                                ]
-                                            },
-                                            // Structure Prediction
-                                            {
-                                                id: 'structure_prediction',
-                                                name: 'Structure Prediction',
-                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
-                                                icon: 'microscope',
-                                                color: '#F59E0B', // Amber
-                                                stages: [
-                                                    { tool: 'Boltz-2 / RF3 / Protenix' }
-                                                ]
-                                            },
-                                            // De Novo Nanobody Toolkit
-                                            {
-                                                id: 'antibody_denovo',
-                                                name: 'De Novo Nanobody Toolkit',
-                                                description: 'Launch RFantibody or BoltzGen nanobody generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
-                                                icon: 'flask',
-                                                color: '#14B8A6', // Teal (was Emerald)
-                                                stages: [
-                                                    { tool: 'RFantibody / BoltzGen' },
-                                                    { tool: 'FAMPNN' },
-                                                    { tool: 'PPIFlow (Opt.)' },
-                                                    { tool: 'Protenix / Boltz2' },
-                                                    { tool: 'Review + QC' }
-                                                ]
-                                            },
-                                            // BoltzGEN (Ligand-Aware Binder Design)
-                                            {
-                                                id: 'boltzgen_design',
-                                                name: 'BoltzGEN',
-                                                description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
-                                                icon: 'pill',
-                                                color: '#EC4899', // Pink (was Amber)
-                                                stages: [
-                                                    { tool: 'BoltzGen' },
-                                                    { tool: 'Filtering' },
-                                                    { tool: 'Docking' }
-                                                ]
-                                            },
-                                            // BindCraft (De Novo Minibinder Design)
-                                            {
-                                                id: 'bindcraft',
-                                                name: 'BindCraft',
-                                                description: 'Design minibinders and peptides via AF2 hallucination, ProteinMPNN sequence optimization, and PyRosetta filtering.',
-                                                icon: 'binder',
-                                                color: '#10B981', // Emerald
-                                                stages: [
-                                                    { tool: 'AF2 Hallucination' },
-                                                    { tool: 'MPNN' },
-                                                    { tool: 'Filtering' }
-                                                ]
-                                            },
-                                            // Oligo Designer (Multi-Polymer Design)
-                                            {
-                                                id: 'oligo_design',
-                                                name: 'Oligo Designer',
-                                                description: 'Design DNA, RNA, proteins, and mixed nucleoprotein assemblies using RFDpoly diffusion with Boltz-2 validation.',
-                                                icon: 'dna',
-                                                color: '#6366F1', // Indigo
-                                                stages: [
-                                                    { tool: 'RFDpoly' },
-                                                    { tool: 'Boltz-2' },
-                                                    { tool: 'Filtering' }
-                                                ]
-                                            },
-                                            {
-                                                id: 'protein_local_redesign',
-                                                name: 'Protein Local Redesign',
-                                                description: 'Use RFdiffusion3 to locally remodel a selected region of an existing structure, redesign sequence with FA-MPNN or ProteinMPNN, and optionally validate with Boltz-2.',
-                                                icon: 'cube',
-                                                color: '#22C55E',
-                                                stages: [
-                                                    { tool: 'Region Resolve' },
-                                                    { tool: 'RFdiffusion3' },
-                                                    { tool: 'FAMPNN / MPNN' },
-                                                    { tool: 'Boltz-2 (Opt.)' }
-                                                ]
-                                            }
-                                        ].map((template: any) => {
-                                            const isSelected = selectedTemplateId === template.id;
-                                            return (
-                                                <div
-                                                    key={template.id}
-                                                    onClick={() => handleTemplateCardSelect(template.id)}
-                                                    className={`cursor-pointer p-4 border-2 transition-all rounded-lg
-                                                        ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
-                                                        bg-[var(--card-bg)] text-[var(--text-primary)]`}
-                                                    style={{
-                                                        boxShadow: isSelected ? `0 8px 30px color-mix(in srgb, var(--accent-primary) 35%, transparent)` : undefined
-                                                    }}
-                                                >
-                                                    <div className="flex items-center gap-3 mb-2">
-                                                        <div
-                                                            className="w-10 h-10 flex items-center justify-center text-sm font-bold rounded"
-                                                            style={{ backgroundColor: `${template.color}20`, color: template.color }}
-                                                        >
-                                                            {template.icon === 'target' ? 'TG' :
-                                                                template.icon === 'flask' ? 'RF' :
-                                                                    template.icon === 'dna' ? 'MU' :
-                                                                        template.icon === 'microscope' ? 'SP' :
-                                                                            template.icon === 'pill' ? 'BG' :
-                                                                                template.icon === 'binder' ? 'BC' :
-                                                                                    template.icon === 'cube' ? 'PL' : 'OL'}
-                                                        </div>
-                                                        <h3 className="font-bold text-base" style={{ color: template.color }}>{template.name}</h3>
-                                                    </div>
-                                                    <p className="text-xs opacity-70 mb-2 line-clamp-2">{template.description}</p>
-                                                    {/* Stage Pipeline (compact) */}
-                                                    <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
-                                                        {template.stages.map((stage: any, idx: number) => (
-                                                            <div key={idx} className="flex items-center">
-                                                                <span
-                                                                    className="px-1.5 py-0.5 font-medium rounded"
-                                                                    style={{ backgroundColor: `${template.color}15`, color: template.color }}
-                                                                >
-                                                                    {stage.tool}
-                                                                </span>
-                                                                {idx < template.stages.length - 1 && (
-                                                                    <span className="mx-0.5 opacity-40" style={{ color: template.color }}>→</span>
-                                                                )}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
+                                        {(wizardMode === 'experimental' ? experimentalTemplateCards : workflowTemplateCards).map((template: any) =>
+                                            renderTemplateCard(template)
+                                        )}
                                     </div>
+                                    {wizardMode === 'experimental' && experimentalTemplateCards.length === 0 && (
+                                        <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-5 text-sm text-slate-400">
+                                            No experimental workflows are currently exposed in this branch.
+                                        </div>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -920,12 +1018,11 @@ export function JobSubmission() {
                                                 className="w-10 h-10 rounded-lg flex items-center justify-center text-lg shadow-inner"
                                                 style={{ backgroundColor: `${model.ui_color}20`, color: model.ui_color }}
                                             >
-                                                {/* Simple icon fallback */}
-                                                {model.ui_icon === 'dna' ? 'DNA' : model.ui_icon === 'cube' ? '3D' : 'ML'}
+                                                {getModelCardBadge(model)}
                                             </div>
                                             {model.experimental && (
                                                 <span className="text-[10px] uppercase font-bold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded-full">
-                                                    Beta
+                                                    Experimental
                                                 </span>
                                             )}
                                         </div>
@@ -939,25 +1036,44 @@ export function JobSubmission() {
                 </section>
 
                 {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
-                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && selectedTemplateData?.data && (
+                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && templateDetail && (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
                             <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
-                                <span className="w-1.5 h-6 bg-green-500 rounded-full" />
-                                {selectedTemplateData.data.name} - Configuration
+                                <span className={`w-1.5 h-6 rounded-full ${templateDetail.experimental ? 'bg-orange-400' : 'bg-green-500'}`} />
+                                {templateDetail.name} - Configuration
+                                {templateDetail.experimental && (
+                                    <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">
+                                        Experimental Alpha
+                                    </span>
+                                )}
                             </h2>
+
+                            {templateDetail.experimental && (
+                                <div className="mb-6 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Experimental Workflow</p>
+                                    <p className="mt-2 text-sm text-slate-200">
+                                        <span className="font-semibold text-orange-200">Goal:</span>{' '}
+                                        {templateDetail.goal || templateDetail.description}
+                                    </p>
+                                    <p className="mt-2 text-sm text-slate-300">
+                                        <span className="font-semibold text-orange-200">Current status:</span>{' '}
+                                        {templateDetail.status || 'Active alpha integration with backend wiring in place and downstream iteration still in progress.'}
+                                    </p>
+                                </div>
+                            )}
 
                             {/* Stage Explanation */}
                             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
                                 <p className="text-sm text-slate-400 mb-3">This template runs the following stages:</p>
                                 <div className="flex flex-wrap items-center gap-2">
-                                    {selectedTemplateData.data.stages.map((stage: any, idx: number) => (
+                                    {templateDetail.stages.map((stage: any, idx: number) => (
                                         <div key={idx} className="flex items-center">
                                             <div className="bg-slate-700 px-3 py-1.5 rounded-lg">
                                                 <span className="text-sm font-medium text-slate-200">{idx + 1}. {stage.name}</span>
                                                 <span className="text-xs text-slate-400 ml-2">({stage.tool})</span>
                                             </div>
-                                            {idx < selectedTemplateData.data.stages.length - 1 && (
+                                            {idx < templateDetail.stages.length - 1 && (
                                                 <span className="text-blue-400 mx-2 text-lg">→</span>
                                             )}
                                         </div>
@@ -967,10 +1083,10 @@ export function JobSubmission() {
 
                             {/* User Parameters */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {selectedTemplateData.data.user_params.map((param: any) => {
+                                {templateDetail.user_params.map((param: any) => {
                                     // Conditional Rendering Logic
                                     if (param.condition) {
-                                        const controllingParam = selectedTemplateData.data.user_params.find((p: any) => p.name === param.condition.param);
+                                        const controllingParam = templateDetail.user_params.find((p: any) => p.name === param.condition.param);
                                         // Use params value if set, otherwise fall back to the controlling param's default
                                         const controllingValue = params[param.condition.param] !== undefined
                                             ? params[param.condition.param]
@@ -1087,7 +1203,7 @@ export function JobSubmission() {
                             </div>
 
                             {/* Ligand Selector - Show for structure prediction templates */}
-                            {(selectedTemplateData?.data?.preset_params?.pred_method ||
+                            {(templateDetail?.preset_params?.pred_method ||
                                 selectedTemplateId?.includes('structure') ||
                                 selectedTemplateId?.includes('predict')) && (
                                     <LigandSelector
@@ -1200,7 +1316,7 @@ export function JobSubmission() {
                 {selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && (
                     <div className="flex justify-end gap-3 pt-4 pb-12">
                         {/* Save as Template Button */}
-                        {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
+                        {(isTemplateMode || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
                                 onClick={() => setShowTemplateManager(true)}
                                 className="inline-flex min-w-[12rem] items-center justify-center rounded-xl border border-slate-600 bg-slate-900/60 px-6 py-3.5 text-sm font-semibold text-slate-100 transition-all hover:bg-slate-800"

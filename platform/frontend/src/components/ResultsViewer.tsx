@@ -299,19 +299,112 @@ const getMetricColor = (metric: string, value: number | null): string => {
     return 'text-slate-300';
 };
 
-// Binding quality tier based on iPTM (interface predicted TM-score)
-// A: Excellent binding confidence, B: Good, C: Moderate, D: Low/uncertain
-const getBindingTier = (iptm: number | null | undefined, epitopeContacts: number | null | undefined): { tier: string; color: string; bgColor: string; label: string } => {
-    if (iptm == null) return { tier: '—', color: 'text-slate-500', bgColor: 'bg-slate-700/50', label: 'No data' };
+type BindingMetricKey = 'ipsae' | 'iptm';
 
-    // Bonus for epitope contacts (validates iPTM with physical proximity)
-    const contactBonus = (epitopeContacts ?? 0) >= 5 ? 0.05 : 0;
-    const adjustedIptm = iptm + contactBonus;
+type BindingMetricSummary = {
+    key: BindingMetricKey;
+    label: 'ipSAE' | 'iPTM';
+    rawValue: number | null;
+    scoreValue: number | null;
+    contactBonus: number;
+};
 
-    if (adjustedIptm >= 0.75) return { tier: 'A', color: 'text-emerald-300', bgColor: 'bg-emerald-500/30 border-emerald-500/50', label: 'Excellent' };
-    if (adjustedIptm >= 0.55) return { tier: 'B', color: 'text-blue-300', bgColor: 'bg-blue-500/30 border-blue-500/50', label: 'Good' };
-    if (adjustedIptm >= 0.40) return { tier: 'C', color: 'text-amber-300', bgColor: 'bg-amber-500/30 border-amber-500/50', label: 'Moderate' };
-    return { tier: 'D', color: 'text-red-300', bgColor: 'bg-red-500/30 border-red-500/50', label: 'Low' };
+type BindingTierInfo = {
+    tier: string;
+    color: string;
+    bgColor: string;
+    label: string;
+    metric: BindingMetricSummary;
+};
+
+const getBindingMetricSummary = (
+    design: Pick<Design, 'ipsae' | 'iptm' | 'epitope_contact_count'>,
+): BindingMetricSummary => {
+    if (typeof design.ipsae === 'number' && Number.isFinite(design.ipsae)) {
+        return {
+            key: 'ipsae',
+            label: 'ipSAE',
+            rawValue: design.ipsae,
+            scoreValue: design.ipsae,
+            contactBonus: 0,
+        };
+    }
+
+    const iptm = typeof design.iptm === 'number' && Number.isFinite(design.iptm) ? design.iptm : null;
+    const contactBonus = iptm != null && (design.epitope_contact_count ?? 0) >= 5 ? 0.05 : 0;
+    return {
+        key: 'iptm',
+        label: 'iPTM',
+        rawValue: iptm,
+        scoreValue: iptm != null ? iptm + contactBonus : null,
+        contactBonus,
+    };
+};
+
+const summarizeBindingMetricUsage = (
+    designs: Array<Pick<Design, 'ipsae' | 'iptm' | 'epitope_contact_count'>>,
+): { label: string; detail: string; thresholds: string } => {
+    const metrics = designs.map((design) => getBindingMetricSummary(design));
+    const usableCount = metrics.filter((metric) => metric.scoreValue != null).length;
+    const ipsaeCount = metrics.filter((metric) => metric.key === 'ipsae' && metric.scoreValue != null).length;
+    const iptmCount = metrics.filter((metric) => metric.key === 'iptm' && metric.scoreValue != null).length;
+
+    if (usableCount === 0) {
+        return {
+            label: 'interface metric',
+            detail: 'No interface-confidence metric was available for the current page.',
+            thresholds: 'Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D < 0.40',
+        };
+    }
+
+    if (ipsaeCount === usableCount) {
+        return {
+            label: 'ipSAE',
+            detail: 'Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D < 0.40',
+            thresholds: 'ipSAE tiers use the raw interface score with no epitope-contact bonus.',
+        };
+    }
+
+    if (iptmCount === usableCount) {
+        return {
+            label: 'iPTM',
+            detail: 'Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D < 0.40',
+            thresholds: 'iPTM receives a +0.05 bonus for designs with ≥5 epitope contacts.',
+        };
+    }
+
+    return {
+        label: 'interface metric',
+        detail: 'Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D < 0.40',
+        thresholds: 'Uses ipSAE when available, otherwise falls back to iPTM (+0.05 for ≥5 epitope contacts).',
+    };
+};
+
+// Binding quality tier based on the best persisted interface-confidence metric.
+const getBindingTier = (
+    design: Pick<Design, 'ipsae' | 'iptm' | 'epitope_contact_count'>,
+): BindingTierInfo => {
+    const metric = getBindingMetricSummary(design);
+    if (metric.scoreValue == null) {
+        return {
+            tier: '—',
+            color: 'text-slate-500',
+            bgColor: 'bg-slate-700/50',
+            label: 'No data',
+            metric,
+        };
+    }
+
+    if (metric.scoreValue >= 0.75) {
+        return { tier: 'A', color: 'text-emerald-300', bgColor: 'bg-emerald-500/30 border-emerald-500/50', label: 'Excellent', metric };
+    }
+    if (metric.scoreValue >= 0.55) {
+        return { tier: 'B', color: 'text-blue-300', bgColor: 'bg-blue-500/30 border-blue-500/50', label: 'Good', metric };
+    }
+    if (metric.scoreValue >= 0.40) {
+        return { tier: 'C', color: 'text-amber-300', bgColor: 'bg-amber-500/30 border-amber-500/50', label: 'Moderate', metric };
+    }
+    return { tier: 'D', color: 'text-red-300', bgColor: 'bg-red-500/30 border-red-500/50', label: 'Low', metric };
 };
 
 const getRfScreenStatus = (design: Pick<Design, 'passed_screen' | 'screening_reason'>): { label: string; color: string; bgColor: string; tooltip: string } => {
@@ -371,12 +464,20 @@ const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFi
 
     if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
     if (
+        stage === 'post_boltzgen' ||
         stageFamily.includes('boltzgen') ||
         stageMode.includes('nanobody_binder') ||
         stageMode.includes('antibody_binder') ||
         (modelId === 'boltzgen' && (mode === 'nanobody_binder' || mode === 'antibody_binder'))
     ) {
         return 'boltzgen';
+    }
+    if (
+        stage === 'post_ppiflow_generator' ||
+        stageMode === 'generator_backbone_refine' ||
+        (modelId === 'ppiflow' && mode === 'generator_backbone_refine')
+    ) {
+        return 'ppiflow';
     }
     if (
         stage.includes('ppiflow') ||
@@ -849,6 +950,30 @@ type FilterDraftState = {
     targetMaxDist: string;
 };
 
+type BoltzgenClusterMode = 'exact_sequence' | 'identity_95' | 'identity_90' | 'cdr_h3_exact';
+
+type BoltzgenCluster = {
+    key: string;
+    representative: Design;
+    members: Design[];
+    sequence: string | null;
+    cdrH3: string | null;
+};
+
+type BoltzgenClusterSummary = {
+    clusters: BoltzgenCluster[];
+    totalCount: number;
+    uniqueCount: number;
+    duplicateCount: number;
+    largestClusterSize: number;
+    uniqueSequenceCount: number;
+    uniqueCdrH3Count: number;
+    medianConfidence: number | null;
+    medianAffinity: number | null;
+    medianBinderProbability: number | null;
+    medianBinderLength: number | null;
+};
+
 type JobSelectorOption = {
     key: string;
     value: string;
@@ -863,7 +988,7 @@ type JobSelectorOption = {
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const getRfReviewSetLabel = (value: RfReviewSet | null | undefined) => value === 'raw' ? 'Raw' : value === 'filtered' ? 'Screened' : 'No Set';
 const isStageReviewJob = (job: Job | null | undefined): boolean =>
-    ['post_rfantibody', 'post_fampnn', 'post_structure_validation']
+    ['post_rfantibody', 'post_boltzgen', 'post_ppiflow_generator', 'post_fampnn', 'post_structure_validation']
         .includes(String(job?.awaiting_stage || job?.current_stage || '').toLowerCase());
 const isPostRfantibodyStage = (job: Job | null | undefined): boolean =>
     String(job?.awaiting_stage || job?.current_stage || '').toLowerCase() === 'post_rfantibody';
@@ -948,6 +1073,7 @@ const getLineageOutputLabel = (job: Job): string => {
         return 'BoltzGen';
     }
     if (family === 'ppiflow') {
+        if (stageMode === 'generator_backbone_refine') return 'Seeded Generation';
         if (stageMode === 'backbone_refine' || stageMode === 'post_rfantibody') return 'Backbone Refinement';
         if (stageMode === 'post_ppiflow') return 'Backbone Reattempt';
         if (stageMode === 'maturation' || stageMode === 'post_fampnn') return 'Maturation';
@@ -970,7 +1096,7 @@ const getLineageOutputScopeLabel = (job: Job): string | null => {
         selected_loops: job.params?.ppiflow_selected_loops,
     };
     const stageMode = String(job.stage_mode || '').trim().toLowerCase();
-    const candidates: unknown[] = stageMode === 'backbone_refine' || stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow'
+    const candidates: unknown[] = stageMode === 'generator_backbone_refine' || stageMode === 'backbone_refine' || stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow'
         ? [
             scopeRecord,
             paramsScopeRecord,
@@ -1110,7 +1236,7 @@ const getDesignSortValue = (design: Design, field: string): string | number | bo
         case 'backbone':
             return design.backbone_id ?? null;
         case 'binding_tier':
-            return (design.iptm ?? 0) + ((design.epitope_contact_count ?? 0) >= 5 ? 0.05 : 0);
+            return getBindingMetricSummary(design).scoreValue ?? null;
         case 'maturation_delta_interface':
             return getDirectNumberField(design, field) ?? getPpiflowScoreRecord(design)?.delta_interface_score ?? null;
         case 'maturation_interface_score':
@@ -1289,6 +1415,127 @@ const normalizeSavedReviewFilterState = (state: SavedReviewFilterState): SavedRe
 const savedReviewStatesEqual = (a: SavedReviewFilterState, b: SavedReviewFilterState): boolean =>
     JSON.stringify(normalizeSavedReviewFilterState(a)) === JSON.stringify(normalizeSavedReviewFilterState(b));
 
+const normalizeBoltzgenSequence = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toUpperCase().replace(/[^A-Z|]/g, '');
+    return normalized || null;
+};
+
+const collapseBoltzgenBinderSequence = (value: unknown): string | null => {
+    const normalized = normalizeBoltzgenSequence(value);
+    if (!normalized) return null;
+    return normalized.replace(/\|/g, '');
+};
+
+const sameLengthSequenceIdentity = (left: string, right: string): number => {
+    if (!left || !right || left.length !== right.length) return 0;
+    let matches = 0;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] === right[index]) matches += 1;
+    }
+    return matches / left.length;
+};
+
+const medianMetric = (values: Array<number | null | undefined>): number | null => {
+    const filtered = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    if (filtered.length === 0) return null;
+    const sorted = [...filtered].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 1) return sorted[middle];
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+const buildBoltzgenClusters = (designs: Design[], mode: BoltzgenClusterMode): BoltzgenClusterSummary => {
+    const clusters: BoltzgenCluster[] = [];
+    const exactSequenceKeys = new Set<string>();
+    const cdrH3Keys = new Set<string>();
+    const exactClusters = new Map<string, BoltzgenCluster>();
+    const cdrH3Clusters = new Map<string, BoltzgenCluster>();
+    const lengthBuckets = new Map<number, BoltzgenCluster[]>();
+
+    for (const design of designs) {
+        const binderSequence = collapseBoltzgenBinderSequence(design.binder_sequence);
+        const cdrH3 = normalizeBoltzgenSequence(design.cdr_h3);
+
+        if (binderSequence) exactSequenceKeys.add(binderSequence);
+        if (cdrH3) cdrH3Keys.add(cdrH3);
+
+        if (mode === 'exact_sequence') {
+            const key = binderSequence ? `seq:${binderSequence}` : `missing:${design.id}`;
+            const existing = exactClusters.get(key);
+            if (existing) {
+                existing.members.push(design);
+                continue;
+            }
+            const cluster = { key, representative: design, members: [design], sequence: binderSequence, cdrH3 };
+            exactClusters.set(key, cluster);
+            clusters.push(cluster);
+            continue;
+        }
+
+        if (mode === 'cdr_h3_exact') {
+            const key = cdrH3 ? `cdrh3:${cdrH3}` : `missing:${design.id}`;
+            const existing = cdrH3Clusters.get(key);
+            if (existing) {
+                existing.members.push(design);
+                continue;
+            }
+            const cluster = { key, representative: design, members: [design], sequence: binderSequence, cdrH3 };
+            cdrH3Clusters.set(key, cluster);
+            clusters.push(cluster);
+            continue;
+        }
+
+        const threshold = mode === 'identity_95' ? 0.95 : 0.90;
+        if (!binderSequence) {
+            clusters.push({
+                key: `missing:${design.id}`,
+                representative: design,
+                members: [design],
+                sequence: null,
+                cdrH3,
+            });
+            continue;
+        }
+
+        const candidates = lengthBuckets.get(binderSequence.length) || [];
+        const matchingCluster = candidates.find((cluster) =>
+            cluster.sequence
+            && cluster.sequence.length === binderSequence.length
+            && sameLengthSequenceIdentity(cluster.sequence, binderSequence) >= threshold
+        );
+        if (matchingCluster) {
+            matchingCluster.members.push(design);
+            continue;
+        }
+        clusters.push({
+            key: `${mode}:${clusters.length}:${design.id}`,
+            representative: design,
+            members: [design],
+            sequence: binderSequence,
+            cdrH3,
+        });
+        const bucket = lengthBuckets.get(binderSequence.length) || [];
+        bucket.push(clusters[clusters.length - 1]);
+        lengthBuckets.set(binderSequence.length, bucket);
+    }
+
+    const largestClusterSize = clusters.reduce((maxSize, cluster) => Math.max(maxSize, cluster.members.length), 0);
+    return {
+        clusters,
+        totalCount: designs.length,
+        uniqueCount: clusters.length,
+        duplicateCount: Math.max(0, designs.length - clusters.length),
+        largestClusterSize,
+        uniqueSequenceCount: exactSequenceKeys.size,
+        uniqueCdrH3Count: cdrH3Keys.size,
+        medianConfidence: medianMetric(designs.map((design) => design.conf_score ?? design.plddt_overall)),
+        medianAffinity: medianMetric(designs.map((design) => design.affinity_score)),
+        medianBinderProbability: medianMetric(designs.map((design) => design.binder_probability)),
+        medianBinderLength: medianMetric(designs.map((design) => design.binder_length)),
+    };
+};
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -1378,6 +1625,7 @@ export function ResultsViewer() {
     const [pageSize, setPageSize] = useState<number>(100);
     const [currentPage, setCurrentPage] = useState<number>(1);
     const [topSelectionCount, setTopSelectionCount] = useState<string>('25');
+    const [boltzgenClusterMode, setBoltzgenClusterMode] = useState<BoltzgenClusterMode>('exact_sequence');
     const [savedFilterSetName, setSavedFilterSetName] = useState<string>('');
     const [appliedSavedFilterSetId, setAppliedSavedFilterSetId] = useState<string | null>(null);
     const [savedReviewFilterSetsOverride, setSavedReviewFilterSetsOverride] = useState<SavedReviewFilterSet[] | null>(null);
@@ -1681,6 +1929,12 @@ export function ResultsViewer() {
         const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
         const boltzgenMode = String(activeJob.params?.boltzgen_mode || activeJob.mode || '').toLowerCase();
         const frameworkType = String(activeJob.params?.framework_type || '').toLowerCase();
+        const antibodyChains = String(activeJob.params?.antibody_chains || '').trim();
+        const isPpiFlowSeededAntibody = modelId === 'ppiflow' && (
+            mode === 'generator_backbone_refine' ||
+            frameworkType === 'nanobody' ||
+            Boolean(antibodyChains)
+        );
         const isBoltzGenNanobody = modelId === 'boltzgen' && (
             boltzgenMode === 'nanobody_binder' ||
             frameworkType === 'nanobody'
@@ -1691,7 +1945,8 @@ export function ResultsViewer() {
             mode.includes('antibody') ||
             name.includes('antibody') ||
             isAntibodyPipelineMode(rfdMode) ||
-            isBoltzGenNanobody
+            isBoltzGenNanobody ||
+            isPpiFlowSeededAntibody
         );
     }, [activeJob]);
     const isProteinLocalRedesignContext = useMemo(() => {
@@ -2453,6 +2708,15 @@ export function ResultsViewer() {
         if (outputSourceFilter === 'all') return orderedDesigns;
         return orderedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
     }, [orderedDesigns, outputSourceFilter]);
+    const boltzgenScopedDesigns = useMemo(
+        () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as any) === 'boltzgen'),
+        [sourceScopedDesigns],
+    );
+    const boltzgenClusterSummary = useMemo(
+        () => buildBoltzgenClusters(boltzgenScopedDesigns, boltzgenClusterMode),
+        [boltzgenClusterMode, boltzgenScopedDesigns],
+    );
+    const showBoltzgenClusterPanel = showReviewWorkingSetPanel && boltzgenScopedDesigns.length > 0;
     const totalDesigns = useClientSourcePagination ? sourceScopedDesigns.length : serverTotalDesigns;
     const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
     const tableDesigns = useMemo(() => {
@@ -3392,10 +3656,11 @@ export function ResultsViewer() {
         const screenPassed = designs.filter((d) => d.passed_screen === true).length;
         const screenFailed = designs.filter((d) => d.passed_screen === false).length;
         const screeningReasons = new Map<string, number>();
+        const bindingMetricUsage = summarizeBindingMetricUsage(designs);
 
         const tierCounts = { A: 0, B: 0, C: 0, D: 0, none: 0 };
         designs.forEach(d => {
-            const tier = getBindingTier(d.iptm, d.epitope_contact_count);
+            const tier = getBindingTier(d);
             if (tier.tier === 'A') tierCounts.A++;
             else if (tier.tier === 'B') tierCounts.B++;
             else if (tier.tier === 'C') tierCounts.C++;
@@ -3447,6 +3712,9 @@ export function ResultsViewer() {
             tierB: tierCounts.B,
             tierC: tierCounts.C,
             tierD: tierCounts.D,
+            bindingMetricLabel: bindingMetricUsage.label,
+            bindingMetricThresholds: bindingMetricUsage.detail,
+            bindingMetricDetail: bindingMetricUsage.thresholds,
             psceExcellent: psces.filter((value) => value <= 0.9).length,
             psceGood: psces.filter((value) => value > 0.9 && value <= 1.2).length,
             psceModerate: psces.filter((value) => value > 1.2 && value <= 1.6).length,
@@ -3495,6 +3763,7 @@ export function ResultsViewer() {
             avgTargetDistance: average(representatives.map((representative) => representative.target_min_distance)),
             avgHotspotCoverage: average(representatives.map((representative) => representative.rfa_hotspot_covered_count)),
             avgPsce: null,
+            avgMaxResiduePsce: null,
             avgPpiflowDeltaInterface: null,
             avgPpiflowInterfaceScore: null,
             avgPpiflowRmsd: null,
@@ -3517,6 +3786,9 @@ export function ResultsViewer() {
             tierB: 0,
             tierC: 0,
             tierD: 0,
+            bindingMetricLabel: 'binding quality',
+            bindingMetricThresholds: 'Tier A-D thresholds are unavailable for this review-only aggregate.',
+            bindingMetricDetail: 'Open a full design set to recover the normal binding metric distribution summary.',
             psceExcellent: 0,
             psceGood: 0,
             psceModerate: 0,
@@ -3938,6 +4210,51 @@ export function ResultsViewer() {
                 ? `Added ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`
                 : `Added the top ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`;
             setIterationMessage({ kind: 'success', text: message });
+        },
+        onError: (error) => {
+            setIterationMessage({ kind: 'error', text: getErrorMessage(error) });
+        },
+    });
+
+    const clusterSelectionMutation = useMutation({
+        mutationFn: async (mode: BoltzgenClusterMode) => {
+            if (!selectedJobId) {
+                throw new Error('Select a job before clustering a BoltzGen cohort.');
+            }
+            if (reviewSelectionRequired) {
+                throw new Error('Select a live RF review set or saved dataset before clustering outputs.');
+            }
+            const response = await fetchDesigns(bulkSelectionFilters);
+            if (response.data.total > MAX_BULK_SELECTION_DESIGNS) {
+                throw new Error(`Filtered result set exceeds ${MAX_BULK_SELECTION_DESIGNS.toLocaleString()} outputs. Narrow the filters first.`);
+            }
+            const boltzgenDesigns = response.data.designs.filter((design) => inferDesignOutputSource(design as any) === 'boltzgen');
+            if (boltzgenDesigns.length === 0) {
+                throw new Error('No BoltzGen outputs matched the current filtered set.');
+            }
+            const summary = buildBoltzgenClusters(boltzgenDesigns, mode);
+            return {
+                mode,
+                representativeIds: summary.clusters.map((cluster) => cluster.representative.id),
+                totalCount: summary.totalCount,
+                uniqueCount: summary.uniqueCount,
+                duplicateCount: summary.duplicateCount,
+                largestClusterSize: summary.largestClusterSize,
+            };
+        },
+        onSuccess: (result) => {
+            setSelectedDesignIds((current) => Array.from(new Set([...current, ...result.representativeIds])));
+            const clusterLabel = result.mode === 'exact_sequence'
+                ? 'exact-sequence'
+                : result.mode === 'cdr_h3_exact'
+                    ? 'CDR-H3'
+                    : result.mode === 'identity_95'
+                        ? '95% identity'
+                        : '90% identity';
+            setIterationMessage({
+                kind: 'success',
+                text: `Added ${result.uniqueCount.toLocaleString()} BoltzGen representative outputs from ${result.totalCount.toLocaleString()} filtered designs using ${clusterLabel} clustering.`,
+            });
         },
         onError: (error) => {
             setIterationMessage({ kind: 'error', text: getErrorMessage(error) });
@@ -4698,7 +5015,99 @@ export function ResultsViewer() {
                                                     Building working set...
                                                 </span>
                                             )}
+                                            {clusterSelectionMutation.isPending && (
+                                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                    Building BoltzGen representative set...
+                                                </span>
+                                            )}
                                         </div>
+                                        {showBoltzgenClusterPanel && (
+                                            <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+                                                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
+                                                            BoltzGen Cohort Triage
+                                                        </div>
+                                                        <p className="mt-1 max-w-3xl text-[11px] text-slate-400">
+                                                            Reduce near-duplicate BoltzGen binders before refinement. The stats below reflect the currently loaded BoltzGen rows; the clustering action re-queries the full filtered BoltzGen cohort for the current job/output-source scope.
+                                                        </p>
+                                                        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Loaded BoltzGen</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">{boltzgenClusterSummary.totalCount.toLocaleString()}</div>
+                                                            </div>
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Unique Sequences</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">{boltzgenClusterSummary.uniqueSequenceCount.toLocaleString()}</div>
+                                                            </div>
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Unique CDR-H3</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">{boltzgenClusterSummary.uniqueCdrH3Count.toLocaleString()}</div>
+                                                            </div>
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Largest Cluster</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">{boltzgenClusterSummary.largestClusterSize.toLocaleString()}</div>
+                                                            </div>
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Median Conf / Affinity</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">
+                                                                    {boltzgenClusterSummary.medianConfidence != null ? boltzgenClusterSummary.medianConfidence.toFixed(2) : '—'}
+                                                                    <span className="mx-1 text-slate-500">/</span>
+                                                                    {boltzgenClusterSummary.medianAffinity != null ? boltzgenClusterSummary.medianAffinity.toFixed(2) : '—'}
+                                                                </div>
+                                                            </div>
+                                                            <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                                                                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Median Prob / Size</div>
+                                                                <div className="mt-1 text-sm font-semibold text-white">
+                                                                    {boltzgenClusterSummary.medianBinderProbability != null ? boltzgenClusterSummary.medianBinderProbability.toFixed(2) : '—'}
+                                                                    <span className="mx-1 text-slate-500">/</span>
+                                                                    {boltzgenClusterSummary.medianBinderLength != null ? boltzgenClusterSummary.medianBinderLength.toFixed(0) : '—'}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="min-w-[280px] rounded-xl border border-slate-700/70 bg-slate-950/40 p-3">
+                                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+                                                            Representative Selection
+                                                        </div>
+                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                            {([
+                                                                ['exact_sequence', 'Exact Sequence'],
+                                                                ['identity_95', '95% Identity'],
+                                                                ['identity_90', '90% Identity'],
+                                                                ['cdr_h3_exact', 'CDR-H3 Exact'],
+                                                            ] as Array<[BoltzgenClusterMode, string]>).map(([value, label]) => (
+                                                                <button
+                                                                    key={value}
+                                                                    type="button"
+                                                                    onClick={() => setBoltzgenClusterMode(value)}
+                                                                    className={`rounded-lg border px-3 py-1.5 text-[11px] transition-colors ${boltzgenClusterMode === value
+                                                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-100'
+                                                                        : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                                                                        }`}
+                                                                >
+                                                                    {label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                        <div className="mt-3 text-[11px] text-slate-400">
+                                                            Current mode yields <span className="font-semibold text-amber-100">{boltzgenClusterSummary.uniqueCount.toLocaleString()}</span> representatives and removes <span className="font-semibold text-amber-100">{boltzgenClusterSummary.duplicateCount.toLocaleString()}</span> duplicates from the loaded cohort.
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setIterationMessage(null);
+                                                                clusterSelectionMutation.mutate(boltzgenClusterMode);
+                                                            }}
+                                                            disabled={clusterSelectionMutation.isPending || boltzgenClusterSummary.totalCount === 0}
+                                                            className="mt-3 w-full rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100 transition-colors hover:border-amber-400 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {clusterSelectionMutation.isPending ? 'Selecting Representatives…' : 'Add Cluster Representatives'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="mt-3 flex flex-wrap items-center gap-2">
                                             <input
                                                 type="text"
@@ -5734,7 +6143,7 @@ export function ResultsViewer() {
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                                                             <span>🔗</span>
                                                             Binding Quality Distribution
-                                                            <span className="text-xs text-slate-500 font-normal">(based on iPTM)</span>
+                                                            <span className="text-xs text-slate-500 font-normal">(based on {overviewStats.bindingMetricLabel})</span>
                                                         </h3>
                                                         <div className="grid grid-cols-4 gap-3">
                                                             <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
@@ -5759,8 +6168,8 @@ export function ResultsViewer() {
                                                             </div>
                                                         </div>
                                                         <div className="mt-3 text-xs text-slate-500 flex items-center gap-3">
-                                                            <span>Thresholds: A ≥ 0.75, B ≥ 0.55, C ≥ 0.40, D &lt; 0.40</span>
-                                                            <span className="text-amber-500/80">+0.05 bonus for ≥5 epitope contacts</span>
+                                                            <span>{overviewStats.bindingMetricThresholds}</span>
+                                                            <span className="text-amber-500/80">{overviewStats.bindingMetricDetail}</span>
                                                         </div>
                                                     </>
                                                 )}
@@ -7405,11 +7814,14 @@ export function ResultsViewer() {
                                                                                 </span>
                                                                             );
                                                                         }
-                                                                        const tier = getBindingTier(d.iptm, d.epitope_contact_count);
+                                                                        const tier = getBindingTier(d);
+                                                                        const bonusNote = tier.metric.contactBonus > 0
+                                                                            ? `, Bonus: +${tier.metric.contactBonus.toFixed(2)}`
+                                                                            : '';
                                                                         return (
                                                                             <span
                                                                                 className={`px-2 py-0.5 text-xs font-bold rounded border ${tier.bgColor} ${tier.color}`}
-                                                                                title={`${tier.label} binding (iPTM: ${d.iptm?.toFixed(2) ?? '—'}, Contacts: ${d.epitope_contact_count ?? '—'})`}
+                                                                                title={`${tier.label} binding (${tier.metric.label}: ${tier.metric.rawValue?.toFixed(2) ?? '—'}, Score: ${tier.metric.scoreValue?.toFixed(2) ?? '—'}, Contacts: ${d.epitope_contact_count ?? '—'}${bonusNote})`}
                                                                             >
                                                                                 {tier.tier}
                                                                             </span>

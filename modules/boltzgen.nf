@@ -1,3 +1,34 @@
+[
+    boltzgen_nanobody_scaffold_specs: null,
+    boltzgen_num_designs: 10,
+    boltzgen_diffusion_batch_size: null,
+    boltzgen_batch_size: null,
+    boltzgen_protocol: 'protein-anything',
+    boltzgen_step_scale: null,
+    boltzgen_noise_scale: null,
+    boltzgen_inverse_fold_avoid: null,
+    boltzgen_inverse_fold_num_sequences: null,
+    boltzgen_checkpoint_mode: null,
+    boltzgen_skip_inverse_folding: false,
+    boltzgen_reuse: false,
+    boltzgen_extra_config: null,
+    boltzgen_min_plddt: null,
+    boltzgen_min_conf_score: null,
+    boltzgen_refolding_rmsd_threshold: null,
+    boltzgen_max_rmsd: null,
+    boltzgen_budget: null,
+    boltzgen_alpha: '0.01',
+    boltzgen_filter_biased: true,
+    boltzgen_metrics_override: null,
+    boltzgen_additional_filters: null,
+    boltzgen_size_buckets: null,
+    boltzgen_extra_params: null,
+].each { key, value ->
+    if (!params.containsKey(key)) {
+        params[key] = value
+    }
+}
+
 process PrepBoltzGenInput {
     label 'pyrosetta_tools'
 
@@ -27,12 +58,20 @@ process PrepBoltzGenInput {
     path "boltzgen_input.yaml", emit: yaml
 
     script:
+    def nanobodyScaffoldSpecs = params.get('boltzgen_nanobody_scaffold_specs')
     """
-    eval "\$(micromamba shell hook --shell bash)"
-    micromamba activate pyrosetta
+    export MAMBA_ROOT_PREFIX=/opt/conda/
+    if [ -x /opt/conda/envs/pyrosetta/bin/python3 ]; then
+        export PATH=/opt/conda/envs/pyrosetta/bin:\$PATH
+    elif command -v micromamba >/dev/null 2>&1; then
+        eval "\$(micromamba shell hook --shell bash)"
+        if micromamba env list 2>/dev/null | awk '{print \$1}' | grep -qx 'pyrosetta'; then
+            micromamba activate pyrosetta
+        fi
+    fi
 
     # Prepare input YAML for BoltzGen
-    python /scripts/prep_boltzgen.py \\
+    python3 ${params.code_root}/scripts/prep_boltzgen.py \\
         ${ligand_smiles ? "--ligand_smiles '${ligand_smiles}'" : ''} \\
         ${ntp_type ? "--ntp_type '${ntp_type}'" : ''} \\
         --scaffold_length '${scaffold_length}' \\
@@ -46,7 +85,7 @@ process PrepBoltzGenInput {
         ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
         ${covalent_bonds ? "--covalent_bonds '${covalent_bonds}'" : ''} \\
         ${nanobody_framework ? "--nanobody_framework '${nanobody_framework}'" : ''} \\
-        ${params.boltzgen_nanobody_scaffold_specs ? "--nanobody_scaffold_specs '${params.boltzgen_nanobody_scaffold_specs}'" : ''} \\
+        ${nanobodyScaffoldSpecs ? "--nanobody_scaffold_specs '${nanobodyScaffoldSpecs}'" : ''} \\
         ${cdr_h1_length ? "--cdr_h1_length '${cdr_h1_length}'" : ''} \\
         ${cdr_h2_length ? "--cdr_h2_length '${cdr_h2_length}'" : ''} \\
         ${cdr_h3_length ? "--cdr_h3_length '${cdr_h3_length}'" : ''} \\
@@ -70,6 +109,8 @@ process RunBoltzGen {
     // Wrapper outputs converted PDBs + JSONs to output/designs/
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.json", saveAs: { filename -> filename.split('/')[-1] }
     // Also capture batch metadata if available
     publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/**/all_designs_metrics.csv", saveAs: { filename -> filename.split('/')[-1] }
 
@@ -82,16 +123,16 @@ process RunBoltzGen {
     path "*.log"
 
     script:
-    def numDesigns = params.boltzgen_num_designs ?: 10
-    def diffusionBatchSize = params.boltzgen_diffusion_batch_size ?: params.boltzgen_batch_size ?: 1
-    def protocol = params.boltzgen_protocol ?: 'auto'
-    def stepScale = params.boltzgen_step_scale ?: ''
-    def noiseScale = params.boltzgen_noise_scale ?: ''
-    def inverseFoldAvoid = params.boltzgen_inverse_fold_avoid ?: ''
-    def inverseFoldNumSeqs = params.boltzgen_inverse_fold_num_sequences ?: ''
-    def checkpointMode = params.boltzgen_checkpoint_mode ?: ''
-    def skipInverseFolding = params.boltzgen_skip_inverse_folding ?: false
-    def reuseExisting = params.boltzgen_reuse ?: false
+    def numDesigns = params.get('boltzgen_num_designs') ?: 10
+    def diffusionBatchSize = params.get('boltzgen_diffusion_batch_size') ?: params.get('boltzgen_batch_size') ?: 1
+    def protocol = params.get('boltzgen_protocol') ?: 'auto'
+    def stepScale = params.get('boltzgen_step_scale') ?: ''
+    def noiseScale = params.get('boltzgen_noise_scale') ?: ''
+    def inverseFoldAvoid = params.get('boltzgen_inverse_fold_avoid') ?: ''
+    def inverseFoldNumSeqs = params.get('boltzgen_inverse_fold_num_sequences') ?: ''
+    def checkpointMode = params.get('boltzgen_checkpoint_mode') ?: ''
+    def skipInverseFolding = params.get('boltzgen_skip_inverse_folding') ?: false
+    def reuseExisting = params.get('boltzgen_reuse') ?: false
     // Handle both single config and batch of configs
     def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" : "--config ${yaml_configs}"
     """
@@ -110,7 +151,7 @@ process RunBoltzGen {
         ${checkpointMode && checkpointMode != 'both' ? "--checkpoint_mode ${checkpointMode}" : ''} \\
         ${skipInverseFolding ? "--skip_inverse_folding" : ''} \\
         ${reuseExisting ? "--reuse" : ''} \\
-        ${params.boltzgen_extra_config ? params.boltzgen_extra_config : ''} \\
+        ${params.get('boltzgen_extra_config') ?: ''} \\
         2>&1 | tee boltzgen.log
     """
 }
@@ -119,6 +160,8 @@ process FilterBoltzGen {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "filtered/*.json"
+    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     path pdbs
@@ -132,21 +175,28 @@ process FilterBoltzGen {
 
     script:
     // Build filter parameters
-    def minPlddt = params.boltzgen_min_plddt ?: ''
-    def minConfScore = params.boltzgen_min_conf_score ?: ''
-    def maxRmsd = params.boltzgen_refolding_rmsd_threshold ?: params.boltzgen_max_rmsd ?: ''
-    def budget = params.boltzgen_budget ?: ''
-    def alpha = params.boltzgen_alpha ?: '0.01'
-    def filterBiased = params.boltzgen_filter_biased != false ? 'true' : 'false'
-    def metricsOverride = params.boltzgen_metrics_override ?: ''
-    def additionalFilters = params.boltzgen_additional_filters ?: ''
-    def sizeBuckets = params.boltzgen_size_buckets ?: ''
+    def minPlddt = params.get('boltzgen_min_plddt') ?: ''
+    def minConfScore = params.get('boltzgen_min_conf_score') ?: ''
+    def maxRmsd = params.get('boltzgen_refolding_rmsd_threshold') ?: params.get('boltzgen_max_rmsd') ?: ''
+    def budget = params.get('boltzgen_budget') ?: ''
+    def alpha = params.get('boltzgen_alpha') ?: '0.01'
+    def filterBiased = params.containsKey('boltzgen_filter_biased') ? (params.get('boltzgen_filter_biased') != false) : true
+    def metricsOverride = params.get('boltzgen_metrics_override') ?: ''
+    def additionalFilters = params.get('boltzgen_additional_filters') ?: ''
+    def sizeBuckets = params.get('boltzgen_size_buckets') ?: ''
 
     """
-    eval "\$(micromamba shell hook --shell bash)"
-    micromamba activate pyrosetta
+    export MAMBA_ROOT_PREFIX=/opt/conda/
+    if [ -x /opt/conda/envs/pyrosetta/bin/python3 ]; then
+        export PATH=/opt/conda/envs/pyrosetta/bin:\$PATH
+    elif command -v micromamba >/dev/null 2>&1; then
+        eval "\$(micromamba shell hook --shell bash)"
+        if micromamba env list 2>/dev/null | awk '{print \$1}' | grep -qx 'pyrosetta'; then
+            micromamba activate pyrosetta
+        fi
+    fi
 
-    python /scripts/filter_boltzgen.py \\
+    python3 ${params.code_root}/scripts/filter_boltzgen.py \\
         --pdbs ${pdbs} \\
         --jsons ${jsons} \\
         ${minPlddt ? "--boltzgen-min-plddt ${minPlddt}" : ''} \\
@@ -188,7 +238,8 @@ process SpawnBoltzGenJobs {
     path "spawn_boltzgen.log"
 
     script:
-    def paramsJson = params.boltzgen_extra_params ? "'${params.boltzgen_extra_params}'" : "'{}'"
+    def extraParams = params.get('boltzgen_extra_params')
+    def paramsJson = extraParams ? "'${extraParams}'" : "'{}'"
     """
     python3 ${params.code_root}/scripts/spawn_boltzgen_children.py \\
         --parent_job_id "${parent_job_id}" \\
@@ -238,6 +289,8 @@ process CollectBoltzGenOutputs {
 
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.json"
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "collection_manifest.json"
 
     input:
