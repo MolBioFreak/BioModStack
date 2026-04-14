@@ -79,6 +79,51 @@ const toBoolean = (value: unknown, fallback = false): boolean => {
 const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, value));
 
+const formatResumeStageLabel = (stage: string): string => {
+    const normalized = stage.trim().toLowerCase();
+    switch (normalized) {
+        case 'auto':
+            return 'Auto';
+        case 'rfantibody':
+            return 'RFantibody';
+        case 'fampnn':
+            return 'FAMPNN';
+        case 'structure_validation':
+            return 'Structure Validation';
+        case 'boltzgen':
+            return 'BoltzGen';
+        case 'post_rfantibody':
+            return 'RFantibody Review';
+        case 'post_fampnn':
+            return 'FAMPNN Review';
+        case 'post_structure_validation':
+            return 'Structure Validation Review';
+        case 'post_boltzgen':
+            return 'BoltzGen Review';
+        case 'post_ppiflow_generator':
+            return 'PPIFlow Review';
+        default:
+            return stage.replace(/_/g, ' ');
+    }
+};
+
+const mapAwaitingStageToResumeStage = (awaitingStage?: string | null): string => {
+    switch ((awaitingStage || '').trim().toLowerCase()) {
+        case 'post_rfantibody':
+            return 'rfantibody';
+        case 'post_fampnn':
+            return 'fampnn';
+        case 'post_structure_validation':
+            return 'structure_validation';
+        case 'post_boltzgen':
+            return 'boltzgen';
+        case 'post_ppiflow_generator':
+            return 'ppiflow';
+        default:
+            return 'auto';
+    }
+};
+
 export function Dashboard() {
     const queryClient = useQueryClient();
 
@@ -199,15 +244,7 @@ export function Dashboard() {
     const handleResumeWithSettings = (job: Job) => {
         const p = job.params || {};
         setResumeSettingsJob(job);
-        setResumeSettingsFromStage(
-            job.awaiting_stage === 'post_rfantibody'
-                ? 'rfantibody'
-                : job.awaiting_stage === 'post_fampnn'
-                ? 'fampnn'
-                : job.awaiting_stage === 'post_structure_validation'
-                    ? 'structure_validation'
-                    : 'auto'
-        );
+        setResumeSettingsFromStage(mapAwaitingStageToResumeStage(job.awaiting_stage));
         setResumeSettingsNameSuffix(job.status === 'awaiting_input' ? 'continued' : 'retuned');
         setResumeSettingsForm({
             rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
@@ -422,9 +459,14 @@ export function Dashboard() {
                                     >
                                         <option value="auto">auto</option>
                                         {(resumeSettingsJob.all_stages || []).map((stage) => (
-                                            <option key={stage} value={stage}>{stage}</option>
+                                            <option key={stage} value={stage}>{formatResumeStageLabel(stage)}</option>
                                         ))}
                                     </select>
+                                    {resumeSettingsJob.awaiting_stage && (
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Currently paused at {formatResumeStageLabel(resumeSettingsJob.awaiting_stage)}.
+                                        </p>
+                                    )}
                                     <p className="mt-1 text-xs text-slate-500">
                                         Cache-based resume reuses matching tasks; this hint does not strictly force stage restart yet.
                                     </p>

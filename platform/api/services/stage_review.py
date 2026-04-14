@@ -20,10 +20,15 @@ import numpy as np
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from antibody_pipeline_contract import is_antibody_pipeline_mode
+from antibody_pipeline_contract import (
+    infer_antibody_artifact_class_from_stage,
+    is_antibody_pipeline_mode,
+)
 from database import Design, Job
 from paths import get_data_root, resolve_allowed_path, to_allowed_relative
 from services.result_ingester import (
+    _apply_ppiflow_filter_fields,
+    _apply_ppiflow_score_fields,
     _design_lineage_fields,
     _inherit_source_design_metrics,
     _parse_hlt_cdr_lengths,
@@ -38,7 +43,7 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
-REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn", "post_structure_validation"}
+REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
 NEXTFLOW_JOB_ID_RE = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
@@ -74,6 +79,10 @@ def _review_stage_identity(stage: str | None, job: Job | None = None, payload: O
         if _is_protein_local_redesign_job(job, payload):
             return "protein_local_redesign", "post_rfd3"
         return "rfantibody", normalized
+    if normalized == "post_boltzgen":
+        return "boltzgen", normalized
+    if normalized == "post_ppiflow_generator":
+        return "ppiflow", "generator_backbone_refine"
     if normalized == "post_fampnn":
         return "fampnn", normalized
     if normalized == "post_structure_validation":
@@ -420,7 +429,7 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
                 candidate_dir = raw_dir
             elif raw_dir and count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
                 candidate_dir = raw_dir
-    elif stage == "post_fampnn":
+    elif stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
         candidate_count = count_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else 0
         if candidate_count == 0:
             if filtered_dir and count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
@@ -676,6 +685,93 @@ def _infer_binder_metrics(structure_path: Path) -> tuple[Optional[int], Optional
         return None, None
 
     return None, None
+
+
+def _load_boltzgen_review_metrics(
+    structure_path: Path,
+    *,
+    candidate_dir: Optional[Path],
+    raw_dir: Optional[Path],
+    filtered_dir: Optional[Path],
+) -> dict[str, Any]:
+    design_name = structure_path.stem
+    confidence_candidates = [
+        structure_path.with_suffix(".json"),
+        (candidate_dir / f"confidence_{design_name}.json") if candidate_dir else None,
+        (candidate_dir / f"{design_name}.json") if candidate_dir else None,
+        (raw_dir / f"confidence_{design_name}.json") if raw_dir else None,
+        (raw_dir / f"{design_name}.json") if raw_dir else None,
+        (filtered_dir / f"confidence_{design_name}.json") if filtered_dir else None,
+        (filtered_dir / f"{design_name}.json") if filtered_dir else None,
+    ]
+    metrics_path = next((path for path in confidence_candidates if path and path.exists()), None)
+    metrics = _read_json(metrics_path)
+
+    affinity_candidates = [
+        (candidate_dir / f"affinity_{design_name}.json") if candidate_dir else None,
+        (raw_dir / f"affinity_{design_name}.json") if raw_dir else None,
+        (filtered_dir / f"affinity_{design_name}.json") if filtered_dir else None,
+    ]
+    affinity_path = next((path for path in affinity_candidates if path and path.exists()), None)
+    affinity_metrics = _read_json(affinity_path)
+
+    return {
+        "json_path": str(metrics_path) if metrics_path else None,
+        "confidence_metrics": metrics or None,
+        "conf_score": safe_float(metrics.get("confidence_score")),
+        "ptm": safe_float(metrics.get("ptm")),
+        "iptm": safe_float(metrics.get("iptm")),
+        "protein_iptm": safe_float(metrics.get("protein_iptm")),
+        "ligand_iptm": safe_float(metrics.get("ligand_iptm")),
+        "complex_iplddt": safe_float(metrics.get("complex_iplddt")),
+        "complex_ipde": safe_float(metrics.get("complex_ipde")),
+        "chains_ptm": _coerce_json_value(metrics.get("chains_ptm")),
+        "pair_chains_iptm": _coerce_json_value(metrics.get("pair_chains_iptm")),
+        "affinity_score": safe_float(affinity_metrics.get("affinity_pred_value")),
+        "binder_probability": safe_float(affinity_metrics.get("affinity_probability_binary")),
+    }
+
+
+def _load_ppiflow_review_metrics(
+    structure_path: Path,
+    *,
+    candidate_dir: Optional[Path],
+    raw_dir: Optional[Path],
+    filtered_dir: Optional[Path],
+) -> dict[str, Any]:
+    design_name = structure_path.stem
+    score_candidates = [
+        structure_path.with_name(f"{design_name}_partial_flow_score.json"),
+        structure_path.with_name(f"{design_name}_maturation_score.json"),
+        (candidate_dir / f"{design_name}_partial_flow_score.json") if candidate_dir else None,
+        (candidate_dir / f"{design_name}_maturation_score.json") if candidate_dir else None,
+        (raw_dir / f"{design_name}_partial_flow_score.json") if raw_dir else None,
+        (raw_dir / f"{design_name}_maturation_score.json") if raw_dir else None,
+        (filtered_dir / f"{design_name}_partial_flow_score.json") if filtered_dir else None,
+        (filtered_dir / f"{design_name}_maturation_score.json") if filtered_dir else None,
+    ]
+    score_path = next((path for path in score_candidates if path and path.exists()), None)
+    score_payload = _read_json(score_path)
+
+    filter_candidates = [
+        structure_path.with_name(f"{design_name}_maturation_filter.json"),
+        (candidate_dir / f"{design_name}_maturation_filter.json") if candidate_dir else None,
+        (raw_dir / f"{design_name}_maturation_filter.json") if raw_dir else None,
+        (filtered_dir / f"{design_name}_maturation_filter.json") if filtered_dir else None,
+    ]
+    filter_path = next((path for path in filter_candidates if path and path.exists()), None)
+    filter_payload = _read_json(filter_path)
+
+    if not score_payload and isinstance(filter_payload.get("score_data"), dict):
+        score_payload = dict(filter_payload["score_data"])
+
+    return {
+        "json_path": str(score_path or filter_path) if (score_path or filter_path) else None,
+        "score_path": str(score_path) if score_path else None,
+        "score_data": score_payload if isinstance(score_payload, dict) else {},
+        "filter_path": str(filter_path) if filter_path else None,
+        "filter_payload": filter_payload if isinstance(filter_payload, dict) else {},
+    }
 
 
 def _normalize_chain_ids(chain_hint: Any) -> list[str]:
@@ -1136,6 +1232,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         json_path: Optional[Path] = None
         fampnn_psce = None
         mpnn_score = None
+        boltzgen_metrics: dict[str, Any] = {}
         if stage == "post_fampnn":
             candidate_json = (raw_dir / f"{design_name}.json") if raw_dir else None
             if candidate_json and candidate_json.exists():
@@ -1147,9 +1244,30 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                     or metrics.get("seq_fampnn_psce")
                 )
                 mpnn_score = safe_float(metrics.get("mpnn_score"))
+        elif stage == "post_boltzgen":
+            boltzgen_metrics = _load_boltzgen_review_metrics(
+                structure_path,
+                candidate_dir=candidate_dir,
+                raw_dir=raw_dir,
+                filtered_dir=filtered_dir,
+            )
+            json_path_value = boltzgen_metrics.get("json_path")
+            if json_path_value:
+                json_path = Path(str(json_path_value))
+        elif stage == "post_ppiflow_generator":
+            ppiflow_metrics = _load_ppiflow_review_metrics(
+                structure_path,
+                candidate_dir=candidate_dir,
+                raw_dir=raw_dir,
+                filtered_dir=filtered_dir,
+            )
+            json_path_value = ppiflow_metrics.get("json_path")
+            if json_path_value:
+                json_path = Path(str(json_path_value))
+        else:
+            ppiflow_metrics = {}
 
-        rows.append(
-            Design(
+        review_row = Design(
                 id=_review_design_id(job.id, stage, artifact_group, design_name),
                 job_id=job.id,
                 name=design_name,
@@ -1160,6 +1278,17 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 residue_plddt=residue_plddt,
                 mpnn_score=mpnn_score,
                 fampnn_psce=fampnn_psce,
+                conf_score=safe_float(boltzgen_metrics.get("conf_score")),
+                ptm=safe_float(boltzgen_metrics.get("ptm")),
+                iptm=safe_float(boltzgen_metrics.get("iptm")),
+                protein_iptm=safe_float(boltzgen_metrics.get("protein_iptm")),
+                ligand_iptm=safe_float(boltzgen_metrics.get("ligand_iptm")),
+                complex_iplddt=safe_float(boltzgen_metrics.get("complex_iplddt")),
+                complex_ipde=safe_float(boltzgen_metrics.get("complex_ipde")),
+                chains_ptm=_coerce_json_value(boltzgen_metrics.get("chains_ptm")),
+                pair_chains_iptm=_coerce_json_value(boltzgen_metrics.get("pair_chains_iptm")),
+                affinity_score=safe_float(boltzgen_metrics.get("affinity_score")),
+                binder_probability=safe_float(boltzgen_metrics.get("binder_probability")),
                 binder_length=binder_length,
                 antibody_type=antibody_type,
                 backbone_id=backbone_id,
@@ -1212,7 +1341,11 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
                 rfa_design_loops=rfa_trb.get("rfa_design_loops"),
                 rfa_hotspots=rfa_trb.get("rfa_hotspots"),
-                confidence_metrics=(rfa_trb.get("rfa_metadata") if uses_rfantibody_review else None),
+                confidence_metrics=(
+                    rfa_trb.get("rfa_metadata")
+                    if uses_rfantibody_review
+                    else _coerce_json_value(boltzgen_metrics.get("confidence_metrics"))
+                ),
                 cdr_h1_length=structure_cdr_lengths.get("H1"),
                 cdr_h2_length=structure_cdr_lengths.get("H2"),
                 cdr_h3_length=structure_cdr_lengths.get("H3"),
@@ -1222,12 +1355,15 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 stage_family=review_stage_family,
                 stage_mode=review_stage_mode,
                 source_stage=stage,
+                artifact_class=infer_antibody_artifact_class_from_stage(review_stage_family, review_stage_mode),
                 artifact_group=artifact_group,
                 created_at=datetime.utcnow(),
-            )
         )
+        if stage == "post_ppiflow_generator":
+            _apply_ppiflow_score_fields(review_row, ppiflow_metrics.get("score_data") or {})
+            _apply_ppiflow_filter_fields(review_row, ppiflow_metrics.get("filter_payload") or {})
 
-        review_row = rows[-1]
+        rows.append(review_row)
         for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
             if getattr(review_row, field_name, None) in (None, "", [], {}, ()):
                 setattr(review_row, field_name, field_value)
