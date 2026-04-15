@@ -40,6 +40,8 @@ include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedB
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
 include { PROTEIN_CAD_EXPERIMENTAL } from './workflows/protein_cad_experimental.nf'
+include { CALIBY_EXPERIMENTAL } from './workflows/caliby_experimental.nf'
+include { PROTEIN_HUNTER_EXPERIMENTAL } from './workflows/protein_hunter_experimental.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -468,10 +470,27 @@ workflow {
         return null
     }
 
-    /////////////////////////////
-    // RFANTIBODY STANDALONE    //
-    /////////////////////////////
-    // Standalone RFantibody backbone generation for orchestrator-spawned child jobs
+    if (params.rfd_mode == 'caliby_experimental') {
+        println("Running Caliby Experimental Workflow")
+        println("* Task: ${params.caliby_task}")
+        println("* Model: ${params.caliby_model_name}")
+        println("* Num seqs/structure: ${params.caliby_num_seqs_per_pdb}")
+
+        CALIBY_EXPERIMENTAL()
+        return null
+    }
+
+    if (params.rfd_mode == 'protein_hunter_experimental') {
+        println("Running Protein Hunter Experimental Workflow")
+        println("* Backend: ${params.ph_backend}")
+        println("* Task: ${params.ph_task}")
+        println("* Num designs: ${params.ph_num_designs}")
+        println("* Num cycles: ${params.ph_num_cycles}")
+
+        PROTEIN_HUNTER_EXPERIMENTAL()
+        return null
+    }
+
     if (params.rfd_mode == 'rfantibody_backbone') {
         println("Running RFantibody Backbone Generation (Child Job)")
         println("* Target PDB: ${params.target_pdb}")

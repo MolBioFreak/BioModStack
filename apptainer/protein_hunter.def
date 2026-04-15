@@ -1,0 +1,99 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Version 0.1.0
+    Description Protein Hunter runtime for experimental Boltz/Chai generator workflows
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y \
+        git \
+        curl \
+        wget \
+        build-essential \
+        python3.10 \
+        python3.10-dev \
+        python3.10-venv \
+        libglib2.0-0 \
+        libxrender1 \
+        libxext6 \
+        libsm6 \
+        && rm -rf /var/lib/apt/lists/*
+
+    ln -sf /usr/bin/python3.10 /usr/bin/python3
+    ln -sf /usr/bin/python3.10 /usr/bin/python
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:${PATH}"
+
+    uv venv /opt/venv -p python3.10
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:${PATH}"
+
+    uv pip install --compile "torch==2.7.1" torchvision==0.22.1 torchaudio==2.7.1 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+    git clone https://github.com/yehlincho/Protein-Hunter /opt/Protein-Hunter
+    cd /opt/Protein-Hunter
+
+    uv pip install --compile /opt/Protein-Hunter/boltz_ph
+    uv pip install --compile matplotlib seaborn prody tqdm PyYAML requests pypdb py3Dmol py2Dmol logmd==0.1.45 ml_collections
+
+    uv pip install --compile --no-deps git+https://github.com/sokrypton/chai-lab.git
+    uv pip install --compile \
+        "gemmi~=0.6.5" \
+        "jaxtyping>=0.2.25" \
+        "pandera>=0.24" \
+        "antipickle==0.2.0" \
+        "rdkit~=2024.9.5" \
+        "modelcif>=1.0" \
+        "biopython>=1.83" \
+        typing_inspect \
+        beartype \
+        typeguard \
+        ihm \
+        mypy_extensions \
+        equinox \
+        wadler_lindig
+
+    bash /opt/Protein-Hunter/LigandMPNN/get_model_params.sh /opt/Protein-Hunter/LigandMPNN/model_params
+
+    mkdir -p /weights /cache/huggingface /cache/triton /cache/general /cache/matplotlib /cache/numba
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/Protein-Hunter:$PYTHONPATH
+    export VIRTUAL_ENV=/opt/venv
+    export HF_HOME=/cache/huggingface
+    export XDG_CACHE_HOME=/cache/general
+    export TRITON_CACHE_DIR=/cache/triton
+    export MPLCONFIGDIR=/cache/matplotlib
+    export NUMBA_CACHE_DIR=/cache/numba
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+%runscript
+    exec python "$@"
+
+%test
+    . /opt/venv/bin/activate
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export NUMBA_CACHE_DIR=/tmp/numba
+    mkdir -p "$MPLCONFIGDIR" "$NUMBA_CACHE_DIR"
+    python -c "import torch; print(torch.__version__)"
+    python /opt/Protein-Hunter/boltz_ph/design.py --help >/dev/null
+    python /opt/Protein-Hunter/chai_ph/design.py --help >/dev/null
+    echo "Protein Hunter runtime OK"
+
+%help
+    Protein Hunter experimental runtime for BioModStack.
+
+    Notes:
+    - Uses a UV-managed Python 3.10 environment.
+    - Targets CUDA 12.8 to stay viable on both Ampere and Blackwell hosts.
+    - AF3 is intentionally not part of the live BMS launcher surface.
+    - Boltz weights are expected under /weights/boltz when launched in BMS.
