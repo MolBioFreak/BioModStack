@@ -1,27 +1,8 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-// =============================================================================
-// De Novo Antibody Design Workflow
-// =============================================================================
-// Two-phase pipeline for generating and validating novel antibodies:
-//
-// PHASE 1: Generation
-//   Step 1: RFantibody - CDR backbone generation
-//   Step 2: Sequence Design - FAMPNN/AntiFold/ProteinMPNN (cross-validation)
-//   Step 2.5: Stability Filtering - ThermoMPNN (optional, pre-Boltz)
-//
-// PHASE 2: Validation & Scoring
-//   Step 3: Structure Validation - Boltz2 (ipTM, pLDDT)
-//   Step 4: Immunogenicity - AntiBERTy (pseudo-log-likelihood)
-//   Step 5: Affinity Maturation - IgGM (optional)
-// =============================================================================
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTION: Extract sequence from PDB file
-// ═══════════════════════════════════════════════════════════════════════════════
 def extractSequenceFromPDB(pdb_file) {
-    // Extract sequences from PDB file, separating chains with ':' for Boltz multi-chain input
     def aa_codes = [
         'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
         'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
@@ -29,7 +10,6 @@ def extractSequenceFromPDB(pdb_file) {
         'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
     ]
     
-    // Track sequences per chain
     def chain_sequences = [:] as LinkedHashMap  // Preserve chain order
     def seen_residues = [:] as Map  // Per-chain residue tracking
     
@@ -53,11 +33,9 @@ def extractSequenceFromPDB(pdb_file) {
             }
         }
     } catch (Exception e) {
-        // Fallback: return empty sequence (Boltz will fail gracefully)
         return "AAAA"
     }
     
-    // Join chain sequences with ':' separator for Boltz multi-chain input
     def result = chain_sequences.values().collect { it.join('') }.join(':')
     return result ?: "AAAA"
 }
@@ -81,9 +59,6 @@ def parseFastaRecords(fasta_file) {
         } else {
             sequence.append(trimmed)
         }
-        // ANARCII post-polishing is handled once at parent job completion by
-        // the API completion hook, so review gates and child workflows do not
-        // fan out duplicate annotation passes.
     }
 
     if (currentId != null) {
@@ -225,6 +200,7 @@ def initializeAntibodyDenovoParams(params) {
     ensureParamDefault(params, 'seq_design_fampnn', null)
     ensureParamDefault(params, 'seq_design_antifold', null)
     ensureParamDefault(params, 'seq_design_proteinmpnn', null)
+    ensureParamDefault(params, 'seq_design_caliby', false)
     ensureParamDefault(params, 'enable_rfantibody_filter', false)
     ensureParamDefault(params, 'rfantibody_min_epitope_contacts', null)
     ensureParamDefault(params, 'rfantibody_max_epitope_distance', null)
@@ -303,10 +279,10 @@ def initializeAntibodyDenovoParams(params) {
     ]
 }
 
-// Import modules
 include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
 include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
+include { RunCaliby ; FilterCaliby } from '../modules/caliby'
 include { PrepMPNN ; RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER_STRUCTURES } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
@@ -320,10 +296,6 @@ include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
 include { BatchBoltzValidation ; BatchProtenixValidation } from '../modules/antibody_batch'
 
-// =============================================================================
-// ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
-// These enable per-job GPU assignment via the Python GPU orchestrator
-// =============================================================================
 
 process SpawnRFantibodyJobs {
     label 'process_low'
@@ -353,7 +325,6 @@ process SpawnRFantibodyJobs {
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
         rfantibody_ckpt_override: params.rfantibody_ckpt_override,
         rfantibody_debug_repo_overlay: params.rfantibody_debug_repo_overlay ?: false,
-        // Pass UI CDR loop selection - prefer custom UI index over general string flag if available
         antibody_design_loops: customLoopSpec ?: (params.antibody_design_loops ?: ''),
         rfantibody_loop_length_ranges: loopLengthSpec,
         antibody_chains: params.antibody_chains ?: 'H,L',
@@ -774,9 +745,6 @@ process CollectChildOutputs {
     """
 }
 
-// FAMPNN-specific Wait and Collect processes
-// These are separate from the generic ones to allow both RFantibody and FAMPNN 
-// to use spawn-wait-aggregate in the same workflow without channel conflicts
 process WaitForFAMPNNChildren {
     label 'process_low'
     
@@ -872,9 +840,6 @@ process CollectFAMPNNOutputs {
     """
 }
 
-// =============================================================================
-// PPIFlow maturation spawn/wait/collect helpers
-// =============================================================================
 process StageMaturationInputs {
     label 'process_low'
 
@@ -1240,20 +1205,17 @@ process StageStructureValidationArtifacts {
     publishDir "${params.out_dir}/collected/structure_validation", mode: 'copy', pattern: "validation_artifacts/*"
 
     input:
-    val pdbs
+    path pdb_list_file
 
     output:
     path "validation_artifacts", emit: dir
 
     script:
-    def pdbList = (pdbs instanceof Collection ? pdbs : [pdbs]).collect { it.toString() }.join('\n')
     """
     set -euo pipefail
     shopt -s nullglob
     mkdir -p validation_artifacts
-    cat > pdbs.list <<'EOF'
-${pdbList}
-EOF
+    cp "${pdb_list_file}" pdbs.list
 
     copy_if_present() {
         local src="\$1"
@@ -1395,9 +1357,6 @@ process CheckProtenixMsaPreflight {
     """
 }
 
-// =============================================================================
-// ANARCII Polishing (trigger API annotation)
-// =============================================================================
 process TriggerANARCIIAnnotationPostFAMPNNGate {
     label 'process_low'
 
@@ -1458,11 +1417,6 @@ process TriggerANARCIIAnnotationFinal {
     """
 }
 
-// =============================================================================
-// Process to spawn child validation jobs via API
-// This is a proper Nextflow process that BLOCKS until completion
-// Used by exploration mode for parallel GPU distribution
-// =============================================================================
 process SpawnChildJobs {
     label 'process_low'
     
@@ -1542,10 +1496,6 @@ process SpawnChildJobs {
     """
 }
 
-// =============================================================================
-// Process to wait for child jobs and aggregate their validated results
-// This blocks until all children complete, then collects outputs to master dir
-// =============================================================================
 process WaitAndAggregateChildResults {
     label 'process_low'
     
@@ -1717,7 +1667,7 @@ process FinalizeSequentialValidationOutputs {
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
 
     input:
-    val artifact_manifest_json
+    path artifact_manifest_file
 
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
@@ -1737,17 +1687,13 @@ process FinalizeSequentialValidationOutputs {
 
     mkdir -p validated_designs
 
-    cat > validation_artifacts.json <<'EOF'
-${artifact_manifest_json}
-EOF
-
     python3 <<'PY'
 import json
 import os
 import shutil
 from pathlib import Path
 
-manifest = json.loads(Path("validation_artifacts.json").read_text(encoding="utf-8"))
+manifest = json.loads(Path("${artifact_manifest_file}").read_text(encoding="utf-8"))
 validated_dir = Path("validated_designs")
 validated_dir.mkdir(parents=True, exist_ok=True)
 aligned_error_dir = validated_dir / "aligned_error"
@@ -1846,23 +1792,17 @@ process FinalizeTerminalAntibodyOutputs {
     publishDir "${params.out_dir}", mode: 'copy', pattern: "terminal_closeout_report.json"
 
     input:
-    val pdbs
+    path terminal_pdb_list_file
 
     output:
     path "terminal_closeout_report.json", emit: report
 
     script:
-    def pdbList = (pdbs instanceof Collection ? pdbs : (pdbs ? [pdbs] : []))
-        .collect { it?.toString() }
-        .findAll { it }
-        .join('\n')
     """
     #!/bin/bash
     set -euo pipefail
 
-    cat > terminal_pdbs.list <<'EOF'
-${pdbList}
-EOF
+    cp "${terminal_pdb_list_file}" terminal_pdbs.list
 
     TOTAL_PDBS=\$(grep -c . terminal_pdbs.list || true)
 
@@ -1903,17 +1843,9 @@ workflow ANTIBODY_DENOVO {
     def selectedInputDir = workflowContext.selectedInputDir
     def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
 
-    // =========================================================================
-    // PHASE 1: GENERATION
-    // =========================================================================
 
-    // Step 1: RFantibody - Generate CDR backbones
-    // ---------------------------------------------------------------------------
     log.info("Step 1: Generating CDR backbones with RFantibody...")
 
-    // Framework PDB - if user provided custom framework, use it; otherwise use placeholder
-    // The placeholder triggers preset selection in the process script
-    // Use safe path resolution to avoid Channel.value() DSL2 error with undefined params
     def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
     framework_for_rfantibody = framework_pdb_ch
         .map { meta, pdb -> pdb }
@@ -1925,8 +1857,6 @@ workflow ANTIBODY_DENOVO {
         log.info("  Nanobody mode detected; defaulting antibody_chains to H for maturation/design stages")
     }
     
-    // Multi-GPU parallelism for RFantibody
-    // Parse available GPUs from pinned_gpus param (e.g., "0,2" -> [0, 2])
     def available_gpus = []
     if (params.pinned_gpus) {
         available_gpus = params.pinned_gpus.toString().split(',').collect { it.trim().toInteger() }
@@ -1942,23 +1872,17 @@ workflow ANTIBODY_DENOVO {
     def remainder = total_designs % num_gpus
     def designs_per_job = params.designs_per_job ?: 5
     def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
-    // Resume must preserve the original child batch key so orchestrated child
-    // stages can rediscover or resume prior attempts instead of starting over.
     def orchestrator_batch_name = params.batch_name
         ?: (params.job_id
             ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
             : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
     
-    // =========================================================================
-    // SKIP RFANTIBODY: Load pre-existing backbone PDBs instead of generating
-    // =========================================================================
     def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
     def skip_rfantibody_input_dir = selectedInputDir
 
     if (skip_rfantibody && skip_rfantibody_input_dir) {
         log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
         
-        // Load backbone PDBs from provided directory
         backbone_designs = Channel.fromPath("${skip_rfantibody_input_dir}/*.pdb")
             .collect()
             .map { pdbs ->
@@ -1969,19 +1893,11 @@ workflow ANTIBODY_DENOVO {
     } else if (skip_rfantibody) {
         error("skip_rfantibody=true but no selected_input_dir-compatible directory was provided")
     } else {
-        // =========================================================================
-        // PARALLELISM MODE: Choose between Nextflow-internal or Orchestrator spawning
-        // =========================================================================
         def use_orchestrator = params.parallel_mode == 'full_orchestrator'
     
     if (use_orchestrator) {
-        // =====================================================================
-        // ORCHESTRATOR MODE: Spawn child jobs through GPU queue
-        // Each child is a separate API job managed by the orchestrator
-        // =====================================================================
         log.info("  Orchestrator mode: Spawning ${planned_child_jobs} child job(s)")
         
-        // Spawn child jobs via API
         SpawnRFantibodyJobs(
             target_pdb_ch.map { meta, pdb -> pdb }.first(),
             epitope_residues ?: "",
@@ -1992,9 +1908,6 @@ workflow ANTIBODY_DENOVO {
             orchestrator_batch_name
         )
         
-        // Wait for all child jobs to complete
-        // Depends on spawn completion via SpawnRFantibodyJobs.out.result
-        // Pass batch_name for resume support (find children from original run)
         wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
         batch_name = orchestrator_batch_name
         WaitForChildren(
@@ -2004,13 +1917,11 @@ workflow ANTIBODY_DENOVO {
             batch_name
         )
         
-        // Collect outputs from completed child jobs
         CollectChildOutputs(
             WaitForChildren.out.child_outputs,
             "rfantibody"
         )
 
-        // REPORT STAGE: rfantibody (orchestrator path)
         CollectChildOutputs.out.pdbs.subscribe { pdbs ->
             try {
                 def file_list = pdbs instanceof List ? pdbs : [pdbs]
@@ -2025,7 +1936,6 @@ workflow ANTIBODY_DENOVO {
             }
         }
         
-        // Create backbone_designs channel from collected outputs
         backbone_designs = CollectChildOutputs.out.pdbs
             .flatten()
             .collect()
@@ -2035,14 +1945,8 @@ workflow ANTIBODY_DENOVO {
         }
         
     } else {
-        // =====================================================================
-        // STANDARD MODE: Nextflow-internal multi-GPU parallelism
-        // Splits work across pinned GPUs within the same Nextflow process
-        // =====================================================================
         log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
         
-        // Create parallel job channels for each GPU
-        // Each gets a portion of the total designs
         rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
             def idx = available_gpus.indexOf(gpu_id)
             def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
@@ -2050,22 +1954,17 @@ workflow ANTIBODY_DENOVO {
             [gpu_id, designs_for_this_gpu]
         }
         
-        // Prepare input for RFantibody with GPU assignment
-        // Combine target PDB with each GPU assignment
         rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
             def hotspots = epitope_residues ?: ""
-            // Create unique meta for each GPU split
             def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
             [split_meta, pdb, hotspots, gpu_id, designs_count]
         }
 
         RFANTIBODY(rfantibody_input, framework_for_rfantibody)
         
-        // REPORT STAGE: rfantibody
         RFANTIBODY.out.designs.subscribe { meta, files ->
             try {
                 def file_list = files instanceof List ? files : [files]
-                // Limit number of files reported to avoid command line length limits
                 def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
                 def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
                 def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
@@ -2075,8 +1974,6 @@ workflow ANTIBODY_DENOVO {
             }
         }
 
-        // Collect backbone designs from all parallel GPU runs
-        // Normalize meta.id by removing GPU suffix for downstream stages
         backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
             def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
             def unified_meta = [id: base_id]
@@ -2157,8 +2054,6 @@ workflow ANTIBODY_DENOVO {
         mutations = Channel.empty()
         backbone_designs = reviewed_backbone_designs
     } else {
-        // If a coarse screen ran, enforce non-zero yield even in refinement mode.
-        // If screening is disabled for a hand-selected refinement set, trust the user selection.
         if (params.skip_rfantibody && !shouldScreenRFantibody) {
             backbone_designs = reviewed_backbone_designs
         } else {
@@ -2244,25 +2139,35 @@ workflow ANTIBODY_DENOVO {
             }
         }
 
-        // Step 2: CDR Sequence Design (Cross-Validation Mode)
-        // ---------------------------------------------------------------------------
         log.info("Step 2: Designing CDR sequences...")
 
-        // Determine which sequence design methods to run
-        // Note: Use explicit null check because ?: treats false as falsy
         def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
         def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
         def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
+        def run_caliby = params.seq_design_caliby == true
+        def selectedInputStageFamily = (params.selected_input_stage_family ?: params.source_stage_family ?: '').toString().trim().toLowerCase()
+        def sequenceDesignResumeSource = params.interactive_gate_continue == true || params.resume_job_id != null
+        def fampnnUsesPreCollectedInputs = sequenceDesignResumeSource &&
+            selectedInputIsSequenceConditioned &&
+            selectedInputDir &&
+            (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')
+        def calibyUsesPreCollectedInputs = sequenceDesignResumeSource &&
+            selectedInputIsSequenceConditioned &&
+            selectedInputDir &&
+            selectedInputStageFamily == 'caliby'
 
-        // Initialize sequence channels
         fampnn_seqs = Channel.empty()
+        caliby_seqs = Channel.empty()
         antifold_seqs = Channel.empty()
         proteinmpnn_seqs = Channel.empty()
         def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
         def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
-        def fampnnCandidateDir = selectedInputIsSequenceConditioned && selectedInputDir ? selectedInputDir.toString() : null
+        def fampnnCandidateDir = (fampnnUsesPreCollectedInputs && selectedInputDir) ? selectedInputDir.toString() : null
+        def calibyRawDir = params.out_dir ? "${params.out_dir}/collected/caliby_raw" : null
+        def calibyFilteredDir = params.out_dir ? "${params.out_dir}/collected/caliby" : null
+        def calibyCandidateDir = (selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') ? selectedInputDir.toString() : null
 
-        if (!run_fampnn && selectedInputIsSequenceConditioned && selectedInputDir) {
+        if (!run_fampnn && selectedInputIsSequenceConditioned && selectedInputDir && (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')) {
             log.info("  Sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
 
             pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
@@ -2278,16 +2183,10 @@ workflow ANTIBODY_DENOVO {
             }
         }
 
-        // FAMPNN branch - using GPU orchestrator spawn-wait-aggregate pattern
         if (run_fampnn) {
-        // =====================================================================
-        // CHECK: Skip FAMPNN if pre-collected PDBs are provided
-        // This allows resuming from filtering without re-running FAMPNN
-        // =====================================================================
-        if (selectedInputIsSequenceConditioned && selectedInputDir) {
+        if (fampnnUsesPreCollectedInputs && selectedInputDir) {
             log.info("  FAMPNN: Using pre-collected PDBs from ${selectedInputDir}")
             
-            // Load pre-collected PDBs directly
             pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
                 .collect()
             
@@ -2295,42 +2194,31 @@ workflow ANTIBODY_DENOVO {
                 log.info("  FAMPNN: Loaded ${pdbs.size()} pre-collected PDBs")
             }
             
-            // Skip directly to filtering
             fampnn_seqs = pre_collected_pdbs.map { pdbs ->
                 def meta = [id: "fampnn_designs"]
                 [meta, pdbs]
             }
             fampnnCandidateDir = selectedInputDir.toString()
             
-            // Skip the spawn/wait/collect/filter block
             
         } else {
-            // Standard orchestrator mode
             log.info("  Running FAMPNN via GPU Orchestrator...")
             log.info("  Spawning child jobs (${params.pdbs_per_job ?: 5} PDBs per job, ${params.seqs_per_design ?: 20} seqs/design)")
             
-            // Collect all backbone PDBs from parallel GPU runs into a single list
             all_backbone_pdbs = backbone_designs
                 .map { meta, files -> files }
                 .flatten()
                 .collect()
             
-            // PrepFAMPNN generates constraint CSV and preps structures
             fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
                 [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
             }
             PrepFAMPNN(fampnn_prep_input)
             
-            // Get the output directory from PrepFAMPNN (contains prepped PDBs)
             fampnn_pdb_dir = PrepFAMPNN.out.pdbs.collect().map { files ->
-                // Return parent directory path as string
                 files[0].parent.toString()
             }
             
-            // =====================================================================
-            // ORCHESTRATOR MODE: Spawn FAMPNN child jobs
-            // Each child runs FAMPNN on a subset of PDBs, scheduled by orchestrator
-            // =====================================================================
             SpawnFAMPNNJobs(
                 fampnn_pdb_dir,
                 params.seqs_per_design ?: 20,
@@ -2339,14 +2227,9 @@ workflow ANTIBODY_DENOVO {
                 orchestrator_batch_name
             )
             
-            // Wait for all FAMPNN children to complete
-            // Pass batch_name for resume support (find children from original run)
-            // Note: map closure must accept the path argument (even if unused) 
             fampnn_wait_trigger = SpawnFAMPNNJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
             fampnn_batch_name = orchestrator_batch_name
             
-            // Reuse WaitForChildren process - need separate call for FAMPNN stage
-            // Note: We use a different variable name to avoid Nextflow channel conflicts
             WaitForFAMPNNChildren(
                 fampnn_wait_trigger,
                 "fampnn",
@@ -2354,13 +2237,11 @@ workflow ANTIBODY_DENOVO {
                 fampnn_batch_name
             )
             
-            // Collect outputs from completed FAMPNN child jobs
             CollectFAMPNNOutputs(
                 WaitForFAMPNNChildren.out.child_outputs,
                 "fampnn"
             )
             
-            // REPORT STAGE: fampnn
             CollectFAMPNNOutputs.out.outputs.subscribe { items ->
                 try {
                     def (pdbs, jsons) = items
@@ -2376,10 +2257,6 @@ workflow ANTIBODY_DENOVO {
                 }
             }
             
-            // ═══════════════════════════════════════════════════════════════════
-            // FILTER: Pre-Boltz Filtering (optional)
-            // Reject low-quality FAMPNN sequences before expensive Boltz validation
-            // ═══════════════════════════════════════════════════════════════════
             def filterEnabled = params.enable_fampnn_filter != false && 
                                (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
             
@@ -2389,7 +2266,6 @@ workflow ANTIBODY_DENOVO {
                 if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
                 log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
                 
-                // Collect PDBs + JSONs for filtering
                 FilterFAMPNN(CollectFAMPNNOutputs.out.outputs)
                 
                 FilterFAMPNN.out.pdbs.subscribe { pdbs ->
@@ -2404,7 +2280,6 @@ workflow ANTIBODY_DENOVO {
                 fampnnCandidateDir = fampnnFilteredDir ?: fampnnRawDir
             } else {
                 log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
-                // Pass through unfiltered
                 fampnn_seqs = CollectFAMPNNOutputs.out.outputs.map { pdbs, jsons ->
                     def meta = [id: "fampnn_designs"]
                     [meta, pdbs]
@@ -2414,24 +2289,125 @@ workflow ANTIBODY_DENOVO {
         } // End of else block (standard FAMPNN mode)
     }
 
+        if (!run_caliby && selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') {
+            log.info("  Caliby sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
+
+            pre_collected_caliby_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
+                .collect()
+
+            pre_collected_caliby_pdbs.subscribe { pdbs ->
+                log.info("  Caliby: Loaded ${pdbs.size()} pre-collected PDBs")
+            }
+
+            caliby_seqs = pre_collected_caliby_pdbs.map { pdbs ->
+                def meta = [id: "caliby_designs"]
+                [meta, pdbs]
+            }
+        }
+
+        if (run_caliby) {
+            if (calibyUsesPreCollectedInputs && selectedInputDir) {
+                log.info("  Caliby: Using pre-collected PDBs from ${selectedInputDir}")
+
+                pre_collected_caliby_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
+                    .collect()
+
+                pre_collected_caliby_pdbs.subscribe { pdbs ->
+                    log.info("  Caliby: Loaded ${pdbs.size()} pre-collected PDBs")
+                }
+
+                caliby_seqs = pre_collected_caliby_pdbs.map { pdbs ->
+                    def meta = [id: "caliby_designs"]
+                    [meta, pdbs]
+                }
+                calibyCandidateDir = selectedInputDir.toString()
+            } else {
+                log.info("  Running Caliby experimental sequence design...")
+                RunCaliby(backbone_designs)
+                RunCaliby.out.pdbs_jsons.subscribe { items ->
+                    try {
+                        def (pdbs, jsons) = items
+                        def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                        def count = file_list.size()
+                        log.info("  Caliby: Produced ${count} designed structures")
+                        def report_files = count > 50 ? file_list[0..49] : file_list
+                        def args = [params.job_id, "caliby", "complete"] + report_files.collect { it.toString() }
+                        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+                        proc.waitFor()
+                    } catch (Exception e) {
+                        println "Warning: Failed to report stage caliby: ${e.message}"
+                    }
+                }
+
+                def calibyFilterEnabled = params.enable_caliby_filter != false &&
+                    (params.caliby_max_potts_energy != null || params.caliby_min_sc_plddt != null || params.caliby_max_sc_rmsd != null)
+
+                if (calibyFilterEnabled) {
+                    def filterDesc = []
+                    if (params.caliby_max_potts_energy != null) filterDesc << "max Potts energy: ${params.caliby_max_potts_energy}"
+                    if (params.caliby_min_sc_plddt != null) filterDesc << "min self-consistency pLDDT: ${params.caliby_min_sc_plddt}"
+                    if (params.caliby_max_sc_rmsd != null) filterDesc << "max self-consistency RMSD: ${params.caliby_max_sc_rmsd}"
+                    log.info("  Filtering Caliby designs (${filterDesc.join(', ')})...")
+
+                    FilterCaliby(RunCaliby.out.pdbs_jsons)
+
+                    FilterCaliby.out.pdbs.subscribe { pdbs ->
+                        def count = pdbs instanceof List ? pdbs.size() : 1
+                        log.info("  FilterCaliby: ${count} designs passed filter")
+                    }
+
+                    caliby_seqs = FilterCaliby.out.pdbs.map { pdbs ->
+                        def meta = [id: "caliby_designs"]
+                        [meta, pdbs]
+                    }
+                    calibyCandidateDir = calibyFilteredDir ?: calibyRawDir
+                } else {
+                    log.info("  Caliby filtering disabled (enable with caliby_max_potts_energy, caliby_min_sc_plddt, or caliby_max_sc_rmsd)")
+                    caliby_seqs = RunCaliby.out.pdbs_jsons.map { pdbs, jsons ->
+                        def meta = [id: "caliby_designs"]
+                        [meta, pdbs]
+                    }
+                    calibyCandidateDir = calibyRawDir
+                }
+            }
+        }
+
     def shouldPauseAfterFampnn = interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_fampnn') == 'post_fampnn' &&
         params.interactive_gate_continue != true &&
         run_fampnn &&
         fampnnCandidateDir
+    def shouldPauseAfterCaliby = interactiveGateEnabled &&
+        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_caliby' &&
+        params.interactive_gate_continue != true &&
+        run_caliby &&
+        calibyCandidateDir
     def fampnn_gate_trigger = fampnn_seqs.map { meta, pdbs ->
         (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
     }
+    def caliby_gate_trigger = caliby_seqs.map { meta, pdbs ->
+        (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
+    }
+    def usingExistingCalibySequenceSource = !run_fampnn && !run_caliby && !run_antifold && !run_proteinmpnn &&
+        selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby'
+    def primarySequenceDesigns = (run_caliby || usingExistingCalibySequenceSource) ? caliby_seqs : fampnn_seqs
+    def primarySequenceCandidateDir = (run_caliby || usingExistingCalibySequenceSource) ? calibyCandidateDir : fampnnCandidateDir
+    def primarySequenceDesignerLabel = (run_caliby || usingExistingCalibySequenceSource) ? 'Caliby' : 'FAMPNN'
 
-    if (shouldPauseAfterFampnn) {
-        log.info("Interactive SWA gate: pausing after FAMPNN candidate collection at ${fampnnCandidateDir}")
+    if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
+        def gateStageName = shouldPauseAfterCaliby ? "post_caliby" : "post_fampnn"
+        def gateTrigger = shouldPauseAfterCaliby ? caliby_gate_trigger : fampnn_gate_trigger
+        def gateCandidateDir = shouldPauseAfterCaliby ? calibyCandidateDir : fampnnCandidateDir
+        def gateRawDir = shouldPauseAfterCaliby ? calibyRawDir : fampnnRawDir
+        def gateFilteredDir = shouldPauseAfterCaliby ? (calibyFilteredDir ?: "") : (fampnnFilteredDir ?: "")
+        log.info("Interactive SWA gate: pausing after ${shouldPauseAfterCaliby ? 'Caliby' : 'FAMPNN'} candidate collection at ${gateCandidateDir}")
         OpenInteractiveGate(
             params.job_id ?: "unknown",
-            "post_fampnn",
-            fampnn_gate_trigger,
-            fampnnCandidateDir,
-            fampnnRawDir ?: "",
-            fampnnFilteredDir ?: "",
+            gateStageName,
+            gateTrigger,
+            gateCandidateDir,
+            gateRawDir ?: "",
+            gateFilteredDir,
             params.framework_type ?: "standard-fv",
             params.antibody_chains ?: "",
             params.structure_validator ?: "boltz2"
@@ -2439,19 +2415,15 @@ workflow ANTIBODY_DENOVO {
         validated_structures = Channel.empty()
         stability_scores_early = Channel.empty()
     } else {
-        // =====================================================================
-        // Step 2.4: PPIFlow Maturation (Interface Rotamer Enrichment + Partial Flow)
-        // Applies only to the FAMPNN branch
-        // =====================================================================
         maturation_seqs = Channel.empty()
         def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
         if (run_ppiflow_maturation == true) {
-            def hasPreCollectedFampnnInputs = selectedInputIsSequenceConditioned && selectedInputDir != null
-            if (!run_fampnn && !hasPreCollectedFampnnInputs) {
-                log.warn("PPIFlow maturation requested but FAMPNN is disabled; skipping maturation.")
-                maturation_seqs = fampnn_seqs
+            def hasPrimarySequenceInputs = primarySequenceCandidateDir != null
+            if (!hasPrimarySequenceInputs) {
+                log.warn("PPIFlow maturation requested but no sequence-designed inputs are available; skipping maturation.")
+                maturation_seqs = primarySequenceDesigns
             } else {
-                log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
+                log.info("Step 2.4: Running PPIFlow maturation on ${primarySequenceDesignerLabel} outputs...")
                 log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
                 def maturationRegionMode = params.ppiflow_maturation_region_mode
                 def maturationSelectedLoops = maturationRegionMode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
@@ -2460,7 +2432,7 @@ workflow ANTIBODY_DENOVO {
                     log.info("  PPIFlow maturation loop scope: ${maturationSelectedLoops}")
                 }
 
-                maturation_inputs = fampnn_seqs
+                maturation_inputs = primarySequenceDesigns
                     .map { meta, pdbs -> pdbs }
                     .flatten()
                     .collect()
@@ -2523,7 +2495,7 @@ workflow ANTIBODY_DENOVO {
                 }
             }
         } else {
-            maturation_seqs = fampnn_seqs
+            maturation_seqs = primarySequenceDesigns
         }
 
         if (run_antifold) {
@@ -2547,7 +2519,7 @@ workflow ANTIBODY_DENOVO {
         }
 
         pdb_designs = maturation_seqs.mix(proteinmpnn_seqs)
-        if (!run_fampnn && !run_antifold && !run_proteinmpnn) {
+        if (!run_fampnn && !run_antifold && !run_proteinmpnn && !run_caliby) {
             log.info("  No sequence-design branch selected; carrying backbone-stage PDBs forward for downstream refinement/validation.")
             pdb_designs = backbone_designs
         }
@@ -2902,7 +2874,10 @@ workflow ANTIBODY_DENOVO {
                             (data.pdbs ?: []).size() > 0
                         }
 
-                    FinalizeSequentialValidationOutputs(sequential_validation_manifest)
+                    sequential_validation_manifest_file = sequential_validation_manifest
+                        .collectFile(name: 'validation_artifacts.json', newLine: false) { manifest_json -> manifest_json }
+
+                    FinalizeSequentialValidationOutputs(sequential_validation_manifest_file)
                 } else {
                     params.boltz_use_msa = false
 
@@ -2950,7 +2925,10 @@ workflow ANTIBODY_DENOVO {
                             (data.pdbs ?: []).size() > 0
                         }
 
-                    FinalizeSequentialValidationOutputs(sequential_validation_manifest)
+                    sequential_validation_manifest_file = sequential_validation_manifest
+                        .collectFile(name: 'validation_artifacts.json', newLine: false) { manifest_json -> manifest_json }
+
+                    FinalizeSequentialValidationOutputs(sequential_validation_manifest_file)
                 }
 
                 validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
@@ -2979,7 +2957,11 @@ workflow ANTIBODY_DENOVO {
                 .collect()
                 .filter { pdbs -> pdbs && pdbs.size() > 0 }
 
-            StageStructureValidationArtifacts(staged_validation_pdbs)
+            staged_validation_pdb_list_file = staged_validation_pdbs
+                .map { pdbs -> pdbs.collect { it.toString() }.join('\n') + '\n' }
+                .collectFile(name: 'staged_validation_pdbs.list', newLine: false)
+
+            StageStructureValidationArtifacts(staged_validation_pdb_list_file)
 
             validation_gate_candidate_count = staged_validation_pdbs
                 .map { pdbs -> pdbs.size() as Integer }
@@ -3063,12 +3045,6 @@ workflow ANTIBODY_DENOVO {
         }
     }
 
-    // =========================================================================
-    // Step 3.5: Physics Refinement with OpenMM (Optional)
-    // =========================================================================
-    // CDR-only energy minimization with framework restraints to preserve
-    // validated AI geometry while resolving atomic-level clashes.
-    // MM-GBSA scoring for binding affinity estimation (full tier only).
 
     if (params.openmm_enabled == true) {
         log.info("Step 3.5: Running OpenMM physics refinement...")
@@ -3076,7 +3052,6 @@ workflow ANTIBODY_DENOVO {
         log.info("  CDR-only mode: ${params.openmm_cdr_only ?: true}")
         log.info("  Restraint mode: ${params.openmm_restraint_mode ?: 'framework'}")
         
-        // Batch validated structures for GPU processing
         openmm_batched = validated_structures
             .map { meta, pdb -> pdb }
             .collect()
@@ -3084,7 +3059,6 @@ workflow ANTIBODY_DENOVO {
             .buffer(size: 10, remainder: true)
             .map { batch -> tuple("openmm_${batch.hashCode()}", batch) }
         
-        // Run energy minimization
         OpenMMRelaxation(
             openmm_batched,
             params.openmm_compute_tier ?: 'fast',
@@ -3094,7 +3068,6 @@ workflow ANTIBODY_DENOVO {
             params.openmm_force_field ?: 'amber14sb'
         )
         
-        // REPORT STAGE: openmm_relaxation
         OpenMMRelaxation.out.relaxed_pdbs.subscribe { pdbs ->
             try {
                 def file_list = pdbs instanceof List ? pdbs : [pdbs]
@@ -3107,11 +3080,9 @@ workflow ANTIBODY_DENOVO {
             }
         }
         
-        // Run MM-GBSA scoring for full tier or explicit request
         if (params.openmm_compute_tier == 'full' || params.openmm_mmgbsa_mode != 'off') {
             log.info("  Running MM-GBSA binding affinity scoring...")
             
-            // Batch relaxed structures for scoring
             mmgbsa_batched = OpenMMRelaxation.out.relaxed_pdbs
                 .collect()
                 .flatten()
@@ -3126,7 +3097,6 @@ workflow ANTIBODY_DENOVO {
                 params.openmm_force_field ?: 'amber14sb'
             )
             
-            // REPORT STAGE: openmm_mmgbsa
             OpenMMScore.out.scores_json.subscribe { jsons ->
                 try {
                     def args = [params.job_id, "openmm_mmgbsa", "complete"]
@@ -3138,7 +3108,6 @@ workflow ANTIBODY_DENOVO {
             }
         }
         
-        // Use relaxed structures for downstream stages
         refined_structures = OpenMMRelaxation.out.relaxed_pdbs
             .flatten()
             .map { pdb ->
@@ -3148,26 +3117,19 @@ workflow ANTIBODY_DENOVO {
             }
     }
     else {
-        // Skip OpenMM - pass validated structures directly
         refined_structures = validated_structures
     }
 
-    // Step 4: Immunogenicity Scoring with AntiBERTy
-    // ---------------------------------------------------------------------------
     log.info("Step 4: Scoring immunogenicity with AntiBERTy...")
 
     if (params.run_immunogenicity_scoring != false) {
-        // Extract sequences from structures for AntiBERTy
-        // AntiBERTy expects FASTA input
         antiberty_input = refined_structures.map { meta, pdb ->
-            // Convert PDB to FASTA (simplified - actual implementation needs extraction)
             [meta, pdb]
         }
 
         ANTIBERTY_SCORE(antiberty_input)
         immunogenicity_scores = ANTIBERTY_SCORE.out.scores
 
-        // Filter high-risk sequences
         if (params.filter_immunogenic != false) {
             antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(refined_structures)
             ANTIBERTY_FILTER_STRUCTURES(antiberty_filter_input)
@@ -3182,17 +3144,11 @@ workflow ANTIBODY_DENOVO {
         immunogenicity_scores = Channel.empty()
     }
 
-    // NOTE: ThermoMPNN stability scoring moved to Step 2.5 (before Boltz-2)
-    // This runs AFTER FAMPNN but BEFORE expensive Boltz validation for compute savings
-    // Results are in stability_scores_early channel
     stable_designs = filtered_structures
 
-    // Step 6: Affinity Maturation with IgGM (Optional)
-    // ---------------------------------------------------------------------------
     if (params.run_affinity_maturation == true) {
         log.info("Step 6: Running affinity maturation with IgGM...")
 
-        // Combine designs with target for maturation
         maturation_input = stable_designs
             .combine(target_pdb_ch.first())
             .map { meta, design_pdb, target_meta, target_pdb ->
@@ -3213,7 +3169,6 @@ workflow ANTIBODY_DENOVO {
         mutations = Channel.empty()
     }
 
-    // Step 4.x: FrustraMPNN QC (Post-pipeline annotation)
     if (params.run_frustrampnn == true) {
         log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
         frustrampnn_input = final_designs.flatMap { meta, pdb_or_pdbs ->
@@ -3224,7 +3179,6 @@ workflow ANTIBODY_DENOVO {
             }
         }
         FrustrampnnQC(frustrampnn_input)
-        // Extract just the path from (meta, path) tuples before collecting
         AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
     }
 
@@ -3238,16 +3192,8 @@ workflow ANTIBODY_DENOVO {
     backbones = backbone_designs // RFantibody backbones after optional coarse screening/review staging
 }
 
-// =============================================================================
-// STANDALONE WORKFLOW ENTRY
-// =============================================================================
 workflow {
-    // =========================================================================
-    // TARGET STRUCTURE RESOLUTION
-    // Either use provided PDB OR predict from sequence
-    // =========================================================================
     
-    // Option 1: User provides target PDB (existing workflow - unchanged)
     if (params.target_pdb) {
         target_pdb = file(params.target_pdb)
         if (!target_pdb.exists()) {
@@ -3256,7 +3202,6 @@ workflow {
         meta = [id: params.run_id ?: target_pdb.baseName]
         target_ch = Channel.of([meta, target_pdb])
     }
-    // Option 2: User provides protein sequence (+optional DNA) - predict complex first
     else if (params.target_protein_seq) {
         log.info("No target_pdb provided - will predict target structure from sequence")
         
@@ -3268,23 +3213,18 @@ workflow {
             log.info("DNA sequence provided - will predict protein-DNA complex")
         }
         
-        // Create input channel for complex prediction
         complex_input = Channel.of([meta, protein_seq, dna_seq])
         
-        // Run Boltz-2 complex prediction
         PredictTargetComplex(complex_input)
         
-        // Use predicted complex as target
         target_ch = PredictTargetComplex.out.complex
     }
     else {
         error("Please provide either --target_pdb (antigen structure) or --target_protein_seq (sequence to predict)")
     }
 
-    // Epitope residues
     epitope = params.epitope_residues ?: ""
 
-    // Framework (optional)
     framework_ch = params.framework_pdb
         ? Channel.of([meta, file(params.framework_pdb)])
         : Channel.empty()
@@ -3292,21 +3232,23 @@ workflow {
     NormalizeTargetPDB(target_ch)
     normalized_target_ch = NormalizeTargetPDB.out.normalized
 
-    // Run workflow
     ANTIBODY_DENOVO(normalized_target_ch, epitope, framework_ch)
 
-    // Collect outputs
     ANTIBODY_DENOVO.out.designs
         .map { designMeta, pdb -> pdb }
         .flatten()
         .collectFile(name: 'final_designs.txt', storeDir: params.out_dir) { it.name + '\n' }
 
     if (params.run_structure_validation == false) {
+        terminal_pdb_list_file = ANTIBODY_DENOVO.out.designs
+            .map { designMeta, pdb -> pdb }
+            .flatten()
+            .map { pdb -> "${pdb}\n" }
+            .ifEmpty('')
+            .collectFile(name: 'terminal_pdbs.list', newLine: false)
+
         FinalizeTerminalAntibodyOutputs(
-            ANTIBODY_DENOVO.out.designs
-                .map { designMeta, pdb -> pdb }
-                .flatten()
-                .collect()
+            terminal_pdb_list_file
         )
     }
 }

@@ -45,7 +45,7 @@ from services.result_ingester import (
     _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
-from services.stage_review import _dedupe_review_structures, refresh_gate_payload
+from services.stage_review import _dedupe_review_structures, _load_caliby_review_metrics, refresh_gate_payload
 from services.structure_utils import get_per_chain_fampnn_psce
 
 
@@ -181,6 +181,91 @@ def test_refresh_gate_payload_prefers_filtered_ppiflow_generator_candidates(tmp_
     assert repaired["filtered_candidate_count"] == 1
 
 
+def test_refresh_gate_payload_prefers_filtered_caliby_candidates(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "collected" / "caliby_raw"
+    raw_dir.mkdir(parents=True)
+    filtered_dir = tmp_path / "collected" / "caliby"
+    filtered_dir.mkdir(parents=True)
+
+    (raw_dir / "caliby_0001.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 55.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "caliby_0001.pdb").write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 70.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    (filtered_dir / "caliby_0001.json").write_text(
+        '{"sequence": "QVQLV", "caliby_model": "soluble_caliby_v1", "caliby_potts_energy": -14.2}',
+        encoding="utf-8",
+    )
+
+    repaired = refresh_gate_payload(
+        {
+            "stage": "post_caliby",
+            "candidate_dir": "missing_dir",
+            "raw_dir": str(raw_dir),
+            "filtered_dir": str(filtered_dir),
+        },
+        str(tmp_path),
+    )
+
+    assert repaired["candidate_dir"] == str(filtered_dir.resolve())
+    assert repaired["candidate_count"] == 1
+    assert repaired["raw_candidate_count"] == 1
+    assert repaired["filtered_candidate_count"] == 1
+
+
+def test_load_caliby_review_metrics_reads_generator_sidecar(tmp_path: Path) -> None:
+    candidate_dir = tmp_path / "collected" / "caliby"
+    candidate_dir.mkdir(parents=True)
+    structure_path = candidate_dir / "caliby_0001.pdb"
+    structure_path.write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 70.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    metrics_path = candidate_dir / "generator_caliby_0001.json"
+    metrics_path.write_text(
+        '{"sequence": "QVQLV", "caliby_model": "soluble_caliby_v1", "caliby_potts_energy": -14.2}',
+        encoding="utf-8",
+    )
+
+    loaded = _load_caliby_review_metrics(
+        structure_path,
+        candidate_dir=candidate_dir,
+        raw_dir=None,
+        filtered_dir=None,
+    )
+
+    assert loaded["json_path"] == str(metrics_path)
+    assert loaded["confidence_metrics"]["caliby_model"] == "soluble_caliby_v1"
+
+
+def test_load_caliby_review_metrics_canonicalizes_self_consistency_fields(tmp_path: Path) -> None:
+    candidate_dir = tmp_path / "collected" / "caliby"
+    candidate_dir.mkdir(parents=True)
+    structure_path = candidate_dir / "caliby_0002.pdb"
+    structure_path.write_text(
+        "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00 70.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    metrics_path = candidate_dir / "generator_caliby_0002.json"
+    metrics_path.write_text(
+        '{"sequence": "QVQLV", "self_consistency": {"avg_plddt": 88.4, "ca_rmsd": 0.91}}',
+        encoding="utf-8",
+    )
+
+    loaded = _load_caliby_review_metrics(
+        structure_path,
+        candidate_dir=candidate_dir,
+        raw_dir=None,
+        filtered_dir=None,
+    )
+
+    assert loaded["confidence_metrics"]["caliby_sc_plddt"] == 88.4
+    assert loaded["confidence_metrics"]["caliby_sc_rmsd"] == 0.91
+
+
 def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "OK")
     monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
@@ -267,6 +352,17 @@ def test_normalize_antibody_job_params_accepts_post_ppiflow_generator_gate() -> 
     )
 
     assert normalized["interactive_gate_stage"] == "post_ppiflow_generator"
+
+
+def test_normalize_antibody_job_params_accepts_post_caliby_gate() -> None:
+    normalized = _normalize_antibody_job_params(
+        {
+            "interactive_gate_stage": "post_caliby",
+            "selected_input_artifact_class": "sequence_designed_complex",
+        }
+    )
+
+    assert normalized["interactive_gate_stage"] == "post_caliby"
 
 
 def test_iter_saved_review_filter_sets_reads_persisted_selection_sets() -> None:
