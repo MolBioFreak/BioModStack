@@ -1,0 +1,67 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
+
+%labels
+    Author BioModStack
+    Version 0.1.0
+    Description Caliby runtime for experimental sequence design and nanobody CDR redesign
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y \
+        git \
+        curl \
+        wget \
+        build-essential \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        && rm -rf /var/lib/apt/lists/*
+
+    ln -sf /usr/bin/python3.12 /usr/bin/python3
+    ln -sf /usr/bin/python3.12 /usr/bin/python
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:${PATH}"
+
+    git clone https://github.com/ProteinDesignLab/caliby.git /opt/caliby
+    cd /opt/caliby
+
+    uv venv .venv -p python3.12
+    . .venv/bin/activate
+    uv pip install --upgrade pip
+    uv pip install "torch>=2.7,<2.9" --index-url https://download.pytorch.org/whl/cu128
+    uv pip install -e .
+    uv pip install gemmi
+
+    mkdir -p /weights/caliby/model_params /cache/huggingface /cache/triton /cache/general
+    uv pip freeze > /opt/caliby/.venv/requirements.lock 2>/dev/null || true
+
+%environment
+    export PATH=/opt/caliby/.venv/bin:$PATH
+    export PYTHONPATH=/opt/caliby:$PYTHONPATH
+    export MODEL_PARAMS_DIR=/weights/caliby/model_params
+    export XDG_CACHE_HOME=/cache/general
+    export HF_HOME=/cache/huggingface
+    export TRITON_CACHE_DIR=/cache/triton
+    export PDB_MIRROR_PATH=
+    export CCD_MIRROR_PATH=
+
+%test
+    . /opt/caliby/.venv/bin/activate
+    python3 -c "import torch; print(torch.__version__)"
+    python3 -c "from caliby import load_model; print('Caliby runtime ok')"
+
+%help
+    Caliby runtime image for BioModStack experimental sequence design.
+
+    Notes:
+    - This image intentionally uses Python 3.12 and UV, matching upstream.
+    - Torch is installed from the cu128 wheel index to support both Ampere and
+      Blackwell hosts through a single CUDA 12.8 runtime surface.
+    - Default model cache location in BMS is /weights/caliby/model_params.
+
+    Upstream:
+    https://github.com/ProteinDesignLab/caliby
