@@ -127,8 +127,23 @@ function transformPrimersForSelection(
     sequenceType: SequenceData['sequenceType'],
 ): Primer[] {
     return primers.map((primer) => {
-        const transformed = transformFeatureForSelection(primer as Feature, start, end, operation) as Primer;
-        if (transformed === primer || primer.start < start || primer.end > end) {
+        const transformedFeature = transformFeatureForSelection({
+            id: primer.id,
+            name: primer.name,
+            type: 'primer',
+            start: primer.start,
+            end: primer.end,
+            strand: primer.strand,
+            notes: primer.notes,
+            provenance: primer.provenance,
+        }, start, end, operation);
+        const transformed: Primer = {
+            ...primer,
+            start: transformedFeature.start,
+            end: transformedFeature.end,
+            strand: transformedFeature.strand,
+        };
+        if (primer.start < start || primer.end > end) {
             return transformed;
         }
         return {
