@@ -43,7 +43,7 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
-REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}
+REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
 NEXTFLOW_JOB_ID_RE = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
@@ -85,6 +85,8 @@ def _review_stage_identity(stage: str | None, job: Job | None = None, payload: O
         return "ppiflow", "generator_backbone_refine"
     if normalized == "post_fampnn":
         return "fampnn", normalized
+    if normalized == "post_caliby":
+        return "caliby", normalized
     if normalized == "post_structure_validation":
         return "validation", normalized
     return None, None
@@ -429,7 +431,7 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
                 candidate_dir = raw_dir
             elif raw_dir and count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
                 candidate_dir = raw_dir
-    elif stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
+    elif stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator", "post_caliby"}:
         candidate_count = count_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else 0
         if candidate_count == 0:
             if filtered_dir and count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
@@ -505,6 +507,13 @@ def infer_antibody_stage_state(job: Job, completed: list[str], stage_outputs: di
         inferred["fampnn"] = fampnn_filtered
     elif fampnn_raw.exists():
         inferred["fampnn"] = fampnn_raw
+
+    caliby_filtered = output_path / "collected" / "caliby"
+    caliby_raw = output_path / "collected" / "caliby_raw"
+    if caliby_filtered.exists():
+        inferred["caliby"] = caliby_filtered
+    elif caliby_raw.exists():
+        inferred["caliby"] = caliby_raw
 
     for stage, path in inferred.items():
         existing = stage_outputs.get(stage)
@@ -771,6 +780,52 @@ def _load_ppiflow_review_metrics(
         "score_data": score_payload if isinstance(score_payload, dict) else {},
         "filter_path": str(filter_path) if filter_path else None,
         "filter_payload": filter_payload if isinstance(filter_payload, dict) else {},
+    }
+
+
+def _load_caliby_review_metrics(
+    structure_path: Path,
+    *,
+    candidate_dir: Optional[Path],
+    raw_dir: Optional[Path],
+    filtered_dir: Optional[Path],
+) -> dict[str, Any]:
+    design_name = structure_path.stem
+    metric_candidates = [
+        structure_path.with_suffix(".json"),
+        (candidate_dir / f"generator_{design_name}.json") if candidate_dir else None,
+        (candidate_dir / f"{design_name}.json") if candidate_dir else None,
+        (candidate_dir / f"caliby_{design_name}.json") if candidate_dir else None,
+        (raw_dir / f"generator_{design_name}.json") if raw_dir else None,
+        (raw_dir / f"{design_name}.json") if raw_dir else None,
+        (raw_dir / f"caliby_{design_name}.json") if raw_dir else None,
+        (filtered_dir / f"generator_{design_name}.json") if filtered_dir else None,
+        (filtered_dir / f"{design_name}.json") if filtered_dir else None,
+        (filtered_dir / f"caliby_{design_name}.json") if filtered_dir else None,
+    ]
+    metrics_path = next((path for path in metric_candidates if path and path.exists()), None)
+    metrics = _read_json(metrics_path)
+    if isinstance(metrics, dict):
+        self_consistency = metrics.get("self_consistency")
+        if isinstance(self_consistency, dict):
+            alias_groups = {
+                "caliby_sc_plddt": ("caliby_sc_plddt", "sc_plddt", "plddt", "avg_plddt", "mean_plddt"),
+                "caliby_sc_rmsd": ("caliby_sc_rmsd", "sc_rmsd", "rmsd", "ca_rmsd", "bb_rmsd", "backbone_rmsd"),
+                "caliby_sc_ptm": ("caliby_sc_ptm", "sc_ptm", "ptm", "predicted_tm_score"),
+                "caliby_sc_tm": ("caliby_sc_tm", "sc_tm", "tm", "tm_score"),
+            }
+            for canonical_key, aliases in alias_groups.items():
+                if safe_float(metrics.get(canonical_key)) is not None:
+                    continue
+                for alias in aliases:
+                    numeric = safe_float(self_consistency.get(alias))
+                    if numeric is not None:
+                        metrics[canonical_key] = numeric
+                        break
+
+    return {
+        "json_path": str(metrics_path) if metrics_path else None,
+        "confidence_metrics": metrics if isinstance(metrics, dict) else {},
     }
 
 
@@ -1169,7 +1224,10 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
 
         if (
             populated_binder_lengths == existing_count
-            and (stage != "post_fampnn" or (populated_geometry == existing_count and populated_cdr_lengths == existing_count))
+            and (
+                stage not in {"post_fampnn", "post_caliby"}
+                or (populated_geometry == existing_count and populated_cdr_lengths == existing_count)
+            )
             and not force
         ):
             return existing_count
@@ -1233,6 +1291,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         fampnn_psce = None
         mpnn_score = None
         boltzgen_metrics: dict[str, Any] = {}
+        caliby_metrics: dict[str, Any] = {}
         if stage == "post_fampnn":
             candidate_json = (raw_dir / f"{design_name}.json") if raw_dir else None
             if candidate_json and candidate_json.exists():
@@ -1244,6 +1303,16 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                     or metrics.get("seq_fampnn_psce")
                 )
                 mpnn_score = safe_float(metrics.get("mpnn_score"))
+        elif stage == "post_caliby":
+            caliby_metrics = _load_caliby_review_metrics(
+                structure_path,
+                candidate_dir=candidate_dir,
+                raw_dir=raw_dir,
+                filtered_dir=filtered_dir,
+            )
+            json_path_value = caliby_metrics.get("json_path")
+            if json_path_value:
+                json_path = Path(str(json_path_value))
         elif stage == "post_boltzgen":
             boltzgen_metrics = _load_boltzgen_review_metrics(
                 structure_path,
@@ -1344,7 +1413,12 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 confidence_metrics=(
                     rfa_trb.get("rfa_metadata")
                     if uses_rfantibody_review
-                    else _coerce_json_value(boltzgen_metrics.get("confidence_metrics"))
+                    else _coerce_json_value(
+                        boltzgen_metrics.get("confidence_metrics")
+                        if stage == "post_boltzgen"
+                        else caliby_metrics.get("confidence_metrics") if stage == "post_caliby"
+                        else None
+                    )
                 ),
                 cdr_h1_length=structure_cdr_lengths.get("H1"),
                 cdr_h2_length=structure_cdr_lengths.get("H2"),

@@ -41,8 +41,8 @@ interface AntibodyDenovoTemplateProps {
 type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
 type LoopLengthMode = 'defaults' | 'custom_ranges';
 type LoopLengthRange = { min: number; max: number };
-type InteractiveGateStage = 'post_rfantibody' | 'post_boltzgen' | 'post_ppiflow_generator' | 'post_fampnn' | 'post_structure_validation';
-type SeqDesigner = 'none' | 'fampnn' | 'antifold' | 'proteinmpnn';
+type InteractiveGateStage = 'post_rfantibody' | 'post_boltzgen' | 'post_ppiflow_generator' | 'post_fampnn' | 'post_caliby' | 'post_structure_validation';
+type SeqDesigner = 'none' | 'fampnn' | 'caliby' | 'antifold' | 'proteinmpnn';
 type RefinementPreset = 'full_loop' | 'fampnn_only' | 'validation_only' | 'ppiflow_only' | 'manual_mutagenesis' | 'custom';
 type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
 type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
@@ -378,6 +378,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 ? 'post_boltzgen'
             : initialValues?.interactive_gate_stage === 'post_ppiflow_generator'
                 ? 'post_ppiflow_generator'
+            : initialValues?.interactive_gate_stage === 'post_caliby'
+                ? 'post_caliby'
             : initialValues?.interactive_gate_stage === 'post_fampnn'
                 ? 'post_fampnn'
                 : 'post_rfantibody'
@@ -500,11 +502,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const showRfQualitySettings = !isRefinementMode && deNovoGenerator === 'rfantibody';
     const showStructureValidationQualitySettings = effectiveRunStructureValidation;
     const showFampnnQualitySettings = effectiveSeqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
+    const showCalibyQualitySettings = effectiveSeqDesigner === 'caliby';
     const showOrchestratorPanel = true;
     const showDebugPanel = true;
     const refinementSourceIsPpiFlow = isRefinementMode && refinementSourceOutputSourceFilter === 'ppiflow';
     const refinementBlocksImmediatePpiFlowBackbone = isRefinementMode && (
         refinementSourceOutputSourceFilter === 'boltzgen'
+        || refinementSourceOutputSourceFilter === 'caliby'
         || refinementSourceOutputSourceFilter === 'fampnn'
         || refinementSourceOutputSourceFilter === 'validation'
     );
@@ -1245,6 +1249,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     initialValues.interactive_gate_stage === 'post_rfantibody' ||
                     initialValues.interactive_gate_stage === 'post_boltzgen' ||
                     initialValues.interactive_gate_stage === 'post_ppiflow_generator' ||
+                    initialValues.interactive_gate_stage === 'post_caliby' ||
                     initialValues.interactive_gate_stage === 'post_structure_validation' ||
                     initialValues.interactive_gate_stage === 'post_fampnn'
                 )
@@ -1305,10 +1310,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Sequence Designer
             if (initialValues.seq_design_fampnn) setSeqDesigner('fampnn');
+            else if (initialValues.seq_design_caliby) setSeqDesigner('caliby');
             else if (initialValues.seq_design_antifold) setSeqDesigner('antifold');
             else if (initialValues.seq_design_proteinmpnn) setSeqDesigner('proteinmpnn');
             else if (
                 initialValues.seq_design_fampnn === false &&
+                initialValues.seq_design_caliby === false &&
                 initialValues.seq_design_antifold === false &&
                 initialValues.seq_design_proteinmpnn === false
             ) setSeqDesigner('none');
@@ -1782,8 +1789,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     antibody_pipeline_steps: pipelineSteps,
                     rfantibody_num_designs: numDesigns,
                     seq_design_fampnn: effectiveSeqDesigner === 'fampnn',
+                    seq_design_caliby: effectiveSeqDesigner === 'caliby',
                     seq_design_antifold: effectiveSeqDesigner === 'antifold',
                     seq_design_proteinmpnn: effectiveSeqDesigner === 'proteinmpnn',
+                    seq_designer: effectiveSeqDesigner,
                     run_immunogenicity_scoring: effectiveUseAntiberty,
                     run_stability_scoring: effectiveUseThermoMPNN,
                     run_structure_validation: effectiveRunStructureValidation,
@@ -1871,6 +1880,24 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_target_chains: qualitySettings.lock_target_chains,
                     lock_antibody_framework: qualitySettings.lock_antibody_framework,
                     fampnn_constraint_mode: effectiveSeqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
+                    caliby_model_name: qualitySettings.caliby_model_name,
+                    caliby_temperature: qualitySettings.caliby_temperature,
+                    caliby_batch_size: qualitySettings.caliby_batch_size,
+                    caliby_num_workers: qualitySettings.caliby_num_workers,
+                    caliby_clean_num_workers: qualitySettings.caliby_clean_num_workers,
+                    caliby_omit_aas: qualitySettings.caliby_omit_aas.trim() || undefined,
+                    caliby_run_self_consistency_eval: qualitySettings.caliby_run_self_consistency_eval,
+                    caliby_self_consistency_num_models: qualitySettings.caliby_self_consistency_num_models,
+                    caliby_self_consistency_num_recycles: qualitySettings.caliby_self_consistency_num_recycles,
+                    caliby_self_consistency_use_multimer: qualitySettings.caliby_self_consistency_use_multimer,
+                    enable_caliby_filter: qualitySettings.enable_caliby_filter,
+                    caliby_max_potts_energy: qualitySettings.caliby_max_potts_energy ?? undefined,
+                    caliby_min_sc_plddt: qualitySettings.caliby_min_sc_plddt ?? undefined,
+                    caliby_max_sc_rmsd: qualitySettings.caliby_max_sc_rmsd ?? undefined,
+                    caliby_fixed_pos_override_seq: qualitySettings.caliby_fixed_pos_override_seq.trim() || undefined,
+                    caliby_pos_restrict_aatype: qualitySettings.caliby_pos_restrict_aatype.trim() || undefined,
+                    caliby_symmetry_pos: qualitySettings.caliby_symmetry_pos.trim() || undefined,
+                    caliby_sampling_overrides_json: qualitySettings.caliby_sampling_overrides_json.trim() || undefined,
                     // PPIFlow settings
                     run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
                     run_ppiflow_maturation: runPpiFlowMaturation,
@@ -2463,6 +2490,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 disabled={seqDesigner === 'none'}
                             >
                                 <option value="fampnn">FAMPNN</option>
+                                <option value="caliby">Caliby</option>
                                 <option value="antifold">AntiFold</option>
                                 <option value="proteinmpnn">ProteinMPNN</option>
                             </select>
@@ -4519,7 +4547,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ) : interactiveWorkflow && (
                             <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="block text-xs text-[var(--text-secondary)]">Pause After</label>
-                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -4546,6 +4574,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         type="button"
                                         onClick={() => {
                                             interactiveGateStageTouchedRef.current = true;
+                                            setInteractiveGateStage('post_caliby');
+                                        }}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={interactiveGateStage === 'post_caliby' ? themedSelectedStyle('var(--warning)') : themedMutedInsetStyle}
+                                    >
+                                        Caliby Review
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            interactiveGateStageTouchedRef.current = true;
                                             setInteractiveGateStage('post_structure_validation');
                                         }}
                                         className="rounded-lg border px-3 py-2 text-sm transition-colors"
@@ -4559,6 +4598,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
                                         : interactiveGateStage === 'post_fampnn'
                                             ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
+                                            : interactiveGateStage === 'post_caliby'
+                                                ? 'Pause immediately after Caliby sequence design so you can review the experimental Potts-designed candidates before maturation or structure validation.'
                                             : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
                                 </p>
                             </div>
@@ -4611,6 +4652,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showRfantibodySettings={showRfQualitySettings}
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
+                        showCalibySettings={showCalibyQualitySettings}
                         showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
                         showPostValidationFiltering={effectiveRunStructureValidation}
                     />
@@ -4735,7 +4777,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
                             <div className="flex gap-3">
-                                {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                                {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'caliby', 'antifold', 'proteinmpnn'] as const).map((designer) => (
                                     <button
                                         key={designer}
                                         onClick={() => {
@@ -4750,7 +4792,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                             }`}
                                     >
-                                        {designer === 'none' ? 'SKIP' : designer.toUpperCase()}
+                                        {designer === 'none' ? 'SKIP' : designer === 'caliby' ? 'CALIBY' : designer.toUpperCase()}
                                     </button>
                                 ))}
                             </div>
@@ -5236,7 +5278,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         }
                         if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
                         if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); }
-                        else if (p.seq_design_fampnn === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
+                        else if (p.seq_design_caliby === true) { setSeqDesigner('caliby'); loaded.push('seq_design_caliby'); }
+                        else if (p.seq_design_fampnn === false && p.seq_design_caliby === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
                         else { skipped.push('seq_designer'); }
                         if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
                         if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
@@ -5315,6 +5358,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             p.interactive_gate_stage === 'post_rfantibody' ||
                             p.interactive_gate_stage === 'post_boltzgen' ||
                             p.interactive_gate_stage === 'post_ppiflow_generator' ||
+                            p.interactive_gate_stage === 'post_caliby' ||
                             p.interactive_gate_stage === 'post_structure_validation' ||
                             p.interactive_gate_stage === 'post_fampnn'
                         ) {

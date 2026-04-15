@@ -51,9 +51,10 @@ steps:
     name: CDR Sequence Design
     models:
       - fampnn
+      - caliby
       - antifold
       - proteinmpnn
-    description: Design amino acid sequences for CDR loops
+    description: Design amino acid sequences for CDR loops with production and experimental sequence designers
     default: fampnn
     allow_multiple: true
 
@@ -173,6 +174,11 @@ params:
     description: Run FAMPNN for sequence design
     default: true
 
+  - name: seq_design_caliby
+    type: boolean
+    description: Run Caliby experimental sequence design
+    default: false
+
   - name: seq_design_antifold
     type: boolean
     description: Run AntiFold for sequence design
@@ -205,6 +211,115 @@ params:
     minimum: 0.01
     maximum: 2.0
     step: 0.1
+
+  - name: caliby_model_name
+    type: string
+    description: Caliby experimental checkpoint name
+    default: soluble_caliby_v1
+    enum:
+      - caliby
+      - soluble_caliby
+      - soluble_caliby_v1
+
+  - name: caliby_temperature
+    type: number
+    description: Caliby sampling temperature
+    default: 0.1
+    minimum: 0.001
+    maximum: 1.0
+    step: 0.01
+
+  - name: caliby_batch_size
+    type: integer
+    description: Caliby inference batch size
+    default: 4
+    minimum: 1
+    maximum: 64
+
+  - name: caliby_num_workers
+    type: integer
+    description: Caliby dataloader worker count
+    default: 8
+    minimum: 1
+    maximum: 64
+
+  - name: caliby_clean_num_workers
+    type: integer
+    description: Workers used to clean structures before Caliby design
+    default: 2
+    minimum: 1
+    maximum: 32
+
+  - name: caliby_omit_aas
+    type: string
+    description: Comma-separated amino acids excluded from Caliby design
+    default: C
+
+  - name: caliby_sampling_overrides_json
+    type: text
+    description: Optional JSON merged into Caliby sampling_overrides
+    required: false
+
+  - name: caliby_run_self_consistency_eval
+    type: boolean
+    description: Run AF2 self-consistency on Caliby designs before downstream validation
+    default: false
+
+  - name: caliby_self_consistency_num_models
+    type: integer
+    description: Number of AF2 models used for Caliby self-consistency
+    default: 5
+    minimum: 1
+    maximum: 5
+
+  - name: caliby_self_consistency_num_recycles
+    type: integer
+    description: AF2 recycle count during Caliby self-consistency
+    default: 3
+    minimum: 1
+    maximum: 12
+
+  - name: caliby_self_consistency_use_multimer
+    type: boolean
+    description: Use AF2-Multimer for Caliby self-consistency
+    default: false
+
+  - name: caliby_fixed_pos_override_seq
+    type: string
+    description: Optional Caliby fixed_pos_override_seq spec (e.g. "H52:A,H53:G")
+    required: false
+
+  - name: caliby_pos_restrict_aatype
+    type: string
+    description: Optional Caliby pos_restrict_aatype spec (e.g. "H52:AVG,H53:VG")
+    required: false
+
+  - name: caliby_symmetry_pos
+    type: string
+    description: Optional Caliby symmetry_pos spec for tied sampling groups
+    required: false
+
+  - name: enable_caliby_filter
+    type: boolean
+    description: Enable Caliby candidate filtering before validation
+    default: false
+
+  - name: caliby_max_potts_energy
+    type: number
+    description: Maximum Caliby Potts energy to keep (lower is stricter)
+    required: false
+
+  - name: caliby_min_sc_plddt
+    type: number
+    description: Minimum Caliby self-consistency pLDDT to keep
+    required: false
+    minimum: 0
+    maximum: 100
+
+  - name: caliby_max_sc_rmsd
+    type: number
+    description: Maximum Caliby self-consistency RMSD to keep
+    required: false
 
   - name: antifold_temperature
     type: number

@@ -501,6 +501,21 @@ def main():
             # IdentifyAnchorResidues is the best source of truth for which chain is
             # antibody and should remain designable.
             effective_antibody_chains = override_chains
+        elif effective_antibody_chains and not any(chain in chains_data for chain in effective_antibody_chains):
+            has_light_chain_labels = any(cdr_dict.get(loop_id) for loop_id in ('L1', 'L2', 'L3'))
+            inferred_chain_count = 2 if has_light_chain_labels else 1
+            preferred_fallback_order = []
+            for chain_id in ('H', 'L', 'A', 'B'):
+                if chain_id in chains_data and chain_id not in preferred_fallback_order:
+                    preferred_fallback_order.append(chain_id)
+            for chain_id in sorted(chains_data.keys()):
+                if chain_id not in preferred_fallback_order:
+                    preferred_fallback_order.append(chain_id)
+            effective_antibody_chains = preferred_fallback_order[:max(1, min(inferred_chain_count, len(preferred_fallback_order)))]
+            print(
+                f"  {pdb_name}: Requested antibody chains {antibody_chains} were not present; "
+                f"using inferred chains {effective_antibody_chains}"
+            )
 
         # Check if we found any CDR labels or override positions
         has_cdr_labels = any(len(v) > 0 for v in cdr_dict.values()) or bool(cdr_override_by_chain)

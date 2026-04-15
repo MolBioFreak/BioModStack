@@ -68,7 +68,7 @@ def infer_antibody_artifact_class_from_stage(stage_family: Any, stage_mode: Any)
         return BACKBONE_COMPLEX
     if family == "boltzgen":
         return SEQUENCE_DESIGNED_COMPLEX
-    if family in {"fampnn", "antifold", "proteinmpnn", "frustrampnn"}:
+    if family in {"fampnn", "antifold", "proteinmpnn", "frustrampnn", "caliby"}:
         return SEQUENCE_DESIGNED_COMPLEX
     if family == "validation":
         return VALIDATED_COMPLEX
