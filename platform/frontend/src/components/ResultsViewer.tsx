@@ -39,6 +39,7 @@ import MolstarViewer from './MolstarViewer';
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
+import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
@@ -480,6 +481,15 @@ const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFi
         return 'ppiflow';
     }
     if (
+        stage === 'post_caliby' ||
+        stageFamily.includes('caliby') ||
+        stageMode.includes('caliby') ||
+        modelId === 'caliby_experimental' ||
+        candidateDir.includes('caliby')
+    ) {
+        return 'caliby';
+    }
+    if (
         stage.includes('ppiflow') ||
         stage.includes('maturation') ||
         candidateDir.includes('ppiflow') ||
@@ -720,6 +730,29 @@ const getFampnnMaxResiduePsce = (design: { provenance?: unknown; confidence_metr
     getFampnnScalar(design, 'fampnn_max_residue_psce', 'max_residue_psce')
 );
 
+const getCalibyRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, any> | null => (
+    asRecord(asRecord(design?.provenance)?.caliby)
+    ?? asRecord(design?.confidence_metrics)
+);
+
+const getCalibyScalar = (
+    design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined,
+    ...keys: string[]
+): number | null => {
+    const directRecord = asRecord(design as unknown);
+    const record = getCalibyRecord(design);
+    const nestedSelfConsistency = asRecord(record?.self_consistency);
+    for (const key of keys) {
+        const directValue = directRecord?.[key];
+        if (typeof directValue === 'number' && Number.isFinite(directValue)) return directValue;
+        const value = record?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        const nestedValue = nestedSelfConsistency?.[key];
+        if (typeof nestedValue === 'number' && Number.isFinite(nestedValue)) return nestedValue;
+    }
+    return null;
+};
+
 const getPpiflowSourceName = (design: { name?: string; provenance?: unknown; source_design_name?: string | null } | null | undefined): string | null => {
     if (typeof design?.source_design_name === 'string' && design.source_design_name.trim()) {
         return design.source_design_name.trim();
@@ -803,7 +836,8 @@ const formatSequenceViewerText = (entries: StageSequenceEntry[]): string => {
     const totalLengthWidth = String(Math.max(...entries.map((entry) => entry.length))).length;
 
     return entries.map((entry) => {
-        const lines: string[] = [`Chain ${entry.chain}`];
+        const chainHeader = /^chain\s+/i.test(entry.chain) ? entry.chain : `Chain ${entry.chain}`;
+        const lines: string[] = [chainHeader];
         for (let start = 0; start < entry.sequence.length; start += residuesPerLine) {
             const chunk = entry.sequence.slice(start, start + residuesPerLine);
             const grouped = chunk.match(new RegExp(`.{1,${residuesPerGroup}}`, 'g'))?.join(' ') ?? chunk;
@@ -813,6 +847,27 @@ const formatSequenceViewerText = (entries: StageSequenceEntry[]): string => {
         }
         return lines.join('\n');
     }).join('\n\n');
+};
+
+const parseChainIdList = (value: unknown): string[] => {
+    if (typeof value !== 'string') return [];
+    return value
+        .split(/[|,]/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+};
+
+const filterStageSequenceToBinderChains = (
+    sequenceValue: string,
+    chainAvgValue: unknown,
+    binderChainHint: unknown,
+): string => {
+    const binderChains = new Set(parseChainIdList(binderChainHint));
+    if (!sequenceValue || binderChains.size === 0) return '';
+    const filtered = parseStageSequenceEntries(sequenceValue, chainAvgValue)
+        .filter((entry) => binderChains.has(entry.chain));
+    if (!filtered.length) return '';
+    return filtered.map((entry) => `${entry.chain}:${entry.sequence}`).join('|');
 };
 
 const parseStageSequenceEntries = (
@@ -988,7 +1043,7 @@ type JobSelectorOption = {
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const getRfReviewSetLabel = (value: RfReviewSet | null | undefined) => value === 'raw' ? 'Raw' : value === 'filtered' ? 'Screened' : 'No Set';
 const isStageReviewJob = (job: Job | null | undefined): boolean =>
-    ['post_rfantibody', 'post_boltzgen', 'post_ppiflow_generator', 'post_fampnn', 'post_structure_validation']
+    ['post_rfantibody', 'post_boltzgen', 'post_ppiflow_generator', 'post_fampnn', 'post_caliby', 'post_structure_validation']
         .includes(String(job?.awaiting_stage || job?.current_stage || '').toLowerCase());
 const isPostRfantibodyStage = (job: Job | null | undefined): boolean =>
     String(job?.awaiting_stage || job?.current_stage || '').toLowerCase() === 'post_rfantibody';
@@ -997,6 +1052,7 @@ const ANALYSIS_LENS_LABELS: Record<AnalysisLens, string> = {
     rfantibody: 'RFantibody',
     boltzgen: 'BoltzGen',
     fampnn: 'FA-MPNN',
+    caliby: 'Caliby',
     ppiflow: 'PPIFlow',
     frustrampnn: 'FrustraMPNN',
     protenix: 'Protenix',
@@ -1005,10 +1061,11 @@ const LINEAGE_GROUP_ORDER: Record<string, number> = {
     rfantibody: 0,
     boltzgen: 1,
     fampnn: 2,
-    ppiflow: 3,
-    validation: 4,
-    frustrampnn: 5,
-    child: 6,
+    caliby: 3,
+    ppiflow: 4,
+    validation: 5,
+    frustrampnn: 6,
+    child: 7,
 };
 const normalizeLoopScopeLabel = (value: unknown): string | null => {
     if (Array.isArray(value)) {
@@ -1049,6 +1106,7 @@ const getLineageFamily = (job: Job): string => {
         if (stageFamily.includes('validation') || stageFamily.includes('protenix') || stageFamily.includes('boltz2')) return 'validation';
         if (stageFamily.includes('ppiflow') || stageFamily.includes('maturation')) return 'ppiflow';
         if (stageFamily.includes('fampnn')) return 'fampnn';
+        if (stageFamily.includes('caliby')) return 'caliby';
         if (stageFamily.includes('frustrampnn')) return 'frustrampnn';
         if (stageFamily.includes('rfantibody')) return 'rfantibody';
     }
@@ -1071,6 +1129,9 @@ const getLineageOutputLabel = (job: Job): string => {
         if (stageMode === 'nanobody_binder') return 'Nanobody Generation';
         if (stageMode === 'antibody_binder') return 'Antibody Generation';
         return 'BoltzGen';
+    }
+    if (family === 'caliby') {
+        return 'Caliby Sequence Design';
     }
     if (family === 'ppiflow') {
         if (stageMode === 'generator_backbone_refine') return 'Seeded Generation';
@@ -1380,6 +1441,7 @@ const normalizeSavedReviewFilterState = (state: SavedReviewFilterState): SavedRe
     output_source_filter: state.output_source_filter === 'rfantibody'
         || state.output_source_filter === 'boltzgen'
         || state.output_source_filter === 'fampnn'
+        || state.output_source_filter === 'caliby'
         || state.output_source_filter === 'ppiflow'
         || state.output_source_filter === 'validation'
         || state.output_source_filter === 'all'
@@ -3041,10 +3103,10 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], ppiflow: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
-            if (source === 'rfantibody' || source === 'boltzgen' || source === 'fampnn' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
+            if (source === 'rfantibody' || source === 'boltzgen' || source === 'fampnn' || source === 'caliby' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
             else grouped.all.push(design);
         }
         grouped.ppiflow.sort((a, b) => {
@@ -3069,24 +3131,56 @@ export function ResultsViewer() {
         () => getFampnnMaxResiduePsce(selectedDesign),
         [selectedDesign],
     );
+    const selectedDesignCalibyPottsEnergy = useMemo(
+        () => getCalibyScalar(selectedDesign, 'caliby_potts_energy', 'U'),
+        [selectedDesign],
+    );
+    const selectedDesignCalibyScPlddt = useMemo(
+        () => getCalibyScalar(selectedDesign, 'caliby_sc_plddt', 'sc_plddt', 'avg_plddt', 'mean_plddt', 'plddt'),
+        [selectedDesign],
+    );
+    const selectedDesignCalibyScRmsd = useMemo(
+        () => getCalibyScalar(selectedDesign, 'caliby_sc_rmsd', 'sc_rmsd', 'rmsd', 'ca_rmsd', 'bb_rmsd', 'backbone_rmsd'),
+        [selectedDesign],
+    );
     const selectedDesignPpiflowRecord = useMemo(() => (
         getPpiflowRecord(selectedDesign)
     ), [selectedDesign]);
     const selectedDesignHasPpiflowLens = selectedDesignLens === 'ppiflow' || Boolean(selectedDesignPpiflowRecord);
     const selectedDesignSequenceSource = useMemo(() => {
         const stageSequence = typeof selectedDesignFampnnPayload?.sequence === 'string' ? selectedDesignFampnnPayload.sequence.trim() : '';
-        if (stageSequence) {
-            return { sequence: stageSequence, kind: 'stage' as const };
-        }
         const binderSequence = [
             selectedDesign?.binder_sequence,
             selectedDesignFampnnPayload?.binder_sequence,
         ].find((value) => typeof value === 'string' && value.trim());
+        const binderChainHint = [
+            selectedDesign?.detected_antibody_chains,
+            selectedDesignFampnnPayload?.detected_antibody_chains,
+            (activeJob?.params as Record<string, unknown> | undefined)?.antibody_chains,
+            (activeJob?.params as Record<string, unknown> | undefined)?.binder_chains,
+        ].find((value) => typeof value === 'string' && value.trim());
+
+        if (hasExplicitBinderTargetRoles(activeJob)) {
+            if (typeof binderSequence === 'string' && binderSequence.trim()) {
+                return { sequence: binderSequence.trim(), kind: 'binder' as const };
+            }
+            const binderFilteredStageSequence = filterStageSequenceToBinderChains(
+                stageSequence,
+                selectedDesignFampnnPayload?.chain_avg_psce,
+                binderChainHint,
+            );
+            if (binderFilteredStageSequence) {
+                return { sequence: binderFilteredStageSequence, kind: 'stage' as const };
+            }
+        }
+        if (stageSequence) {
+            return { sequence: stageSequence, kind: 'stage' as const };
+        }
         return {
             sequence: typeof binderSequence === 'string' ? binderSequence.trim() : '',
             kind: 'binder' as const,
         };
-    }, [selectedDesign?.binder_sequence, selectedDesignFampnnPayload]);
+    }, [activeJob, selectedDesign?.binder_sequence, selectedDesign?.detected_antibody_chains, selectedDesignFampnnPayload]);
     const selectedDesignSequenceEntries = useMemo(
         () => parseStageSequenceEntries(
             selectedDesignSequenceSource.sequence,
@@ -3132,6 +3226,29 @@ export function ResultsViewer() {
                 seqs_per_design: params.seqs_per_design,
             };
         }
+        if (selectedDesignSource === 'caliby') {
+            return {
+                caliby_model_name: params.caliby_model_name,
+                caliby_temperature: params.caliby_temperature,
+                caliby_batch_size: params.caliby_batch_size,
+                caliby_num_workers: params.caliby_num_workers,
+                caliby_clean_num_workers: params.caliby_clean_num_workers,
+                caliby_omit_aas: params.caliby_omit_aas,
+                caliby_run_self_consistency_eval: params.caliby_run_self_consistency_eval,
+                caliby_self_consistency_num_models: params.caliby_self_consistency_num_models,
+                caliby_self_consistency_num_recycles: params.caliby_self_consistency_num_recycles,
+                caliby_self_consistency_use_multimer: params.caliby_self_consistency_use_multimer,
+                enable_caliby_filter: params.enable_caliby_filter,
+                caliby_max_potts_energy: params.caliby_max_potts_energy,
+                caliby_min_sc_plddt: params.caliby_min_sc_plddt,
+                caliby_max_sc_rmsd: params.caliby_max_sc_rmsd,
+                caliby_fixed_pos_override_seq: params.caliby_fixed_pos_override_seq,
+                caliby_pos_restrict_aatype: params.caliby_pos_restrict_aatype,
+                caliby_symmetry_pos: params.caliby_symmetry_pos,
+                caliby_sampling_overrides_json: params.caliby_sampling_overrides_json,
+                seqs_per_design: params.seqs_per_design,
+            };
+        }
         if (!selectedDesignHasPpiflowLens) return null;
         return {
             ppiflow_mode: params.ppiflow_mode ?? params.ppiflow_stage_mode ?? activeJob?.stage_mode,
@@ -3169,6 +3286,28 @@ export function ResultsViewer() {
                 ['Constraint Mode', settings.fampnn_constraint_mode],
                 ['Seqs/Backbone', settings.seqs_per_design],
             ]
+            : selectedDesignSource === 'caliby'
+                ? [
+                    ['Model', settings.caliby_model_name],
+                    ['Temperature', settings.caliby_temperature],
+                    ['Batch Size', settings.caliby_batch_size],
+                    ['Workers', settings.caliby_num_workers],
+                    ['Clean Workers', settings.caliby_clean_num_workers],
+                    ['AF2 Self-Consistency', settings.caliby_run_self_consistency_eval],
+                    ['SC Models', settings.caliby_self_consistency_num_models],
+                    ['SC Recycles', settings.caliby_self_consistency_num_recycles],
+                    ['SC Multimer', settings.caliby_self_consistency_use_multimer],
+                    ['Filter Enabled', settings.enable_caliby_filter],
+                    ['Max Potts Energy', settings.caliby_max_potts_energy],
+                    ['Min SC pLDDT', settings.caliby_min_sc_plddt],
+                    ['Max SC RMSD', settings.caliby_max_sc_rmsd],
+                    ['Omit AAs', settings.caliby_omit_aas],
+                    ['Override Seq', settings.caliby_fixed_pos_override_seq],
+                    ['Restrict AAs', settings.caliby_pos_restrict_aatype],
+                    ['Symmetry', settings.caliby_symmetry_pos],
+                    ['Seqs/Backbone', settings.seqs_per_design],
+                    ['Overrides', settings.caliby_sampling_overrides_json],
+                ]
             : [
                 ['Mode', settings.ppiflow_mode],
                 ['Region', normalizeLoopScopeLabel(settings.ppiflow_selected_loops) ?? selectedDesignPpiflowRecord?.selected_loop_scope ?? activeJobSelectedLoops],
@@ -3381,11 +3520,33 @@ export function ResultsViewer() {
                         tone: getMetricColor('fampnn_max_residue_psce', selectedDesignFampnnMaxResiduePsce),
                     },
                 ]
+                : selectedDesignSource === 'caliby'
+                    ? [
+                        {
+                            label: 'Potts Energy',
+                            value: formatMetric(selectedDesignCalibyPottsEnergy, 2),
+                            tone: selectedDesignCalibyPottsEnergy != null
+                                ? (selectedDesignCalibyPottsEnergy <= 0 ? 'text-emerald-300' : 'text-amber-300')
+                                : 'text-slate-500',
+                        },
+                        {
+                            label: 'SC pLDDT',
+                            value: formatMetric(selectedDesignCalibyScPlddt, 1),
+                            tone: getMetricColor('plddt_overall', selectedDesignCalibyScPlddt),
+                        },
+                    ]
                 : [{
                     label: selectedDesignSource === 'rfantibody' ? 'RF pLDDT Global' : 'pLDDT',
                     value: formatMetric(selectedDesign.plddt_overall, 1),
                     tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall),
                 }]),
+            ...(selectedDesignSource === 'caliby'
+                ? [{
+                    label: 'SC RMSD',
+                    value: selectedDesignCalibyScRmsd != null ? `${selectedDesignCalibyScRmsd.toFixed(2)} Å` : '—',
+                    tone: selectedDesignCalibyScRmsd != null ? 'text-cyan-300' : 'text-slate-500',
+                } as const]
+                : []),
             ...(selectedDesignSource === 'rfantibody'
                 ? [{
                     label: 'RF pLDDT Selected',
@@ -3448,7 +3609,7 @@ export function ResultsViewer() {
             { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
             { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
         ];
-    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
+    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignCalibyPottsEnergy, selectedDesignCalibyScPlddt, selectedDesignCalibyScRmsd, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
     const overviewAnalysisItems = useMemo(() => ([
         {
             key: 'structure_summary',
@@ -3953,6 +4114,7 @@ export function ResultsViewer() {
         const nextOutputSourceFilter = (nextState.output_source_filter === 'rfantibody'
             || nextState.output_source_filter === 'boltzgen'
             || nextState.output_source_filter === 'fampnn'
+            || nextState.output_source_filter === 'caliby'
             || nextState.output_source_filter === 'ppiflow'
             || nextState.output_source_filter === 'validation'
             || nextState.output_source_filter === 'all')
@@ -4575,6 +4737,7 @@ export function ResultsViewer() {
         .split('\n')
         .map((entry) => entry.trim())
         .filter(Boolean).length;
+    const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -4590,7 +4753,7 @@ export function ResultsViewer() {
                     <div>
                         <h1 className="text-3xl font-bold text-white">Results Viewer</h1>
                         <p className="text-slate-400 text-sm mt-1">
-                            {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Select a job to analyze'}
+                            {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
                         </p>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
@@ -4715,10 +4878,17 @@ export function ResultsViewer() {
                     </div>
                 </div>
 
-                {nonNgsJobs.length === 0 && (
-                    <div className="bg-slate-900/50 rounded-xl border border-slate-800 p-8 text-center text-slate-400">
-                        No protein workflow jobs available for Data Viewer. NGS jobs are available in NGS Data Visualization Toolkit.
-                    </div>
+                {showDataHubLanding && (
+                    <DataViewerLanding
+                        jobs={nonNgsJobs}
+                        jobsLoading={jobsLoading}
+                        onBrowseJobs={() => {
+                            setShowJobSelectorMenu(true);
+                            setJobSelectorSearch('');
+                        }}
+                        onSelectJob={handleSelectJob}
+                        onImportComplete={(job) => handleSelectJob(job.id)}
+                    />
                 )}
 
                 {activeJob && (
@@ -4812,7 +4982,7 @@ export function ResultsViewer() {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleSelectLineageGroup(group.family)}
-                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'boltzgen' || group.family === 'fampnn' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
+                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'boltzgen' || group.family === 'fampnn' || group.family === 'caliby' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
                                                                     ? 'border-sky-400/60 bg-sky-500/15 text-white'
                                                                     : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
                                                                     }`}
@@ -6563,7 +6733,7 @@ export function ResultsViewer() {
                                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
                                                                         className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
-                                                                        {(['rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[])
+                                                                        {(['rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'validation'] as OutputSourceFilter[])
                                                                             .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
                                                                             .map((source) => (
                                                                                 <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
@@ -6579,7 +6749,7 @@ export function ResultsViewer() {
                                                                 </div>
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
-                                                                {(['all', 'rfantibody', 'boltzgen', 'fampnn', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                {(['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
                                                                     const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
                                                                     if (source !== 'all' && count === 0) return null;
                                                                     const active = antibodySourceFilter === source;
@@ -6837,7 +7007,7 @@ export function ResultsViewer() {
                                                             {selectedDesignStageSettingsRows.length > 0 && (
                                                                 <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                                                                     <div className="text-[11px] uppercase tracking-wider text-slate-500">
-                                                                        {selectedDesignSource === 'fampnn' ? 'FAMPNN Settings' : 'PPIFlow Settings'}
+                                                                        {selectedDesignSource === 'fampnn' ? 'FAMPNN Settings' : selectedDesignSource === 'caliby' ? 'Caliby Settings' : 'PPIFlow Settings'}
                                                                     </div>
                                                                     <div className="mt-3 space-y-2 text-xs">
                                                                         {selectedDesignStageSettingsRows.map(([label, value]) => (
