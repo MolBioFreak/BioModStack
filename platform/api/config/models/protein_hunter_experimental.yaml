@@ -1,0 +1,279 @@
+id: protein_hunter_experimental
+name: Protein Hunter Experimental
+version: "0.1.0"
+category: generative_design
+description: >
+  Experimental iterative protein generator family using Protein Hunter with
+  Boltz or Chai backends. Supports broad binder exploration and unconditional
+  generation from one BMS launcher surface.
+container: protein_hunter.sif
+
+ui_icon: sparkles
+ui_color: "#F97316"
+
+inputs:
+  - pdb
+  - cif
+  - sdf
+  - txt
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: design
+    name: Experimental Generator
+    description: Run Protein Hunter generation through the Boltz or Chai backend
+    params:
+      - backend
+      - task
+      - num_designs
+      - num_cycles
+      - min_protein_length
+      - max_protein_length
+      - percent_x
+      - seed_binder_sequence
+      - target_protein_sequences
+      - target_pdb
+      - target_pdb_chain
+      - target_template_path
+      - target_template_chain_id
+      - ligand_smiles
+      - ligand_ccd
+      - nucleic_sequence
+      - nucleic_type
+      - contact_residues
+      - cyclic
+      - alanine_bias
+      - temperature
+      - high_iptm_threshold
+      - high_plddt_threshold
+      - msa_mode
+      - boltz_model_version
+      - boltz_model_path
+      - boltz_ccd_path
+      - chai_hysteresis_mode
+      - chai_num_recycles
+      - chai_num_diff_steps
+      - chai_repredict
+
+params:
+  - name: backend
+    type: string
+    description: Protein Hunter backend to run
+    required: true
+    default: boltz
+    enum:
+      - boltz
+      - chai
+
+  - name: task
+    type: string
+    description: Experimental generator task family
+    required: true
+    default: protein_binder
+    enum:
+      - protein_binder
+      - unconditional
+      - ligand_binder
+      - nucleic_binder
+
+  - name: num_designs
+    type: integer
+    description: Number of independent designs or trials to generate
+    required: true
+    default: 4
+    minimum: 1
+    maximum: 128
+
+  - name: num_cycles
+    type: integer
+    description: Number of iterative design cycles
+    required: true
+    default: 7
+    minimum: 1
+    maximum: 64
+
+  - name: min_protein_length
+    type: integer
+    description: Minimum generated binder length
+    required: true
+    default: 90
+    minimum: 1
+    maximum: 2000
+
+  - name: max_protein_length
+    type: integer
+    description: Maximum generated binder length
+    required: true
+    default: 150
+    minimum: 1
+    maximum: 2000
+
+  - name: percent_x
+    type: integer
+    description: Percent of X residues in the initial sampled binder sequence
+    required: false
+    default: 50
+    minimum: 0
+    maximum: 100
+
+  - name: seed_binder_sequence
+    type: string
+    description: Optional starting binder sequence for seeded redesign
+    required: false
+
+  - name: target_protein_sequences
+    type: string
+    description: >
+      Target protein sequence string. For Boltz, multiple target chains can be
+      separated with ':'.
+    required: false
+
+  - name: target_pdb
+    type: file
+    description: Optional target/template PDB for Chai protein-binder tasks
+    required: false
+    file_type: pdb
+    preset_type: pdb
+
+  - name: target_pdb_chain
+    type: string
+    description: Chain ID for target_pdb when using the Chai backend
+    required: false
+
+  - name: target_template_path
+    type: string
+    description: Optional Boltz template path or PDB code
+    required: false
+
+  - name: target_template_chain_id
+    type: string
+    description: Optional Boltz mmCIF template chain ID
+    required: false
+
+  - name: ligand_smiles
+    type: string
+    description: Ligand SMILES string for ligand-binder tasks
+    required: false
+
+  - name: ligand_ccd
+    type: string
+    description: Ligand CCD code for Boltz ligand-binder tasks
+    required: false
+
+  - name: nucleic_sequence
+    type: string
+    description: DNA or RNA target sequence for nucleic-binder tasks
+    required: false
+
+  - name: nucleic_type
+    type: string
+    description: Nucleic-acid target type
+    required: false
+    default: rna
+    enum:
+      - dna
+      - rna
+
+  - name: contact_residues
+    type: string
+    description: Optional target contact residues for Boltz contact conditioning
+    required: false
+
+  - name: cyclic
+    type: boolean
+    description: Enable cyclic topology for the designed binder
+    required: false
+    default: false
+
+  - name: alanine_bias
+    type: boolean
+    description: Enable Protein Hunter alanine-bias mode
+    required: false
+    default: true
+
+  - name: temperature
+    type: float
+    description: Final sequence-design temperature
+    required: false
+    default: 0.1
+    minimum: 0.001
+    maximum: 2.0
+
+  - name: high_iptm_threshold
+    type: float
+    description: High-ipTM save threshold
+    required: false
+    default: 0.7
+    minimum: 0.0
+    maximum: 1.0
+
+  - name: high_plddt_threshold
+    type: float
+    description: High-pLDDT save threshold
+    required: false
+    default: 0.8
+    minimum: 0.0
+    maximum: 1.0
+
+  - name: msa_mode
+    type: string
+    description: Boltz MSA mode
+    required: false
+    default: mmseqs
+    enum:
+      - single
+      - mmseqs
+
+  - name: boltz_model_version
+    type: string
+    description: Protein Hunter Boltz model version
+    required: false
+    default: boltz2
+    enum:
+      - boltz2
+      - boltz1
+
+  - name: boltz_model_path
+    type: string
+    description: Optional override for the Boltz checkpoint path
+    required: false
+
+  - name: boltz_ccd_path
+    type: string
+    description: Optional override for the Boltz canonical-molecule directory
+    required: false
+
+  - name: chai_hysteresis_mode
+    type: string
+    description: Chai hysteresis mode
+    required: false
+    default: templates
+    enum:
+      - templates
+      - esm
+      - partial_diffusion
+      - none
+
+  - name: chai_num_recycles
+    type: integer
+    description: Number of Chai trunk recycles per fold
+    required: false
+    default: 3
+    minimum: 1
+    maximum: 16
+
+  - name: chai_num_diff_steps
+    type: integer
+    description: Number of Chai diffusion steps
+    required: false
+    default: 200
+    minimum: 1
+    maximum: 1000
+
+  - name: chai_repredict
+    type: boolean
+    description: Run final Chai reprediction without templates
+    required: false
+    default: true

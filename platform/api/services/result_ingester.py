@@ -909,6 +909,31 @@ def _extract_stage_settings(params: Dict[str, Any], stage_family: Optional[str],
         family = "ppiflow"
 
     key_groups = {
+        "caliby": (
+            "caliby_model_name",
+            "caliby_packer_model_name",
+            "caliby_num_seqs_per_pdb",
+            "caliby_batch_size",
+            "caliby_num_workers",
+            "caliby_clean_num_workers",
+            "caliby_temperature",
+            "caliby_omit_aas",
+            "caliby_run_self_consistency_eval",
+            "caliby_self_consistency_num_models",
+            "caliby_self_consistency_num_recycles",
+            "caliby_self_consistency_use_multimer",
+            "caliby_fixed_pos_override_seq",
+            "caliby_pos_restrict_aatype",
+            "caliby_symmetry_pos",
+            "enable_caliby_filter",
+            "caliby_max_potts_energy",
+            "caliby_min_sc_plddt",
+            "caliby_max_sc_rmsd",
+            "caliby_sampling_overrides_json",
+            "seqs_per_design",
+            "antibody_design_mode",
+            "antibody_design_loops",
+        ),
         "fampnn": (
             "fampnn_checkpoint",
             "fampnn_checkpoint_path",
@@ -1015,6 +1040,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         if mode == "maturation_child":
             stage_family = "ppiflow"
             stage_mode = stage_mode or "maturation"
+        elif "caliby" in model_id:
+            stage_family = "caliby"
+        elif "protein_hunter" in model_id:
+            stage_family = "protein_hunter"
         elif "fampnn" in model_id:
             stage_family = "fampnn"
         elif "antibody" in model_id or "antibody" in mode:
