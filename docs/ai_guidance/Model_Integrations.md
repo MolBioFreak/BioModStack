@@ -39,6 +39,8 @@ Every model integration usually touches some subset of:
   experimental La-Proteina / DISCO non-binder design workflow
 - `caliby_experimental`
   experimental structure-conditioned sequence design workflow
+- `protein_hunter_experimental`
+  experimental broad binder and unconditional generator workflow
 
 ### Generic prediction / design / docking
 
@@ -57,6 +59,7 @@ Every model integration usually touches some subset of:
 - `mutagenesis`
 - `protein_cad_experimental`
 - `caliby_experimental`
+- `protein_hunter_experimental`
 
 ### Sequencing
 
@@ -70,6 +73,7 @@ Every model integration usually touches some subset of:
 - RFdiffusion
 - BindCraft
 - BoltzGen
+- Protein Hunter
 - RFDpoly / Oligo Designer
 - La-Proteina
 - DISCO
@@ -127,6 +131,19 @@ integration explicitly say so.
 
 Document it as an experimental sequence-design backend, not as a backbone
 generator or validator.
+
+### Protein Hunter is standalone experimental generation only
+
+`Protein Hunter` is wired as `protein_hunter_experimental`.
+
+Document it as:
+
+- an experimental generator family
+- broad binder / unconditional exploration
+- Boltz or Chai backend driven
+
+Do not document it as an antibody-native workflow or as part of the nanobody
+refinement loop.
 
 ### OpenMM is live
 
