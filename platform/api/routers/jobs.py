@@ -47,6 +47,7 @@ from paths import (
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.nextflow import launch_nextflow_job
 from services.job_control import cancel_job_lineage
+from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
 from services.stage_review import (
@@ -406,6 +407,13 @@ class SaveReviewFilterSetResponse(BaseModel):
 class DeleteReviewFilterSetResponse(BaseModel):
     message: str
     filter_sets: List[SavedReviewFilterSet]
+
+
+class ProteinBaseBundleImportRequest(BaseModel):
+    """Request payload for importing a ProteinBase JSONL bundle into the job/design viewer."""
+    bundle_path: str = Field(..., min_length=1)
+    dataset_name: str = Field(..., min_length=1)
+    job_name: Optional[str] = Field(default=None)
 
 
 def _resume_defaults_from_awaiting_payload(payload: Optional[Dict[str, Any]]) -> tuple[dict[str, Any], Optional[str], Optional[str]]:
@@ -4242,6 +4250,91 @@ async def list_jobs(
         ))
     
     return JobList(jobs=job_responses, total=total)
+
+
+@router.post("/imports/proteinbase", response_model=JobResponse, status_code=201)
+async def import_proteinbase_bundle_job(
+    request: ProteinBaseBundleImportRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Import an uploaded ProteinBase JSONL bundle as a synthetic completed job."""
+    try:
+        resolved_bundle_path = resolve_allowed_path(request.bundle_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Access denied to this import bundle path") from exc
+
+    if not resolved_bundle_path.exists():
+        raise HTTPException(status_code=404, detail="Import bundle not found")
+    if not resolved_bundle_path.is_file():
+        raise HTTPException(status_code=400, detail="Import bundle path must point to a file")
+
+    try:
+        job = await import_proteinbase_bundle(
+            session=session,
+            bundle_path=resolved_bundle_path,
+            dataset_name=request.dataset_name,
+            job_name=request.job_name,
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"ProteinBase bundle is not valid JSONL: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"ProteinBase bundle must be UTF-8 text: {exc}") from exc
+
+    await session.refresh(job)
+
+    design_count = (
+        await session.execute(select(func.count(Design.id)).where(Design.job_id == job.id))
+    ).scalar_one()
+
+    try:
+        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+        schedule_viewer_minimum_analyses_for_job(str(job.id))
+    except Exception:
+        pass
+
+    return JobResponse(
+        id=job.id,
+        name=job.name,
+        status=job.status,
+        model_id=job.model_id,
+        mode=job.mode,
+        params=job.params,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        output_dir=job.output_dir,
+        error_message=job.error_message,
+        design_count=design_count or 0,
+        requested_design_count=_resolve_requested_design_count(job),
+        batch_id=job.batch_id,
+        batch_name=job.batch_name,
+        parent_job_id=job.parent_job_id,
+        child_stage=job.child_stage,
+        lineage_root_job_id=job.lineage_root_job_id,
+        stage_family=job.stage_family,
+        stage_mode=job.stage_mode,
+        source_stage_job_id=job.source_stage_job_id,
+        source_stage_family=job.source_stage_family,
+        source_stage_mode=job.source_stage_mode,
+        source_selection_manifest_path=job.source_selection_manifest_path,
+        source_selection_count=job.source_selection_count,
+        selected_input_artifact_class=job.selected_input_artifact_class,
+        selected_input_schema_version=job.selected_input_schema_version,
+        selection_source_type=job.selection_source_type,
+        selection_source_job_id=job.selection_source_job_id,
+        selection_dataset_name=job.selection_dataset_name,
+        selected_loop_scope=job.selected_loop_scope,
+        provenance=job.provenance,
+        saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        current_stage=job.current_stage,
+        completed_stages=job.completed_stages,
+        stage_outputs=job.stage_outputs,
+        awaiting_input=job.awaiting_input,
+        awaiting_stage=job.awaiting_stage,
+        awaiting_payload=job.awaiting_payload,
+        decision_history=job.decision_history,
+    )
 
 
 @router.post("", response_model=JobResponse, status_code=201)
