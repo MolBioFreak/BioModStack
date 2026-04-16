@@ -1,4 +1,4 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'validation';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'validation' | 'imported';
 export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
@@ -6,6 +6,10 @@ type OutputSourceDesign = {
     pdb_path?: string | null;
     confidence_metrics?: Record<string, unknown> | null;
     provenance?: Record<string, unknown> | null;
+    is_imported?: boolean | null;
+    import_source?: string | null;
+    import_method?: string | null;
+    import_label?: string | null;
     source_stage?: string | null;
     artifact_group?: string | null;
     artifact_class?: string | null;
@@ -17,7 +21,7 @@ type OutputSourceDesign = {
 
 type AnalysisLensDesign = OutputSourceDesign & Record<string, unknown>;
 
-type AnalysisLensJob = {
+type OutputSourceJob = {
     name?: string | null;
     model_id?: string | null;
     mode?: string | null;
@@ -27,7 +31,12 @@ type AnalysisLensJob = {
     current_stage?: string | null;
     awaiting_stage?: string | null;
     awaiting_payload?: Record<string, unknown> | null;
+    selection_source_type?: string | null;
+    selection_dataset_name?: string | null;
+    provenance?: Record<string, unknown> | null;
 };
+
+type AnalysisLensJob = OutputSourceJob;
 
 const ANALYSIS_LENS_PRIORITY: AnalysisLens[] = ['rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'frustrampnn', 'protenix', 'validation'];
 
@@ -57,8 +66,107 @@ const hasValidationMetrics = (metrics: Record<string, unknown> | null | undefine
     );
 };
 
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+    value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
+);
+
 const normalizeArtifactClass = (value: unknown): string => String(value || '').trim().toLowerCase();
 const isValidatedArtifactClass = (artifactClass: string): boolean => artifactClass === 'validated_complex';
+
+const isImportedStageMarker = (value: unknown): boolean => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized.endsWith('_import') || normalized === 'external_import';
+};
+
+const isImportedSourceMarker = (value: unknown): boolean => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'external' || normalized === 'competition' || normalized === 'dataset' || normalized === 'imported';
+};
+
+const isImportedDesign = (design: OutputSourceDesign): boolean => {
+    const stageMode = String(design.stage_mode || '').toLowerCase();
+    const sourceStageMode = String(design.source_stage_mode || '').toLowerCase();
+    const artifactClass = normalizeArtifactClass(design.artifact_class);
+    const importSource = String(design.import_source || '').trim().toLowerCase();
+    const importMethod = String(design.import_method || '').trim().toLowerCase();
+    const importLabel = String(design.import_label || '').trim();
+    const provenance = asRecord(design.provenance);
+
+    return (
+        design.is_imported === true ||
+        Boolean(importSource) ||
+        Boolean(importMethod) ||
+        Boolean(importLabel) ||
+        artifactClass.startsWith('imported') ||
+        isImportedStageMarker(stageMode) ||
+        isImportedStageMarker(sourceStageMode) ||
+        isImportedSourceMarker(provenance?.import_source)
+    );
+};
+
+export const inferJobOutputSource = (job: OutputSourceJob | null | undefined): OutputSourceFilter => {
+    if (!job) return 'all';
+
+    const stage = String(job.awaiting_stage || job.current_stage || '').toLowerCase();
+    const stageFamily = String(job.stage_family || '').toLowerCase();
+    const stageMode = String(job.stage_mode || '').toLowerCase();
+    const modelId = String(job.model_id || '').toLowerCase();
+    const mode = String(job.mode || '').toLowerCase();
+    const candidateDir = String(job.awaiting_payload?.candidate_dir || '').toLowerCase();
+    const params = asRecord(job.params) || {};
+    const provenance = asRecord(job.provenance);
+
+    if (
+        mode === 'external_import' ||
+        isImportedStageMarker(stage) ||
+        isImportedStageMarker(stageMode) ||
+        typeof params.import_type === 'string' ||
+        isImportedSourceMarker(provenance?.import_source)
+    ) {
+        return 'imported';
+    }
+
+    if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
+    if (
+        stage === 'post_boltzgen' ||
+        stageFamily.includes('boltzgen') ||
+        stageMode.includes('nanobody_binder') ||
+        stageMode.includes('antibody_binder') ||
+        (modelId === 'boltzgen' && (mode === 'nanobody_binder' || mode === 'antibody_binder'))
+    ) {
+        return 'boltzgen';
+    }
+    if (
+        stage === 'post_ppiflow_generator' ||
+        stageMode === 'generator_backbone_refine' ||
+        (modelId === 'ppiflow' && mode === 'generator_backbone_refine')
+    ) {
+        return 'ppiflow';
+    }
+    if (
+        stage === 'post_caliby' ||
+        stageFamily.includes('caliby') ||
+        stageMode.includes('caliby') ||
+        modelId === 'caliby_experimental' ||
+        candidateDir.includes('caliby')
+    ) {
+        return 'caliby';
+    }
+    if (
+        stage.includes('ppiflow') ||
+        stage.includes('maturation') ||
+        candidateDir.includes('ppiflow') ||
+        candidateDir.includes('backbone_refine') ||
+        candidateDir.includes('maturation')
+    ) {
+        return 'ppiflow';
+    }
+    if (stage === 'post_fampnn' || candidateDir.includes('fampnn')) return 'fampnn';
+    if (stage === 'post_rfantibody' || candidateDir.includes('rfantibody')) return 'rfantibody';
+    return 'all';
+};
 
 const isBoltzGenGeneratorDesign = (design: OutputSourceDesign): boolean => {
     const name = String(design.name || '').toLowerCase();
@@ -117,6 +225,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (isProteinLocalRedesignBackboneDesign(design)) {
         return 'all';
+    }
+
+    if (isImportedDesign(design)) {
+        return 'imported';
     }
 
     if (
@@ -250,6 +362,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLens | null => {
     const path = (design.pdb_path || '').toLowerCase();
 
+    if (inferDesignOutputSource(design) === 'imported') {
+        return null;
+    }
+
     if (
         containsAny(path, ['/ppiflow/', '/ppiflow_maturation/', '/ppiflow_backbone/', '/ppiflow_repair/', '/maturation/']) ||
         hasMetricKeys(design, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])
@@ -284,6 +400,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
 
 const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): AnalysisLens | null => {
     if (!job) return null;
+    if (inferJobOutputSource(job) === 'imported') return null;
 
     const stage = String(job.awaiting_stage || job.current_stage || '').toLowerCase();
     const name = String(job.name || '').toLowerCase();
@@ -426,6 +543,7 @@ export const inferPreferredAnalysisLens = (
 export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     if (isProteinLocalRedesignBackboneDesign(design)) return 'RFD3 Backbone';
     const source = inferDesignOutputSource(design);
+    if (source === 'imported') return 'Imported';
     if (source === 'validation') {
         return hasValidationMetrics(design.confidence_metrics || null) ? 'Protenix' : 'Validation';
     }
@@ -443,6 +561,7 @@ export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string =>
     if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
     if (source === 'caliby') return 'border-teal-500/40 bg-teal-500/10 text-teal-200';
     if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
+    if (source === 'imported') return 'border-sky-500/40 bg-sky-500/10 text-sky-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
     return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
 };
