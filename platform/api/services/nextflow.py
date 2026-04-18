@@ -2026,6 +2026,7 @@ def build_nextflow_command(
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('caliby_experimental', 'design'): 'caliby_experimental',
         ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
+        ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
@@ -2622,6 +2623,30 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['ph_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_hunter_experimental'
+    elif model_id == 'boltz_cp_experimental':
+        boltz_cp_mappings = {
+            'input_path': 'bcp_input_path',
+            'gpu_ids': 'bcp_gpu_ids',
+            'size_cp': 'bcp_size_cp',
+            'input_format': 'bcp_input_format',
+            'output_format': 'bcp_output_format',
+            'write_full_pae': 'bcp_write_full_pae',
+            'recycling_steps': 'bcp_recycling_steps',
+            'sampling_steps': 'bcp_sampling_steps',
+            'diffusion_samples': 'bcp_diffusion_samples',
+            'seed': 'bcp_seed',
+            'repo_path': 'bcp_repo_path',
+        }
+        for src_key, dest_key in boltz_cp_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'boltz_cp_experimental'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {
