@@ -1985,16 +1985,26 @@ def build_nextflow_command(
         logger.info(f"complex_components found with {len(params['complex_components'])} items")
     else:
         logger.warning("complex_components NOT in params - ligands will not be used!")
-    
+
+    def resolve_structure_prediction_profile(pred_method: object) -> str:
+        normalized = str(pred_method or 'boltz').strip().lower()
+        if normalized == 'protenix':
+            return 'protenix'
+        if normalized == 'rf3':
+            return 'rf3'
+        return 'boltz'
+
+    structure_prediction_profile = resolve_structure_prediction_profile(params.get('pred_method'))
+
     # Mode to profile mapping for modes that need translation
     mode_to_profile = {
         # structure_validation and structure_prediction use pred_method
-        'structure_validation': params.get('pred_method', 'boltz'),
-        'structure_prediction': params.get('pred_method', 'boltz'),
+        'structure_validation': structure_prediction_profile,
+        'structure_prediction': structure_prediction_profile,
         # DNA polymerase template
         'dna_polymerase': 'fampnn_predict',
     }
-    
+
     # Model + mode to profile mapping (for API-driven jobs)
     model_mode_to_profile = {
         ('boltz2', 'predict'): 'boltz',
