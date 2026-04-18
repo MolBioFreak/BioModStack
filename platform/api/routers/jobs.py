@@ -79,6 +79,41 @@ PPI_FLOW_STAGE_FLAG_KEYS = {
     "run_post_validation_maturation",
     "run_post_boltz_maturation",
 }
+BOLTZ_ITERATION_FORWARD_KEYS = (
+    "boltz_use_msa",
+    "boltz_sampling_steps",
+    "boltz_recycling_steps",
+    "boltz_num_samples",
+    "boltz_diffusion_samples",
+    "boltz_max_parallel_samples",
+    "boltz_use_potentials",
+    "boltz_step_scale",
+    "boltz_method",
+    "boltz_predict_affinity",
+    "boltz_sampling_steps_affinity",
+    "boltz_diffusion_samples_affinity",
+    "boltz_affinity_mw_correction",
+    "boltz_anchor_target",
+    "boltz_anchor_strict",
+    "boltz_target_geometry_mode",
+    "boltz_extra_config",
+    "msa_preset",
+    "msa_use_gpu",
+    "msa_local_db",
+    "msa_cache_dir",
+    "msa_threads",
+    "colabfold_api_host",
+    "colabfold_api_min_interval",
+    "colabfold_api_poll_interval",
+    "msa_gpu_mode",
+    "msa_gpu_threshold",
+    "msa_preferred_gpus",
+    "msa_excluded_gpus",
+    "msa_gpu_server_mode",
+    "msa_gpu_server_wait_timeout",
+    "msa_gpu_server_db_load_mode",
+    "msa_gpu_server_startup_wait",
+)
 ANTIBODY_ITERATION_ACTION_LABELS = {
     "validate_boltz2": "Boltz-2 validation",
     "validate_protenix": "Protenix validation",
@@ -118,6 +153,12 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _copy_present_params(source: Dict[str, Any], dest: Dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        if key in source:
+            dest[key] = source[key]
 
 
 def _format_artifact_identity(artifact_class: Optional[str], stage_family: Optional[str], stage_mode: Optional[str]) -> str:
@@ -1017,6 +1058,33 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
         value = normalized.get(key)
         if isinstance(value, str):
             normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3
+MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50
+
+
+def _normalize_boltz_no_msa_quality_params(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if model_id != "boltz2" or mode not in {"predict", "complex"} or not isinstance(params, dict):
+        return {} if not isinstance(params, dict) else params
+
+    normalized = dict(params)
+    if "boltz_use_msa" not in normalized or _to_bool(normalized.get("boltz_use_msa")):
+        return normalized
+
+    sampling_steps = _coerce_positive_int(normalized.get("boltz_sampling_steps"))
+    recycling_steps = _coerce_positive_int(normalized.get("boltz_recycling_steps"))
+
+    if sampling_steps is not None and sampling_steps < MIN_BOLTZ_NO_MSA_SAMPLING_STEPS:
+        normalized["boltz_sampling_steps"] = MIN_BOLTZ_NO_MSA_SAMPLING_STEPS
+    if recycling_steps is not None and recycling_steps < MIN_BOLTZ_NO_MSA_RECYCLING_STEPS:
+        normalized["boltz_recycling_steps"] = MIN_BOLTZ_NO_MSA_RECYCLING_STEPS
+
     return normalized
 
 
@@ -2865,34 +2933,7 @@ def _build_manual_mutagenesis_iteration_job(
             if key in base_params:
                 launch_params[key] = base_params[key]
     else:
-        for key in (
-            "boltz_use_msa",
-            "boltz_sampling_steps",
-            "boltz_recycling_steps",
-            "boltz_num_samples",
-            "boltz_use_potentials",
-            "boltz_step_scale",
-            "boltz_predict_affinity",
-            "boltz_diffusion_samples_affinity",
-            "msa_preset",
-            "msa_use_gpu",
-            "msa_local_db",
-            "msa_cache_dir",
-            "msa_threads",
-            "colabfold_api_host",
-            "colabfold_api_min_interval",
-            "colabfold_api_poll_interval",
-            "msa_gpu_mode",
-            "msa_gpu_threshold",
-            "msa_preferred_gpus",
-            "msa_excluded_gpus",
-            "msa_gpu_server_mode",
-            "msa_gpu_server_wait_timeout",
-            "msa_gpu_server_db_load_mode",
-            "msa_gpu_server_startup_wait",
-        ):
-            if key in base_params:
-                launch_params[key] = base_params[key]
+        _copy_present_params(base_params, launch_params, BOLTZ_ITERATION_FORWARD_KEYS)
 
     if param_overrides:
         launch_params.update(dict(param_overrides))
@@ -3182,34 +3223,7 @@ def _build_cdr_indel_iteration_job(
             if key in base_params:
                 launch_params[key] = base_params[key]
     else:
-        for key in (
-            "boltz_use_msa",
-            "boltz_sampling_steps",
-            "boltz_recycling_steps",
-            "boltz_num_samples",
-            "boltz_use_potentials",
-            "boltz_step_scale",
-            "boltz_predict_affinity",
-            "boltz_diffusion_samples_affinity",
-            "msa_preset",
-            "msa_use_gpu",
-            "msa_local_db",
-            "msa_cache_dir",
-            "msa_threads",
-            "colabfold_api_host",
-            "colabfold_api_min_interval",
-            "colabfold_api_poll_interval",
-            "msa_gpu_mode",
-            "msa_gpu_threshold",
-            "msa_preferred_gpus",
-            "msa_excluded_gpus",
-            "msa_gpu_server_mode",
-            "msa_gpu_server_wait_timeout",
-            "msa_gpu_server_db_load_mode",
-            "msa_gpu_server_startup_wait",
-        ):
-            if key in base_params:
-                launch_params[key] = base_params[key]
+        _copy_present_params(base_params, launch_params, BOLTZ_ITERATION_FORWARD_KEYS)
 
     if param_overrides:
         cleaned_overrides = dict(param_overrides)
@@ -4363,6 +4377,7 @@ async def create_job(
         job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
+        job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
         job_data.params = _normalize_antibody_job_params(job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches

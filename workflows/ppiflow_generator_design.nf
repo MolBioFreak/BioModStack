@@ -3,30 +3,50 @@ nextflow.enable.dsl = 2
 
 include { IdentifyAnchorResidues ; RunPartialFlow ; ScorePartialFlowImprovement ; FilterByMaturation } from '../modules/ppiflow.nf'
 
-[
-    framework_type: 'nanobody',
-    antibody_chains: 'H',
-    ppiflow_seed_input_dir: '',
-    selected_input_dir: '',
-    ppiflow_mode: 'backbone_refine',
-    stage_family: 'ppiflow',
-    stage_mode: 'generator_backbone_refine',
-    ppiflow_stage_mode: 'generator_backbone_refine',
-    ppiflow_require_anchors: true,
-    ppiflow_rotamer_enrichment_enabled: true,
-    ppiflow_rotamer_shell_distance: params.get('ppiflow_rotamer_shell_cutoff') ?: 20.0,
-    ppiflow_region_mode: params.get('ppiflow_backbone_region_mode') ?: 'selected_cdrs',
-    ppiflow_selected_loops: params.get('ppiflow_backbone_loop_scope') ?: '',
-    cdr_positions_by_loop: [:],
-    manual_cdr_definitions: [],
-    interactive_swa: false,
-    interactive_gating: false,
-    interactive_gate_stage: 'post_ppiflow_generator',
-    interactive_gate_continue: false,
-].each { key, value ->
-    if (!params.containsKey(key)) {
-        params[key] = value
+def applyPpiFlowGeneratorDefaults() {
+    if (!params.containsKey('framework_type') || !params.framework_type) params.framework_type = 'nanobody'
+    if (!params.containsKey('antibody_chains') || !params.antibody_chains) params.antibody_chains = 'H'
+    if (!params.containsKey('ppiflow_seed_input_dir') || params.ppiflow_seed_input_dir == null) params.ppiflow_seed_input_dir = ''
+    if (!params.containsKey('selected_input_dir') || params.selected_input_dir == null) params.selected_input_dir = ''
+    if (!params.containsKey('ppiflow_mode') || !params.ppiflow_mode) params.ppiflow_mode = 'backbone_refine'
+    if (!params.containsKey('stage_family') || !params.stage_family) params.stage_family = 'ppiflow'
+    if (!params.containsKey('stage_mode') || !params.stage_mode) params.stage_mode = 'generator_backbone_refine'
+    if (!params.containsKey('ppiflow_stage_mode') || !params.ppiflow_stage_mode) params.ppiflow_stage_mode = 'generator_backbone_refine'
+    if (!params.containsKey('ppiflow_require_anchors') || params.ppiflow_require_anchors == null) params.ppiflow_require_anchors = true
+    if (!params.containsKey('ppiflow_rotamer_enrichment_enabled') || params.ppiflow_rotamer_enrichment_enabled == null) params.ppiflow_rotamer_enrichment_enabled = true
+    if (!params.containsKey('ppiflow_rotamer_shell_distance') || params.ppiflow_rotamer_shell_distance == null) params.ppiflow_rotamer_shell_distance = params.get('ppiflow_rotamer_shell_cutoff') ?: 20.0
+    if (!params.containsKey('ppiflow_region_mode') || !params.ppiflow_region_mode) params.ppiflow_region_mode = params.get('ppiflow_backbone_region_mode') ?: 'selected_cdrs'
+    if (!params.containsKey('ppiflow_selected_loops') || params.ppiflow_selected_loops == null) params.ppiflow_selected_loops = params.get('ppiflow_backbone_loop_scope') ?: ''
+    if (!params.containsKey('cdr_positions_by_loop') || params.cdr_positions_by_loop == null) params.cdr_positions_by_loop = [:]
+    if (!params.containsKey('manual_cdr_definitions') || params.manual_cdr_definitions == null) params.manual_cdr_definitions = []
+    if (!params.containsKey('interactive_swa') || params.interactive_swa == null) params.interactive_swa = false
+    if (!params.containsKey('interactive_gating') || params.interactive_gating == null) params.interactive_gating = false
+    if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_ppiflow_generator'
+    if (!params.containsKey('interactive_gate_continue') || params.interactive_gate_continue == null) params.interactive_gate_continue = false
+}
+
+def appendExistingStructureCandidates(List candidates, raw) {
+    def text = raw?.toString()?.trim()
+    if (!text) {
+        return
     }
+
+    def resolved = file(text)
+    if (!resolved.exists()) {
+        return
+    }
+
+    if (resolved.isDirectory()) {
+        resolved.listFiles()
+            ?.findAll { child ->
+                def lowerName = child.name.toLowerCase()
+                lowerName.endsWith('.pdb') || lowerName.endsWith('.cif') || lowerName.endsWith('.mmcif')
+            }
+            ?.each { child -> candidates << child }
+        return
+    }
+
+    candidates << resolved
 }
 
 def parsePpiFlowBackboneManifest(manifestFile) {
@@ -61,28 +81,10 @@ def resolveSeedStructureFiles() {
     def seedInputDir = params.get('ppiflow_seed_input_dir')
     def selectedInputDir = params.get('selected_input_dir')
     def seedComplexPath = params.get('ppiflow_seed_complex_path')
-    def addPath = { raw ->
-        def text = raw?.toString()?.trim()
-        if (!text) {
-            return
-        }
-        def resolved = file(text)
-        if (!resolved.exists()) {
-            return
-        }
-        if (resolved.isDirectory()) {
-            ['*.pdb', '*.cif', '*.mmcif'].each { pattern ->
-                candidates.addAll(resolved.listFiles().findAll { child -> child.name ==~ pattern.replace('*', '.*') })
-            }
-        }
-        else {
-            candidates << resolved
-        }
-    }
 
-    addPath(seedInputDir)
-    addPath(selectedInputDir)
-    addPath(seedComplexPath)
+    appendExistingStructureCandidates(candidates, seedInputDir)
+    appendExistingStructureCandidates(candidates, selectedInputDir)
+    appendExistingStructureCandidates(candidates, seedComplexPath)
 
     def normalized = candidates
         .collect { it.toString() }
@@ -195,6 +197,7 @@ process CollectPPIFlowGeneratorFiltered {
 
 workflow PPIFLOW_GENERATOR_DESIGN {
     main:
+        applyPpiFlowGeneratorDefaults()
         def seedStructures = resolveSeedStructureFiles()
         if (seedStructures.isEmpty()) {
             error("PPIFlow generator requires --ppiflow_seed_complex_path or --ppiflow_seed_input_dir")
