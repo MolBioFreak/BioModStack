@@ -70,7 +70,8 @@ models/
 !platform/api/config/models/
 platform/api/config/models/*
 !platform/api/config/models/nanopore.yaml
-apptainer/
+!platform/api/config/models/boltz_cp_experimental.yaml
+
 !platform/api/config/models/protein_cad_experimental.yaml
 !apptainer/
 apptainer/*
