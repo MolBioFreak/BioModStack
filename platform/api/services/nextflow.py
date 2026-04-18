@@ -2090,6 +2090,8 @@ def build_nextflow_command(
         profile = "boltzgen,workstation_ryzen7960x"
 
     # Resolve runtime roots explicitly so Nextflow doesn't fall back to stale defaults.
+    workflow_entrypoint = "ngs.nf" if effective_profile == "nanopore_methylation" else "main.nf"
+
     explicit_data_root = params.get("data_root")
     if not explicit_data_root:
         env_data_root = os.getenv("BMS_DATA")
@@ -2125,7 +2127,7 @@ def build_nextflow_command(
     if resume_work_dir:
         logger.info(f"Resuming job using work dir: {resume_work_dir}")
         cmd = [
-            "nextflow", "run", "main.nf",
+            "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
             "-w", resume_work_dir,
             "-resume",
@@ -2136,7 +2138,7 @@ def build_nextflow_command(
             logger.info(f"Resume cache source: {params['resume_source_dir']}")
     else:
         cmd = [
-            "nextflow", "run", "main.nf",
+            "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
             "--out_dir", output_dir,
         ]
@@ -2317,6 +2319,7 @@ def build_nextflow_command(
         'boltz_sampling_steps': 'boltz_sampling_steps',
         'boltz_num_samples': 'boltz_num_samples',
         'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
+        'boltz_max_parallel_samples': 'boltz_max_parallel_samples',
         'boltz_use_msa': 'boltz_use_msa',
         'boltz_method': 'boltz_method',
         'boltz_use_potentials': 'boltz_use_potentials',

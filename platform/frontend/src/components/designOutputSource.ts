@@ -106,6 +106,32 @@ const isImportedDesign = (design: OutputSourceDesign): boolean => {
     );
 };
 
+export const getValidationOutputLabel = (design: OutputSourceDesign): string => {
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const provenance = asRecord(design.provenance);
+    const provenanceModelId = String(provenance?.model_id || '').toLowerCase();
+    const provenanceStageFamily = String(provenance?.stage_family || '').toLowerCase();
+
+    if (
+        provenanceModelId === 'boltz2' ||
+        containsAny(stageFamily, ['boltz2']) ||
+        containsAny(provenanceStageFamily, ['boltz2'])
+    ) {
+        return 'Boltz-2';
+    }
+
+    if (
+        provenanceModelId === 'protenix' ||
+        containsAny(stageFamily, ['protenix']) ||
+        containsAny(provenanceStageFamily, ['protenix']) ||
+        hasValidationMetrics(design.confidence_metrics || null)
+    ) {
+        return 'Protenix';
+    }
+
+    return 'Validation';
+};
+
 export const inferJobOutputSource = (job: OutputSourceJob | null | undefined): OutputSourceFilter => {
     if (!job) return 'all';
 
@@ -222,6 +248,9 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
     const artifactGroup = String(design.artifact_group || '').toLowerCase();
     const artifactClass = normalizeArtifactClass(design.artifact_class);
     const metrics = design.confidence_metrics || {};
+    const provenance = asRecord(design.provenance);
+    const provenanceModelId = String(provenance?.model_id || '').toLowerCase();
+    const provenanceStageFamily = String(provenance?.stage_family || '').toLowerCase();
 
     if (isProteinLocalRedesignBackboneDesign(design)) {
         return 'all';
@@ -234,7 +263,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
     if (
         isValidatedArtifactClass(artifactClass) ||
         containsAny(stageFamily, ['validation', 'protenix', 'boltz2']) ||
-        containsAny(stageMode, ['validation', 'post_structure_validation'])
+        containsAny(provenanceStageFamily, ['validation', 'protenix', 'boltz2']) ||
+        containsAny(stageMode, ['validation', 'post_structure_validation']) ||
+        provenanceModelId === 'boltz2' ||
+        provenanceModelId === 'protenix'
     ) {
         return 'validation';
     }
@@ -545,7 +577,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     const source = inferDesignOutputSource(design);
     if (source === 'imported') return 'Imported';
     if (source === 'validation') {
-        return hasValidationMetrics(design.confidence_metrics || null) ? 'Protenix' : 'Validation';
+        return getValidationOutputLabel(design);
     }
     if (source === 'boltzgen') return 'BoltzGen';
     if (source === 'ppiflow') return 'PPIFlow';
