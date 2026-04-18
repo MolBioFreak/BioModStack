@@ -1063,6 +1063,58 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
 
 MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3
 MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50
+STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR = "RF3 is predict-only and cannot be launched in complex mode."
+
+
+def _default_structure_prediction_pred_method(model_id: str) -> str:
+    normalized_model_id = str(model_id or "").strip().lower()
+    if normalized_model_id == "rf3":
+        return "rf3"
+    if normalized_model_id == "protenix":
+        return "protenix"
+    return "boltz"
+
+
+def _normalize_structure_prediction_pred_method(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {} if params is None else params
+
+    normalized = dict(params)
+    normalized_mode = str(mode or "").strip().lower()
+    normalized_model_id = str(model_id or "").strip().lower()
+
+    structure_modes = {"predict", "complex", "structure_prediction", "structure_validation"}
+    structure_models = {"boltz2", "protenix", "rf3", "template_structure_prediction"}
+    if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
+        return normalized
+
+    requested_pred_method = str(normalized.get("pred_method") or "").strip().lower()
+    if requested_pred_method == "boltz2":
+        requested_pred_method = "boltz"
+    if not requested_pred_method:
+        requested_pred_method = _default_structure_prediction_pred_method(normalized_model_id)
+
+    if normalized_mode == "complex":
+        if requested_pred_method == "rf3" or normalized_model_id == "rf3":
+            raise HTTPException(
+                status_code=422,
+                detail={"validation_errors": [STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR]},
+            )
+        if requested_pred_method in {"both", "all", "boltz_protenix"}:
+            normalized["pred_method"] = "boltz_protenix"
+            return normalized
+        if requested_pred_method == "protenix":
+            normalized["pred_method"] = "protenix"
+            return normalized
+        normalized["pred_method"] = "boltz"
+        return normalized
+
+    normalized["pred_method"] = requested_pred_method
+    return normalized
 
 
 def _normalize_boltz_no_msa_quality_params(
@@ -4370,6 +4422,11 @@ async def create_job(
         job_data.params = _normalize_nanopore_modbase_for_validation(
             registry,
             job_data.model_id,
+            job_data.params,
+        )
+        job_data.params = _normalize_structure_prediction_pred_method(
+            job_data.model_id,
+            job_data.mode,
             job_data.params,
         )
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
