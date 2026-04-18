@@ -1,0 +1,115 @@
+# Boltz-CP experimental workflow
+
+id: boltz_cp_experimental
+name: Boltz-CP Experimental
+icon: sparkles
+color: "#F97316"
+experimental: true
+description: >
+  Experimental single-example Boltz-2 inference using DTensor context
+  parallelism (CP) across multiple GPUs. Launches directly from a prepared
+  Boltz YAML / FASTA input path or a preprocessed Boltz directory.
+goal: >
+  Surface true multi-GPU single-fold Boltz context parallelism in the BMS
+  launcher without forcing users through ad hoc shell commands.
+status: >
+  Experimental alpha. Single-node Boltz-2 CP only, expects either config_files
+  or preprocessed inputs, and currently uses the local checked-out Boltz-CP repo
+  path preset for this workstation.
+
+stages:
+  - name: Input Intake
+    tool: BMS Launcher
+    description: Capture the prepared Boltz input path and CP launch settings.
+  - name: Distributed Inference
+    tool: Boltz-CP
+    description: Run DTensor context-parallel Boltz-2 inference across the selected GPUs with torch.distributed.
+  - name: Artifact Collect
+    tool: BMS Output Collector
+    description: Flatten prediction artifacts into standard BMS output folders for review.
+
+preset_params:
+  template_model_id: boltz_cp_experimental
+  template_mode_id: design
+  bcp_repo_path: /home/dalab/tmp/boltz-cp
+  bcp_input_format: config_files
+  bcp_output_format: mmcif
+  bcp_write_full_pae: false
+
+user_params:
+  - name: input_path
+    label: Boltz Input Path
+    type: file
+    required: true
+    description: Path to a Boltz YAML / FASTA input file, directory of configs, or preprocessed Boltz directory.
+
+  - name: gpu_ids
+    label: GPU IDs
+    type: string
+    required: true
+    default: "0,1,2,3"
+    description: Comma-separated host GPU IDs to expose to the CP run on this workstation.
+
+  - name: size_cp
+    label: Context Parallel Size
+    type: integer
+    required: true
+    default: 4
+    minimum: 1
+    maximum: 16
+    description: Total number of context-parallel ranks. Must be a perfect square and divide the selected GPU count.
+
+  - name: input_format
+    label: Input Format
+    type: string
+    required: false
+    default: config_files
+    description: Set to config_files for YAML / FASTA inputs or preprocessed for a prepared Boltz directory.
+
+  - name: output_format
+    label: Output Format
+    type: string
+    required: false
+    default: mmcif
+    description: Output structure format written by Boltz-CP (mmcif or pdb).
+
+  - name: write_full_pae
+    label: Write Full PAE
+    type: boolean
+    required: false
+    default: false
+    description: Write full PAE matrices in the confidence outputs.
+
+  - name: recycling_steps
+    label: Recycling Steps
+    type: integer
+    required: false
+    default: 3
+    minimum: 1
+    maximum: 16
+    description: Number of Boltz trunk recycling iterations.
+
+  - name: sampling_steps
+    label: Sampling Steps
+    type: integer
+    required: false
+    default: 200
+    minimum: 1
+    maximum: 500
+    description: Number of diffusion denoising steps.
+
+  - name: diffusion_samples
+    label: Diffusion Samples
+    type: integer
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 32
+    description: Number of independent diffusion samples to draw.
+
+  - name: seed
+    label: Random Seed
+    type: integer
+    required: false
+    minimum: 0
+    description: Optional random seed for deterministic comparisons.

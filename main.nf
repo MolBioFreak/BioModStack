@@ -41,6 +41,7 @@ include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
 include { PROTEIN_CAD_EXPERIMENTAL } from './workflows/protein_cad_experimental.nf'
 include { CALIBY_EXPERIMENTAL } from './workflows/caliby_experimental.nf'
 include { PROTEIN_HUNTER_EXPERIMENTAL } from './workflows/protein_hunter_experimental.nf'
+include { BOLTZ_CP_EXPERIMENTAL } from './workflows/boltz_cp_experimental.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -224,6 +225,18 @@ workflow {
         println("* Num cycles: ${params.ph_num_cycles}")
 
         PROTEIN_HUNTER_EXPERIMENTAL()
+        return null
+    }
+
+    if (params.rfd_mode == 'boltz_cp_experimental') {
+        println("Running Boltz-CP Experimental Workflow")
+        println("* Input path: ${params.bcp_input_path}")
+        println("* GPU IDs: ${params.bcp_gpu_ids ?: '0,1,2,3'}")
+        println("* Context parallel size: ${params.bcp_size_cp ?: 4}")
+        println("* Input format: ${params.bcp_input_format ?: 'config_files'}")
+        println("* Sampling steps: ${params.bcp_sampling_steps ?: 200}")
+
+        BOLTZ_CP_EXPERIMENTAL()
         return null
     }
 
