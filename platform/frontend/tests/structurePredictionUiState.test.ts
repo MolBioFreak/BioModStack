@@ -2,15 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    buildBoltzCpSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
+    deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
     inferTargetStructureFormat,
     resolveBoltzSamplingStepsFromSlider,
+    resolveStructureLaunchConfig,
     resolveStructurePredictorSelection,
+    resolveStructureSubmitTarget,
     resolveTargetPreviewSource,
 } from '../src/components/structurePredictionUiState.js';
 
@@ -54,6 +58,104 @@ test('complex mode rejects RF3-only selections instead of silently lying about s
 
     assert.equal(resolved.valid, false);
     assert.match(resolved.error || '', /predict-only/i);
+});
+
+test('boltz cp experimental launch config locks the structure template into single-fold boltz mode', () => {
+    const config = resolveStructureLaunchConfig({
+        template_model_id: 'boltz_cp_experimental',
+        structure_launch_variant: 'boltz_cp_experimental',
+    });
+
+    assert.equal(config.variant, 'boltz_cp_experimental');
+    assert.equal(config.submitModelId, 'boltz_cp_experimental');
+    assert.equal(config.submitMode, 'design');
+    assert.equal(config.allowPredictorSelection, false);
+    assert.equal(config.showParallelJobs, false);
+    assert.equal(config.showSequenceBatch, false);
+    assert.equal(config.showMsaControls, false);
+    assert.equal(config.forcedPredictor, 'boltz');
+});
+
+test('structure submit target preserves native predictor routing but forces boltz cp experimental onto its workflow identity', () => {
+    const defaultConfig = resolveStructureLaunchConfig({ template_model_id: 'boltz2' });
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: defaultConfig,
+            predictionMode: 'complex',
+            predictorSelection: 'protenix',
+        }),
+        { modelId: 'protenix', mode: 'complex' },
+    );
+
+    const cpConfig = resolveStructureLaunchConfig({
+        template_model_id: 'boltz_cp_experimental',
+        structure_launch_variant: 'boltz_cp_experimental',
+    });
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: cpConfig,
+            predictionMode: 'complex',
+            predictorSelection: 'boltz',
+        }),
+        { modelId: 'boltz_cp_experimental', mode: 'design' },
+    );
+});
+
+test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {
+    assert.deepEqual(
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: undefined }),
+        { gpuIds: '0,1,2,3', sizeCp: 4 },
+    );
+
+    assert.deepEqual(
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 2, 3], requestedSizeCp: undefined }),
+        { gpuIds: '0,2,3', sizeCp: 1 },
+    );
+
+    assert.deepEqual(
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: 9, fallbackGpuIds: '0,1,2,3' }),
+        { gpuIds: '0,1,2,3', sizeCp: 4 },
+    );
+});
+
+test('boltz cp submit params expose only the workflow-specific knobs on top of shared structure inputs', () => {
+    assert.deepEqual(
+        buildBoltzCpSubmitParams({
+            outputFormat: 'pdb',
+            writeFullPae: true,
+            seed: '17',
+            gpuIds: '0,1,2,3',
+            sizeCp: 4,
+        }),
+        {
+            structure_launch_variant: 'boltz_cp_experimental',
+            num_parallel_jobs: 1,
+            bcp_input_format: 'config_files',
+            bcp_output_format: 'pdb',
+            bcp_write_full_pae: true,
+            bcp_gpu_ids: '0,1,2,3',
+            bcp_size_cp: 4,
+            bcp_seed: 17,
+        },
+    );
+
+    assert.deepEqual(
+        buildBoltzCpSubmitParams({
+            outputFormat: 'mmcif',
+            writeFullPae: false,
+            seed: '  ',
+            gpuIds: '',
+            sizeCp: 1,
+        }),
+        {
+            structure_launch_variant: 'boltz_cp_experimental',
+            num_parallel_jobs: 1,
+            bcp_input_format: 'config_files',
+            bcp_output_format: 'mmcif',
+            bcp_write_full_pae: false,
+            bcp_size_cp: 1,
+        },
+    );
 });
 
 test('boltz quality slider treats 200-step runs as the max preset and preserves legacy 1000-step runs as custom', () => {
