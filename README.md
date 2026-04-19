@@ -154,11 +154,19 @@ From the repo root:
 ./start_ui.sh
 ```
 
+`start_ui.sh` now installs and manages dedicated `systemd --user` units for
+`biomodstack-api.service` and `biomodstack-frontend.service`. The shell entrypoint
+remains stable, but the API/frontend no longer live under the launcher or GTK panel
+process scope.
+
 Optional local desktop launcher:
 
 ```bash
 ./start_ui_gui.sh
 ```
+
+The GTK panel / tray are control surfaces only. They should start, stop, and restart
+services through `systemctl --user`, not own the backend process lifetime.
 
 Default local URLs:
 
@@ -200,6 +208,7 @@ Canonical docs:
 - [Structure Design and Refinement](docs/Structure_Design_and_Refinement.md)
 - [Lab Automation, Mol Bio, and Sequencing](docs/Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](docs/Results_and_Analysis.md)
+- [Desktop Runtime and Shell Architecture](docs/Desktop_Runtime_and_Shell_Architecture.md)
 - [Documentation Harmonization Strategy](docs/Documentation_Harmonization_Strategy.md)
 
 Platform-specific docs:
