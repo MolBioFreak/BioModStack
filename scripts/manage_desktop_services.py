@@ -11,8 +11,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from biomodstack_services import (  # noqa: E402
     API_LOG,
+    CORE_RUNTIME_LOG,
     FRONTEND_LOG,
     ServiceManagerError,
+    resolve_runtime_mode,
     restart_all,
     restart_api,
     start_all,
@@ -38,23 +40,30 @@ def notify(message: str, icon: str = NOTIFY_ICON) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument("action", choices=["start", "stop", "restart", "restart-api", "status"])
+    parser.add_argument(
+        "--runtime",
+        choices=["dev", "container"],
+        help="runtime mode to manage (defaults to BMS_RUNTIME_MODE or dev)",
+    )
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
     args = parser.parse_args()
+
+    runtime_mode = resolve_runtime_mode(args.runtime)
 
     try:
         if args.action == "start":
             if args.notify:
                 notify("🚀 Starting BioModStack services…")
-            start_all()
+            start_all(runtime_mode=runtime_mode)
             if args.notify:
                 notify("✅ BioModStack services are running")
-            print("\n".join(status_lines()))
+            print("\n".join(status_lines(runtime_mode=runtime_mode)))
             return 0
 
         if args.action == "stop":
             if args.notify:
                 notify("🛑 Stopping BioModStack services…", icon="dialog-warning")
-            stop_all()
+            stop_all(runtime_mode=runtime_mode)
             if args.notify:
                 notify("✅ BioModStack services stopped", icon="dialog-information")
             print("Stopped BioModStack services")
@@ -63,24 +72,30 @@ def main() -> int:
         if args.action == "restart":
             if args.notify:
                 notify("♻️ Restarting BioModStack services…", icon="view-refresh")
-            restart_all()
+            restart_all(runtime_mode=runtime_mode)
             if args.notify:
                 notify("✅ BioModStack services restarted", icon="dialog-information")
-            print("\n".join(status_lines()))
+            print("\n".join(status_lines(runtime_mode=runtime_mode)))
             return 0
 
         if args.action == "restart-api":
             if args.notify:
                 notify("🔄 Restarting BioModStack API…", icon="view-refresh")
-            restart_api()
+            restart_api(runtime_mode=runtime_mode)
             if args.notify:
                 notify("✅ BioModStack API restarted", icon="dialog-information")
-            print(f"API log: {API_LOG}")
+            if runtime_mode == "container":
+                print(f"Core runtime log: {CORE_RUNTIME_LOG}")
+            else:
+                print(f"API log: {API_LOG}")
             return 0
 
         if args.action == "status":
-            print("\n".join(status_lines()))
-            print(f"Frontend log: {FRONTEND_LOG}")
+            print("\n".join(status_lines(runtime_mode=runtime_mode)))
+            if runtime_mode == "container":
+                print(f"Core runtime log: {CORE_RUNTIME_LOG}")
+            else:
+                print(f"Frontend log: {FRONTEND_LOG}")
             return 0
     except ServiceManagerError as exc:
         if args.notify:

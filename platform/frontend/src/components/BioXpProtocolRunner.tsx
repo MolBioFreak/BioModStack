@@ -9,6 +9,7 @@ import {
     useReviewProtocolJob,
 } from '../lib/bioxpClient';
 import { BioXpArtifactsPanel } from './BioXpArtifactsPanel';
+import type { BioXpRuntimeSummary } from './bioxpConnectionSemantics.js';
 
 const DEFAULT_REMOTE_XML_PATH = '/home/molbiofreak/bioxp_re/testdata/oem_xml/demo.xml';
 const DEFAULT_REMOTE_LIFETEST_XML_PATH = '/home/molbiofreak/bioxp_re/testdata/oem_xml/lifetest.xml';
@@ -168,12 +169,10 @@ const ProtocolJobRow = ({
 
 export const BioXpProtocolRunner = ({
     linkageConfigured,
-    daemonState,
-    daemonStatusHelp,
+    runtimeSummary,
 }: {
     linkageConfigured: boolean;
-    daemonState?: string;
-    daemonStatusHelp?: string | null;
+    runtimeSummary: BioXpRuntimeSummary;
 }) => {
     const [sourceType, setSourceType] = useState<'oem_xml' | 'native'>('oem_xml');
     const [xmlPath, setXmlPath] = useState(DEFAULT_REMOTE_XML_PATH);
@@ -275,11 +274,15 @@ export const BioXpProtocolRunner = ({
                         <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${linkageConfigured ? 'bg-success/10 text-success border-success/30' : 'bg-error/10 text-error border-error/30'}`}>
                             LINKAGE: {linkageConfigured ? 'CONFIGURED' : 'MISSING'}
                         </div>
-                        <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${daemonState === 'running' || daemonState === 'inferred' || daemonState === 'proxy-running' ? 'bg-success/10 text-success border-success/30' : daemonState === 'stopped' ? 'bg-error/10 text-error border-error/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
-                            DAEMON: {(daemonState ?? 'unknown').toUpperCase()}
+                        <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${runtimeSummary.badgeClassName}`}>
+                            RUNTIME: {runtimeSummary.label}
+                        </div>
+                        <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${runtimeSummary.adminControlAvailable ? 'bg-accent/10 text-accent border-accent/30' : 'bg-surface border-border-primary text-content-muted'}`}>
+                            ADMIN: {runtimeSummary.adminLabel}
                         </div>
                     </div>
-                    {daemonStatusHelp ? <div className="text-xs text-content-muted">{daemonStatusHelp}</div> : null}
+                    {runtimeSummary.detail ? <div className="text-xs text-content-muted">{runtimeSummary.detail}</div> : null}
+                    <div className="text-xs text-content-muted">{runtimeSummary.adminDetail}</div>
 
                     <div className="flex flex-wrap gap-2">
                         <button
@@ -323,7 +326,7 @@ export const BioXpProtocolRunner = ({
                                 </button>
                             </div>
                             <div className="text-[11px] text-content-muted">
-                                XML paths are resolved on the robot daemon host, not on the browser machine.
+                                XML paths are resolved on the robot runtime host, not on the browser machine.
                             </div>
                         </div>
                     ) : (
@@ -352,7 +355,7 @@ export const BioXpProtocolRunner = ({
                         <div className="text-xs text-error">{payloadState.validationError}</div>
                     ) : null}
                     {!linkageConfigured ? (
-                        <div className="text-xs text-error">Configure a BioXP daemon linkage first. The operator surface delegates to the robot-local protocol API.</div>
+                        <div className="text-xs text-error">Configure a BioXP runtime linkage first. The operator surface delegates to the robot-local protocol API.</div>
                     ) : null}
                     {(compileProtocol.isError || executeProtocol.isError || reviewProtocolJob.isError) ? (
                         <div className="text-xs text-error">
