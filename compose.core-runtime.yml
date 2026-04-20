@@ -15,7 +15,7 @@ services:
       BMS_COLABFOLD_DB: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db
       BMS_MSA_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache
       BMS_SABDAB_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1,https://compute-node.taileb3a90.ts.net}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1}
       BMS_CORE_RUNTIME_MODE: ${BMS_CORE_RUNTIME_MODE:-1}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BIOXP_SERVER_URL: ${BIOXP_SERVER_URL:-}
