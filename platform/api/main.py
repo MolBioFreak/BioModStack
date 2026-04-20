@@ -107,7 +107,8 @@ async def add_private_network_access_header(request: Request, call_next):
         response.headers["Access-Control-Allow-Private-Network"] = "true"
     return response
 
-# CORS for frontend dev + remote access
+# CORS for localhost dev + local Cordova/web shells.
+# Add remote wrapper origins explicitly via CORS_ORIGINS when needed.
 default_origins = [
     "http://localhost",
     "https://localhost",
@@ -118,7 +119,6 @@ default_origins = [
     "http://localhost:5173",
     "https://localhost:3000",
     "https://localhost:5173",
-    "https://compute-node.taileb3a90.ts.net",
 ]
 env_origins = os.getenv("CORS_ORIGINS")
 allowed_origins = [o.strip() for o in env_origins.split(",")] if env_origins else default_origins

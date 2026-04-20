@@ -21,7 +21,6 @@ DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "https://localhost:5173",
     "https://127.0.0.1",
-    "https://compute-node.taileb3a90.ts.net",
 ]
 DEFAULT_WORKFLOW_ADAPTER_URL = "http://127.0.0.1:8001"
 DEFAULT_COMPOSE_PROJECT_NAME = "biomodstack-core-runtime"
