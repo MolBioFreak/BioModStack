@@ -1,5 +1,6 @@
 #!/bin/bash
-# BioModStack GUI Launcher - Starts services and opens browser
+# BioModStack browser launcher - starts services and opens the web UI.
+# For the Electron shell, use ./start_ui_electron.sh instead.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"

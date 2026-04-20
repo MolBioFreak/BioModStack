@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import sys
 from pathlib import Path
 
@@ -29,6 +30,23 @@ class _ExplodingSession:
         raise AssertionError("database should not be touched when core-runtime mode blocks workflow launches")
 
 
+def test_runtime_policy_imports_without_services_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_CORE_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+
+    for module_name in (
+        "runtime_policy",
+        "services",
+        "services.nextflow",
+        "services.workflow_adapter",
+    ):
+        sys.modules.pop(module_name, None)
+
+    imported = importlib.import_module("runtime_policy")
+
+    assert imported.workflow_launches_allowed() is True
+
+
 def test_invalid_core_runtime_mode_value_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "banana")
 
@@ -41,6 +59,24 @@ def test_blank_core_runtime_mode_value_disables_guard(monkeypatch: pytest.Monkey
 
     assert runtime_policy.core_runtime_mode_enabled() is False
     assert runtime_policy.workflow_launches_allowed() is True
+
+
+def test_core_runtime_mode_with_adapter_allows_workflow_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://host.docker.internal:8001")
+
+    assert runtime_policy.core_runtime_mode_enabled() is True
+    assert runtime_policy.workflow_launches_allowed() is True
+
+
+def test_guard_message_mentions_adapter_requirement_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+
+    detail = runtime_policy.workflow_launch_block_detail("launch workflows")
+
+    assert "adapter" in detail.lower()
+    assert "host-native" in detail.lower()
 
 
 @pytest.mark.asyncio

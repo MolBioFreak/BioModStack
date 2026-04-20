@@ -154,9 +154,9 @@ From the repo root:
 ./start_ui.sh
 ```
 
-`start_ui.sh` installs and manages dedicated `systemd --user` units. In dev mode it uses
-`biomodstack-api.service` and `biomodstack-frontend.service`. For the new containerized core
-runtime, use:
+`start_ui.sh` is the service-control entrypoint. It installs and manages dedicated
+`systemd --user` units. In dev mode it uses `biomodstack-api.service` and
+`biomodstack-frontend.service`. For the new containerized core runtime, use:
 
 ```bash
 ./start_ui.sh start --runtime container
@@ -166,6 +166,17 @@ runtime, use:
 
 That container mode launches `biomodstack-core-runtime.service`, which in turn runs the
 repo-native compose stack from `compose.core-runtime.yml`.
+
+To manually raise a UI surface after starting services, use the launcher entrypoints:
+
+```bash
+python3 scripts/launch_biomodstack_ui.py --surface browser --runtime container
+./start_ui_electron.sh --runtime container
+```
+
+`start_ui_electron.sh` is an additive opt-in wrapper around
+`python3 scripts/launch_biomodstack_ui.py --surface electron ...`. It keeps
+`start_ui.sh` service-control-only while making the Electron shell discoverable.
 
 Important current Phase 1 boundary:
 - container mode is the portable web/control-plane runtime

@@ -79,8 +79,10 @@ The service-layer/control split now lives in these files:
   - used by `biomodstack-core-runtime.service`
 - `docker/api.Dockerfile`, `docker/web.Dockerfile`, `docker/web/nginx.conf`
   - first-wave container scaffold for `bms-api` and `bms-web`
-- `start_ui.sh`, `restart_api.sh`, `stop_services.sh`
+- `start_ui.sh`, `start_ui_electron.sh`, `restart_api.sh`, `stop_services.sh`
   - stable shell entrypoints preserved for operators and desktop launchers
+  - `start_ui.sh` remains service control only
+  - `start_ui_electron.sh` is the additive opt-in Electron shell launcher
 - `biomodstack_panel.py`, `biomodstack_tray.py`
   - GUI control surfaces that should remain clients of the service layer
 
