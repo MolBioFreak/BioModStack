@@ -1,7 +1,7 @@
-# Boltz-CP experimental workflow
+# Fold-CP experimental workflow
 
 id: boltz_cp_experimental
-name: Boltz-CP Experimental
+name: Fold-CP Experimental
 icon: sparkles
 color: "#F97316"
 experimental: true
@@ -15,14 +15,14 @@ goal: >
 status: >
   Experimental alpha. Single-node Boltz-2 CP only. Canonical sequence/complex
   inputs are staged into Boltz config_files automatically, and the local
-  checked-out Boltz-CP repo path remains preset for this workstation.
+  checked-out Fold-CP repo path remains preset for this workstation.
 
 stages:
   - name: Input Intake
     tool: BMS Launcher
     description: Capture canonical structure-launcher inputs and CP launch settings.
   - name: Distributed Inference
-    tool: Boltz-CP
+    tool: Fold-CP
     description: Run DTensor context-parallel Boltz-2 inference across the selected GPUs with torch.distributed.
   - name: Artifact Collect
     tool: BMS Output Collector
