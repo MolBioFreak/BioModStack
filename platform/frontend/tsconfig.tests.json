@@ -12,6 +12,7 @@
   },
   "include": [
     "src/components/designOutputSource.ts",
+    "src/runtime/navigation.ts",
     "tests/**/*.ts"
   ]
 }

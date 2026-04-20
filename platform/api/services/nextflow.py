@@ -43,6 +43,7 @@ from antibody_pipeline_contract import (
 )
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .gpu_config import read_scheduler_config
+from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
@@ -1505,6 +1506,7 @@ async def launch_nextflow_job(
     
     This runs in a background task and updates the database with status.
     """
+    assert_workflow_launch_allowed("launch workflow jobs")
     from database import async_session, Job
     from sqlalchemy import select
     from schemas import JobStatus
@@ -2105,6 +2107,7 @@ def launch_nextflow_job_detached(
     This closes the race where the orchestrator marks a job running before the
     launcher has created the subprocess or registered it in _running_processes.
     """
+    assert_workflow_launch_allowed("launch workflow jobs from the scheduler")
     _launching_jobs.add(job_id)
 
     async def _runner() -> None:
