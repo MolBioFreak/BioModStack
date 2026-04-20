@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import analyses, analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from services.analysis_worker import AnalysisWorker
 from services.gpu_orchestrator import GPUOrchestrator
@@ -109,6 +109,11 @@ async def add_private_network_access_header(request: Request, call_next):
 
 # CORS for frontend dev + remote access
 default_origins = [
+    "http://localhost",
+    "https://localhost",
+    "http://127.0.0.1",
+    "https://127.0.0.1",
+    "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://localhost:5173",
     "https://localhost:3000",
@@ -152,6 +157,7 @@ app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
 app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
 app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
+app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
 async def health_check():

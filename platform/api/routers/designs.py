@@ -18,7 +18,7 @@ from pathlib import Path
 import math
 
 from database import get_session, Design, Job
-from paths import to_allowed_relative
+from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
@@ -1231,7 +1231,7 @@ def _compute_fampnn_response_metrics(
         has_fampnn_hints = avg_psce is not None or bool(payload_records) or str(getattr(design, "stage_family", "") or "").strip().lower() == "fampnn"
         if has_fampnn_hints and design.pdb_path:
             try:
-                chain_profiles = get_per_chain_fampnn_psce(Path(design.pdb_path))
+                chain_profiles = get_per_chain_fampnn_psce(resolve_runtime_data_path(design.pdb_path))
             except Exception:
                 chain_profiles = {}
             residue_psces: List[float] = []
@@ -1278,7 +1278,7 @@ def _compute_binder_sequence_response_value(
     if not include_structure_fallback or not design.pdb_path:
         return None
 
-    structure_path = Path(design.pdb_path)
+    structure_path = resolve_runtime_data_path(design.pdb_path)
     if not structure_path.exists():
         return None
 
@@ -2000,7 +2000,7 @@ async def get_design_pdb(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No PDB file for this design")
     
-    pdb_path = Path(design.pdb_path)
+    pdb_path = resolve_runtime_data_path(design.pdb_path)
     return _structure_file_response(pdb_path, design.name)
 
 
@@ -2030,7 +2030,7 @@ async def get_design_source_pdb(
     if not source_pdb_path:
         raise HTTPException(status_code=404, detail="No source structure recorded for this design")
 
-    return _structure_file_response(Path(source_pdb_path), source_design_name)
+    return _structure_file_response(resolve_runtime_data_path(source_pdb_path), source_design_name)
 
 
 class ResidueMetrics(BaseModel):
@@ -2253,7 +2253,7 @@ async def get_structure_analysis(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
-    structure_path = Path(design.pdb_path)
+    structure_path = resolve_runtime_data_path(design.pdb_path)
     if not structure_path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
@@ -2312,7 +2312,7 @@ async def compare_structures(
     if not design1.pdb_path or not design2.pdb_path:
         raise HTTPException(status_code=404, detail="One or both designs missing structure files")
     
-    path1, path2 = Path(design1.pdb_path), Path(design2.pdb_path)
+    path1, path2 = resolve_runtime_data_path(design1.pdb_path), resolve_runtime_data_path(design2.pdb_path)
     if not path1.exists() or not path2.exists():
         raise HTTPException(status_code=404, detail="Structure files not found on disk")
     
@@ -2470,7 +2470,7 @@ async def get_design_imgt_pdb(
     if not design or not design.pdb_path:
         raise HTTPException(status_code=404, detail="Design not found or no PDB")
     
-    pdb_path = Path(design.pdb_path)
+    pdb_path = resolve_runtime_data_path(design.pdb_path)
     imgt_path = pdb_path.parent / f"{pdb_path.stem}_imgt.pdb"
     
     if not imgt_path.exists():
@@ -2494,7 +2494,7 @@ async def get_antifold_logits(
     if not design or not design.antifold_logits_path:
         raise HTTPException(status_code=404, detail="No AntiFold data for this design")
         
-    path = Path(design.antifold_logits_path)
+    path = resolve_runtime_data_path(design.antifold_logits_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Logits file not found")
         
@@ -2534,7 +2534,7 @@ async def get_contact_map(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
-    structure_path = Path(design.pdb_path)
+    structure_path = resolve_runtime_data_path(design.pdb_path)
     if not structure_path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
@@ -2680,7 +2680,7 @@ async def export_fasta(
         seq = _compute_binder_sequence_response_value(d, include_structure_fallback=True)
         if d.pdb_path:
             try:
-                structure_path = Path(d.pdb_path)
+                structure_path = resolve_runtime_data_path(d.pdb_path)
                 if structure_path.exists():
                     sequences = extract_sequence_from_pdb(str(structure_path))
                     detected_binder_chains = {

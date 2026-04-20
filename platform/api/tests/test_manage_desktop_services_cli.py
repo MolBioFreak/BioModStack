@@ -105,3 +105,16 @@ def test_notify_failures_do_not_mask_service_errors(monkeypatch, capsys) -> None
 
     assert module.main() == 1
     assert "ERROR: boom" in capsys.readouterr().err
+
+
+def test_start_defaults_to_container_runtime_when_flag_omitted(monkeypatch, capsys) -> None:
+    module = load_module()
+    started: list[str] = []
+    monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
+    monkeypatch.setattr(module, "start_all", lambda runtime_mode=None: started.append(runtime_mode or "missing"))
+    monkeypatch.setattr(module, "status_lines", lambda runtime_mode=None: [f"runtime={runtime_mode}"])
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "start"])
+
+    assert module.main() == 0
+    assert started == ["container"]
+    assert capsys.readouterr().out.splitlines() == ["runtime=container"]

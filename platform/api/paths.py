@@ -56,6 +56,43 @@ def get_data_root() -> Path:
     return Path(str(_runtime_paths()["data_root"]))
 
 
+def resolve_runtime_data_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser().resolve()
+    if candidate.exists():
+        return candidate
+
+    current_data_root = get_data_root().resolve()
+    alias_roots: list[Path] = [current_data_root]
+
+    container_state_path = str(_runtime_paths().get("container_state_path") or "").strip()
+    if container_state_path:
+        alias_roots.append(Path(container_state_path).expanduser().resolve())
+
+    alias_roots.extend(root.expanduser().resolve() for root in _candidate_data_roots())
+
+    seen: set[str] = set()
+    ordered_alias_roots: list[Path] = []
+    for root in alias_roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered_alias_roots.append(root)
+
+    for alias_root in ordered_alias_roots:
+        if alias_root == current_data_root:
+            continue
+        try:
+            relative_path = candidate.relative_to(alias_root)
+        except ValueError:
+            continue
+        remapped = (current_data_root / relative_path).resolve()
+        if remapped.exists():
+            return remapped
+
+    return candidate
+
+
 def get_inputs_dir() -> Path:
     return Path(str(_runtime_paths()["inputs_dir"]))
 
@@ -70,6 +107,13 @@ def get_analysis_cache_dir() -> Path:
 
 def get_work_dir() -> Path:
     return get_data_root() / "work"
+
+
+def get_mobile_ui_updates_dir() -> Path:
+    env = os.getenv("BMS_MOBILE_UI_UPDATES_DIR")
+    if env:
+        return _resolve_path(env)
+    return get_data_root() / "mobile-ui-updates"
 
 
 def get_container_dir() -> Path:

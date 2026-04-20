@@ -6,14 +6,14 @@ import {
   shouldDisableGpuAcceleration,
 } from '../src/graphicsWorkarounds.js';
 
-test('shouldDisableGpuAcceleration defaults to Linux X11 only', () => {
-  assert.equal(shouldDisableGpuAcceleration({ platform: 'linux', env: { XDG_SESSION_TYPE: 'x11' } }), true);
+test('shouldDisableGpuAcceleration stays off by default across platforms and session types', () => {
+  assert.equal(shouldDisableGpuAcceleration({ platform: 'linux', env: { XDG_SESSION_TYPE: 'x11' } }), false);
   assert.equal(shouldDisableGpuAcceleration({ platform: 'linux', env: { XDG_SESSION_TYPE: 'wayland' } }), false);
   assert.equal(shouldDisableGpuAcceleration({ platform: 'darwin', env: { XDG_SESSION_TYPE: 'x11' } }), false);
   assert.equal(shouldDisableGpuAcceleration({ platform: 'win32', env: { XDG_SESSION_TYPE: 'x11' } }), false);
 });
 
-test('BMS_ELECTRON_DISABLE_GPU overrides the Linux X11 default', () => {
+test('BMS_ELECTRON_DISABLE_GPU remains an explicit override', () => {
   assert.equal(
     shouldDisableGpuAcceleration({
       platform: 'linux',
@@ -30,7 +30,7 @@ test('BMS_ELECTRON_DISABLE_GPU overrides the Linux X11 default', () => {
   );
 });
 
-test('applyShellGraphicsWorkarounds disables hardware acceleration when the mitigation is active', () => {
+test('applyShellGraphicsWorkarounds disables hardware acceleration only when the explicit override is active', () => {
   let disabled = 0;
 
   const applied = applyShellGraphicsWorkarounds(
@@ -39,7 +39,7 @@ test('applyShellGraphicsWorkarounds disables hardware acceleration when the miti
         disabled += 1;
       },
     },
-    { platform: 'linux', env: { XDG_SESSION_TYPE: 'x11' } },
+    { platform: 'linux', env: { XDG_SESSION_TYPE: 'x11', BMS_ELECTRON_DISABLE_GPU: '1' } },
   );
 
   assert.equal(applied, true);

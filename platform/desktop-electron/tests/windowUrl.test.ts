@@ -35,6 +35,10 @@ test('browser window options keep the renderer hardened, persistent, and expose 
     'restartAll',
     'restartApi',
     'openInBrowser',
+    'getZoomFactor',
+    'setZoomFactor',
+    'adjustZoom',
+    'resetZoom',
   ]);
   assert.equal(options.webPreferences?.preload, '/tmp/biomodstack-preload.js');
   assert.equal(options.webPreferences?.contextIsolation, true);

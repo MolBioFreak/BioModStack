@@ -38,6 +38,11 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
+    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1,https://compute-node.taileb3a90.ts.net}"
+    assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
+    assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
+    assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
+    assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert "BIOXP_SERVER_URL" in api["environment"]
 
     web = compose["services"]["bms-web"]
@@ -93,6 +98,7 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
     for required in [
         "BMS_STATE_DIR=",
         "BMS_CONTAINER_STATE_PATH=",
+        "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1,https://compute-node.taileb3a90.ts.net",
         "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BIOXP_SERVER_URL=",

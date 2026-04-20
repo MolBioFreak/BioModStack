@@ -65,6 +65,12 @@ def test_build_launch_ui_command_rejects_unknown_surface(tmp_path: Path) -> None
         services.build_launch_ui_command(project_root=project_root, surface="sideways")
 
 
+def test_resolve_runtime_mode_defaults_to_container_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
+
+    assert services.resolve_runtime_mode() == services.CONTAINER_RUNTIME_MODE
+
+
 def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "repo"
     monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: name == services.API_SERVICE)
@@ -219,8 +225,8 @@ def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
     written = services.install_user_units(project_root=project_root, systemd_dir=user_dir)
 
     assert {path.name for path in written} == {
-        services.API_SERVICE,
-        services.FRONTEND_SERVICE,
+        services.WORKFLOW_ADAPTER_SERVICE,
+        services.CORE_RUNTIME_SERVICE,
         services.TARGET_UNIT,
     }
     for path in written:
@@ -270,14 +276,42 @@ def test_biomodstack_frontend_process_detection_uses_cmdline_or_cwd(tmp_path: Pa
     )
 
 
-def test_listener_pids_parses_fuser_output(monkeypatch) -> None:
+def test_listener_pids_prefers_lsof_listeners_over_fuser_matches(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
     def fake_run(args, **kwargs):
-        assert args == ["fuser", "-n", "tcp", str(services.API_PORT)]
-        return SimpleNamespace(stdout=f"{services.API_PORT}/tcp: 9100 9101\n", stderr="", returncode=0)
+        calls.append(args)
+        if args[:2] == ["lsof", "-ti"]:
+            return SimpleNamespace(stdout="", stderr="", returncode=1)
+        if args == ["fuser", "-n", "tcp", str(services.API_PORT)]:
+            return SimpleNamespace(stdout=f"{services.API_PORT}/tcp: 9100\n", stderr="", returncode=0)
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+
+    assert services.listener_pids(services.API_PORT) == []
+    assert calls[0] == ["lsof", "-ti", f"tcp:{services.API_PORT}", "-sTCP:LISTEN"]
+
+
+
+def test_listener_pids_falls_back_to_fuser_when_lsof_missing(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ["lsof", "-ti"]:
+            raise FileNotFoundError("lsof")
+        if args == ["fuser", "-n", "tcp", str(services.API_PORT)]:
+            return SimpleNamespace(stdout=f"{services.API_PORT}/tcp: 9100 9101\n", stderr="", returncode=0)
+        raise AssertionError(f"unexpected command: {args}")
 
     monkeypatch.setattr(services.subprocess, "run", fake_run)
 
     assert services.listener_pids(services.API_PORT) == [9100, 9101]
+    assert calls == [
+        ["lsof", "-ti", f"tcp:{services.API_PORT}", "-sTCP:LISTEN"],
+        ["fuser", "-n", "tcp", str(services.API_PORT)],
+    ]
 
 
 def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_path: Path) -> None:

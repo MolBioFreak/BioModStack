@@ -4,7 +4,7 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
@@ -45,6 +45,12 @@ import {
     sequenceUnitLabel,
 } from './utils/nucleotides';
 import { dedupeFeatures, featureBounds } from './utils/features';
+import {
+    MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
+    clampMolBioPanelWidth,
+    getDefaultMolBioToolPanelWidth,
+    resolveMolBioViewerLayout,
+} from './utils/viewerLayout';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -60,6 +66,7 @@ interface SequenceLibraryProps {
     onOpenModal: () => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
+    width: number;
 }
 
 function SequenceLibrary({
@@ -71,12 +78,16 @@ function SequenceLibrary({
     onRefresh,
     onOpenModal,
     onLoadDemo,
-    loading
+    loading,
+    width
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
 
     return (
-        <div className="sequence-library w-64 flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden">
+        <div
+            className="sequence-library flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden"
+            style={{ width: `${width}px` }}
+        >
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
                     <h3 className="font-semibold text-slate-200">Construct Shelf</h3>
@@ -1105,12 +1116,41 @@ export function MolBioToolkitV2() {
 
     // View mode state (for circular view toggle)
     type ViewMode = 'linear' | 'circular' | 'both';
+    type ResizeHandleSide = 'left' | 'right';
     const [viewMode, setViewMode] = useState<ViewMode>('both');
+    const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
+    const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(false);
+    const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(false);
+    const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth));
+    const [leftPanelWidth, setLeftPanelWidth] = useState(MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH);
+    const [rightPanelWidth, setRightPanelWidth] = useState(() => getDefaultMolBioToolPanelWidth('view'));
+    const resizeStateRef = useRef<{
+        side: ResizeHandleSide;
+        pointerX: number;
+        startWidth: number;
+    } | null>(null);
 
     // GC track visibility state
     const [showGCTrack, setShowGCTrack] = useState(true);
     const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
     const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
+    const viewerLayout = useMemo(() => resolveMolBioViewerLayout({
+        activePanel,
+        viewportWidth,
+        leftPanelWidth,
+        rightPanelWidth,
+        isViewerFullscreen,
+        isLibraryPanelCollapsed,
+        isToolPanelCollapsed,
+    }), [
+        activePanel,
+        viewportWidth,
+        leftPanelWidth,
+        rightPanelWidth,
+        isViewerFullscreen,
+        isLibraryPanelCollapsed,
+        isToolPanelCollapsed,
+    ]);
 
     useEffect(() => {
         let cancelled = false;
@@ -1156,6 +1196,94 @@ export function MolBioToolkitV2() {
             setPrimerTmSettings(primerTmOptions.defaults[preferredSequenceType]);
         }
     }, [primerTmOptions, primerTmSettings.algorithm, sequenceData.sequenceType]);
+
+    useEffect(() => {
+        const handleWindowResize = () => setViewportWidth(window.innerWidth);
+        handleWindowResize();
+        window.addEventListener('resize', handleWindowResize);
+        return () => window.removeEventListener('resize', handleWindowResize);
+    }, []);
+
+    useEffect(() => {
+        setRightPanelWidth(getDefaultMolBioToolPanelWidth(activePanel));
+    }, [activePanel]);
+
+    useEffect(() => {
+        if (!isViewerFullscreen) {
+            return undefined;
+        }
+
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsViewerFullscreen(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isViewerFullscreen]);
+
+    useEffect(() => {
+        const handlePointerMove = (event: PointerEvent) => {
+            const resizeState = resizeStateRef.current;
+            if (!resizeState) {
+                return;
+            }
+
+            if (resizeState.side === 'left') {
+                setLeftPanelWidth(clampMolBioPanelWidth(
+                    resizeState.startWidth + (event.clientX - resizeState.pointerX),
+                    viewerLayout.leftPanelBounds,
+                ));
+                return;
+            }
+
+            setRightPanelWidth(clampMolBioPanelWidth(
+                resizeState.startWidth - (event.clientX - resizeState.pointerX),
+                viewerLayout.rightPanelBounds,
+            ));
+        };
+
+        const stopResize = () => {
+            resizeStateRef.current = null;
+        };
+
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', stopResize);
+        window.addEventListener('pointercancel', stopResize);
+        return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', stopResize);
+            window.removeEventListener('pointercancel', stopResize);
+        };
+    }, [viewerLayout.leftPanelBounds, viewerLayout.rightPanelBounds]);
+
+    const startPanelResize = useCallback((side: ResizeHandleSide) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        resizeStateRef.current = {
+            side,
+            pointerX: event.clientX,
+            startWidth: side === 'left' ? viewerLayout.leftPanelWidth : viewerLayout.rightPanelWidth,
+        };
+    }, [viewerLayout.leftPanelWidth, viewerLayout.rightPanelWidth]);
+
+    const toggleViewerFullscreen = useCallback(() => {
+        setIsViewerFullscreen((current) => !current);
+    }, []);
+
+    const toggleLibraryPanel = useCallback(() => {
+        setIsLibraryPanelCollapsed((current) => !current);
+    }, []);
+
+    const toggleToolPanel = useCallback(() => {
+        setIsToolPanelCollapsed((current) => !current);
+    }, []);
 
     // Open auto-annotate settings panel
     const handleAutoAnnotate = useCallback(() => {
@@ -1409,14 +1537,6 @@ export function MolBioToolkitV2() {
         };
     }, [selection, selectionRanges, sequenceData.circular]);
 
-    const toolPanelWidthClass = activePanel === 'primers'
-        ? 'w-[30rem]'
-        : activePanel === 'assembly'
-            ? 'w-[34rem]'
-            : activePanel === 'align' || activePanel === 'rna' || activePanel === 'history'
-            ? 'w-[26rem]'
-            : 'w-72';
-
     const handleLoadAssemblyProduct = useCallback((product: SequenceData, savedSequenceId?: string | null) => {
         openWorkspace(product, {
             sequenceId: savedSequenceId || null,
@@ -1541,54 +1661,94 @@ export function MolBioToolkitV2() {
 
     return (
         <>
-            <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
+            <div
+                className={`molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70]' : ''}`}
+                data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
+            >
                 {/* Left: Sequence Library */}
-                <SequenceLibrary
-                        sequences={sequences}
-                        demos={demoPlasmids}
-                        demoLoading={demoLoading}
-                        selectedId={selectedSequenceId}
-                    onSelect={loadSequence}
-                    onRefresh={loadLibrary}
-                    onOpenModal={() => setShowInputModal(true)}
-                    onLoadDemo={loadDemo}
-                    loading={loading}
-                />
+                {viewerLayout.showLibraryPanel && (
+                    <>
+                        <SequenceLibrary
+                            sequences={sequences}
+                            demos={demoPlasmids}
+                            demoLoading={demoLoading}
+                            selectedId={selectedSequenceId}
+                            onSelect={loadSequence}
+                            onRefresh={loadLibrary}
+                            onOpenModal={() => setShowInputModal(true)}
+                            onLoadDemo={loadDemo}
+                            loading={loading}
+                            width={viewerLayout.leftPanelWidth}
+                        />
+                        {viewerLayout.showLibraryResizeHandle && (
+                            <button
+                                type="button"
+                                data-molbio-panel-resize-handle="left"
+                                aria-label="Resize construct shelf"
+                                title="Resize construct shelf"
+                                onPointerDown={startPanelResize('left')}
+                                className="w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
+                            />
+                        )}
+                    </>
+                )}
 
                 {/* Center: Viewer */}
-                <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                    <SequenceHeader
-                        sequenceData={sequenceData}
-                        onSave={saveSequence}
-                        onUndo={undo}
-                        onRedo={redo}
-                        onAutoAnnotate={handleAutoAnnotate}
-                        canUndo={canUndo}
-                        canRedo={canRedo}
-                        isDirty={isDirty}
-                        loading={loading}
-                        isAnnotating={isAnnotating}
-                        viewMode={viewMode}
-                        onViewModeChange={setViewMode}
-                        showGCTrack={showGCTrack}
-                        onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
-                        onOpenLibrary={() => setShowInputModal(true)}
-                        historyJournal={historyJournal}
-                    />
+                <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
+                    {!isViewerFullscreen && (
+                        <SequenceHeader
+                            sequenceData={sequenceData}
+                            onSave={saveSequence}
+                            onUndo={undo}
+                            onRedo={redo}
+                            onAutoAnnotate={handleAutoAnnotate}
+                            canUndo={canUndo}
+                            canRedo={canRedo}
+                            isDirty={isDirty}
+                            loading={loading}
+                            isAnnotating={isAnnotating}
+                            viewMode={viewMode}
+                            onViewModeChange={setViewMode}
+                            showGCTrack={showGCTrack}
+                            onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
+                            onOpenLibrary={() => setShowInputModal(true)}
+                            isViewerFullscreen={isViewerFullscreen}
+                            onToggleFullscreen={toggleViewerFullscreen}
+                            isLibraryPanelCollapsed={isLibraryPanelCollapsed}
+                            isToolPanelCollapsed={isToolPanelCollapsed}
+                            onToggleLibraryPanel={toggleLibraryPanel}
+                            onToggleToolPanel={toggleToolPanel}
+                            historyJournal={historyJournal}
+                        />
+                    )}
 
-                    <WorkspaceTabs
-                        tabs={workspaceTabs}
-                        activeId={activeWorkspaceId}
-                        onActivate={activateWorkspace}
-                        onClose={closeWorkspace}
-                    />
+                    {!isViewerFullscreen && (
+                        <WorkspaceTabs
+                            tabs={workspaceTabs}
+                            activeId={activeWorkspaceId}
+                            onActivate={activateWorkspace}
+                            onClose={closeWorkspace}
+                        />
+                    )}
 
 
-                    <div className="flex-1 overflow-hidden flex flex-col">
+                    <div className="relative flex-1 overflow-hidden flex flex-col">
+                        {sequenceData.circular && (
+                            <div className="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={toggleViewerFullscreen}
+                                    className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
+                                    title={isViewerFullscreen ? 'Exit focused plasmid view' : 'Focus Viewer'}
+                                >
+                                    {isViewerFullscreen ? 'Exit Focus' : 'Focus Viewer'}
+                                </button>
+                            </div>
+                        )}
                         {sequenceData.sequence ? (
                             <>
                                 {/* GC Content Track */}
-                                {showGCTrack && (
+                                {!isViewerFullscreen && showGCTrack && (
                                     <GCContentTrack
                                         sequence={sequenceData.sequence}
                                         circular={sequenceData.circular}
@@ -1658,7 +1818,7 @@ export function MolBioToolkitV2() {
                     </div>
 
                     {/* Selection info bar */}
-                    {selection && (
+                    {!isViewerFullscreen && selection && (
                         <div className="border-t border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 flex-shrink-0">
                             <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
@@ -1691,6 +1851,13 @@ export function MolBioToolkitV2() {
                                                 Edit
                                             </button>
                                             <button
+                                                onClick={() => setActivePanel('align')}
+                                                className="rounded-md bg-sky-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-sky-500"
+                                                title="Compare the selected span in alignment tools"
+                                            >
+                                                Align
+                                            </button>
+                                            <button
                                                 onClick={() => setActivePanel('pcr')}
                                                 className="rounded-md bg-cyan-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-cyan-500"
                                                 title="Use the selected span in PCR tools"
@@ -1720,10 +1887,25 @@ export function MolBioToolkitV2() {
                 </div>
 
                 {/* Right: Tool Panels */}
-                <div className={`${toolPanelWidthClass} flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden transition-[width] duration-200`}>
-                    <PanelTabs active={activePanel} onChange={setActivePanel} sequenceType={sequenceData.sequenceType} />
+                {viewerLayout.showToolPanel && (
+                    <>
+                        {viewerLayout.showToolResizeHandle && (
+                            <button
+                                type="button"
+                                data-molbio-panel-resize-handle="right"
+                                aria-label="Resize toolkit panels"
+                                title="Resize toolkit panels"
+                                onPointerDown={startPanelResize('right')}
+                                className="w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
+                            />
+                        )}
+                        <div
+                            className="flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden transition-[width] duration-200"
+                            style={{ width: `${viewerLayout.rightPanelWidth}px` }}
+                        >
+                            <PanelTabs active={activePanel} onChange={setActivePanel} sequenceType={sequenceData.sequenceType} />
 
-                    <div className="flex-1 overflow-y-auto">
+                            <div className="flex-1 overflow-y-auto">
                         {(activePanel === 'view' || activePanel === null) && (
                             <VisibilityPanel
                                 visibility={visibility}
@@ -1835,15 +2017,17 @@ export function MolBioToolkitV2() {
                                 onUpdateFeature={handleUpdateFeature}
                             />
                         )}
-                    </div>
+                            </div>
 
-                    {/* Error display */}
-                    {error && (
-                        <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
-                            Error: {error}
+                            {/* Error display */}
+                            {error && (
+                                <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
+                                    Error: {error}
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
+                    </>
+                )}
             </div>
 
             {quickAddMenu && (

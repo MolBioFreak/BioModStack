@@ -25,16 +25,12 @@ function parseBooleanOverride(value: string | undefined): boolean | undefined {
 }
 
 export function shouldDisableGpuAcceleration(options: GraphicsWorkaroundOptions = {}): boolean {
-  const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const override = parseBooleanOverride(env.BMS_ELECTRON_DISABLE_GPU);
   if (typeof override === 'boolean') {
     return override;
   }
-  if (platform !== 'linux') {
-    return false;
-  }
-  return (env.XDG_SESSION_TYPE ?? '').trim().toLowerCase() === 'x11';
+  return false;
 }
 
 export function applyShellGraphicsWorkarounds(
