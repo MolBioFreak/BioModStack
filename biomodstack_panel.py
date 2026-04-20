@@ -35,11 +35,13 @@ from gi.repository import Gtk, Adw, GLib, Gio, Pango
 API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     API_SERVICE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     FRONTEND_SERVICE,
+    build_launch_ui_command,
     service_is_active,
 )
 
@@ -322,11 +324,15 @@ class BioModStackPanel(Adw.Application):
         button_box.set_margin_bottom(8)
         
         # Open UI button
-        btn_ui = Gtk.Button(label="🌐 Open UI")
+        btn_ui = Gtk.Button(label="🖥 Open UI")
         btn_ui.add_css_class("suggested-action")
-        btn_ui.connect("clicked", lambda _: webbrowser.open(FRONTEND_URL))
+        btn_ui.connect("clicked", self._on_open_ui)
         button_box.append(btn_ui)
-        
+
+        btn_browser = Gtk.Button(label="🌐 Browser")
+        btn_browser.connect("clicked", self._on_open_browser)
+        button_box.append(btn_browser)
+
         # Results folder
         btn_results = Gtk.Button(label="📂 Results")
         btn_results.connect("clicked", lambda _: subprocess.Popen(["xdg-open", str(RESULTS_DIR)]))
@@ -381,6 +387,13 @@ class BioModStackPanel(Adw.Application):
         group.add(password_row)
 
         return group
+
+    def _on_open_ui(self, button):
+        show_notification("Opening UI", "Launching the BioModStack shell...")
+        subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT), env=self._script_env())
+
+    def _on_open_browser(self, button):
+        webbrowser.open(FRONTEND_URL)
     
     def _on_start_all(self, button):
         show_notification("Starting", "Starting all services...")
@@ -555,23 +568,27 @@ class BioModStackPanel(Adw.Application):
         """Settings toggles."""
         group = Adw.PreferencesGroup()
         group.set_title("Settings")
-        
-        # Autostart toggle
-        self.autostart_row = Adw.SwitchRow()
-        self.autostart_row.set_title("Autostart on Login")
-        self.autostart_row.set_subtitle("Launch control panel when you log in")
-        self.autostart_row.set_active(AUTOSTART_PATH.exists())
-        self.autostart_row.connect("notify::active", self._on_autostart_toggle)
-        group.add(self.autostart_row)
-        
-        # Notifications toggle
-        self.notif_row = Adw.SwitchRow()
-        self.notif_row.set_title("Desktop Notifications")
-        self.notif_row.set_subtitle("Show notifications for service events")
-        self.notif_row.set_active(self.config.get("notifications", True))
-        self.notif_row.connect("notify::active", self._on_notifications_toggle)
-        group.add(self.notif_row)
-        
+
+        autostart_row_widget, self.autostart_row = build_toggle_row(
+            Adw,
+            Gtk,
+            title="Autostart on Login",
+            subtitle="Launch control panel when you log in",
+            active=AUTOSTART_PATH.exists(),
+            handler=self._on_autostart_toggle,
+        )
+        group.add(autostart_row_widget)
+
+        notif_row_widget, self.notif_row = build_toggle_row(
+            Adw,
+            Gtk,
+            title="Desktop Notifications",
+            subtitle="Show notifications for service events",
+            active=self.config.get("notifications", True),
+            handler=self._on_notifications_toggle,
+        )
+        group.add(notif_row_widget)
+
         return group
     
     def _on_autostart_toggle(self, row, param):

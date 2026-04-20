@@ -1,3 +1,3 @@
 """Services package."""
 
-from . import nextflow
+from . import nextflow, workflow_adapter

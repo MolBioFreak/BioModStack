@@ -43,6 +43,12 @@ from antibody_pipeline_contract import (
 )
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .gpu_config import read_scheduler_config
+from .workflow_adapter import (
+    cancel_via_workflow_adapter,
+    get_adapter_running_jobs,
+    launch_via_workflow_adapter,
+    workflow_adapter_enabled,
+)
 from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
@@ -486,6 +492,8 @@ def _build_boltz_cp_sequence_entry(
     use_msa: bool = False,
 ) -> Dict[str, Any]:
     component_type = str(component.get("type") or "protein").strip().lower()
+    if component_type == "ion":
+        component_type = "ligand"
     fallback_id = chr(ord("A") + (index % 26))
     component_id = _normalize_boltz_cp_component_id(component.get("id"), fallback_id)
 
@@ -1499,7 +1507,8 @@ async def launch_nextflow_job(
     model_id: str,
     mode: str,
     params: Dict[str, Any],
-    output_dir: str
+    output_dir: str,
+    allow_running_job: bool = False,
 ) -> None:
     """
     Launch a Nextflow pipeline job.
@@ -1562,18 +1571,24 @@ async def launch_nextflow_job(
             logger.error(f"Job {job_id} not found in database")
             return
 
-        if job.status == JobStatus.RUNNING.value and job.started_at is not None:
+        if job.status == JobStatus.RUNNING.value and job.started_at is not None and not allow_running_job:
             logger.warning(f"Job {job_id} is already marked running; skipping duplicate launcher entry")
             return
+        if job.status == JobStatus.RUNNING.value and job.started_at is not None and allow_running_job:
+            logger.info(
+                "Job %s is already marked running in the shared state store; continuing because this launch was explicitly handed off.",
+                job_id,
+            )
         
         # Check if job was cancelled while queued
         if job.status == JobStatus.CANCELLED.value:
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        job.status = JobStatus.RUNNING.value
-        job.started_at = datetime.utcnow()
-        await session.commit()
+        if job.status != JobStatus.RUNNING.value or job.started_at is None:
+            job.status = JobStatus.RUNNING.value
+            job.started_at = datetime.utcnow()
+            await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
         await session.refresh(job)
@@ -1591,6 +1606,33 @@ async def launch_nextflow_job(
             )
 
         try:
+            if workflow_adapter_enabled():
+                adapter_response = launch_via_workflow_adapter(
+                    job_id=job_id,
+                    model_id=model_id,
+                    mode=mode,
+                    params=launch_params,
+                    output_dir=output_dir,
+                )
+                if adapter_response.get("accepted") is False:
+                    raise RuntimeError(
+                        f"Workflow adapter rejected launch for job {job_id}: {adapter_response!r}"
+                    )
+                adapter_run_id = (
+                    adapter_response.get("nextflow_run_id")
+                    or adapter_response.get("run_id")
+                    or adapter_response.get("job_id")
+                    or job_id
+                )
+                job.nextflow_run_id = str(adapter_run_id)
+                await session.commit()
+                logger.info(
+                    "[WORKFLOW-ADAPTER] Job %s delegated to host adapter with run id %s",
+                    job_id,
+                    job.nextflow_run_id,
+                )
+                return
+
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
@@ -2099,6 +2141,7 @@ def launch_nextflow_job_detached(
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
+    allow_running_job: bool = False,
 ) -> asyncio.Task:
     """
     Schedule a Nextflow launch in the background while marking the job as
@@ -2108,6 +2151,14 @@ def launch_nextflow_job_detached(
     launcher has created the subprocess or registered it in _running_processes.
     """
     assert_workflow_launch_allowed("launch workflow jobs from the scheduler")
+    if job_id in _launching_jobs:
+        logger.warning("Job %s is already queued for detached launch in this process; skipping duplicate scheduling", job_id)
+
+        async def _noop() -> None:
+            return None
+
+        return asyncio.create_task(_noop())
+
     _launching_jobs.add(job_id)
 
     async def _runner() -> None:
@@ -2118,6 +2169,7 @@ def launch_nextflow_job_detached(
                 mode=mode,
                 params=params,
                 output_dir=output_dir,
+                allow_running_job=allow_running_job,
             )
         finally:
             _launching_jobs.discard(job_id)
@@ -2975,6 +3027,13 @@ def _pid_is_alive(pid: int) -> bool:
 
 async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
+    if workflow_adapter_enabled():
+        try:
+            return cancel_via_workflow_adapter(str(nextflow_run_id))
+        except Exception as exc:
+            logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
+            return False
+
     try:
         pid = int(nextflow_run_id)
     except (TypeError, ValueError) as exc:
@@ -3042,6 +3101,12 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
 
 def get_running_jobs() -> Dict[str, int]:
     """Get currently running job IDs and their PIDs."""
+    if workflow_adapter_enabled():
+        running = get_adapter_running_jobs()
+        for job_id in _launching_jobs:
+            running.setdefault(job_id, 0)
+        return running
+
     running = {
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 

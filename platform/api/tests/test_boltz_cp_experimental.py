@@ -370,3 +370,63 @@ def test_build_nextflow_command_stages_boltz_cp_yaml_from_complex_components(tmp
     assert "--bcp_gpu_ids 0,1,2,3" in joined
     assert "--bcp_size_cp 4" in joined
     assert "--complex_json_path" not in joined
+
+
+
+def test_build_nextflow_command_normalizes_ion_components_to_boltz_cp_ligands(tmp_path: Path) -> None:
+    output_dir = tmp_path / "bcp_complex_with_ions"
+    cmd = build_nextflow_command(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
+            "sequence_name": "cp_complex_ions_case",
+            "complex_components": [
+                {"type": "protein", "id": "A", "sequence": "MKTIIALSYIFCLVFADYKDDDDA"},
+                {"type": "ligand", "id": "D", "ccd": "ATP", "name": "ATP"},
+                {"type": "ion", "id": "E", "ccd": "MG", "name": "Magnesium 1"},
+                {"type": "ion", "id": "F", "ccd": "MG", "name": "Magnesium 2"},
+            ],
+            "pinned_gpus": [0, 1, 2, 3],
+        },
+        str(output_dir),
+        job_id="job-bcp-complex-ions",
+    )
+
+    input_path = Path(_flag_value(cmd, "--bcp_input_path"))
+    payload = yaml.safe_load(input_path.read_text())
+
+    assert input_path.exists()
+    assert payload == {
+        "version": 1,
+        "sequences": [
+            {
+                "protein": {
+                    "id": ["A"],
+                    "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
+                    "msa": "empty",
+                }
+            },
+            {
+                "ligand": {
+                    "id": ["D"],
+                    "ccd": "ATP",
+                    "name": "ATP",
+                }
+            },
+            {
+                "ligand": {
+                    "id": ["E"],
+                    "ccd": "MG",
+                    "name": "Magnesium 1",
+                }
+            },
+            {
+                "ligand": {
+                    "id": ["F"],
+                    "ccd": "MG",
+                    "name": "Magnesium 2",
+                }
+            },
+        ],
+    }

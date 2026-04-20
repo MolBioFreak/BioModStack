@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import socket
 import sys
 from pathlib import Path
 
@@ -34,11 +35,30 @@ async def test_set_linkage_normalizes_and_persists_url(monkeypatch: pytest.Monke
     monkeypatch.setattr(bioxp, 'LINKAGE_STATE_PATH', state_path)
     monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
 
+    def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
+        assert host == 'robot'
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+
     response = await bioxp.set_linkage(bioxp.LinkageRequest(url='robot:8123/'))
 
-    assert response['url'] == 'http://robot:8123'
+    assert response['url'] == 'http://100.124.140.56:8123'
     assert response['configured'] is True
-    assert state_path.read_text(encoding='utf-8') == 'http://robot:8123'
+    assert state_path.read_text(encoding='utf-8') == 'http://100.124.140.56:8123'
+
+
+def test_recommended_linkage_url_prefers_resolved_robot_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, 'ROBOT_SSH_HOST', 'robot')
+    monkeypatch.setattr(bioxp, 'ROBOT_DAEMON_PORT', 8123)
+
+    def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
+        assert host == 'robot'
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+
+    assert bioxp._recommended_linkage_url() == 'http://100.124.140.56:8123'
 
 
 @pytest.mark.asyncio
@@ -64,7 +84,7 @@ async def test_get_status_without_linkage_returns_not_configured(monkeypatch: py
     assert response['status'] == 'not_configured'
     assert response['hardware_connected'] is False
     assert response['linkage_configured'] is False
-    assert response['recommended_url'] == f'http://{bioxp.ROBOT_SSH_HOST}:{bioxp.ROBOT_DAEMON_PORT}'
+    assert response['recommended_url'] == bioxp._recommended_linkage_url()
 
 
 @pytest.mark.asyncio

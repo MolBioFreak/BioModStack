@@ -773,6 +773,23 @@ def _repair_job_for_response(job: Job) -> bool:
     stale_failed = str(job.error_message or "").startswith(
         "Reconciled as failed: no active process and no terminal .nextflow/history status"
     )
+    if history_status == "ERR":
+        if job.status != JobStatus.FAILED.value:
+            job.status = JobStatus.FAILED.value
+            changed = True
+        if job.queue_status != "failed":
+            job.queue_status = "failed"
+            changed = True
+        replacement_error = str(job.error_message or "").strip()
+        if not replacement_error or stale_failed:
+            replacement_error = "Reconciled as failed: terminal .nextflow/history status ERR"
+        if replacement_error != (job.error_message or ""):
+            job.error_message = replacement_error
+            changed = True
+        if not job.completed_at:
+            job.completed_at = datetime.utcnow()
+            changed = True
+        return changed
     if history_status == "OK" and (job.awaiting_input or gate_present or stale_failed):
         if not job.awaiting_input:
             job.awaiting_input = True
