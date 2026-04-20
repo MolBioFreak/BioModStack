@@ -44,8 +44,8 @@ from paths import (
     resolve_allowed_path,
     to_allowed_relative,
 )
+from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
-from services.nextflow import launch_nextflow_job
 from services.job_control import cancel_job_lineage
 from services.proteinbase_importer import import_proteinbase_bundle
 
@@ -123,6 +123,12 @@ ANTIBODY_ITERATION_ACTION_LABELS = {
     "frustrampnn": "FrustraMPNN redesign",
     "ui_refinement": "refinement launch",
 }
+
+
+def _raise_if_workflow_launches_disabled(action: str) -> None:
+    if workflow_launches_allowed():
+        return
+    raise HTTPException(status_code=409, detail=workflow_launch_block_detail(action))
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -4496,6 +4502,7 @@ async def create_job(
     session: AsyncSession = Depends(get_session)
 ):
     """Create and queue a new pipeline job."""
+    _raise_if_workflow_launches_disabled("create new workflow jobs")
     registry = get_registry()
 
     # Keep model schema in sync with disk changes during long-lived API sessions.
@@ -5533,6 +5540,7 @@ async def resubmit_job(
     Resubmit a failed or cancelled job with the same parameters.
     Creates a new job with a fresh ID but copies all settings from the original.
     """
+    _raise_if_workflow_launches_disabled("resubmit workflow jobs")
     # Find original job
     result = await session.execute(select(Job).where(Job.id == job_id))
     original_job = result.scalar_one_or_none()
@@ -6382,6 +6390,7 @@ async def resume_job(
     If from_stage is specified, it is recorded as a stage hint for cache-based
     resume behavior. The underlying Nextflow resume remains cache-driven.
     """
+    _raise_if_workflow_launches_disabled("resume workflow jobs")
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     

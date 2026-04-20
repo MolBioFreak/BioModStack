@@ -7,12 +7,22 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+from paths import get_data_root
+
 router = APIRouter()
+
+
+def _default_linkage_state_path() -> Path:
+    override = os.getenv("BIOXP_LINKAGE_STATE_PATH")
+    if override:
+        return Path(override).expanduser().resolve()
+    return get_data_root() / "bioxp_linkage_url"
+
 
 # BioXP runtime host defaults. The robot should own the runtime locally; BMS only links to it.
 ROBOT_SSH_HOST = os.getenv("BIOXP_SSH_HOST", "robot")
 ROBOT_DAEMON_PORT = int(os.getenv("BIOXP_DAEMON_PORT", "8123"))
-LINKAGE_STATE_PATH = Path(os.getenv("BIOXP_LINKAGE_STATE_PATH", str(Path.home() / ".biomodstack" / "bioxp_linkage_url")))
+LINKAGE_STATE_PATH = _default_linkage_state_path()
 
 class LinkageRequest(BaseModel):
     url: str
