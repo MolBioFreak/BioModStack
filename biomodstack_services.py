@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -7,6 +8,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
 from textwrap import dedent
 
@@ -24,11 +26,59 @@ FRONTEND_PORT = 5173
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{FRONTEND_PORT}/bms/"
 
+BROWSER_LAUNCH_SURFACE = "browser"
+ELECTRON_LAUNCH_SURFACE = "electron"
+NONE_LAUNCH_SURFACE = "none"
+SUPPORTED_LAUNCH_SURFACES = (
+    BROWSER_LAUNCH_SURFACE,
+    ELECTRON_LAUNCH_SURFACE,
+    NONE_LAUNCH_SURFACE,
+)
+DEFAULT_LAUNCH_PREFERENCES = {
+    "default_surface": BROWSER_LAUNCH_SURFACE,
+    "auto_open_hosted_web_on_start": True,
+}
+
 _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))).expanduser().resolve()
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
+
+
+def get_biomodstack_config_dir() -> Path:
+    xdg_config_home = os.getenv("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home).expanduser().resolve() / "biomodstack"
+    return Path.home().resolve() / ".config" / "biomodstack"
+
+
+def get_launch_preferences_path() -> Path:
+    return get_biomodstack_config_dir() / "launch_preferences.json"
+
+
+def normalize_launch_preferences(raw: Mapping[str, object] | None) -> dict[str, object]:
+    raw = raw or {}
+    surface = str(raw.get("default_surface") or BROWSER_LAUNCH_SURFACE).strip().lower()
+    if surface not in SUPPORTED_LAUNCH_SURFACES:
+        surface = BROWSER_LAUNCH_SURFACE
+    return {
+        "default_surface": surface,
+        "auto_open_hosted_web_on_start": bool(raw.get("auto_open_hosted_web_on_start", True)),
+    }
+
+
+def load_launch_preferences() -> dict[str, object]:
+    path = get_launch_preferences_path()
+    if not path.exists():
+        return DEFAULT_LAUNCH_PREFERENCES.copy()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_LAUNCH_PREFERENCES.copy()
+    if not isinstance(data, Mapping):
+        return DEFAULT_LAUNCH_PREFERENCES.copy()
+    return normalize_launch_preferences(data)
 
 
 class ServiceManagerError(RuntimeError):
@@ -73,6 +123,72 @@ def all_runtime_service_names() -> tuple[str, ...]:
 def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     active = set(runtime_service_names(runtime_mode))
     return tuple(name for name in all_runtime_service_names() if name not in active)
+
+
+def runtime_frontend_origin() -> str:
+    return f"http://127.0.0.1:{FRONTEND_PORT}"
+
+
+def runtime_router_basename(runtime_mode: str | None = None) -> str:
+    mode = resolve_runtime_mode(runtime_mode)
+    return "/bms/" if mode == CONTAINER_RUNTIME_MODE else "/"
+
+
+def runtime_frontend_url(runtime_mode: str | None = None) -> str:
+    origin = runtime_frontend_origin()
+    basename = runtime_router_basename(runtime_mode)
+    if basename == "/":
+        return f"{origin}/"
+    return f"{origin}{basename}"
+
+
+def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, str]]:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        return [{"id": "runtime", "label": "Core runtime log", "path": str(CORE_RUNTIME_LOG)}]
+    return [
+        {"id": "api", "label": "API log", "path": str(API_LOG)},
+        {"id": "frontend", "label": "Frontend log", "path": str(FRONTEND_LOG)},
+    ]
+
+
+def runtime_service_descriptors(project_root: Path | None = None, runtime_mode: str | None = None) -> list[dict[str, object]]:
+    root = (project_root or get_project_root()).resolve()
+    return [
+        {"name": service_name, "active": service_is_active(service_name, root)}
+        for service_name in runtime_service_names(runtime_mode)
+    ]
+
+
+def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, object]:
+    root = (project_root or get_project_root()).resolve()
+    mode = resolve_runtime_mode(runtime_mode)
+    frontend_url = runtime_frontend_url(mode)
+    services = runtime_service_descriptors(root, mode)
+    return {
+        "runtime_mode": mode,
+        "runtime_active": any(service["active"] for service in services),
+        "runtime_manager": "systemd-user",
+        "api_url": f"http://127.0.0.1:{API_PORT}",
+        "frontend_origin": runtime_frontend_origin(),
+        "frontend_url": frontend_url,
+        "browser_url": frontend_url,
+        "router_basename": runtime_router_basename(mode),
+        "supported_launch_surfaces": list(SUPPORTED_LAUNCH_SURFACES),
+        "launch_preferences": load_launch_preferences(),
+        "health": {
+            "api_ready": url_is_ready(API_HEALTH_URL),
+            "frontend_ready": url_is_ready(frontend_url),
+        },
+        "services": services,
+        "logs": runtime_log_descriptors(mode),
+        "capabilities": {
+            "open_in_browser": True,
+            "restart_all": True,
+            "restart_api": True,
+            "stop_all": True,
+        },
+    }
 
 
 def run_core_runtime_script(
@@ -458,6 +574,7 @@ def should_cleanup_legacy_listeners_before_start(
 def start_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
+    frontend_url = runtime_frontend_url(mode)
     ensure_user_units(root, runtime_mode=mode)
     incompatible_services = incompatible_runtime_service_names(mode)
     run_systemctl("stop", *incompatible_services, check=False, project_root=root)
@@ -466,7 +583,7 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
         cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(API_HEALTH_URL)
-    wait_for_http(FRONTEND_URL)
+    wait_for_http(frontend_url)
 
 
 def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -482,6 +599,7 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
 def restart_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
+    frontend_url = runtime_frontend_url(mode)
     ensure_user_units(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
     run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
@@ -489,7 +607,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(API_HEALTH_URL)
-    wait_for_http(FRONTEND_URL)
+    wait_for_http(frontend_url)
 
 
 def restart_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -508,23 +626,19 @@ def restart_api(project_root: Path | None = None, runtime_mode: str | None = Non
 def status_lines(project_root: Path | None = None, runtime_mode: str | None = None) -> list[str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
-    ensure_user_units(root, runtime_mode=mode)
+    descriptor = runtime_descriptor(project_root=root, runtime_mode=mode)
     if mode == CONTAINER_RUNTIME_MODE:
-        runtime_active = service_is_active(CORE_RUNTIME_SERVICE, root)
-        api_ready = url_is_ready(API_HEALTH_URL)
-        frontend_ready = url_is_ready(FRONTEND_URL)
         return [
-            f"Runtime: {'active' if runtime_active else 'inactive'} ({CORE_RUNTIME_SERVICE})",
-            f"API: {'ready' if api_ready else 'not ready'} ({API_HEALTH_URL})",
-            f"Frontend: {'ready' if frontend_ready else 'not ready'} ({FRONTEND_URL})",
+            f"Runtime: {'active' if descriptor['runtime_active'] else 'inactive'} ({CORE_RUNTIME_SERVICE})",
+            f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
+            f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({descriptor['frontend_url']})",
             f"Runtime log: {CORE_RUNTIME_LOG}",
         ]
 
-    api_active = service_is_active(API_SERVICE, root)
-    frontend_active = service_is_active(FRONTEND_SERVICE, root)
+    services_by_name = {item["name"]: item["active"] for item in descriptor["services"]}
     return [
-        f"API: {'active' if api_active else 'inactive'} ({API_SERVICE})",
-        f"Frontend: {'active' if frontend_active else 'inactive'} ({FRONTEND_SERVICE})",
+        f"API: {'active' if services_by_name.get(API_SERVICE, False) else 'inactive'} ({API_SERVICE})",
+        f"Frontend: {'active' if services_by_name.get(FRONTEND_SERVICE, False) else 'inactive'} ({FRONTEND_SERVICE})",
         f"API log: {API_LOG}",
         f"Frontend log: {FRONTEND_LOG}",
     ]
