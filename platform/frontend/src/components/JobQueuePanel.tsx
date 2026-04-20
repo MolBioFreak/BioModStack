@@ -14,16 +14,10 @@ import {
     forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
+import { GPU_NAMES, formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 
 // Model display names and icons
 // Model display names removed - using text badges instead
-
-const GPU_NAMES: Record<number, string> = {
-    0: 'RTX 5090',
-    1: 'RTX 5060 Ti',
-    2: 'RTX 3090 #1',
-    3: 'RTX 3090 #2',
-};
 
 const INTERNAL_BATCH_NAME_RE = /^antibody_batch_[0-9a-f-]{36}$/i;
 const INTERNAL_CHILD_NAME_RE = /^antibody_batch_[0-9a-f-]{36}_(.+)$/i;
@@ -169,25 +163,35 @@ function VramBadge({ vramMb, label = 'VRAM', tone = 'accent' }: { vramMb: number
     );
 }
 
-function GPUBadge({ gpu, pinned }: { gpu: number | null; pinned: boolean }) {
-    if (gpu === null) {
+function GPUBadge({
+    displayGpuIds,
+    assignedGpu,
+    pinnedGpu,
+}: {
+    displayGpuIds: number[] | null | undefined;
+    assignedGpu: number | null;
+    pinnedGpu: number | null;
+}) {
+    const display = resolveQueueGpuDisplay({
+        displayGpuIds,
+        assignedGpu,
+        pinnedGpu,
+    });
+    if (display.gpuIds.length === 0) {
         return (
             <span className="px-2 py-0.5 rounded text-xs font-medium bg-slate-500/20 text-slate-400">
                 Auto
             </span>
         );
     }
-    const name = GPU_NAMES[gpu] || `GPU ${gpu}`;
     return (
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${pinned ? 'bg-orange-500/20 text-orange-400' : 'bg-cyan-500/20 text-cyan-400'}`}>
-            {pinned ? '📌 ' : ''}{name}
+        <span
+            className={`px-2 py-0.5 rounded text-xs font-medium ${display.pinned ? 'bg-orange-500/20 text-orange-400' : 'bg-cyan-500/20 text-cyan-400'}`}
+            title={display.title || undefined}
+        >
+            {display.badgeText}
         </span>
     );
-}
-
-function formatGpuList(gpuIds: number[] | null | undefined): string | null {
-    if (!gpuIds || gpuIds.length === 0) return null;
-    return gpuIds.map((gpuId) => GPU_NAMES[gpuId] || `GPU ${gpuId}`).join(', ');
 }
 
 // Elapsed time badge for running jobs
@@ -675,6 +679,7 @@ function JobRow({
     const displayName = getDisplayJobName(job);
     const displayBatchName = getDisplayBatchName(job.batch_name);
     const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus);
+    const launchGpuLabel = formatGpuList(job.display_gpu_ids);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -704,7 +709,11 @@ function JobRow({
                             ) : (
                                 <VramBadge vramMb={job.vram_estimate_mb} label="Est" tone="muted" />
                             )}
-                            <GPUBadge gpu={job.assigned_gpu ?? job.pinned_gpu} pinned={job.pinned_gpu !== null} />
+                            <GPUBadge
+                                displayGpuIds={job.display_gpu_ids}
+                                assignedGpu={job.assigned_gpu}
+                                pinnedGpu={job.pinned_gpu}
+                            />
                             {job.priority > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">
                                     P{job.priority}
@@ -731,14 +740,19 @@ function JobRow({
                                 </span>
                             ) : null}
                         </div>
-                        {job.queue_status === 'queued' && (
+                        {(job.queue_status === 'queued' || (job.display_gpu_ids?.length ?? 0) > 1) && (
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                                {candidateGpuLabel && (
+                                {launchGpuLabel && (job.display_gpu_ids?.length ?? 0) > 1 && (
                                     <span className="text-slate-400">
-                                        GPUs: <span className="text-cyan-300">{candidateGpuLabel}</span>
+                                        Launch GPUs: <span className="text-cyan-300">{launchGpuLabel}</span>
                                     </span>
                                 )}
-                                {job.scheduler_blockers && job.scheduler_blockers.length > 0 && (
+                                {job.queue_status === 'queued' && candidateGpuLabel && (
+                                    <span className="text-slate-400">
+                                        Candidates: <span className="text-cyan-300">{candidateGpuLabel}</span>
+                                    </span>
+                                )}
+                                {job.queue_status === 'queued' && job.scheduler_blockers && job.scheduler_blockers.length > 0 && (
                                     <span className="text-amber-300" title={job.scheduler_blockers.join(' | ')}>
                                         Why waiting: {job.scheduler_blockers.join(' • ')}
                                     </span>
