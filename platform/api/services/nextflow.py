@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
+DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
@@ -477,7 +478,12 @@ def _normalize_boltz_cp_sequence(value: object) -> str:
     return str(value or "").strip().upper()
 
 
-def _build_boltz_cp_sequence_entry(component: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _build_boltz_cp_sequence_entry(
+    component: Dict[str, Any],
+    index: int,
+    *,
+    use_msa: bool = False,
+) -> Dict[str, Any]:
     component_type = str(component.get("type") or "protein").strip().lower()
     fallback_id = chr(ord("A") + (index % 26))
     component_id = _normalize_boltz_cp_component_id(component.get("id"), fallback_id)
@@ -486,13 +492,13 @@ def _build_boltz_cp_sequence_entry(component: Dict[str, Any], index: int) -> Dic
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
         if not sequence:
             raise ValueError(f"Boltz-CP protein component {component_id[0]!r} is missing a sequence")
-        return {
-            "protein": {
-                "id": component_id,
-                "sequence": sequence,
-                "msa": "empty",
-            }
+        protein_payload: Dict[str, Any] = {
+            "id": component_id,
+            "sequence": sequence,
         }
+        if not use_msa:
+            protein_payload["msa"] = "empty"
+        return {"protein": protein_payload}
 
     if component_type == "dna":
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
@@ -540,9 +546,11 @@ def _write_boltz_cp_input_yaml(
     if params.get("bcp_input_path") or params.get("input_path"):
         return None
 
+    use_msa = _coerce_bool(params.get("boltz_use_msa"), default=False)
+
     if complex_components:
         sequences = [
-            _build_boltz_cp_sequence_entry(component, index)
+            _build_boltz_cp_sequence_entry(component, index, use_msa=use_msa)
             for index, component in enumerate(complex_components)
         ]
     else:
@@ -554,13 +562,13 @@ def _write_boltz_cp_input_yaml(
             or params.get("target_chains")
             or "A"
         ).split(",")[0].strip() or "A"
-        sequences = [{
-            "protein": {
-                "id": [primary_chain_id],
-                "sequence": sequence,
-                "msa": "empty",
-            }
-        }]
+        protein_payload: Dict[str, Any] = {
+            "id": [primary_chain_id],
+            "sequence": sequence,
+        }
+        if not use_msa:
+            protein_payload["msa"] = "empty"
+        sequences = [{"protein": protein_payload}]
 
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -2828,6 +2836,10 @@ def build_nextflow_command(
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
+        params.setdefault(
+            'bcp_container_path',
+            str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
+        )
 
         if not params.get('bcp_input_path'):
             staged_bcp_input = _write_boltz_cp_input_yaml(
