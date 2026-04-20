@@ -1,13 +1,21 @@
 import { Menu, type MenuItemConstructorOptions } from 'electron';
 
-import type { ServiceControl } from './serviceControl';
-import type { ShellContext } from './windowState';
+import type { ServiceControl } from './serviceControl.js';
+import type { ShellContext } from './windowState.js';
 
 type MenuDeps = {
+  showWindow?: () => void;
   openInBrowser?: () => Promise<void> | void;
   copyLocalUrl?: (url: string) => void;
+  openResultsFolder?: () => Promise<void> | void;
+  openShellDataFolder?: () => Promise<void> | void;
+  openApiLog?: () => Promise<void> | void;
+  openFrontendLog?: () => Promise<void> | void;
+  openCoreRuntimeLog?: () => Promise<void> | void;
   reloadShell?: () => void;
+  hideShell?: () => void;
   quitShell?: () => void;
+  showAbout?: () => void;
 };
 
 function fireAndForget(action: () => Promise<void> | void): () => void {
@@ -25,6 +33,47 @@ function fireAndForget(action: () => Promise<void> | void): () => void {
   };
 }
 
+function buildLogsSubmenu(deps: MenuDeps): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: 'Open API Log',
+      click: fireAndForget(() => deps.openApiLog?.()),
+    },
+    {
+      label: 'Open Frontend Log',
+      click: fireAndForget(() => deps.openFrontendLog?.()),
+    },
+    {
+      label: 'Open Core Runtime Log',
+      click: fireAndForget(() => deps.openCoreRuntimeLog?.()),
+    },
+  ];
+}
+
+function buildServicesSubmenu(
+  context: ShellContext,
+  serviceControl: ServiceControl,
+): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: 'Start Services',
+      click: fireAndForget(() => serviceControl.startAll(context.runtimeMode)),
+    },
+    {
+      label: 'Stop Services',
+      click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode)),
+    },
+    {
+      label: 'Restart Services',
+      click: fireAndForget(() => serviceControl.restartAll(context.runtimeMode)),
+    },
+    {
+      label: 'Restart API',
+      click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode)),
+    },
+  ];
+}
+
 export function buildApplicationMenuTemplate(
   context: ShellContext,
   serviceControl: ServiceControl,
@@ -35,6 +84,10 @@ export function buildApplicationMenuTemplate(
       label: 'BioModStack',
       submenu: [
         {
+          label: 'Open BioModStack',
+          click: () => deps.showWindow?.(),
+        },
+        {
           label: 'Open in Browser',
           click: fireAndForget(() => deps.openInBrowser?.()),
         },
@@ -42,26 +95,28 @@ export function buildApplicationMenuTemplate(
           label: 'Copy Local URL',
           click: () => deps.copyLocalUrl?.(context.browserUrl),
         },
-        { type: 'separator' },
         {
-          label: 'Start Services',
-          click: fireAndForget(() => serviceControl.startAll(context.runtimeMode)),
+          label: 'Open Results Folder',
+          click: fireAndForget(() => deps.openResultsFolder?.()),
         },
         {
-          label: 'Stop Services',
-          click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode)),
+          label: 'Open Shell Data Folder',
+          click: fireAndForget(() => deps.openShellDataFolder?.()),
         },
         {
-          label: 'Restart Services',
-          click: fireAndForget(() => serviceControl.restartAll(context.runtimeMode)),
+          label: 'Logs',
+          submenu: buildLogsSubmenu(deps),
         },
         {
-          label: 'Restart API',
-          click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode)),
+          label: 'Services',
+          submenu: buildServicesSubmenu(context, serviceControl),
         },
-        { type: 'separator' },
         {
-          role: 'quit',
+          label: 'Hide to Tray',
+          click: () => deps.hideShell?.(),
+        },
+        {
+          label: 'Quit Shell',
           click: () => deps.quitShell?.(),
         },
       ],
@@ -69,19 +124,61 @@ export function buildApplicationMenuTemplate(
     {
       label: 'View',
       submenu: [
-        { role: 'reload', click: () => deps.reloadShell?.() },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
+        {
+          label: 'Reload Shell',
+          role: 'reload',
+          click: () => deps.reloadShell?.(),
+        },
+        {
+          label: 'Force Reload',
+          role: 'forceReload',
+        },
+        {
+          label: 'Toggle Developer Tools',
+          role: 'toggleDevTools',
+        },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        {
+          label: 'Reset Zoom',
+          role: 'resetZoom',
+        },
+        {
+          label: 'Zoom In',
+          role: 'zoomIn',
+        },
+        {
+          label: 'Zoom Out',
+          role: 'zoomOut',
+        },
+        { type: 'separator' },
+        {
+          label: 'Toggle Full Screen',
+          role: 'togglefullscreen',
+        },
       ],
     },
     {
       label: 'Window',
       role: 'window',
-      submenu: [{ role: 'minimize' }, { role: 'close' }],
+      submenu: [
+        {
+          label: 'Minimize Window',
+          role: 'minimize',
+        },
+        {
+          label: 'Close Window',
+          role: 'close',
+        },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'About BioModStack Shell',
+          click: () => deps.showAbout?.(),
+        },
+      ],
     },
   ];
 }
