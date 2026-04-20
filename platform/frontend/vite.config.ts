@@ -35,6 +35,7 @@ export default defineConfig(({ mode }) => ({
     alias: {
       buffer: path.resolve(__dirname, 'node_modules/buffer/index.js'),
       'buffer/': path.resolve(__dirname, 'node_modules/buffer'),
+      'safe-buffer': path.resolve(__dirname, 'node_modules/safe-buffer/index.js'),
       string_decoder: path.resolve(__dirname, 'node_modules/string_decoder/lib/string_decoder.js'),
       'string_decoder/': path.resolve(__dirname, 'node_modules/string_decoder'),
       events: path.resolve(__dirname, 'node_modules/events/events.js'),

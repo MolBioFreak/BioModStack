@@ -167,6 +167,12 @@ runtime, use:
 That container mode launches `biomodstack-core-runtime.service`, which in turn runs the
 repo-native compose stack from `compose.core-runtime.yml`.
 
+Important current Phase 1 boundary:
+- container mode is the portable web/control-plane runtime
+- workflow execution and GPU/process truth still remain host-native
+- until a real host workflow adapter exists, do not treat container mode as the honest owner of Nextflow launches
+- `BMS_CORE_RUNTIME_MODE=1` is the explicit guard that disables launch/resume/resubmit and GPU scheduler ownership inside the core-runtime container stack
+
 Optional local desktop launcher:
 
 ```bash
