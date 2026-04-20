@@ -13,6 +13,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from textwrap import dedent
 
+from biomodstack_runtime_profile import (
+    get_biomodstack_config_dir as runtime_profile_config_dir,
+    install_profile_snapshot as runtime_profile_snapshot,
+)
+
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
 WORKFLOW_ADAPTER_SERVICE = "biomodstack-workflow-adapter.service"
@@ -54,10 +59,7 @@ CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
 
 
 def get_biomodstack_config_dir() -> Path:
-    xdg_config_home = os.getenv("XDG_CONFIG_HOME")
-    if xdg_config_home:
-        return Path(xdg_config_home).expanduser().resolve() / "biomodstack"
-    return Path.home().resolve() / ".config" / "biomodstack"
+    return runtime_profile_config_dir()
 
 
 def get_launch_preferences_path() -> Path:
@@ -86,6 +88,22 @@ def load_launch_preferences() -> dict[str, object]:
     if not isinstance(data, Mapping):
         return DEFAULT_LAUNCH_PREFERENCES.copy()
     return normalize_launch_preferences(data)
+
+
+def install_profile_snapshot(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, object]:
+    return runtime_profile_snapshot(profile=profile, project_root=project_root)
+
+
+def electron_shell_available(project_root: Path | None = None) -> bool:
+    root = (project_root or get_project_root()).resolve()
+    shell_dir = root / "platform" / "desktop-electron"
+    if not (shell_dir / "package.json").exists():
+        return False
+    electron_dist = shell_dir / "node_modules" / "electron" / "dist"
+    if sys.platform == "darwin":
+        return (electron_dist / "Electron.app" / "Contents" / "MacOS" / "Electron").exists()
+    binary_name = "electron.exe" if sys.platform == "win32" else "electron"
+    return (electron_dist / binary_name).exists()
 
 
 def build_launch_ui_command(
@@ -197,6 +215,12 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode)
     services = runtime_service_descriptors(root, mode)
+    install_profile = install_profile_snapshot(project_root=root)
+    if not isinstance(install_profile, Mapping):
+        install_profile = {}
+    resolved_paths = install_profile.get("resolved", {})
+    if not isinstance(resolved_paths, Mapping):
+        resolved_paths = {}
     health = {
         "api_ready": url_is_ready(API_HEALTH_URL),
         "frontend_ready": url_is_ready(frontend_url),
@@ -220,11 +244,16 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "health": health,
         "services": services,
         "logs": runtime_log_descriptors(mode),
+        "install_profile": dict(install_profile),
+        "paths": dict(resolved_paths),
+        "electron_shell_available": bool(electron_shell_available(project_root=root)),
         "capabilities": {
             "open_in_browser": True,
             "restart_all": True,
             "restart_api": True,
             "stop_all": True,
+            "runtime_api": True,
+            "install_profile_api": True,
         },
     }
 
@@ -275,7 +304,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Type=simple
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
-            Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=0.0.0.0
+            Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
             ExecStart={adapter_runner}
             Restart=on-failure
             RestartSec=2

@@ -107,6 +107,22 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
             "auto_open_hosted_web_on_start": True,
         },
     )
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda profile=None, project_root=None: {
+            "profile_path": "/home/christian/.config/biomodstack/install_profile.json",
+            "compat_env_path": "/home/christian/.biomodstack/env.sh",
+            "core_runtime_env_path": "/home/christian/.config/biomodstack/core-runtime.env",
+            "profile": {"data_root": "/srv/biomodstack"},
+            "resolved": {
+                "data_root": "/srv/biomodstack",
+                "db_path": "/srv/biomodstack/biomodstack.db",
+            },
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(services, "electron_shell_available", lambda project_root=None: True, raising=False)
 
     descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="container")
 
@@ -135,6 +151,10 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
             "path": str(services.CORE_RUNTIME_LOG),
         }
     ]
+    assert descriptor["install_profile"]["profile"]["data_root"] == "/srv/biomodstack"
+    assert descriptor["paths"]["data_root"] == "/srv/biomodstack"
+    assert descriptor["paths"]["db_path"] == "/srv/biomodstack/biomodstack.db"
+    assert descriptor["electron_shell_available"] is True
 
 
 def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) -> None:
@@ -173,7 +193,7 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     adapter_unit = units[services.WORKFLOW_ADAPTER_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in adapter_unit
     assert "Environment=BMS_RUNTIME_MODE=container" in adapter_unit
-    assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=0.0.0.0" in adapter_unit
+    assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in adapter_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}" in adapter_unit
     assert f"StandardOutput=append:{services.WORKFLOW_ADAPTER_LOG}" in adapter_unit
     assert f"PartOf={services.TARGET_UNIT}" in adapter_unit
