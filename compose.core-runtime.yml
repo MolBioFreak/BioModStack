@@ -5,6 +5,7 @@ services:
       dockerfile: docker/api.Dockerfile
     container_name: biomodstack-api
     restart: unless-stopped
+    network_mode: host
     environment:
       BMS_HOME: /app
       BMS_DATA: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
@@ -12,16 +13,12 @@ services:
       BMS_DB_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}
       BMS_CORE_RUNTIME_MODE: ${BMS_CORE_RUNTIME_MODE:-1}
-      BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://host.docker.internal:8001}
+      BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BIOXP_SERVER_URL: ${BIOXP_SERVER_URL:-}
-    extra_hosts:
-      - host.docker.internal:host-gateway
     volumes:
       - type: bind
         source: ${BMS_STATE_DIR:-/mnt/BioModStack}
         target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
-    ports:
-      - 127.0.0.1:${BMS_API_HOST_PORT:-8000}:8000
     healthcheck:
       test:
         [
@@ -41,13 +38,12 @@ services:
       dockerfile: docker/web.Dockerfile
     container_name: biomodstack-web
     restart: unless-stopped
+    network_mode: host
     depends_on:
       bms-api:
         condition: service_healthy
-    ports:
-      - 127.0.0.1:${BMS_WEB_HOST_PORT:-5173}:80
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/bms/"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/bms/"]
       interval: 30s
       timeout: 5s
       retries: 5
