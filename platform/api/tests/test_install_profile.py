@@ -15,6 +15,20 @@ import biomodstack_runtime_profile as runtime_profile
 import paths as api_paths
 
 
+EXPECTED_CORS_ORIGINS = ",".join(
+    [
+        "http://127.0.0.1",
+        "http://127.0.0.1:5173",
+        "http://localhost",
+        "https://localhost",
+        "http://localhost:5173",
+        "https://localhost:5173",
+        "https://127.0.0.1",
+        "https://compute-node.taileb3a90.ts.net",
+    ]
+)
+
+
 def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monkeypatch) -> None:
     home_dir = tmp_path / "home"
     config_home = home_dir / ".config"
@@ -41,6 +55,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert f'export BMS_STATE_DIR="${{BMS_STATE_DIR:-{resolved_data_root}}}"' in env_text
     assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-9000}"' in env_text
     assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-5174}"' in env_text
+    assert f'export CORS_ORIGINS="${{CORS_ORIGINS:-{EXPECTED_CORS_ORIGINS}}}"' in env_text
     assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"' in env_text
 
     core_runtime_env = runtime_profile.get_core_runtime_env_path()
@@ -49,7 +64,24 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_CONTAINER_STATE_PATH=/var/lib/biomodstack-custom" in core_runtime_text
     assert "BMS_INPUTS_CONTAINER_PATH=/var/lib/biomodstack-custom/inputs" in core_runtime_text
     assert "BMS_DB_CONTAINER_PATH=/var/lib/biomodstack-custom/biomodstack.db" in core_runtime_text
+    assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
+
+
+def test_resolve_runtime_paths_defaults_include_cordova_and_tailscale_cors_origins(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    project_root = tmp_path / "repo"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    project_root.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    resolved = runtime_profile.resolve_runtime_paths(project_root=project_root, profile={})
+
+    assert resolved["cors_origins"] == EXPECTED_CORS_ORIGINS.split(",")
 
 
 def test_api_paths_prefer_install_profile_when_env_is_missing(tmp_path: Path, monkeypatch) -> None:
