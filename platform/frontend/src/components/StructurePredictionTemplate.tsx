@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, fetchMsaCacheInfo, uploadFile, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +29,12 @@ import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../u
 interface StructurePredictionTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, any>;
+    onOpenTemplateManager?: (context: {
+        currentParams?: Record<string, any>;
+        currentModelId?: string;
+        currentMode?: string;
+        baseTemplateId?: string;
+    }) => void;
 }
 
 const parseChainIdList = (value: unknown): string[] => {
@@ -102,7 +108,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
     return Math.max(min, Math.min(1000, parsed));
 };
 
-export function StructurePredictionTemplate({ onBack, initialValues }: StructurePredictionTemplateProps) {
+export function StructurePredictionTemplate({ onBack, initialValues, onOpenTemplateManager }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const normalizeProtenixModel = (model?: string) => {
@@ -541,6 +547,183 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
     });
+    const currentTemplateParams = useMemo(() => {
+        const params: Record<string, any> = {
+            name: jobName,
+            job_name: jobName,
+            sequence: sequence.trim(),
+            sequence_name: sequenceName,
+            pred_method: resolvedPredictorSelection.canonicalSelection,
+            num_parallel_jobs: launchConfig.showParallelJobs ? numParallelJobs : 1,
+            pinned_gpus: pinnedGpus,
+            lock_gpus: lockGpus && pinnedGpus.length > 0,
+            allow_retries: allowRetries,
+        };
+
+        if (isBoltzCpLaunch) {
+            params.structure_launch_variant = 'boltz_cp_experimental';
+            Object.assign(params, buildBoltzCpSubmitParams({
+                outputFormat: bcpOutputFormat,
+                writeFullPae: bcpWriteFullPae,
+                seed: bcpSeed,
+                gpuIds: boltzCpGpuSettings.gpuIds,
+                sizeCp: boltzCpGpuSettings.sizeCp,
+            }));
+        }
+
+        if (usesBoltz) {
+            params.boltz_use_msa = boltzUseMsa;
+            params.boltz_recycling_steps = boltzRecyclingSteps;
+            params.boltz_sampling_steps = boltzSamplingSteps;
+            params.boltz_num_samples = boltzNumSamples;
+            params.boltz_use_potentials = boltzUsePotentials;
+            params.boltz_max_parallel_samples = boltzMaxParallelSamples;
+            params.boltz_target_geometry_mode = boltzTargetGeometryMode;
+            if (boltzMethod) params.boltz_method = boltzMethod;
+        }
+
+        if (usesRf3) {
+            params.rf3_use_msa = rf3UseMsa;
+            params.rf3_num_recycles = rf3NumRecycles;
+            params.rf3_num_samples = rf3NumSamples;
+        }
+
+        if (usesProtenix) {
+            params.protenix_model_weights = protenixModelWeights;
+            params.protenix_seeds = protenixSeeds;
+            params.protenix_n_sample = protenixNSample;
+            params.protenix_n_step = protenixNStep;
+            params.protenix_n_cycle = protenixNCycle;
+            params.protenix_use_msa = protenixUseMsa;
+            params.protenix_target_geometry_mode = protenixTargetGeometryMode;
+        }
+
+        if (msaNeeded) {
+            params.msa_preset = msaPreset;
+            if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
+            if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
+            if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
+            if (msaMinCoverage) params.msa_min_coverage = parseFloat(msaMinCoverage);
+            params.msa_min_depth_warning = msaMinDepthWarning;
+            params.msa_min_depth_fail = msaMinDepthFail;
+            if (msaCacheOnly) params.msa_cache_only = true;
+            if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
+            params.msa_provider = msaProvider;
+            if (msaProvider === 'colabfold_api') {
+                params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
+                params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);
+                params.colabfold_api_poll_interval = Math.max(1, Number(colabfoldApiPollInterval) || 6);
+            }
+            if (msaUseExpand !== undefined) params.msa_use_expand = msaUseExpand;
+            if (msaUseEnv !== undefined) params.msa_use_env = msaUseEnv;
+            if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
+        }
+
+        if (targetSource) {
+            params.target_source = {
+                type: targetSource.type,
+                url: targetSource.url,
+                path: targetSource.path,
+                designId: targetSource.designId,
+                pdbId: targetSource.pdbId,
+                name: targetSource.name,
+            };
+        }
+        if (targetSourcePath) params.fixed_target_source_path = targetSourcePath;
+        if (targetSourceChainId) params.fixed_target_source_chains = targetSourceChainId;
+        if (selectedTargetModel) params.fixed_target_model_number = selectedTargetModel;
+        if (targetSourceSequence) params.fixed_target_source_sequence = targetSourceSequence;
+
+        if (complexMode) {
+            const { components, resolvedPrimaryId, binderIds } = buildComplexComponents(batchEntriesPreview);
+            params.complex_components = components;
+            params.primary_chain_id = resolvedPrimaryId;
+            params.target_chains = resolvedPrimaryId;
+            if (binderIds.length > 0) {
+                params.binder_chains = binderIds.join(',');
+            }
+        }
+
+        if (batchEntriesPreview.length > 0) {
+            params.sequence_batch_entries = batchEntriesPreview;
+            params.sequence_batch_input = sequenceBatchInput;
+            params.sequence_batch_prefix = sequenceBatchPrefix;
+            if (complexMode) {
+                params.sequence_batch_component_id = resolvedSequenceBatchComponentId;
+            }
+        }
+
+        return Object.fromEntries(
+            Object.entries(params).filter(([, value]) => value !== undefined)
+        );
+    }, [
+        allowRetries,
+        batchEntriesPreview,
+        bcpOutputFormat,
+        bcpRequestedSizeCp,
+        bcpSeed,
+        bcpWriteFullPae,
+        boltzCpGpuSettings.gpuIds,
+        boltzCpGpuSettings.sizeCp,
+        boltzMaxParallelSamples,
+        boltzMethod,
+        boltzNumSamples,
+        boltzRecyclingSteps,
+        boltzSamplingSteps,
+        boltzTargetGeometryMode,
+        boltzUseMsa,
+        boltzUsePotentials,
+        buildComplexComponents,
+        colabfoldApiHost,
+        colabfoldApiMinInterval,
+        colabfoldApiPollInterval,
+        complexMode,
+        isBoltzCpLaunch,
+        jobName,
+        launchConfig.showParallelJobs,
+        lockGpus,
+        msaAllowEmptyFallback,
+        msaCacheOnly,
+        msaEvalue,
+        msaMinCoverage,
+        msaMinDepthFail,
+        msaMinDepthWarning,
+        msaMinSeqId,
+        msaNeeded,
+        msaNumIterations,
+        msaPreset,
+        msaProvider,
+        msaTaxonomy,
+        msaUseEnv,
+        msaUseExpand,
+        numParallelJobs,
+        pinnedGpus,
+        predictor,
+        protenixModelWeights,
+        protenixNCycle,
+        protenixNSample,
+        protenixNStep,
+        protenixSeeds,
+        protenixTargetGeometryMode,
+        protenixUseMsa,
+        resolvedPredictorSelection.canonicalSelection,
+        resolvedSequenceBatchComponentId,
+        rf3NumRecycles,
+        rf3NumSamples,
+        rf3UseMsa,
+        selectedTargetModel,
+        sequence,
+        sequenceBatchInput,
+        sequenceBatchPrefix,
+        sequenceName,
+        targetSource,
+        targetSourceChainId,
+        targetSourcePath,
+        targetSourceSequence,
+        usesBoltz,
+        usesProtenix,
+        usesRf3,
+    ]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -1000,6 +1183,33 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         <p className="text-sm text-slate-500">Predict 3D structure from amino acid sequence</p>
                     </div>
                 </div>
+                {onOpenTemplateManager && (
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => onOpenTemplateManager({
+                                currentModelId: submitTarget.modelId,
+                                currentMode: submitTarget.mode,
+                                baseTemplateId: isBoltzCpLaunch ? 'boltz_cp_experimental' : 'structure_prediction',
+                            })}
+                            className="rounded-lg border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                            Load Template
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onOpenTemplateManager({
+                                currentParams: currentTemplateParams,
+                                currentModelId: submitTarget.modelId,
+                                currentMode: submitTarget.mode,
+                                baseTemplateId: isBoltzCpLaunch ? 'boltz_cp_experimental' : 'structure_prediction',
+                            })}
+                            className="rounded-lg border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                            Save Template
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div className="space-y-6">
@@ -1114,7 +1324,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         </div>
                     ) : (
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                            <div className="font-medium">{isBoltzCpLaunch ? 'Boltz-CP Experimental' : 'Fixed predictor'}</div>
+                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : 'Fixed predictor'}</div>
                             <div className="mt-1 text-xs text-orange-100/80">
                                 This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.
                             </div>
@@ -1385,7 +1595,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 {/* Boltz-2 Parameters */}
                 {showBoltzParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
-                        <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Boltz-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
+                        <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Fold-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
 
                         {/* Physics Potentials Toggle */}
                         <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
