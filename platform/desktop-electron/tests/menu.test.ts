@@ -39,29 +39,57 @@ const context: ShellContext = {
   browserUrl: 'http://127.0.0.1:5173/bms/',
 };
 
-test('application menu keeps browser escape hatch while adding service actions', () => {
+test('application menu exposes polished shell navigation, logs, data folders, and service actions', () => {
   const labels = flattenLabels(buildApplicationMenuTemplate(context, createControlStub()));
 
   assert.deepEqual(labels, [
     'BioModStack',
+    'Open BioModStack',
     'Open in Browser',
     'Copy Local URL',
+    'Open Results Folder',
+    'Open Shell Data Folder',
+    'Logs',
+    'Open API Log',
+    'Open Frontend Log',
+    'Open Core Runtime Log',
+    'Services',
     'Start Services',
     'Stop Services',
     'Restart Services',
     'Restart API',
+    'Hide to Tray',
+    'Quit Shell',
     'View',
+    'Reload Shell',
+    'Force Reload',
+    'Toggle Developer Tools',
+    'Reset Zoom',
+    'Zoom In',
+    'Zoom Out',
+    'Toggle Full Screen',
     'Window',
+    'Minimize Window',
+    'Close Window',
+    'Help',
+    'About BioModStack Shell',
   ]);
 });
 
-test('tray menu mirrors the service actions without exposing arbitrary shell controls', () => {
+test('tray menu mirrors the most important shell actions without forcing browser-only workflows', () => {
   const labels = flattenLabels(buildTrayMenuTemplate(context, createControlStub()));
 
   assert.deepEqual(labels, [
     'Open BioModStack',
     'Open in Browser',
     'Copy Local URL',
+    'Open Results Folder',
+    'Open Shell Data Folder',
+    'Logs',
+    'Open API Log',
+    'Open Frontend Log',
+    'Open Core Runtime Log',
+    'Services',
     'Start Services',
     'Stop Services',
     'Restart Services',
