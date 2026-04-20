@@ -32,30 +32,33 @@ def test_compose_core_runtime_contract() -> None:
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
     assert api["container_name"] == "biomodstack-api"
-    assert api["ports"] == ["127.0.0.1:${BMS_API_HOST_PORT:-8000}:8000"]
-    assert api["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    assert api["network_mode"] == "host"
+    assert "ports" not in api
+    assert "extra_hosts" not in api
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
-    assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://host.docker.internal:8001}"
+    assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
     assert "BIOXP_SERVER_URL" in api["environment"]
 
     web = compose["services"]["bms-web"]
     assert web["build"]["dockerfile"] == "docker/web.Dockerfile"
     assert web["container_name"] == "biomodstack-web"
-    assert web["ports"] == ["127.0.0.1:${BMS_WEB_HOST_PORT:-5173}:80"]
+    assert web["network_mode"] == "host"
+    assert "ports" not in web
     assert web["depends_on"]["bms-api"]["condition"] == "service_healthy"
 
 
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     nginx_conf = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
 
+    assert "listen 127.0.0.1:5173;" in nginx_conf
     assert "absolute_redirect off;" in nginx_conf
     assert "location = / {" in nginx_conf
     assert "return 302 /bms/;" in nginx_conf
     assert "location /bms/ {" in nginx_conf
     assert "try_files $uri $uri/ /bms/index.html;" in nginx_conf
     assert "location /api/ {" in nginx_conf
-    assert "proxy_pass http://bms-api:8000;" in nginx_conf
+    assert "proxy_pass http://127.0.0.1:8000;" in nginx_conf
 
 
 def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:
@@ -90,13 +93,13 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
     for required in [
         "BMS_STATE_DIR=",
         "BMS_CONTAINER_STATE_PATH=",
-        "BMS_API_HOST_PORT=8000",
-        "BMS_WEB_HOST_PORT=5173",
         "BMS_CORE_RUNTIME_MODE=1",
-        "BMS_WORKFLOW_ADAPTER_URL=http://host.docker.internal:8001",
+        "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BIOXP_SERVER_URL=",
     ]:
         assert required in env_example
+    assert "BMS_API_HOST_PORT" not in env_example
+    assert "BMS_WEB_HOST_PORT" not in env_example
 
 
 def test_core_runtime_script_loads_repo_local_env_overrides() -> None:
@@ -111,7 +114,7 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
 
     assert "RUN uv sync --frozen --no-dev" in dockerfile
-    assert 'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]' in dockerfile
+    assert 'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]' in dockerfile
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
 
 
@@ -127,5 +130,5 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
 
     assert "unset BMS_WORKFLOW_ADAPTER_URL" in adapter_script
     assert "export BMS_CORE_RUNTIME_MODE=0" in adapter_script
-    assert 'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-0.0.0.0}"' in adapter_script
+    assert 'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"' in adapter_script
     assert 'uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST"' in adapter_script

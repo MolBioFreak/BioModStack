@@ -19,13 +19,38 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
-CORE_RUNTIME_ENV_FILE="${BMS_CORE_RUNTIME_ENV_FILE:-$PROJECT_DIR/.env.core-runtime.local}"
+load_env_file_defaults() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*)
+                continue
+                ;;
+        esac
+        local key="${line%%=*}"
+        local value="${line#*=}"
+        if [ -z "$key" ] || [ "$key" = "$line" ]; then
+            continue
+        fi
+        if [ -n "${!key:-}" ]; then
+            continue
+        fi
+        export "$key=$value"
+    done < "$env_file"
+}
+
+PROFILE_CORE_RUNTIME_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env"
+LEGACY_CORE_RUNTIME_ENV_FILE="$PROJECT_DIR/.env.core-runtime.local"
+CORE_RUNTIME_ENV_FILE="${BMS_CORE_RUNTIME_ENV_FILE:-$PROFILE_CORE_RUNTIME_ENV_FILE}"
 compose_extra_args=()
 if [ -f "$CORE_RUNTIME_ENV_FILE" ]; then
-    set -a
-    source "$CORE_RUNTIME_ENV_FILE"
-    set +a
+    load_env_file_defaults "$CORE_RUNTIME_ENV_FILE"
     compose_extra_args=(--env-file "$CORE_RUNTIME_ENV_FILE")
+elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
+    load_env_file_defaults "$LEGACY_CORE_RUNTIME_ENV_FILE"
+    compose_extra_args=(--env-file "$LEGACY_CORE_RUNTIME_ENV_FILE")
 fi
 
 if [ -z "${BMS_STATE_DIR:-}" ]; then
