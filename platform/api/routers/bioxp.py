@@ -1,6 +1,8 @@
 import os
+import socket
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -40,7 +42,48 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
 
 
 def _recommended_linkage_url() -> str:
-    return f"http://{ROBOT_SSH_HOST}:{ROBOT_DAEMON_PORT}"
+    host = _preferred_runtime_host()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{ROBOT_DAEMON_PORT}"
+
+
+def _preferred_runtime_host() -> str:
+    override = os.getenv("BIOXP_LINKAGE_HOST") or os.getenv("BIOXP_RUNTIME_HOST")
+    if override:
+        return override.strip()
+    return _resolve_host_for_linkage(ROBOT_SSH_HOST)
+
+
+def _resolve_host_for_linkage(host: str) -> str:
+    try:
+        records = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return host
+    for family, _, _, _, sockaddr in records:
+        address = sockaddr[0]
+        if family == socket.AF_INET and address:
+            return address
+    for _, _, _, _, sockaddr in records:
+        address = sockaddr[0]
+        if address:
+            return address
+    return host
+
+
+def _canonicalize_linkage_url(url: Optional[str]) -> Optional[str]:
+    normalized = _normalize_url(url)
+    if not normalized:
+        return None
+    parsed = urlsplit(normalized)
+    if parsed.hostname != ROBOT_SSH_HOST:
+        return normalized
+    preferred_host = _preferred_runtime_host()
+    netloc_host = preferred_host
+    if ":" in netloc_host and not netloc_host.startswith("["):
+        netloc_host = f"[{netloc_host}]"
+    netloc = netloc_host if parsed.port is None else f"{netloc_host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
 
 
 def _read_persisted_linkage() -> Optional[str]:
@@ -125,7 +168,7 @@ async def get_linkage():
 @router.post("/linkage")
 async def set_linkage(req: LinkageRequest):
     global _GLOBAL_LINKAGE_URL
-    url = _normalize_url(req.url)
+    url = _canonicalize_linkage_url(req.url)
     _GLOBAL_LINKAGE_URL = url
     _persist_linkage(_GLOBAL_LINKAGE_URL)
     return {

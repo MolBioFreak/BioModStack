@@ -24,6 +24,7 @@ from urllib.parse import quote as urlquote
 import psutil
 
 from paths import get_code_root
+from runtime_policy import core_runtime_mode_enabled
 from services.gpu_config import (
     read_scheduler_config,
     write_scheduler_config,
@@ -32,6 +33,7 @@ from services.gpu_config import (
 )
 from services.gpu_metadata import HARDWARE_LIMITS
 from services.job_control import force_launch_job as force_launch_job_service
+from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,6 +42,26 @@ PROJECT_ROOT = get_code_root()
 GPU_RESERVATIONS_PATH = PROJECT_ROOT / ".gpu_reservations.json"
 GPU_POWER_STATE_PATH = PROJECT_ROOT / ".gpu_power_state.json"
 GPU_FAN_STATE_PATH = PROJECT_ROOT / ".gpu_fan_state.json"
+
+
+
+def _gpu_proxy_enabled() -> bool:
+    return core_runtime_mode_enabled()
+
+
+
+def _gpu_proxy_request(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    try:
+        return request_via_workflow_adapter(method, f"/api/gpu{path}", payload)
+    except WorkflowAdapterRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+
+def _model_payload(model: BaseModel) -> dict[str, Any]:
+    return model.model_dump(exclude_none=True)
 
 # Power control state
 # - current_limits: currently active per-GPU watt limits
@@ -2363,6 +2385,9 @@ def get_ram_stats() -> RAMStatus:
 @router.get("/status")
 async def get_system_status():
     """Get complete system status including GPUs, CPU, and RAM."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/status")
+
     # Run blocking hardware checks in thread pool to avoid blocking event loop
     cpu = await asyncio.to_thread(get_cpu_stats)
     ram = await asyncio.to_thread(get_ram_stats)
@@ -2386,6 +2411,8 @@ async def get_system_status():
 @router.get("/gpus")
 async def get_gpus_only():
     """Get GPU status only (for lighter polling)."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/gpus")
     gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error)
     return {"gpus": gpus, "gpu_error": gpu_error, "timestamp": datetime.utcnow()}
 
@@ -2393,6 +2420,8 @@ async def get_gpus_only():
 @router.get("/cpu")
 async def get_cpu_only():
     """Get CPU status only."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/cpu")
     cpu = await asyncio.to_thread(get_cpu_stats)
     return {"cpu": cpu, "timestamp": datetime.utcnow()}
 
@@ -2400,6 +2429,8 @@ async def get_cpu_only():
 @router.get("/ram")
 async def get_ram_only():
     """Get RAM status only."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/ram")
     ram = await asyncio.to_thread(get_ram_stats)
     return {"ram": ram, "timestamp": datetime.utcnow()}
 
@@ -2436,6 +2467,8 @@ def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
 @router.get("/power-control")
 async def get_power_control():
     """Get current power control state."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/power-control")
     return await asyncio.to_thread(_get_power_control_payload)
 
 
@@ -2526,6 +2559,8 @@ def _set_power_control_sync(request: PowerControlRequest) -> Dict[str, Any]:
 @router.post("/power-control")
 async def set_power_control(request: PowerControlRequest):
     """Set power limits via preset, manual control, or toggle."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("POST", "/power-control", _model_payload(request))
     return await asyncio.to_thread(_set_power_control_sync, request)
 
 
@@ -2542,6 +2577,8 @@ class FanMappingOverrideRequest(BaseModel):
 @router.get("/fan-control")
 async def get_fan_control():
     """Get per-GPU fan control status and mapping."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/fan-control")
     return await asyncio.to_thread(_get_fan_control_snapshot)
 
 
@@ -2586,6 +2623,8 @@ def _update_fan_control_mapping_sync(request: FanMappingOverrideRequest) -> Dict
 @router.put("/fan-control/mapping")
 async def update_fan_control_mapping(request: FanMappingOverrideRequest):
     """Persist explicit nvidia-smi GPU index -> fan target list overrides."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("PUT", "/fan-control/mapping", _model_payload(request))
     return await asyncio.to_thread(_update_fan_control_mapping_sync, request)
 
 
@@ -2750,6 +2789,8 @@ def _set_fan_control_sync(request: FanControlRequest) -> Dict[str, Any]:
 @router.post("/fan-control")
 async def set_fan_control(request: FanControlRequest):
     """Apply fan mode/speed for a single nvidia-smi GPU index using the configured backend."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("POST", "/fan-control", _model_payload(request))
     return await asyncio.to_thread(_set_fan_control_sync, request)
 
 
@@ -2791,6 +2832,8 @@ class SchedulerConfigResponse(BaseModel):
 @router.get("/scheduler-config")
 async def get_scheduler_config():
     """Get current GPU scheduler configuration."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("GET", "/scheduler-config")
     config = read_scheduler_config()
     return {
         "global": config.get("global", {}),
@@ -2804,6 +2847,8 @@ async def get_scheduler_config():
 @router.put("/scheduler-config")
 async def update_scheduler_config(global_config: SchedulerGlobalConfig):
     """Update global scheduler settings."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("PUT", "/scheduler-config", _model_payload(global_config))
     config = read_scheduler_config()
     config["global"] = {
         "busy_threshold": max(0.0, min(1.0, global_config.busy_threshold)),
@@ -2835,6 +2880,8 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
 @router.put("/scheduler-config/gpu/{gpu_id}")
 async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
     """Set per-GPU override (force_available, quick_enable, or custom threshold)."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("PUT", f"/scheduler-config/gpu/{gpu_id}", _model_payload(override))
     config = read_scheduler_config()
     
     config["overrides"][gpu_id] = {
@@ -2860,6 +2907,8 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
 @router.post("/scheduler-config/gpu/{gpu_id}/toggle-disable")
 async def toggle_gpu_disabled(gpu_id: str):
     """Simple toggle to enable/disable a GPU from inference scheduling."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("POST", f"/scheduler-config/gpu/{gpu_id}/toggle-disable")
     config = read_scheduler_config()
     
     # Get current state
@@ -2889,6 +2938,8 @@ async def toggle_gpu_disabled(gpu_id: str):
 @router.delete("/scheduler-config/gpu/{gpu_id}")
 async def clear_gpu_override(gpu_id: str):
     """Clear per-GPU override, reverting to global settings."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("DELETE", f"/scheduler-config/gpu/{gpu_id}")
     config = read_scheduler_config()
     
     if gpu_id in config["overrides"]:

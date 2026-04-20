@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -14,6 +15,7 @@ from textwrap import dedent
 
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
+WORKFLOW_ADAPTER_SERVICE = "biomodstack-workflow-adapter.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
 
@@ -23,8 +25,12 @@ VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = 8000
 FRONTEND_PORT = 5173
+WORKFLOW_ADAPTER_PORT = 8001
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{FRONTEND_PORT}/bms/"
+WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
+DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS = 30.0
+CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS = 180.0
 
 BROWSER_LAUNCH_SURFACE = "browser"
 ELECTRON_LAUNCH_SURFACE = "electron"
@@ -43,6 +49,7 @@ _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "sta
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
+WORKFLOW_ADAPTER_LOG = LOG_DIR / "workflow-adapter.log"
 CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
 
 
@@ -81,6 +88,28 @@ def load_launch_preferences() -> dict[str, object]:
     return normalize_launch_preferences(data)
 
 
+def build_launch_ui_command(
+    project_root: Path | None = None,
+    runtime_mode: str | None = CONTAINER_RUNTIME_MODE,
+    surface: str | None = ELECTRON_LAUNCH_SURFACE,
+    python_executable: str | None = None,
+) -> list[str]:
+    root = (project_root or get_project_root()).resolve()
+    command = [python_executable or sys.executable, str(root / "scripts" / "launch_biomodstack_ui.py")]
+
+    if runtime_mode:
+        command.extend(["--runtime", resolve_runtime_mode(runtime_mode)])
+    if surface:
+        normalized_surface = str(surface).strip().lower()
+        if normalized_surface not in SUPPORTED_LAUNCH_SURFACES:
+            raise ServiceManagerError(
+                f"Unsupported BioModStack launch surface '{surface}'. Expected one of: {', '.join(SUPPORTED_LAUNCH_SURFACES)}"
+            )
+        command.extend(["--surface", normalized_surface])
+
+    return command
+
+
 class ServiceManagerError(RuntimeError):
     """Raised when BioModStack service management fails."""
 
@@ -112,12 +141,12 @@ def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
 def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
-        return (CORE_RUNTIME_SERVICE,)
+        return (WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
     return (API_SERVICE, FRONTEND_SERVICE)
 
 
 def all_runtime_service_names() -> tuple[str, ...]:
-    return (API_SERVICE, FRONTEND_SERVICE, CORE_RUNTIME_SERVICE)
+    return (API_SERVICE, FRONTEND_SERVICE, WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
 
 
 def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
@@ -145,7 +174,10 @@ def runtime_frontend_url(runtime_mode: str | None = None) -> str:
 def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, str]]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
-        return [{"id": "runtime", "label": "Core runtime log", "path": str(CORE_RUNTIME_LOG)}]
+        return [
+            {"id": "workflow-adapter", "label": "Workflow adapter log", "path": str(WORKFLOW_ADAPTER_LOG)},
+            {"id": "runtime", "label": "Core runtime log", "path": str(CORE_RUNTIME_LOG)},
+        ]
     return [
         {"id": "api", "label": "API log", "path": str(API_LOG)},
         {"id": "frontend", "label": "Frontend log", "path": str(FRONTEND_LOG)},
@@ -165,6 +197,15 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode)
     services = runtime_service_descriptors(root, mode)
+    health = {
+        "api_ready": url_is_ready(API_HEALTH_URL),
+        "frontend_ready": url_is_ready(frontend_url),
+    }
+    if mode == CONTAINER_RUNTIME_MODE:
+        health = {
+            "adapter_ready": url_is_ready(WORKFLOW_ADAPTER_HEALTH_URL),
+            **health,
+        }
     return {
         "runtime_mode": mode,
         "runtime_active": any(service["active"] for service in services),
@@ -176,10 +217,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "router_basename": runtime_router_basename(mode),
         "supported_launch_surfaces": list(SUPPORTED_LAUNCH_SURFACES),
         "launch_preferences": load_launch_preferences(),
-        "health": {
-            "api_ready": url_is_ready(API_HEALTH_URL),
-            "frontend_ready": url_is_ready(frontend_url),
-        },
+        "health": health,
         "services": services,
         "logs": runtime_log_descriptors(mode),
         "capabilities": {
@@ -223,14 +261,40 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
+        adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
+        workflow_adapter_unit = dedent(
+            f"""\
+            [Unit]
+            Description=BioModStack host workflow adapter
+            PartOf={TARGET_UNIT}
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            Environment=BMS_HOME={root}
+            Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
+            Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=0.0.0.0
+            ExecStart={adapter_runner}
+            Restart=on-failure
+            RestartSec=2
+            TimeoutStopSec=20
+            KillMode=control-group
+            StandardOutput=append:{WORKFLOW_ADAPTER_LOG}
+            StandardError=append:{WORKFLOW_ADAPTER_LOG}
+
+            [Install]
+            WantedBy={TARGET_UNIT}
+            """
+        )
         core_runtime_unit = dedent(
             f"""\
             [Unit]
             Description=BioModStack core runtime container stack
             PartOf={TARGET_UNIT}
-            After=network-online.target docker.service
-            Wants=network-online.target docker.service
+            After=network-online.target docker.service {WORKFLOW_ADAPTER_SERVICE}
+            Wants=network-online.target docker.service {WORKFLOW_ADAPTER_SERVICE}
 
             [Service]
             Type=simple
@@ -254,7 +318,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             f"""\
             [Unit]
             Description=BioModStack workstation runtime target
-            Wants={CORE_RUNTIME_SERVICE}
+            Wants={WORKFLOW_ADAPTER_SERVICE} {CORE_RUNTIME_SERVICE}
 
             [Install]
             WantedBy=default.target
@@ -262,6 +326,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         )
 
         return {
+            WORKFLOW_ADAPTER_SERVICE: workflow_adapter_unit,
             CORE_RUNTIME_SERVICE: core_runtime_unit,
             TARGET_UNIT: target_unit,
         }
@@ -566,15 +631,21 @@ def should_cleanup_legacy_listeners_before_start(
     project_root: Path | None = None,
 ) -> bool:
     mode = resolve_runtime_mode(runtime_mode)
-    if mode != CONTAINER_RUNTIME_MODE:
-        return True
-    return not service_is_active(CORE_RUNTIME_SERVICE, project_root=project_root)
+    return not all(service_is_active(name, project_root=project_root) for name in runtime_service_names(mode))
+
+
+def runtime_http_wait_timeout_seconds(runtime_mode: str | None = None) -> float:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        return CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS
+    return DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS
 
 
 def start_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode)
+    wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
     incompatible_services = incompatible_runtime_service_names(mode)
     run_systemctl("stop", *incompatible_services, check=False, project_root=root)
@@ -582,8 +653,10 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
         cleanup_legacy_listener("api", root)
         cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    wait_for_http(API_HEALTH_URL)
-    wait_for_http(frontend_url)
+    if mode == CONTAINER_RUNTIME_MODE:
+        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
 
 def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -600,14 +673,17 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode)
+    wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
     run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
     cleanup_legacy_listener("api", root)
     cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    wait_for_http(API_HEALTH_URL)
-    wait_for_http(frontend_url)
+    if mode == CONTAINER_RUNTIME_MODE:
+        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
 
 def restart_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -630,8 +706,10 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
     if mode == CONTAINER_RUNTIME_MODE:
         return [
             f"Runtime: {'active' if descriptor['runtime_active'] else 'inactive'} ({CORE_RUNTIME_SERVICE})",
+            f"Workflow adapter: {'ready' if descriptor['health']['adapter_ready'] else 'not ready'} ({WORKFLOW_ADAPTER_HEALTH_URL})",
             f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
             f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({descriptor['frontend_url']})",
+            f"Workflow adapter log: {WORKFLOW_ADAPTER_LOG}",
             f"Runtime log: {CORE_RUNTIME_LOG}",
         ]
 

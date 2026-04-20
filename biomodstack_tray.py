@@ -44,6 +44,7 @@ from biomodstack_services import (  # noqa: E402
     API_SERVICE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     FRONTEND_SERVICE,
+    build_launch_ui_command,
     service_is_active,
 )
 
@@ -345,8 +346,15 @@ def stop_all_services():
     subprocess.Popen([str(STOP_SCRIPT)])
 
 def open_ui():
-    """Open BioModStack UI in browser."""
+    """Open BioModStack UI in the Electron shell."""
+    show_notification("Opening UI", "Launching the BioModStack shell...")
+    subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT))
+
+
+def open_browser_ui():
+    """Open BioModStack UI in the hosted browser surface."""
     webbrowser.open(FRONTEND_URL)
+
 
 def open_results_folder():
     """Open results folder in file manager."""
@@ -467,7 +475,8 @@ class BioModStackTray:
         
         return Menu(
             # Open UI
-            Item("🌐 Open BioModStack", lambda: open_ui(), default=True),
+            Item("🖥 Open BioModStack Shell", lambda: open_ui(), default=True),
+            Item("🌐 Open Hosted Web UI", lambda: open_browser_ui()),
             Item("📂 Open Results Folder", lambda: open_results_folder()),
             
             Menu.SEPARATOR,

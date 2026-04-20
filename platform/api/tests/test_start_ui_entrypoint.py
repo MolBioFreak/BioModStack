@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 START_UI = REPO_ROOT / "start_ui.sh"
+START_UI_ELECTRON = REPO_ROOT / "start_ui_electron.sh"
 
 
 def test_start_ui_sh_still_forwards_directly_to_manage_desktop_services(tmp_path: Path) -> None:
@@ -39,3 +40,27 @@ def test_start_ui_sh_usage_contract_remains_service_control_only() -> None:
     assert "launch_biomodstack_ui.py" not in text
     assert 'Usage: $0 {start|stop|status|restart|restart-api} [--runtime dev|container]' in text
     assert 'exec python3 "$MANAGER" "$ACTION" "$@"' in text
+
+
+def test_start_ui_electron_sh_launches_ui_script_on_the_electron_surface(tmp_path: Path) -> None:
+    fake_home = tmp_path / "fake-home"
+    launcher = fake_home / "scripts" / "launch_biomodstack_ui.py"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(
+        "import json, sys\nprint(json.dumps({'argv': sys.argv[1:]}))\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["BMS_HOME"] = str(fake_home)
+
+    result = subprocess.run(
+        ["bash", str(START_UI_ELECTRON), "--runtime", "container"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"argv": ["--surface", "electron", "--runtime", "container"]}
