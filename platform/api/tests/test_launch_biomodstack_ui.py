@@ -120,6 +120,42 @@ def test_explicit_electron_surface_launches_shell_when_installed(monkeypatch) ->
     assert launched == [descriptor]
 
 
+def test_launch_electron_shell_exports_runtime_context_to_the_shell(monkeypatch, tmp_path) -> None:
+    module = load_module()
+    shell_dir = tmp_path / "desktop-electron"
+    shell_dir.mkdir(parents=True)
+    monkeypatch.setattr(module, "ELECTRON_SHELL_DIR", shell_dir)
+    monkeypatch.setattr(module, "electron_shell_installed", lambda: True)
+
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["cwd"] = kwargs.get("cwd")
+        captured["env"] = kwargs.get("env")
+        captured["start_new_session"] = kwargs.get("start_new_session")
+        return object()
+
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+
+    module.launch_electron_shell(
+        {
+            "runtime_mode": "container",
+            "frontend_origin": "http://127.0.0.1:5173",
+            "router_basename": "/bms/",
+        }
+    )
+
+    env = captured["env"]
+    assert captured["command"] == ["pnpm", "start"]
+    assert captured["cwd"] == shell_dir
+    assert captured["start_new_session"] is True
+    assert env["BMS_HOME"] == str(module.REPO_ROOT)
+    assert env["BMS_RUNTIME_MODE"] == "container"
+    assert env["BMS_FRONTEND_ORIGIN"] == "http://127.0.0.1:5173"
+    assert env["BMS_ROUTER_BASENAME"] == "/bms/"
+
+
 def test_electron_shell_installed_requires_platform_binary(monkeypatch, tmp_path) -> None:
     module = load_module()
     shell_dir = tmp_path / "desktop-electron"
