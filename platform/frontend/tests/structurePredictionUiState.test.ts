@@ -60,7 +60,7 @@ test('complex mode rejects RF3-only selections instead of silently lying about s
     assert.match(resolved.error || '', /predict-only/i);
 });
 
-test('boltz cp experimental launch config locks the structure template into single-fold boltz mode', () => {
+test('boltz cp experimental launch config keeps the structure template locked to single-fold boltz mode while exposing MSA controls', () => {
     const config = resolveStructureLaunchConfig({
         template_model_id: 'boltz_cp_experimental',
         structure_launch_variant: 'boltz_cp_experimental',
@@ -72,7 +72,7 @@ test('boltz cp experimental launch config locks the structure template into sing
     assert.equal(config.allowPredictorSelection, false);
     assert.equal(config.showParallelJobs, false);
     assert.equal(config.showSequenceBatch, false);
-    assert.equal(config.showMsaControls, false);
+    assert.equal(config.showMsaControls, true);
     assert.equal(config.forcedPredictor, 'boltz');
 });
 
@@ -105,6 +105,11 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
     assert.deepEqual(
         deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: undefined }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
+    );
+
+    assert.deepEqual(
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: 4 }),
+        { gpuIds: '2,3', sizeCp: 1 },
     );
 
     assert.deepEqual(

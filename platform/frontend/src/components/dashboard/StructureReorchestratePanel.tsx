@@ -1,3 +1,4 @@
+import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
 import type { StructurePredictor, StructureReorchestrateSettings } from './reorchestrateStructureSettings.js';
 
 interface StructureReorchestratePanelProps {
@@ -14,6 +15,12 @@ const predictorLabel: Record<StructurePredictor, string> = {
 
 const numberInputClass = 'mt-1 w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100';
 const sectionClass = 'rounded-xl border border-slate-700 bg-slate-800/40 p-4';
+const boltzCpGpuOptions = [
+    { id: 0, name: '5090' },
+    { id: 1, name: '5060Ti' },
+    { id: 2, name: '3090#1' },
+    { id: 3, name: '3090#2' },
+];
 
 const toPositiveInteger = (value: string, fallback: number, min = 1): number => {
     const parsed = Number.parseInt(value, 10);
@@ -31,6 +38,10 @@ export function StructureReorchestratePanel({
         update({ boltz: { ...settings.boltz, ...patch } });
     };
 
+    const updateBoltzCp = (patch: Partial<StructureReorchestrateSettings['boltzCp']>) => {
+        update({ boltzCp: { ...settings.boltzCp, ...patch } });
+    };
+
     const updateRf3 = (patch: Partial<StructureReorchestrateSettings['rf3']>) => {
         update({ rf3: { ...settings.rf3, ...patch } });
     };
@@ -38,6 +49,14 @@ export function StructureReorchestratePanel({
     const updateProtenix = (patch: Partial<StructureReorchestrateSettings['protenix']>) => {
         update({ protenix: { ...settings.protenix, ...patch } });
     };
+
+    const boltzCpGpuSettings = settings.boltzCp.enabled
+        ? deriveBoltzCpGpuLaunchSettings({
+            pinnedGpus: settings.boltzCp.pinnedGpus,
+            requestedSizeCp: settings.boltzCp.requestedSizeCp,
+            fallbackGpuIds: '0,1,2,3',
+        })
+        : null;
 
     return (
         <div className="space-y-4">
@@ -184,6 +203,122 @@ export function StructureReorchestratePanel({
                                 className={numberInputClass}
                                 disabled={disabled}
                             />
+                        </label>
+                    </div>
+                </div>
+            )}
+
+            {settings.boltzCp.enabled && boltzCpGpuSettings && (
+                <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
+                    <div>
+                        <h3 className="text-base font-semibold text-orange-100">Fold-CP settings</h3>
+                        <p className="mt-1 text-sm text-orange-100/70">
+                            Reuse the same CP runtime controls from the structure launcher when re-orchestrating this experimental job.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                            GPU Pinning {settings.boltzCp.pinnedGpus.length > 0 && <span className="text-blue-400">({settings.boltzCp.pinnedGpus.length} selected)</span>}
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => updateBoltzCp({ pinnedGpus: [], lockGpus: false })}
+                                className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${settings.boltzCp.pinnedGpus.length === 0
+                                    ? 'bg-slate-600 text-white ring-2 ring-slate-400'
+                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                }`}
+                                disabled={disabled}
+                            >
+                                Auto
+                            </button>
+                            {boltzCpGpuOptions.map((gpu) => (
+                                <button
+                                    key={gpu.id}
+                                    type="button"
+                                    onClick={() => updateBoltzCp({
+                                        pinnedGpus: settings.boltzCp.pinnedGpus.includes(gpu.id)
+                                            ? settings.boltzCp.pinnedGpus.filter((value) => value !== gpu.id)
+                                            : [...settings.boltzCp.pinnedGpus, gpu.id].sort((left, right) => left - right),
+                                    })}
+                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${settings.boltzCp.pinnedGpus.includes(gpu.id)
+                                        ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                                    disabled={disabled}
+                                >
+                                    {gpu.name}
+                                </button>
+                            ))}
+                        </div>
+                        {settings.boltzCp.pinnedGpus.length > 0 && (
+                            <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.boltzCp.lockGpus}
+                                    onChange={(event) => updateBoltzCp({ lockGpus: event.target.checked })}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                                    disabled={disabled}
+                                />
+                                <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
+                            </label>
+                        )}
+                    </div>
+
+                    <div>
+                        <label className="text-sm text-orange-100/80 block mb-1">Context Parallel Size Request</label>
+                        <input
+                            type="number"
+                            value={settings.boltzCp.requestedSizeCp}
+                            onChange={(event) => updateBoltzCp({
+                                requestedSizeCp: Math.max(1, Math.min(16, Number.parseInt(event.target.value || '1', 10) || 1)),
+                            })}
+                            min={1}
+                            max={16}
+                            className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                            disabled={disabled}
+                        />
+                        <p className="mt-2 text-xs text-slate-400">
+                            Runtime launch will use square-divisor sizing. Current pinned-GPU resolution: {boltzCpGpuSettings.gpuIds || '0,1,2,3'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label className="text-xs text-slate-400 block mb-1">Output Format</label>
+                            <select
+                                value={settings.boltzCp.outputFormat}
+                                onChange={(event) => updateBoltzCp({
+                                    outputFormat: (event.target.value === 'pdb' ? 'pdb' : 'mmcif') as StructureReorchestrateSettings['boltzCp']['outputFormat'],
+                                })}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                disabled={disabled}
+                            >
+                                <option value="mmcif">mmCIF</option>
+                                <option value="pdb">PDB</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs text-slate-400 block mb-1">Seed</label>
+                            <input
+                                type="text"
+                                value={settings.boltzCp.seed}
+                                onChange={(event) => updateBoltzCp({ seed: event.target.value.replace(/[^0-9-]/g, '') })}
+                                placeholder="optional"
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                disabled={disabled}
+                            />
+                        </div>
+                        <label className="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-sm text-slate-200">
+                            <input
+                                type="checkbox"
+                                checked={settings.boltzCp.writeFullPae}
+                                onChange={(event) => updateBoltzCp({ writeFullPae: event.target.checked })}
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-500"
+                                disabled={disabled}
+                            />
+                            <span>Write full PAE matrix</span>
                         </label>
                     </div>
                 </div>
