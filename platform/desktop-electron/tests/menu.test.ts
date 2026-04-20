@@ -39,8 +39,11 @@ const context: ShellContext = {
   browserUrl: 'http://127.0.0.1:5173/bms/',
 };
 
-test('application menu exposes polished shell navigation, logs, data folders, and service actions', () => {
-  const labels = flattenLabels(buildApplicationMenuTemplate(context, createControlStub()));
+test('application menu exposes shell navigation, service controls, and shell zoom/system settings', () => {
+  const labels = flattenLabels(buildApplicationMenuTemplate(context, createControlStub(), {
+    getZoomFactor: () => 1,
+    isAlwaysOnTop: () => false,
+  }));
 
   assert.deepEqual(labels, [
     'BioModStack',
@@ -49,28 +52,36 @@ test('application menu exposes polished shell navigation, logs, data folders, an
     'Copy Local URL',
     'Open Results Folder',
     'Open Shell Data Folder',
-    'Logs',
-    'Open API Log',
-    'Open Frontend Log',
-    'Open Core Runtime Log',
+    'Hide to Tray',
+    'Quit Shell',
     'Services',
     'Start Services',
     'Stop Services',
     'Restart Services',
     'Restart API',
-    'Hide to Tray',
-    'Quit Shell',
+    'Logs',
+    'Open API Log',
+    'Open Frontend Log',
+    'Open Core Runtime Log',
     'View',
     'Reload Shell',
-    'Force Reload',
     'Toggle Developer Tools',
+    'Current Zoom: 100%',
+    'Zoom Out',
     'Reset Zoom',
     'Zoom In',
-    'Zoom Out',
+    'Zoom Presets',
+    '80%',
+    '90%',
+    '100%',
+    '110%',
+    '125%',
+    '150%',
     'Toggle Full Screen',
     'Window',
     'Minimize Window',
     'Close Window',
+    'Always on Top',
     'Help',
     'About BioModStack Shell',
   ]);
