@@ -1064,6 +1064,24 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
 MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3
 MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50
 STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR = "RF3 is predict-only and cannot be launched in complex mode."
+BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_input__"
+
+
+
+def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
+    if value_count < 1:
+        return 1
+
+    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
+    best = 1
+    for candidate in range(1, value_count + 1):
+        if value_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1114,6 +1132,74 @@ def _normalize_structure_prediction_pred_method(
         return normalized
 
     normalized["pred_method"] = requested_pred_method
+    return normalized
+
+
+def _normalize_boltz_cp_params_for_validation(
+    model_id: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if model_id != "boltz_cp_experimental" or not isinstance(params, dict):
+        return {} if params is None else params
+
+    normalized = dict(params)
+
+    input_path = _coerce_nonempty_text(normalized.get("input_path")) or _coerce_nonempty_text(
+        normalized.get("bcp_input_path")
+    )
+    if not input_path:
+        has_structure_launcher_inputs = any(
+            normalized.get(key)
+            for key in (
+                "sequence",
+                "complex_components",
+                "sequence_batch_entries",
+                "fixed_target_source_path",
+            )
+        ) or normalized.get("structure_launch_variant") == "boltz_cp_experimental"
+        if has_structure_launcher_inputs:
+            input_path = BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
+    if input_path:
+        normalized["input_path"] = input_path
+
+    gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
+        normalized.get("bcp_gpu_ids")
+    )
+    if not gpu_ids and isinstance(normalized.get("pinned_gpus"), list) and normalized["pinned_gpus"]:
+        gpu_ids = ",".join(str(gpu_id).strip() for gpu_id in normalized["pinned_gpus"] if str(gpu_id).strip())
+    if gpu_ids:
+        normalized["gpu_ids"] = gpu_ids
+
+    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
+        normalized.get("bcp_size_cp")
+    )
+    if gpu_ids:
+        gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
+        if gpu_count > 0:
+            size_cp = _largest_square_divisor(gpu_count, size_cp)
+    if size_cp is not None:
+        normalized["size_cp"] = size_cp
+
+    alias_mappings = {
+        "input_format": "bcp_input_format",
+        "output_format": "bcp_output_format",
+        "write_full_pae": "bcp_write_full_pae",
+        "recycling_steps": "bcp_recycling_steps",
+        "sampling_steps": "bcp_sampling_steps",
+        "diffusion_samples": "bcp_diffusion_samples",
+        "seed": "bcp_seed",
+    }
+    for canonical_key, alias_key in alias_mappings.items():
+        if canonical_key not in normalized and alias_key in normalized:
+            normalized[canonical_key] = normalized[alias_key]
+
+    if "recycling_steps" not in normalized and "boltz_recycling_steps" in normalized:
+        normalized["recycling_steps"] = normalized["boltz_recycling_steps"]
+    if "sampling_steps" not in normalized and "boltz_sampling_steps" in normalized:
+        normalized["sampling_steps"] = normalized["boltz_sampling_steps"]
+    if "diffusion_samples" not in normalized and "boltz_num_samples" in normalized:
+        normalized["diffusion_samples"] = normalized["boltz_num_samples"]
+
     return normalized
 
 
@@ -4439,10 +4525,11 @@ async def create_job(
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
+    validation_params = _normalize_boltz_cp_params_for_validation(job_data.model_id, job_data.params)
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
     if not job_data.model_id.startswith('template_') and not is_mutagenesis:
         # Validate model and mode
-        errors = registry.validate_job_params(job_data.model_id, job_data.mode, job_data.params)
+        errors = registry.validate_job_params(job_data.model_id, job_data.mode, validation_params)
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
