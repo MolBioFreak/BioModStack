@@ -1325,6 +1325,7 @@ export interface QueuedJob {
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;
+    display_gpu_ids: number[] | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;

@@ -38,21 +38,22 @@ They should not own backend process lifetime.
 
 ### Service layer
 
-API service
-- owns uvicorn lifecycle
-- restarts on failure
-- writes to `~/.local/state/biomodstack/logs/api.log`
-- reads workstation env from `~/.biomodstack/env.sh`
-- forces `BMS_CPU_POWER_STRICT=0` in the user-service runtime on this workstation so
-  the unprivileged API unit does not die on unreadable RAPL telemetry
+Dev runtime services
+- `biomodstack-api.service`
+- `biomodstack-frontend.service`
+- continue to own the explicit development process shape
+- write to `~/.local/state/biomodstack/logs/api.log` and `frontend.log`
 
-Frontend service
-- currently owns the Vite dev server lifecycle
-- restarts on failure
-- writes to `~/.local/state/biomodstack/logs/frontend.log`
+Containerized core runtime
+- `biomodstack-core-runtime.service`
+- runs `scripts/run_biomodstack_core_runtime.sh`
+- uses `compose.core-runtime.yml` to launch `bms-api` and `bms-web`
+- writes to `~/.local/state/biomodstack/logs/core-runtime.log`
+- preserves the same browser/API health contract on ports 5173 and 8000
 
 Target unit
-- groups both services for start/stop convenience
+- `biomodstack.target`
+- groups either the dev pair or the container runtime for start/stop convenience
 - may be enabled later for login-time auto-start if desired
 
 ### Concrete repo surfaces
@@ -65,11 +66,19 @@ The service-layer/control split now lives in these files:
   - owns health checks, status text, and legacy listener cleanup
 - `scripts/manage_desktop_services.py`
   - single control-plane entry for `start`, `stop`, `restart`, `restart-api`, `status`
+  - supports `--runtime dev|container`
 - `scripts/run_biomodstack_api.sh`
   - API runtime wrapper used by `biomodstack-api.service`
   - sources `~/.biomodstack/env.sh` before snapshotting launch env
+  - makes `BMS_API_MODE=dev|prod` explicit instead of assuming reload semantics forever
 - `scripts/run_biomodstack_frontend.sh`
   - frontend runtime wrapper used by `biomodstack-frontend.service`
+  - keeps dev-mode ownership explicit and points production runtime to the container stack
+- `scripts/run_biomodstack_core_runtime.sh`
+  - compose wrapper for `compose.core-runtime.yml`
+  - used by `biomodstack-core-runtime.service`
+- `docker/api.Dockerfile`, `docker/web.Dockerfile`, `docker/web/nginx.conf`
+  - first-wave container scaffold for `bms-api` and `bms-web`
 - `start_ui.sh`, `restart_api.sh`, `stop_services.sh`
   - stable shell entrypoints preserved for operators and desktop launchers
 - `biomodstack_panel.py`, `biomodstack_tray.py`

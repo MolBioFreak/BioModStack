@@ -57,6 +57,7 @@ class QueuedJobResponse(BaseModel):
     paused: bool
     pinned_gpu: Optional[int]
     assigned_gpu: Optional[int]
+    display_gpu_ids: Optional[List[int]] = None
     priority: int
     vram_estimate_mb: Optional[int]
     sequence_length: Optional[int]
@@ -84,6 +85,51 @@ class QueuedJobResponse(BaseModel):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _normalize_gpu_id_list(raw_value: Any) -> Optional[List[int]]:
+    if raw_value in (None, ""):
+        return None
+    if isinstance(raw_value, str):
+        raw_items: List[Any] = [token.strip() for token in raw_value.split(",") if token.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        raw_items = list(raw_value)
+    else:
+        raw_items = [raw_value]
+
+    gpu_ids: List[int] = []
+    seen: set[int] = set()
+    for raw_item in raw_items:
+        try:
+            gpu_id = int(str(raw_item).strip())
+        except (TypeError, ValueError):
+            continue
+        if gpu_id < 0 or gpu_id in seen:
+            continue
+        seen.add(gpu_id)
+        gpu_ids.append(gpu_id)
+    return gpu_ids or None
+
+
+def _resolve_display_gpu_ids(job: Job) -> Optional[List[int]]:
+    params = getattr(job, "params", None)
+    if not isinstance(params, dict):
+        params = {}
+
+    for key in ("bcp_gpu_ids", "pinned_gpus", "gpu_ids"):
+        gpu_ids = _normalize_gpu_id_list(params.get(key))
+        if gpu_ids:
+            return gpu_ids
+
+    pinned_gpu = getattr(job, "pinned_gpu", None)
+    if isinstance(pinned_gpu, int):
+        return [pinned_gpu]
+
+    assigned_gpu = getattr(job, "assigned_gpu", None)
+    if isinstance(assigned_gpu, int) and job_uses_assigned_gpu(job):
+        return [assigned_gpu]
+
+    return None
 
 
 def _parse_pid(raw_pid: Optional[str]) -> Optional[int]:
@@ -400,6 +446,7 @@ async def list_queue(
             paused=job.paused,
             pinned_gpu=job.pinned_gpu,
             assigned_gpu=job.assigned_gpu if job_uses_assigned_gpu(job) else None,
+            display_gpu_ids=_resolve_display_gpu_ids(job),
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,

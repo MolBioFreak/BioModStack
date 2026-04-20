@@ -12,7 +12,12 @@ from textwrap import dedent
 
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
+CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
+
+DEV_RUNTIME_MODE = "dev"
+CONTAINER_RUNTIME_MODE = "container"
+VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = 8000
 FRONTEND_PORT = 5173
@@ -23,6 +28,7 @@ _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "sta
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
+CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
 
 
 class ServiceManagerError(RuntimeError):
@@ -44,8 +50,106 @@ def get_user_systemd_dir(home: Path | None = None) -> Path:
     return base_home / ".config" / "systemd" / "user"
 
 
-def render_user_units(project_root: Path | None = None) -> dict[str, str]:
+def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
+    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or DEV_RUNTIME_MODE).strip().lower()
+    if mode not in VALID_RUNTIME_MODES:
+        raise ServiceManagerError(
+            f"Unknown BioModStack runtime mode '{mode}'. Expected one of: {', '.join(sorted(VALID_RUNTIME_MODES))}"
+        )
+    return mode
+
+
+def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        return (CORE_RUNTIME_SERVICE,)
+    return (API_SERVICE, FRONTEND_SERVICE)
+
+
+def all_runtime_service_names() -> tuple[str, ...]:
+    return (API_SERVICE, FRONTEND_SERVICE, CORE_RUNTIME_SERVICE)
+
+
+def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
+    active = set(runtime_service_names(runtime_mode))
+    return tuple(name for name in all_runtime_service_names() if name not in active)
+
+
+def run_core_runtime_script(
+    *args: str,
+    check: bool = True,
+    capture_output: bool = True,
+    project_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     root = (project_root or get_project_root()).resolve()
+    env = os.environ.copy()
+    env.setdefault("BMS_HOME", str(root))
+    env.setdefault("BMS_RUNTIME_MODE", CONTAINER_RUNTIME_MODE)
+    script = root / "scripts" / "run_biomodstack_core_runtime.sh"
+    return subprocess.run(
+        [str(script), *args],
+        check=check,
+        capture_output=capture_output,
+        text=True,
+        env=env,
+    )
+
+
+def url_is_ready(url: str, timeout_seconds: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            return 200 <= response.status < 500
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
+    root = (project_root or get_project_root()).resolve()
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
+        core_runtime_unit = dedent(
+            f"""\
+            [Unit]
+            Description=BioModStack core runtime container stack
+            PartOf={TARGET_UNIT}
+            After=network-online.target docker.service
+            Wants=network-online.target docker.service
+
+            [Service]
+            Type=simple
+            Environment=BMS_HOME={root}
+            Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
+            ExecStart={core_runner}
+            ExecStop={core_runner} down
+            Restart=on-failure
+            RestartSec=5
+            TimeoutStopSec=60
+            KillMode=control-group
+            StandardOutput=append:{CORE_RUNTIME_LOG}
+            StandardError=append:{CORE_RUNTIME_LOG}
+
+            [Install]
+            WantedBy={TARGET_UNIT}
+            """
+        )
+
+        target_unit = dedent(
+            f"""\
+            [Unit]
+            Description=BioModStack workstation runtime target
+            Wants={CORE_RUNTIME_SERVICE}
+
+            [Install]
+            WantedBy=default.target
+            """
+        )
+
+        return {
+            CORE_RUNTIME_SERVICE: core_runtime_unit,
+            TARGET_UNIT: target_unit,
+        }
+
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
 
@@ -60,6 +164,8 @@ def render_user_units(project_root: Path | None = None) -> dict[str, str]:
         [Service]
         Type=simple
         Environment=BMS_HOME={root}
+        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
+        Environment=BMS_API_MODE=dev
         Environment=BMS_CPU_POWER_STRICT=0
         Environment=PYTHONUNBUFFERED=1
         ExecStart={api_runner}
@@ -86,6 +192,8 @@ def render_user_units(project_root: Path | None = None) -> dict[str, str]:
         [Service]
         Type=simple
         Environment=BMS_HOME={root}
+        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
+        Environment=BMS_FRONTEND_MODE=dev
         ExecStart={frontend_runner}
         Restart=on-failure
         RestartSec=2
@@ -117,13 +225,17 @@ def render_user_units(project_root: Path | None = None) -> dict[str, str]:
     }
 
 
-def install_user_units(project_root: Path | None = None, systemd_dir: Path | None = None) -> list[Path]:
+def install_user_units(
+    project_root: Path | None = None,
+    systemd_dir: Path | None = None,
+    runtime_mode: str | None = None,
+) -> list[Path]:
     root = (project_root or get_project_root()).resolve()
     target_dir = (systemd_dir or get_user_systemd_dir()).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
 
     written_paths: list[Path] = []
-    for unit_name, content in render_user_units(root).items():
+    for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
         path = target_dir / unit_name
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             path.write_text(content, encoding="utf-8")
@@ -152,11 +264,12 @@ def daemon_reload(project_root: Path | None = None) -> None:
     run_systemctl("daemon-reload", project_root=project_root)
 
 
-def ensure_user_units(project_root: Path | None = None) -> None:
+def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     API_LOG.touch(exist_ok=True)
     FRONTEND_LOG.touch(exist_ok=True)
-    install_user_units(project_root=project_root)
+    CORE_RUNTIME_LOG.touch(exist_ok=True)
+    install_user_units(project_root=project_root, runtime_mode=runtime_mode)
     daemon_reload(project_root=project_root)
 
 
@@ -332,48 +445,81 @@ def wait_for_http(url: str, timeout_seconds: float = 30.0) -> None:
     raise ServiceManagerError(f"Timed out waiting for {url}: {last_error}")
 
 
-def start_all(project_root: Path | None = None) -> None:
+def should_cleanup_legacy_listeners_before_start(
+    runtime_mode: str | None = None,
+    project_root: Path | None = None,
+) -> bool:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode != CONTAINER_RUNTIME_MODE:
+        return True
+    return not service_is_active(CORE_RUNTIME_SERVICE, project_root=project_root)
+
+
+def start_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
-    ensure_user_units(root)
-    cleanup_legacy_listener("api", root)
-    cleanup_legacy_listener("frontend", root)
-    run_systemctl("start", TARGET_UNIT, project_root=root)
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
+    incompatible_services = incompatible_runtime_service_names(mode)
+    run_systemctl("stop", *incompatible_services, check=False, project_root=root)
+    if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
+        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("frontend", root)
+    run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(API_HEALTH_URL)
     wait_for_http(FRONTEND_URL)
 
 
-def stop_all(project_root: Path | None = None) -> None:
+def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
-    ensure_user_units(root)
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
-    run_systemctl("stop", API_SERVICE, FRONTEND_SERVICE, check=False, project_root=root)
+    run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
     cleanup_legacy_listener("api", root)
     cleanup_legacy_listener("frontend", root)
 
 
-def restart_all(project_root: Path | None = None) -> None:
+def restart_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
-    ensure_user_units(root)
-    run_systemctl("stop", API_SERVICE, FRONTEND_SERVICE, check=False, project_root=root)
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
+    run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
+    run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
     cleanup_legacy_listener("api", root)
     cleanup_legacy_listener("frontend", root)
-    run_systemctl("start", API_SERVICE, FRONTEND_SERVICE, project_root=root)
+    run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(API_HEALTH_URL)
     wait_for_http(FRONTEND_URL)
 
 
-def restart_api(project_root: Path | None = None) -> None:
+def restart_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
-    ensure_user_units(root)
-    run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-    cleanup_legacy_listener("api", root)
-    run_systemctl("start", API_SERVICE, project_root=root)
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        run_core_runtime_script("restart", "bms-api", project_root=root)
+    else:
+        run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+        cleanup_legacy_listener("api", root)
+        run_systemctl("start", API_SERVICE, project_root=root)
     wait_for_http(API_HEALTH_URL)
 
 
-def status_lines(project_root: Path | None = None) -> list[str]:
+def status_lines(project_root: Path | None = None, runtime_mode: str | None = None) -> list[str]:
     root = (project_root or get_project_root()).resolve()
-    ensure_user_units(root)
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        runtime_active = service_is_active(CORE_RUNTIME_SERVICE, root)
+        api_ready = url_is_ready(API_HEALTH_URL)
+        frontend_ready = url_is_ready(FRONTEND_URL)
+        return [
+            f"Runtime: {'active' if runtime_active else 'inactive'} ({CORE_RUNTIME_SERVICE})",
+            f"API: {'ready' if api_ready else 'not ready'} ({API_HEALTH_URL})",
+            f"Frontend: {'ready' if frontend_ready else 'not ready'} ({FRONTEND_URL})",
+            f"Runtime log: {CORE_RUNTIME_LOG}",
+        ]
+
     api_active = service_is_active(API_SERVICE, root)
     frontend_active = service_is_active(FRONTEND_SERVICE, root)
     return [
