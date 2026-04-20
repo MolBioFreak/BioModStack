@@ -26,11 +26,11 @@ def load_default_origins() -> list[str]:
     raise AssertionError("Could not find default_origins in main.py")
 
 
-def test_cors_contract_includes_cordova_and_local_wrapper_origins() -> None:
+def test_cors_contract_limits_defaults_to_local_cordova_and_loopback_origins() -> None:
     origins = load_default_origins()
 
     assert "https://localhost" in origins
     assert "http://localhost" in origins
     assert "https://127.0.0.1" in origins
     assert "http://127.0.0.1:5173" in origins
-    assert "https://compute-node.taileb3a90.ts.net" in origins
+    assert "https://compute-node.taileb3a90.ts.net" not in origins

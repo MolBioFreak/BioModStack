@@ -6,8 +6,10 @@ import test from 'node:test';
 import {
     clampMolBioPanelWidth,
     getDefaultMolBioToolPanelWidth,
+    MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS,
     MOLBIO_VIEWER_MIN_WIDTH,
     resolveMolBioViewerLayout,
+    shouldCollapseMolBioPanelsForViewport,
 } from '../src/components/MolBioToolkit/utils/viewerLayout.js';
 
 const TOOLKIT_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx');
@@ -108,10 +110,18 @@ test('narrow viewports keep a minimum center viewer width when both side panels 
     assert.equal(960 - layout.leftPanelWidth - layout.rightPanelWidth, MOLBIO_VIEWER_MIN_WIDTH);
 });
 
+test('phone-sized viewports start with both side panels collapsed', () => {
+    assert.equal(shouldCollapseMolBioPanelsForViewport(MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS - 1), true);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS), false);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(390), true);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(1280), false);
+});
+
 test('mol bio toolkit source wires fullscreen and side-panel collapse controls', () => {
     const source = readFileSync(TOOLKIT_PATH, 'utf8');
 
     assert.match(source, /isViewerFullscreen/);
+    assert.match(source, /shouldCollapseMolBioPanelsForViewport/);
     assert.match(source, /data-molbio-viewer-fullscreen/);
     assert.match(source, /data-molbio-panel-resize-handle="left"/);
     assert.match(source, /data-molbio-panel-resize-handle="right"/);
