@@ -1,254 +1,160 @@
 # BioModStack
 
 BioModStack (BMS) is a workstation-first platform for biomolecular design,
-refinement, analysis, sequencing, and lab-adjacent operations. It combines:
+validation, sequencing, molecular biology, results analysis, and lab-adjacent
+operations.
 
-- Nextflow workflows for heavy compute and staged pipelines
-- a FastAPI control plane for orchestration, metadata, and artifact serving
-- a React UI for submission, review, analytics, mol bio, NGS, and robotics
-- optional GTK launchers for local workstation control
+The live stack combines:
 
-The repo is not just a protein-design launcher. The live system spans structure
-design, binder refinement, sequence design, docking, analysis, nanopore
-sequencing, molecular biology tooling, and a BioXP robotics control surface.
+- Nextflow workflows for heavy compute, staged pipelines, and experimental runs
+- a FastAPI control plane for orchestration, metadata, artifact serving, and
+  system/runtime APIs
+- a React frontend for launch, review, analytics, mol bio, NGS, infra, and
+  BioXP control
+- optional local shells around the hosted `/bms/` UI, including browser,
+  Electron, GTK panel/tray, and an additive Android thin-shell/update path
 
-## Live Workflow and Model Surface
+## Runtime and launch surface
 
-### Antibody and binder workflows
+The current workstation/runtime model is:
 
-- Antibody de novo and staged refinement:
-  RFantibody, FAMPNN, AntiFold, ProteinMPNN, Boltz-2, Protenix,
-  ThermoMPNN, AntiBERTy, IgGM, OpenMM, and PPIFlow-linked review stages.
-- Antibody toolkit / shell-driven design modes:
-  template-driven antibody setup, nanobody/VHH flows, and antibody review /
-  resume paths.
-- Generic binder generation and redesign:
-  RFdiffusion, BindCraft, BoltzGen, and constrained protein local redesign.
-- Experimental non-binder protein CAD:
-  La-Proteina and DISCO through one experimental workflow family, plus early
-  experimental protein-hunting and Caliby design surfaces.
-- Oligomer / nucleic-acid-aware generation:
-  Oligo Designer / RFDpoly.
+- containerized core runtime for the API and web UI via
+  `compose.core-runtime.yml`
+- host-native workflow execution through `biomodstack-workflow-adapter.service`
+  and `BMS_WORKFLOW_ADAPTER_URL`
+- service ownership through `systemd --user`, not through the browser, GTK, or
+  Electron shells
+- optional Electron shell in `platform/desktop-electron` as an additive launch
+  surface, not a separate backend owner
+- optional Android compatibility/update surface through the hosted `/bms/` UI,
+  the frontend Cordova-ready hook, and `/api/mobile-ui/*` bundle endpoints
 
-### Prediction, validation, and redesign models
+If runtime is omitted, BioModStack resolves it as:
 
-- Structure prediction:
-  AlphaFold2, RF3, Boltz-2, Protenix, and ImmuneBuilder-facing antibody
-  structure prediction.
-- Sequence design and redesign:
-  FAMPNN, ProteinMPNN, LigandMPNN, AntiFold, FrustraMPNN, and IgGM.
-- Mutation and local edit surfaces:
-  mutagenesis and local structure redesign workflows.
+1. explicit `--runtime ...`
+2. `BMS_RUNTIME_MODE`
+3. `container`
 
-### Docking, scoring, and post-processing
+## Workflow surface
 
-- Docking:
-  DiffDock, Uni-Dock, and the generic docking wrapper surface.
-- Scoring / analysis / cleanup:
-  OpenMM, ThermoMPNN, AntiBERTy, and ANARCI / ANARCII.
+BMS is not just a protein-design launcher. The live repo covers:
 
-### Sequencing, molecular biology, and operations systems
+- antibody de novo and staged refinement workflows
+- generic structure prediction and validation with AlphaFold2, RF3, Boltz-2,
+  and Protenix
+- generic binder generation and redesign with RFdiffusion, BindCraft,
+  BoltzGen, and local redesign workflows
+- experimental workflow families including La-Proteina/DISCO protein CAD,
+  Protein Hunter Experimental, Caliby Experimental, and Fold-CP Experimental
+- docking via DiffDock, Uni-Dock, and shared docking surfaces
+- nanopore/NGS launch and review
+- a molecular biology toolkit for DNA/RNA libraries and construct operations
+- a BioXP cockpit plus workstation infra/runtime controls
 
-- Nanopore / NGS:
-  Oxford Nanopore launch + review, Dorado basecalling/alignment, modkit
-  methylation reporting, plasmid QC, and IGV-ready outputs.
-- Molecular biology toolkit:
-  DNA/RNA sequence libraries, construct editing, annotation, restriction-site
-  mapping, primer design, PCR, Gibson, Golden Gate, search, diagnostics, and
-  RNA secondary-structure review.
-- Workstation and robotics:
-  dashboard, results/review UI, infra telemetry and scheduler controls, BioXP
-  cockpit, local GTK launchers, and system tray tooling.
+The BioXP surface in BMS should be read as the current robot-linkage and
+cockpit/proxy layer, not as a full mirror of every robot-local endpoint. Live
+robot-local surfaces such as motion reference-state and liquid-handling routes
+still extend beyond what BMS currently exposes under `/api/bioxp/*`, and status
+surfaces can diverge briefly during reconnect/recovery windows.
 
-### Model registry entrypoints
+For the full live model inventory, see
+[docs/ai_guidance/Model_Integrations.md](docs/ai_guidance/Model_Integrations.md).
 
-The current top-level model registry includes:
-
-- `af2`
-- `antibody_denovo`
-- `antibody_design`
-- `bindcraft`
-- `boltz2`
-- `boltzgen`
-- `caliby_experimental`
-- `diffdock`
-- `docking`
-- `fampnn`
-- `ligandmpnn`
-- `mutagenesis`
-- `nanopore`
-- `oligo_design`
-- `protein_cad_experimental`
-- `protein_hunter_experimental`
-- `protein_local_redesign`
-- `proteinmpnn`
-- `protenix`
-- `rf3`
-- `rfdiffusion`
-- `unidock`
-
-There are also internal child/orchestrator entries such as
-`antibody_child`, `rfantibody_child`, `fampnn_child`, and `boltzgen_child`
-that exist for execution flow but are not primary user launch targets.
-
-## What BMS Covers
-
-### Structure design and refinement
-
-- Antibody de novo and refinement workflows built around RFantibody, FAMPNN,
-  AntiFold, ProteinMPNN, Boltz-2, Protenix, AntiBERTy, ThermoMPNN, IgGM,
-  OpenMM, and PPIFlow.
-- Generic design and prediction surfaces for RFdiffusion, RF3, AlphaFold2,
-  Boltz-2, Protenix, BindCraft, BoltzGen, RFDpoly/Oligo Designer, DiffDock,
-  and Uni-Dock.
-- Constrained local redesign and staged validation flows for existing
-  complexes.
-
-### Analysis and review
-
-- Job, design, and lineage tracking in the API database.
-- Persisted design analyses, review metadata, and stage-aware output tracking.
-- Results/analytics views for structure confidence, lineage, stage outputs,
-  cached analyses, and design provenance.
-
-### Molecular biology
-
-- Sequence library management for DNA and RNA constructs.
-- Construct import, editing, annotation, primers, digest, PCR, Gibson, Golden
-  Gate, search, sequence diagnostics, and RNA-aware review tooling.
-
-### Sequencing / NGS
-
-- Oxford Nanopore launch and review surface for POD5, BAM, and FASTQ inputs.
-- Dorado basecalling/alignment, modkit methylation reporting, plasmid QC, and
-  IGV-ready artifacts.
-
-### Robotics
-
-- BioXP remote cockpit for daemon linkage, remote status, cameras, motion
-  control, thermal/chiller controls, and interlock-aware device actions.
-
-## Main UI Surfaces
-
-- `/`
-  dashboard with quick structure viewing, live queue state, GPU scheduler, and
-  telemetry
-- `/submit`
-  job launcher across workflow families
-- `/results`, `/designs`, `/jobs/:jobId`
-  results, lineage, analytics, and job detail review
-- `/designer`
-  molecular biology toolkit
-- `/ngs`
-  nanopore / sequencing toolkit
-- `/infra`
-  workstation telemetry and controls
-- `/bioxp`
-  BioXP robotics cockpit
-
-## Quick Start
+## Quick start
 
 From the repo root:
 
 ```bash
-./start_ui.sh
+./start_ui.sh start
+./start_ui.sh status
 ```
 
-`start_ui.sh` is the service-control entrypoint. It installs and manages dedicated
-`systemd --user` units. In dev mode it uses `biomodstack-api.service` and
-`biomodstack-frontend.service`. For the new containerized core runtime, use:
+That uses the default runtime resolution above, which means container mode unless
+`BMS_RUNTIME_MODE` overrides it.
+
+Explicit dev/runtime commands:
 
 ```bash
+./start_ui.sh start --runtime dev
 ./start_ui.sh start --runtime container
-./start_ui.sh status --runtime container
 ./start_ui.sh stop --runtime container
 ```
 
-That container mode launches `biomodstack-core-runtime.service`, which in turn runs the
-repo-native compose stack from `compose.core-runtime.yml`.
+Important local URLs:
 
-To manually raise a UI surface after starting services, use the launcher entrypoints:
+- UI: `http://127.0.0.1:5173/bms/`
+- API: `http://127.0.0.1:8000`
+- API docs: `http://127.0.0.1:8000/docs`
+- workflow adapter health: `http://127.0.0.1:8001/api/workflow-adapter/health`
+
+## Optional local shells
+
+Browser launch:
 
 ```bash
 python3 scripts/launch_biomodstack_ui.py --surface browser --runtime container
+```
+
+Electron shell:
+
+```bash
+pnpm --dir platform/desktop-electron install
 ./start_ui_electron.sh --runtime container
 ```
 
-`start_ui_electron.sh` is an additive opt-in wrapper around
-`python3 scripts/launch_biomodstack_ui.py --surface electron ...`. It keeps
-`start_ui.sh` service-control-only while making the Electron shell discoverable.
+The Electron shell wraps the same hosted `/bms/` UI, keeps its own persistent
+storage partition, and calls the shared desktop-service control plane rather
+than supervising API/frontend processes directly.
 
-Important current Phase 1 boundary:
-- container mode is the portable web/control-plane runtime
-- workflow execution and GPU/process truth still remain host-native
-- until a real host workflow adapter exists, do not treat container mode as the honest owner of Nextflow launches
-- `BMS_CORE_RUNTIME_MODE=1` is the explicit guard that disables launch/resume/resubmit and GPU scheduler ownership inside the core-runtime container stack
+The Android path is intentionally additive. BMS remains hosted on the
+workstation/server; the mobile shell is expected to consume the existing web UI
+and the `/api/mobile-ui/*` update endpoints rather than move runtime ownership
+onto the phone.
 
-Optional local desktop launcher:
+## Runtime/profile files
 
-```bash
-./start_ui_gui.sh
-```
+Key local config/state files:
 
-The GTK panel / tray are control surfaces only. They should start, stop, and restart
-services through `systemctl --user`, not own the backend process lifetime.
+- `~/.config/biomodstack/install_profile.json`
+  persisted runtime/data-path profile
+- `~/.config/biomodstack/core-runtime.env`
+  generated env file for the containerized core runtime
+- `~/.config/biomodstack/launch_preferences.json`
+  default launch surface and browser auto-open preferences
+- `~/.biomodstack/env.sh`
+  compatibility env exports and local overrides for shell-driven workflows
 
-Default local URLs:
+## Documentation map
 
-- UI: `http://localhost:5173/bms/`
-- API: `http://localhost:8000`
-- API docs: `http://localhost:8000/docs`
-- Infra monitor: `http://localhost:5173/bms/infra`
-
-## Runtime Layout
-
-BMS is path-configurable, but the workstation layout is designed around a data
-root separate from the repo. On the current workstation this is typically
-`/mnt/BioModStack` on the NVMe data volume.
-
-Important paths and env vars:
-
-- `BMS_HOME`: repo root override
-- `BMS_DATA`: data root override
-- `BMS_INPUTS`: runtime-upload/input root
-- `BMS_WEIGHTS`: model weights root
-- `BMS_CONTAINER_DIR`: Apptainer container root
-- `BMS_DB_PATH` or `DATABASE_URL`: database location
-- `BMS_MSA_CACHE`, `BMS_COLABFOLD_DB`, `BMS_SABDAB_CACHE`: supporting data
-- `BMS_FAN_CONTROL_BACKEND`: workstation fan backend
-
-See [docs/Workstation Set Up and Install Guide.md](<docs/Workstation Set Up and Install Guide.md>)
-for the current install and runtime setup.
-
-## Documentation
-
-Start with the docs index:
+Start here:
 
 - [docs/README.md](docs/README.md)
-
-Canonical docs:
-
 - [Platform Overview](docs/Platform_Overview.md)
-- [Workstation Setup and Runtime](<docs/Workstation Set Up and Install Guide.md>)
+- [Workstation Setup and Runtime](docs/Workstation%20Set%20Up%20and%20Install%20Guide.md)
+- [Desktop Runtime and Shell Architecture](docs/Desktop_Runtime_and_Shell_Architecture.md)
 - [Structure Design and Refinement](docs/Structure_Design_and_Refinement.md)
 - [Lab Automation, Mol Bio, and Sequencing](docs/Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](docs/Results_and_Analysis.md)
-- [Desktop Runtime and Shell Architecture](docs/Desktop_Runtime_and_Shell_Architecture.md)
-- [Documentation Harmonization Strategy](docs/Documentation_Harmonization_Strategy.md)
 
-Platform-specific docs:
+Focused workflow/runtime references:
+
+- [Experimental Protein CAD Workflow](docs/Experimental_Protein_CAD_Workflow.md)
+- [Caliby Experimental Workflow](docs/Caliby_Experimental_Workflow.md)
+- [Protein Hunter Experimental Workflow](docs/Protein_Hunter_Experimental_Workflow.md)
+- [Active Plans](docs/plans/README.md)
+
+Subsystem references:
 
 - [API README](platform/api/README.md)
 - [Frontend README](platform/frontend/README.md)
+- [Electron shell README](platform/desktop-electron/README.md)
 
-Reference inventory:
+## Repository entry points
 
-- [Model Integrations](docs/ai_guidance/Model_Integrations.md)
-
-## Repository Entry Points
-
-- Workflow entrypoint: [main.nf](main.nf)
+- workflow entrypoint: [main.nf](main.nf)
 - API entrypoint: [platform/api/main.py](platform/api/main.py)
-- Frontend entrypoint: [platform/frontend/src/App.tsx](platform/frontend/src/App.tsx)
-- Local launcher script: [start_ui.sh](start_ui.sh)
-- GTK control panel: [biomodstack_panel.py](biomodstack_panel.py)
+- frontend entrypoint: [platform/frontend/src/App.tsx](platform/frontend/src/App.tsx)
+- service manager: [start_ui.sh](start_ui.sh)
+- Electron launcher: [start_ui_electron.sh](start_ui_electron.sh)
+- runtime/service layer: [biomodstack_services.py](biomodstack_services.py)
+- install-profile/path resolution: [biomodstack_runtime_profile.py](biomodstack_runtime_profile.py)

@@ -12,6 +12,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+import paths
 from services.analysis_registry import (
     ANTIBODY_ANNOTATION_PACK_ANALYSIS,
     CHAIN_METRICS_ANALYSIS,
@@ -23,13 +24,18 @@ from services.analysis_registry import (
     PAE_MATRIX_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
     IPSAE_INTERFACE_ANALYSIS,
+    _structure_fingerprint,
     get_analysis_definition,
     normalize_contact_map_params,
     normalize_job_scope_params,
     normalize_pae_matrix_params,
 )
 from services.analysis_autorun import _viewer_minimum_analysis_types
-from services.aligned_error_utils import detect_aligned_error_artifact, load_structure_residue_records
+from services.aligned_error_utils import (
+    detect_aligned_error_artifact,
+    fingerprint_aligned_error_artifact,
+    load_structure_residue_records,
+)
 from services.analysis_subprocess import _extract_metric_pairs
 from services.analysis_runs import build_artifact_manifest_for_run, serialize_analysis_run
 from services.result_ingester import _compute_validation_geometry_fields, _validation_role_fields
@@ -248,3 +254,49 @@ def test_detect_aligned_error_artifact_prefers_summary_relative_sidecar_path() -
     assert artifact_path == aligned_error_path.resolve()
     assert artifact_format == "protenix_full_json"
     assert artifact_key == "token_pair_pae"
+
+
+def test_structure_fingerprint_rewrites_legacy_host_paths_to_active_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    legacy_root = (tmp_path / "host-data").resolve()
+    active_root = (tmp_path / "runtime-data").resolve()
+    runtime_file = active_root / "bms_results" / "job-legacy" / "model_0.pdb"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    legacy_path = legacy_root / "bms_results" / "job-legacy" / "model_0.pdb"
+
+    monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+    monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
+    monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
+
+    fingerprint = _structure_fingerprint(str(legacy_path))
+
+    assert fingerprint["path"] == str(runtime_file)
+    assert fingerprint["size"] == runtime_file.stat().st_size
+
+
+def test_aligned_error_fingerprint_rewrites_legacy_host_paths_to_active_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    legacy_root = (tmp_path / "host-data").resolve()
+    active_root = (tmp_path / "runtime-data").resolve()
+    runtime_artifact = active_root / "bms_results" / "job-legacy" / "confidence_model_0.json"
+    runtime_artifact.parent.mkdir(parents=True)
+    runtime_artifact.write_text('{"pae": [[1.0]]}', encoding="utf-8")
+    legacy_artifact = legacy_root / "bms_results" / "job-legacy" / "confidence_model_0.json"
+
+    monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+    monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
+    monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
+
+    fingerprint = fingerprint_aligned_error_artifact(
+        aligned_error_path=str(legacy_artifact),
+        aligned_error_format="confidence_json",
+        matrix_key="pae",
+    )
+
+    assert fingerprint["path"] == str(runtime_artifact)
+    assert fingerprint["size"] == runtime_artifact.stat().st_size

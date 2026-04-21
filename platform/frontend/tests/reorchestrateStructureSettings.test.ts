@@ -137,6 +137,7 @@ test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
         mode: 'design',
         params: {
             structure_launch_variant: 'boltz_cp_experimental',
+            bcp_shard_plan_id: '4x4',
             pinned_gpus: [2, 3],
             lock_gpus: true,
             bcp_size_cp: 1,
@@ -151,7 +152,7 @@ test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
     assert.equal(settings.boltzCp.enabled, true);
     assert.deepEqual(settings.boltzCp.pinnedGpus, [2, 3]);
     assert.equal(settings.boltzCp.lockGpus, true);
-    assert.equal(settings.boltzCp.requestedSizeCp, 1);
+    assert.equal(settings.boltzCp.shardPlanId, '4x4');
     assert.equal(settings.boltzCp.outputFormat, 'pdb');
     assert.equal(settings.boltzCp.writeFullPae, true);
     assert.equal(settings.boltzCp.seed, '17');
@@ -165,6 +166,7 @@ test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing'
             structure_launch_variant: 'boltz_cp_experimental',
             pinned_gpus: [0, 1, 2, 3],
             lock_gpus: true,
+            bcp_shard_plan_id: '2x2',
             bcp_gpu_ids: '0,1,2,3',
             bcp_size_cp: 4,
             bcp_output_format: 'mmcif',
@@ -178,11 +180,12 @@ test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing'
         boltzCp: {
             ...settings.boltzCp,
             pinnedGpus: [2, 3],
-            requestedSizeCp: 4,
+            shardPlanId: '4x4',
         },
     });
 
     assert.deepEqual(overrides.pinned_gpus, [2, 3]);
+    assert.equal(overrides.bcp_shard_plan_id, '4x4');
     assert.equal(overrides.bcp_gpu_ids, '2,3');
     assert.equal(overrides.bcp_size_cp, 1);
 });
@@ -193,6 +196,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
         mode: 'design',
         params: {
             structure_launch_variant: 'boltz_cp_experimental',
+            bcp_shard_plan_id: '4x4',
             pinned_gpus: [2, 3],
             lock_gpus: true,
             bcp_gpu_ids: '2,3',
@@ -210,7 +214,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
             ...settings.boltzCp,
             pinnedGpus: [],
             lockGpus: false,
-            requestedSizeCp: 4,
+            shardPlanId: '2x2',
             outputFormat: 'mmcif',
             writeFullPae: false,
             seed: '',
@@ -219,6 +223,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
 
     assert.equal(overrides.pinned_gpus, null);
     assert.equal(overrides.lock_gpus, false);
+    assert.equal(overrides.bcp_shard_plan_id, '2x2');
     assert.equal(overrides.bcp_gpu_ids, '0,1,2,3');
     assert.equal(overrides.bcp_size_cp, 4);
     assert.equal(overrides.bcp_output_format, 'mmcif');

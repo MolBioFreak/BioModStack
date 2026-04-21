@@ -56,7 +56,7 @@ This is the single biggest reason a naive API container would be fragile.
 - robot HTTP proxying
 - workstation-side SSH daemon probing/control
 
-The new `docs/plans/2026-04-19-bioxp-connection-revision.md` documents the correct direction: robot-local runtime ownership, BioModStack as linkage/proxy first, SSH only as break-glass maintenance.
+The archived `docs/plans/archive/2026-04-19-bioxp-connection-revision.md` documents the correct direction: robot-local runtime ownership, BioModStack as linkage/proxy first, SSH only as break-glass maintenance.
 
 ### 5. The frontend already has a production build path
 

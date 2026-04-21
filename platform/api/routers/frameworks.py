@@ -30,6 +30,11 @@ from services.sabdab_client import (
     set_cache_timestamps,
     _touch_cache_file,
 )
+from services.workflow_adapter import (
+    WorkflowAdapterRequestError,
+    request_via_workflow_adapter,
+    workflow_adapter_enabled,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/frameworks", tags=["frameworks"])
@@ -86,6 +91,43 @@ class FrameworkLibraryResponse(BaseModel):
 
 def _isoformat_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _first_chain(chain_value: Optional[str]) -> Optional[str]:
+    if not chain_value:
+        return None
+    for delimiter in [",", ";", "|", " "]:
+        if delimiter in chain_value:
+            token = chain_value.split(delimiter)[0].strip()
+            return token or None
+    return chain_value.strip() or None
+
+
+def _preferred_framework_chains(entry: object | None) -> dict[str, str]:
+    if entry is None:
+        return {}
+
+    preferred_chains: dict[str, str] = {}
+    h_chain = _first_chain(getattr(entry, "h_chain", None))
+    l_chain = _first_chain(getattr(entry, "l_chain", None))
+    if h_chain:
+        preferred_chains["H"] = h_chain
+    if l_chain and l_chain != h_chain:
+        preferred_chains["L"] = l_chain
+    return preferred_chains
+
+
+def _framework_proxy_enabled() -> bool:
+    return workflow_adapter_enabled()
+
+
+def _framework_proxy_request(method: str, path: str, payload: dict | None = None):
+    try:
+        return request_via_workflow_adapter(method, path, payload)
+    except WorkflowAdapterRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 def _parse_cached_framework_name(pdb_file: Path) -> tuple[str, str]:
@@ -507,14 +549,12 @@ async def annotate_framework_cdrs(
     """
     from services.cdr_annotator import annotate_pdb
 
-    def _first_chain(chain_value: Optional[str]) -> Optional[str]:
-        if not chain_value:
-            return None
-        for delimiter in [",", ";", "|", " "]:
-            if delimiter in chain_value:
-                token = chain_value.split(delimiter)[0].strip()
-                return token or None
-        return chain_value.strip() or None
+    if _framework_proxy_enabled():
+        proxied = _framework_proxy_request(
+            "POST",
+            f"/api/frameworks/sabdab/{pdb_code}/annotate-cdrs?scheme={scheme}",
+        )
+        return CDRAnnotationResponse.model_validate(proxied)
     
     # Check cache for framework PDB
     cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
@@ -531,13 +571,7 @@ async def annotate_framework_cdrs(
             db = get_sabdab_db()
             entries = db.get_by_pdb(pdb_code)
             if entries:
-                entry = entries[0]
-                h_chain = _first_chain(entry.h_chain)
-                l_chain = _first_chain(entry.l_chain)
-                if h_chain:
-                    preferred_chains["H"] = h_chain
-                if l_chain:
-                    preferred_chains["L"] = l_chain
+                preferred_chains = _preferred_framework_chains(entries[0])
         except Exception as chain_err:
             logger.warning(f"[CDR Annotation] Could not load chain metadata for {pdb_code}: {chain_err}")
 
