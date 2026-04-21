@@ -4,6 +4,10 @@ import {
     type SequenceAlignmentResult,
 } from '../../../lib/api';
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
+import {
+    getAlignmentDisplayName,
+    resolveSubmittedQueryName,
+} from '../utils/alignmentLabels';
 import { parseSequenceInput } from '../utils/nucleotides';
 
 interface AlignmentPanelProps {
@@ -34,13 +38,6 @@ function formatHalfOpenSpan(start: number, end: number, wrapsOrigin = false) {
     const displayStart = start + 1;
     const displayEnd = Math.max(end, wrapsOrigin ? end : displayStart);
     return wrapsOrigin ? `${displayStart}->${displayEnd}` : `${displayStart}-${displayEnd}`;
-}
-
-function resolveQueryLabel(explicitName: string, parsedName: string) {
-    const trimmed = explicitName.trim();
-    if (trimmed) return trimmed;
-    if (parsedName && parsedName !== 'Untitled Sequence') return parsedName;
-    return 'Query sequence';
 }
 
 function buildHighlightRegions(
@@ -191,7 +188,8 @@ export function AlignmentPanel({
         : sequenceData.name;
     const referenceOffset = referenceScope === 'selection' && selectionRange ? selectionRange.start : 0;
     const parsedQuery = useMemo(() => parseSequenceInput(queryRaw), [queryRaw]);
-    const queryLabel = resolveQueryLabel(queryName, parsedQuery.name);
+    const submittedQueryName = resolveSubmittedQueryName(queryName, parsedQuery.name);
+    const alignmentDisplayName = getAlignmentDisplayName(result?.query_name ?? submittedQueryName);
     const invalidQuery = parsedQuery.invalidCharacters.length > 0;
     const effectiveCircularReference = referenceScope === 'full' && circularReference && sequenceData.circular;
     const blocks = useMemo(
@@ -209,9 +207,9 @@ export function AlignmentPanel({
             Boolean(result.reference_wraps_origin) && referenceScope === 'full',
             sequenceData.sequence.length,
             '#22d3ee',
-            `${queryLabel}: aligned span`,
+            `Sequence alignment: ${alignmentDisplayName}`,
         );
-    }, [queryLabel, referenceOffset, referenceScope, result, sequenceData.sequence.length]);
+    }, [alignmentDisplayName, referenceOffset, referenceScope, result, sequenceData.sequence.length]);
 
     useEffect(() => {
         if (baseHighlights.length > 0) {
@@ -240,7 +238,7 @@ export function AlignmentPanel({
             const response = await alignMolBioSequences({
                 reference_name: referenceName,
                 reference_sequence: referenceSequence,
-                query_name: queryLabel,
+                query_name: submittedQueryName,
                 query_sequence: parsedQuery.sequence,
                 settings: {
                     mode,
@@ -273,14 +271,14 @@ export function AlignmentPanel({
                     : '#06b6d4';
 
             const baseFeature = {
-                name: `${queryLabel}: ${variant.label}`,
+                name: `${alignmentDisplayName}: ${variant.label}`,
                 type: 'misc_difference' as const,
                 strand: 1 as const,
                 color,
-                description: `Alignment-derived ${variant.type} against ${queryLabel}`,
+                description: `Alignment-derived ${variant.type} against ${alignmentDisplayName}`,
                 notes: {
                     source: 'alignment',
-                    query_name: queryLabel,
+                    query_name: alignmentDisplayName,
                     variant_type: variant.type,
                     reference: variant.reference,
                     query: variant.query,
@@ -292,7 +290,7 @@ export function AlignmentPanel({
                 },
                 qualifiers: {
                     source: 'alignment',
-                    query_name: queryLabel,
+                    query_name: alignmentDisplayName,
                     variant_type: variant.type,
                 },
                 provenance: {
@@ -512,9 +510,13 @@ export function AlignmentPanel({
 
             {result && (
                 <>
-                    <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
-                        {result.mode} • {result.strand} strand • Ref {formatHalfOpenSpan(referenceOffset + result.reference_start, referenceOffset + result.reference_end, Boolean(result.reference_wraps_origin))}
-                        {' '}• Query {formatHalfOpenSpan(result.query_start, result.query_end)}
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Sequence alignment</div>
+                        <div className="mt-1 text-sm font-medium text-amber-200">{alignmentDisplayName}</div>
+                        <div className="mt-2 text-xs text-slate-400">
+                            {result.mode} • {result.strand} strand • Ref {formatHalfOpenSpan(referenceOffset + result.reference_start, referenceOffset + result.reference_end, Boolean(result.reference_wraps_origin))}
+                            {' '}• Query {formatHalfOpenSpan(result.query_start, result.query_end)}
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">

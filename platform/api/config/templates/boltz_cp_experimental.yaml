@@ -1,0 +1,40 @@
+# Fold-CP experimental workflow
+
+id: boltz_cp_experimental
+name: Fold-CP Experimental
+icon: sparkles
+color: "#F97316"
+experimental: true
+description: >
+  Experimental single-example Boltz-2 inference using DTensor context
+  parallelism (CP) across multiple GPUs. Reuses the established structure
+  prediction launcher inputs while preserving a separate experimental workflow.
+goal: >
+  Surface true multi-GPU single-fold Boltz context parallelism in the BMS
+  launcher without forcing users through ad hoc shell commands.
+status: >
+  Experimental alpha. Single-node Boltz-2 CP only. Canonical sequence/complex
+  inputs are staged into Boltz config_files automatically, and the local
+  checked-out Fold-CP repo path remains preset for this workstation.
+
+stages:
+  - name: Input Intake
+    tool: BMS Launcher
+    description: Capture canonical structure-launcher inputs and CP launch settings.
+  - name: Distributed Inference
+    tool: Fold-CP
+    description: Run DTensor context-parallel Boltz-2 inference across the selected GPUs with torch.distributed.
+  - name: Artifact Collect
+    tool: BMS Output Collector
+    description: Flatten prediction artifacts into standard BMS output folders for review.
+
+preset_params:
+  template_model_id: boltz_cp_experimental
+  template_mode_id: design
+  structure_launch_variant: boltz_cp_experimental
+  bcp_repo_path: /home/dalab/tmp/boltz-cp
+  bcp_input_format: config_files
+  bcp_output_format: mmcif
+  bcp_write_full_pae: false
+
+user_params: []

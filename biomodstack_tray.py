@@ -39,6 +39,14 @@ except ImportError:
 API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+from biomodstack_services import (  # noqa: E402
+    API_LOG as API_LOG_PATH,
+    API_SERVICE,
+    FRONTEND_LOG as FRONTEND_LOG_PATH,
+    FRONTEND_SERVICE,
+    build_launch_ui_command,
+    service_is_active,
+)
 
 PROJECT_ROOT = get_code_root()
 API_PORT = 8000
@@ -49,8 +57,8 @@ FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/bms/"
 # Paths
 DB_PATH = get_db_path()
 RESULTS_DIR = get_results_dir()
-API_LOG = Path("/tmp/biomodstack_api.log")
-FRONTEND_LOG = Path("/tmp/biomodstack_frontend.log")
+API_LOG = API_LOG_PATH
+FRONTEND_LOG = FRONTEND_LOG_PATH
 ICON_PATH = PROJECT_ROOT / "platform" / "assets" / "icons" / "biomodstack_256.png"
 TRAY_ICON_PATH = PROJECT_ROOT / "platform" / "assets" / "icons" / "biomodstack_tray.png"  # No text version
 CONFIG_PATH = Path.home() / ".config" / "biomodstack" / "tray_config.json"
@@ -94,6 +102,10 @@ def check_api_status() -> bool:
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
+        try:
+            return service_is_active(API_SERVICE)
+        except Exception:
+            pass
         # Fallback: check if process is running
         try:
             result = subprocess.run(
@@ -107,13 +119,16 @@ def check_api_status() -> bool:
 def check_frontend_status() -> bool:
     """Check if Frontend dev server is running."""
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
-            capture_output=True, timeout=2
-        )
-        return result.returncode == 0
+        return service_is_active(FRONTEND_SERVICE)
     except Exception:
-        return False
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
+                capture_output=True, timeout=2
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
 
@@ -331,8 +346,15 @@ def stop_all_services():
     subprocess.Popen([str(STOP_SCRIPT)])
 
 def open_ui():
-    """Open BioModStack UI in browser."""
+    """Open BioModStack UI in the Electron shell."""
+    show_notification("Opening UI", "Launching the BioModStack shell...")
+    subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT))
+
+
+def open_browser_ui():
+    """Open BioModStack UI in the hosted browser surface."""
     webbrowser.open(FRONTEND_URL)
+
 
 def open_results_folder():
     """Open results folder in file manager."""
@@ -453,7 +475,8 @@ class BioModStackTray:
         
         return Menu(
             # Open UI
-            Item("🌐 Open BioModStack", lambda: open_ui(), default=True),
+            Item("🖥 Open BioModStack Shell", lambda: open_ui(), default=True),
+            Item("🌐 Open Hosted Web UI", lambda: open_browser_ui()),
             Item("📂 Open Results Folder", lambda: open_results_folder()),
             
             Menu.SEPARATOR,

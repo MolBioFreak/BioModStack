@@ -2,10 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+import { createRequire } from 'node:module'
 import path from 'path'
 
+const require = createRequire(import.meta.url)
 const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
-const stablePdbeMolstarPath = path.resolve(__dirname, 'node_modules/.ignored/pdbe-molstar')
+const stablePdbeMolstarPath = path.dirname(require.resolve('pdbe-molstar-stable/package.json'))
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -33,14 +35,15 @@ export default defineConfig(({ mode }) => ({
     alias: {
       buffer: path.resolve(__dirname, 'node_modules/buffer/index.js'),
       'buffer/': path.resolve(__dirname, 'node_modules/buffer'),
+      'safe-buffer': path.resolve(__dirname, 'node_modules/safe-buffer/index.js'),
       string_decoder: path.resolve(__dirname, 'node_modules/string_decoder/lib/string_decoder.js'),
       'string_decoder/': path.resolve(__dirname, 'node_modules/string_decoder'),
       events: path.resolve(__dirname, 'node_modules/events/events.js'),
       util: utilShimPath,
       'node:util': utilShimPath,
       // The newer 3.9.x PDBe bundle has been causing Chromium renderer crashes
-      // on local structure views. Pin the frontend to the older, already-vendored
-      // 3.3.0 build until we can safely re-upgrade Molstar.
+      // on local structure views. Pin the frontend to the declared stable
+      // 3.3.0 alias package until we can safely re-upgrade Molstar.
       'pdbe-molstar': stablePdbeMolstarPath,
     }
   },

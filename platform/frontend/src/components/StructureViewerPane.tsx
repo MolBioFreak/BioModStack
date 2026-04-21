@@ -1,13 +1,42 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type Design, type FampnnPsceChainMetric, type FampnnPsceProfile, type Job, type PAEData, type PersistedAnalysisRun, type RfLoopMetric, type RfLoopMetrics, type RfScopeHeadlineMetrics, type RfScreeningScope, type StructureAnalysis } from '../lib/api';
-import { inferDesignAnalysisLens, inferDesignOutputSource } from './designOutputSource';
+import {
+    buildFileDownloadUrl,
+    buildFileStreamUrl,
+    type ChainMetric,
+    type ChainPairIptmData,
+    type ContactMapData,
+    type Design,
+    type FampnnPsceChainMetric,
+    type FampnnPsceProfile,
+    type IpsaeInterfaceAnalysis,
+    type Job,
+    type PAEData,
+    type PersistedAnalysisRun,
+    type RfLoopMetric,
+    type RfLoopMetrics,
+    type RfScopeHeadlineMetrics,
+    type RfScreeningScope,
+    type StructureAnalysis,
+} from '../lib/api';
+import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
+import {
+    buildStructureViewerQuickViews,
+    buildStructureViewerSections,
+    buildStructureViewerSummaryCards,
+    resolveStructureViewerConfidenceSemantics,
+    type StructureViewerColorMode,
+    type StructureViewerOverlayView,
+    type StructureViewerQuickViewSpec,
+    type StructureViewerSectionId,
+    type StructureViewerSummaryCardSpec,
+} from './structureViewerSemantics.js';
+import { resolveStructureViewerLayout } from './structureViewerLayout.js';
 
 interface Selection {
     chain_id?: string;
@@ -15,6 +44,35 @@ interface Selection {
     end_residue_number?: number;
     color?: { r: number; g: number; b: number };
     focus?: boolean;
+}
+
+interface ViewerAnalysisBundle {
+    structureAnalysisRun?: PersistedAnalysisRun<StructureAnalysis> | null;
+    structureAnalysis?: StructureAnalysis | null;
+    onRunStructureAnalysis?: () => void;
+    structureAnalysisBusy?: boolean;
+    chainMetricsRun?: PersistedAnalysisRun<Record<string, ChainMetric>> | null;
+    chainMetrics?: Record<string, ChainMetric> | null;
+    onRunChainMetrics?: () => void;
+    chainMetricsBusy?: boolean;
+    fampnnPsceProfileRun?: PersistedAnalysisRun<FampnnPsceProfile> | null;
+    fampnnPsceProfile?: FampnnPsceProfile | null;
+    onRunFampnnPsceProfile?: () => void;
+    fampnnPsceBusy?: boolean;
+    paeMatrixRun?: PersistedAnalysisRun<PAEData> | null;
+    paeMatrixData?: PAEData | null;
+    onRunPaeMatrix?: () => void;
+    paeMatrixBusy?: boolean;
+    ipsaeInterfaceRun?: PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null;
+    ipsaeInterface?: IpsaeInterfaceAnalysis | null;
+    onRunIpsaeInterface?: () => void;
+    ipsaeInterfaceBusy?: boolean;
+    contactMapRun?: PersistedAnalysisRun<ContactMapData> | null;
+    contactMap?: ContactMapData | null;
+    onRunContactMap?: () => void;
+    contactMapBusy?: boolean;
+    chainPairIptm?: ChainPairIptmData | null;
+    chainPairIptmLoading?: boolean;
 }
 
 interface Props {
@@ -27,17 +85,14 @@ interface Props {
     structureFormat: 'pdb' | 'cif';
     antibodySelections?: Selection[];
     antibodyStructureUrl?: string;
-    structureAnalysis: StructureAnalysis | null | undefined;
-    structureAnalysisRun?: PersistedAnalysisRun<StructureAnalysis> | null;
-    onRunStructureAnalysis?: () => void;
-    structureAnalysisBusy?: boolean;
+    viewerAnalyses?: ViewerAnalysisBundle;
     activeJob: Job | null | undefined;
     getMetricColor: (field: string, value: number | null) => string;
     rfMetricScope?: RfScreeningScope;
     setRfMetricScope?: (scope: RfScreeningScope) => void;
 }
 
-type OverlayView = 'metrics' | 'plddt' | 'psce' | 'pae';
+type OverlayView = StructureViewerOverlayView;
 type ReferenceDockMode = 'selector' | 'viewer';
 
 interface ReferenceWindowState {
@@ -112,7 +167,8 @@ const getRfLoopEntries = (design: Design | null | undefined): Array<{ loopId: st
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
     const source = inferDesignOutputSource(design || {});
     if (source === 'validation') {
-        return 'Protenix Validation';
+        const validationLabel = getValidationOutputLabel(design || {});
+        return validationLabel === 'Validation' ? 'Validation' : `${validationLabel} Validation`;
     }
     if (source === 'boltzgen') {
         return 'BoltzGen Candidate';
@@ -196,6 +252,14 @@ function formatMetricValue(value: number | null | undefined, digits = 1, suffix 
     return `${value.toFixed(digits)}${suffix}`;
 }
 
+function formatAnalysisStatus(status: PersistedAnalysisRun<unknown>['status'] | undefined | null): string {
+    if (status === 'completed') return 'Cached';
+    if (status === 'running') return 'Running';
+    if (status === 'queued') return 'Queued';
+    if (status === 'failed') return 'Failed';
+    return 'Not computed';
+}
+
 const asRecord = (value: unknown): Record<string, unknown> | null => (
     value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
@@ -226,17 +290,18 @@ export default function StructureViewerPane({
     structureFormat,
     antibodySelections,
     antibodyStructureUrl,
-    structureAnalysis,
-    structureAnalysisRun,
-    onRunStructureAnalysis,
-    structureAnalysisBusy,
+    viewerAnalyses,
     activeJob,
     getMetricColor,
     rfMetricScope,
     setRfMetricScope,
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [viewportWidth, setViewportWidth] = useState(() => (
+        typeof window === 'undefined' ? 1280 : window.innerWidth
+    ));
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
+    const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
     const [showReferenceDock, setShowReferenceDock] = useState(false);
     const [selectedReference, setSelectedReference] = useState<ReferenceStructure | null>(null);
     const [referenceDockMode, setReferenceDockMode] = useState<ReferenceDockMode>('selector');
@@ -247,9 +312,6 @@ export default function StructureViewerPane({
         height: 320,
     });
 
-    // For oligo_design jobs: B-factors are NA-MPNN design confidence, not AlphaFold pLDDT
-    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
-    const queryClient = useQueryClient();
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const containerRef = useRef<HTMLDivElement>(null);
@@ -258,8 +320,23 @@ export default function StructureViewerPane({
     const referenceDragRef = useRef<{ pointerX: number; pointerY: number; startX: number; startY: number } | null>(null);
     const referenceResizeRef = useRef<{ pointerX: number; pointerY: number; startWidth: number; startHeight: number } | null>(null);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const handleViewportResize = () => setViewportWidth(window.innerWidth);
+        handleViewportResize();
+        window.addEventListener('resize', handleViewportResize);
+        return () => window.removeEventListener('resize', handleViewportResize);
+    }, []);
+
     // Theme-aware colors for Molstar viewer
     const themeColors = useThemeColors();
+    const viewerLayout = useMemo(() => resolveStructureViewerLayout({
+        viewportWidth,
+        isFullscreen,
+    }), [viewportWidth, isFullscreen]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
@@ -289,137 +366,61 @@ export default function StructureViewerPane({
     const effectiveRfMetricScope = rfMetricScope ?? preferredRfMetricScope;
     const rfMetricLabels = RF_SCOPE_LABELS[effectiveRfMetricScope];
     const rfLoopEntries = getRfLoopEntries(selectedDesign ?? null);
-    const bfactorLabel = isOligoJob ? 'Design Conf.' : (designLens === 'rfantibody' ? 'RF pLDDT' : 'pLDDT');
+    const confidenceSemantics = useMemo(
+        () => resolveStructureViewerConfidenceSemantics({
+            activeJobModelId: activeJob?.model_id,
+            designLens,
+        }),
+        [activeJob?.model_id, designLens],
+    );
+    const bfactorLabel = confidenceSemantics.shortLabel;
+    const headlineConfidenceLabel = confidenceSemantics.headlineLabel;
+    const structureAnalysisRun = viewerAnalyses?.structureAnalysisRun ?? null;
+    const structureAnalysis = viewerAnalyses?.structureAnalysis ?? null;
+    const structureAnalysisBusy = viewerAnalyses?.structureAnalysisBusy ?? false;
+    const onRunStructureAnalysis = viewerAnalyses?.onRunStructureAnalysis;
     const structureAnalysisStatus = structureAnalysisRun?.status ?? 'missing';
-    const structureAnalysisStatusCopy = structureAnalysisStatus === 'completed'
-        ? 'Cached'
-        : structureAnalysisStatus === 'running'
-            ? 'Running'
-            : structureAnalysisStatus === 'queued'
-                ? 'Queued'
-                : structureAnalysisStatus === 'failed'
-                    ? 'Failed'
-                    : 'Not computed';
+    const structureAnalysisStatusCopy = formatAnalysisStatus(structureAnalysisStatus);
 
-    const { data: chainMetricsRun } = useQuery({
-        queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
-                : null
-        ),
-        enabled: !!selectedDesignId,
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
-        },
-    });
-    const chainMetrics = (chainMetricsRun?.status === 'completed'
-        ? (chainMetricsRun.result as Record<string, ChainMetric> | null)
-        : null) ?? {};
-    const runChainMetrics = useMutation({
-        mutationFn: async () => {
-            if (!selectedDesignId) throw new Error('No design selected');
-            const response = await triggerDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics');
-            return response.data;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'chain_metrics', selectedDesignId] });
-        },
-    });
-    const chainMetricsBusy = runChainMetrics.isPending
-        || chainMetricsRun?.status === 'queued'
-        || chainMetricsRun?.status === 'running';
+    const chainMetricsRun = viewerAnalyses?.chainMetricsRun ?? null;
+    const chainMetrics = viewerAnalyses?.chainMetrics ?? {};
+    const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
+    const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;
     const chainMetricsStatus = chainMetricsRun?.status ?? 'missing';
-    const chainMetricsStatusCopy = chainMetricsStatus === 'completed'
-        ? 'Cached'
-        : chainMetricsStatus === 'running'
-            ? 'Running'
-            : chainMetricsStatus === 'queued'
-                ? 'Queued'
-                : chainMetricsStatus === 'failed'
-                    ? 'Failed'
-                    : 'Not computed';
+    const chainMetricsStatusCopy = formatAnalysisStatus(chainMetricsStatus);
 
-    const { data: fampnnPsceProfileRun } = useQuery({
-        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
-                : null
-        ),
-        enabled: !!selectedDesignId && designLens === 'fampnn',
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<FampnnPsceProfile> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
-        },
-    });
-    const fampnnPsceProfile = fampnnPsceProfileRun?.status === 'completed'
-        ? (fampnnPsceProfileRun.result as FampnnPsceProfile | null)
-        : null;
+    const fampnnPsceProfileRun = viewerAnalyses?.fampnnPsceProfileRun ?? null;
+    const fampnnPsceProfile = viewerAnalyses?.fampnnPsceProfile ?? null;
     const fampnnPsceChains = (fampnnPsceProfile?.chains ?? {}) as Record<string, FampnnPsceChainMetric>;
-    const runFampnnPsceProfile = useMutation({
-        mutationFn: async () => {
-            if (!selectedDesignId) throw new Error('No design selected');
-            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile');
-            return response.data;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId] });
-        },
-    });
-    const fampnnPsceBusy = runFampnnPsceProfile.isPending
-        || fampnnPsceProfileRun?.status === 'queued'
-        || fampnnPsceProfileRun?.status === 'running';
+    const fampnnPsceBusy = viewerAnalyses?.fampnnPsceBusy ?? false;
+    const onRunFampnnPsceProfile = viewerAnalyses?.onRunFampnnPsceProfile;
     const fampnnPsceStatus = fampnnPsceProfileRun?.status ?? 'missing';
-    const fampnnPsceStatusCopy = fampnnPsceStatus === 'completed'
-        ? 'Cached'
-        : fampnnPsceStatus === 'running'
-            ? 'Running'
-            : fampnnPsceStatus === 'queued'
-                ? 'Queued'
-                : fampnnPsceStatus === 'failed'
-                    ? 'Failed'
-                    : 'Not computed';
+    const fampnnPsceStatusCopy = formatAnalysisStatus(fampnnPsceStatus);
 
-    const { data: paeRun } = useQuery({
-        queryKey: ['design-analysis', 'pae_matrix', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
-                : null
-        ),
-        enabled: !!selectedDesignId,
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
-        },
-    });
-    const paeData = paeRun?.status === 'completed' ? (paeRun.result as PAEData | null) : null;
+    const paeRun = viewerAnalyses?.paeMatrixRun ?? null;
+    const paeData = viewerAnalyses?.paeMatrixData ?? null;
     const paeMatrix = paeData?.pae_matrix ?? null;
-    const runPaeMatrix = useMutation({
-        mutationFn: async () => {
-            if (!selectedDesignId) throw new Error('No design selected');
-            const response = await triggerDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 });
-            return response.data;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'pae_matrix', selectedDesignId] });
-        },
-    });
-    const paeBusy = runPaeMatrix.isPending
-        || paeRun?.status === 'queued'
-        || paeRun?.status === 'running';
+    const paeBusy = viewerAnalyses?.paeMatrixBusy ?? false;
+    const onRunPaeMatrix = viewerAnalyses?.onRunPaeMatrix;
     const paeStatus = paeRun?.status ?? 'missing';
-    const paeStatusCopy = paeStatus === 'completed'
-        ? 'Cached'
-        : paeStatus === 'running'
-            ? 'Running'
-            : paeStatus === 'queued'
-                ? 'Queued'
-                : paeStatus === 'failed'
-                    ? 'Failed'
-                    : 'Not computed';
+    const paeStatusCopy = formatAnalysisStatus(paeStatus);
+
+    const ipsaeInterfaceRun = viewerAnalyses?.ipsaeInterfaceRun ?? null;
+    const ipsaeInterface = viewerAnalyses?.ipsaeInterface ?? null;
+    const ipsaeInterfaceBusy = viewerAnalyses?.ipsaeInterfaceBusy ?? false;
+    const onRunIpsaeInterface = viewerAnalyses?.onRunIpsaeInterface;
+    const ipsaeInterfaceStatus = ipsaeInterfaceRun?.status ?? 'missing';
+    const ipsaeInterfaceStatusCopy = formatAnalysisStatus(ipsaeInterfaceStatus);
+
+    const contactMapRun = viewerAnalyses?.contactMapRun ?? null;
+    const contactMap = viewerAnalyses?.contactMap ?? null;
+    const contactMapBusy = viewerAnalyses?.contactMapBusy ?? false;
+    const onRunContactMap = viewerAnalyses?.onRunContactMap;
+    const contactMapStatus = contactMapRun?.status ?? 'missing';
+    const contactMapStatusCopy = formatAnalysisStatus(contactMapStatus);
+
+    const chainPairIptm = viewerAnalyses?.chainPairIptm ?? null;
+    const chainPairIptmLoading = viewerAnalyses?.chainPairIptmLoading ?? false;
 
     const clampReferenceWindow = useCallback((next: ReferenceWindowState): ReferenceWindowState => {
         const bounds = viewerAreaRef.current?.getBoundingClientRect();
@@ -516,6 +517,77 @@ export default function StructureViewerPane({
     const hasResidueConfidence = plddtProfile.length > 0 || Object.keys(chainMetrics).length > 0;
     const hasFampnnPsceProfile = fampnnPsceChainIds.length > 0;
     const hasPae = Array.isArray(paeMatrix) && paeMatrix.length > 0;
+    const hasStructureSummary = Boolean(structureAnalysis);
+    const hasIpsaeInterface = Boolean(
+        ipsaeInterface && (
+            (typeof ipsaeInterface.ipsae === 'number' && Number.isFinite(ipsaeInterface.ipsae))
+            || (ipsaeInterface.pair_scores?.length ?? 0) > 0
+        ),
+    );
+    const hasContactMap = Array.isArray(contactMap?.distance_matrix) && contactMap.distance_matrix.length > 0;
+    const hasChainPairIptm = Array.isArray(chainPairIptm?.iptm_matrix) && chainPairIptm.iptm_matrix.length > 0;
+    const hasFampnnDesign = designLens === 'fampnn';
+    const hasFrustrationSummary = selectedDesign?.frustration_high_count != null
+        || selectedDesign?.frustration_min_count != null
+        || !!selectedDesign?.frustration_residues?.length;
+    const hasDesignabilitySection = hasFampnnDesign || hasFampnnPsceProfile || hasFrustrationSummary;
+    const designabilityStatusCopy = hasFampnnDesign
+        ? fampnnPsceStatusCopy
+        : hasFrustrationSummary
+            ? 'Available'
+            : 'Not available';
+    const viewerSections = useMemo(
+        () => buildStructureViewerSections({
+            hasResidueConfidence,
+            hasPaeMatrix: hasPae,
+            hasStructureSummary,
+            hasIpsaeInterface,
+            hasChainPairIptm,
+            hasContactMap,
+            hasFampnnDesign,
+            hasFampnnPsceProfile,
+            hasFrustrationSummary,
+        }),
+        [
+            hasChainPairIptm,
+            hasContactMap,
+            hasFampnnDesign,
+            hasFampnnPsceProfile,
+            hasFrustrationSummary,
+            hasIpsaeInterface,
+            hasPae,
+            hasResidueConfidence,
+            hasStructureSummary,
+        ],
+    );
+    const viewerQuickViews = useMemo(
+        () => buildStructureViewerQuickViews({
+            confidenceLabel: bfactorLabel,
+            hasResidueConfidence,
+            hasPaeMatrix: hasPae,
+            hasStructureSummary,
+            hasIpsaeInterface,
+            hasChainPairIptm,
+            hasContactMap,
+            hasFampnnDesign,
+            hasFampnnPsceProfile,
+            hasFrustrationSummary,
+            hasCdrOverlay: Boolean(antibodySelections?.length),
+        }),
+        [
+            antibodySelections?.length,
+            bfactorLabel,
+            hasChainPairIptm,
+            hasContactMap,
+            hasFampnnDesign,
+            hasFampnnPsceProfile,
+            hasFrustrationSummary,
+            hasIpsaeInterface,
+            hasPae,
+            hasResidueConfidence,
+            hasStructureSummary,
+        ],
+    );
     const fampnnPsceChartMax = useMemo(() => {
         const maxValue = fampnnPsceProfileValues.length ? Math.max(...fampnnPsceProfileValues) : 0;
         return Math.max(2.0, Math.ceil(maxValue * 2) / 2);
@@ -523,15 +595,75 @@ export default function StructureViewerPane({
 
     useEffect(() => {
         if (designLens !== 'fampnn' || !selectedDesignId) return;
-        if (hasFampnnPsceProfile || fampnnPsceBusy || fampnnPsceStatus !== 'missing') return;
-        runFampnnPsceProfile.mutate();
-    }, [designLens, fampnnPsceBusy, fampnnPsceStatus, hasFampnnPsceProfile, runFampnnPsceProfile, selectedDesignId]);
+        if (hasFampnnPsceProfile || fampnnPsceBusy || fampnnPsceStatus !== 'missing' || !onRunFampnnPsceProfile) return;
+        onRunFampnnPsceProfile();
+    }, [designLens, fampnnPsceBusy, fampnnPsceStatus, hasFampnnPsceProfile, onRunFampnnPsceProfile, selectedDesignId]);
 
     const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence
         ? 'default'
         : colorMode === 'fampnn_psce' && !hasFampnnPsceProfile
             ? 'default'
             : colorMode;
+    const applyQuickView = useCallback((quickView: StructureViewerQuickViewSpec) => {
+        setFocusedMetricSection(quickView.sectionId);
+        setOverlayView(quickView.overlayView);
+        setColorMode(quickView.colorMode);
+    }, [setColorMode]);
+    const handleOverlayTabClick = useCallback((nextOverlayView: OverlayView) => {
+        setOverlayView(nextOverlayView);
+        if (nextOverlayView === 'plddt') {
+            setFocusedMetricSection('confidence');
+            return;
+        }
+        if (nextOverlayView === 'psce') {
+            setFocusedMetricSection('designability');
+            return;
+        }
+        if (nextOverlayView === 'pae') {
+            setFocusedMetricSection('geometry');
+            return;
+        }
+        if (effectiveColorMode === 'frustration') {
+            setFocusedMetricSection('designability');
+            return;
+        }
+        if (effectiveColorMode === 'cdr') {
+            setFocusedMetricSection('confidence');
+        }
+    }, [effectiveColorMode]);
+    const handleColorModeChange = useCallback((nextColorMode: StructureViewerColorMode) => {
+        setColorMode(nextColorMode);
+        if (nextColorMode === 'plddt') {
+            setOverlayView('plddt');
+            setFocusedMetricSection('confidence');
+            return;
+        }
+        if (nextColorMode === 'fampnn_psce') {
+            if (hasFampnnPsceProfile) {
+                setOverlayView('psce');
+            }
+            setFocusedMetricSection('designability');
+            return;
+        }
+        if (nextColorMode === 'frustration') {
+            setOverlayView('metrics');
+            setFocusedMetricSection('designability');
+            return;
+        }
+        if (nextColorMode === 'cdr') {
+            setOverlayView('metrics');
+            setFocusedMetricSection('confidence');
+            return;
+        }
+        if (overlayView === 'metrics') {
+            setFocusedMetricSection('summary');
+        }
+    }, [hasFampnnPsceProfile, overlayView, setColorMode]);
+    const isQuickViewActive = useCallback((quickView: StructureViewerQuickViewSpec) => (
+        focusedMetricSection === quickView.sectionId
+        && overlayView === quickView.overlayView
+        && effectiveColorMode === quickView.colorMode
+    ), [effectiveColorMode, focusedMetricSection, overlayView]);
     const viewerStructureUrl = effectiveColorMode === 'cdr' && antibodyStructureUrl
         ? antibodyStructureUrl
         : (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined);
@@ -540,10 +672,12 @@ export default function StructureViewerPane({
     useEffect(() => {
         if (colorMode === 'plddt' && !hasResidueConfidence) {
             setColorMode('default');
+            setFocusedMetricSection('summary');
             return;
         }
         if (colorMode === 'frustration' && !selectedDesign?.frustration_residues?.length) {
             setColorMode('default');
+            setFocusedMetricSection('summary');
         }
     }, [colorMode, hasResidueConfidence, selectedDesign?.frustration_residues?.length, setColorMode]);
 
@@ -560,6 +694,7 @@ export default function StructureViewerPane({
             || (overlayView === 'pae' && !hasPae)
         ) {
             setOverlayView('metrics');
+            setFocusedMetricSection('summary');
         }
     }, [hasFampnnPsceProfile, hasPae, hasResidueConfidence, overlayView]);
 
@@ -579,9 +714,9 @@ export default function StructureViewerPane({
                 : 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.')
             : designLens === 'boltzgen'
                 ? 'BoltzGen generator cohorts should be read as de novo candidates first: conf_score, affinity priors, and binder size are the main triage signals before downstream refinement.'
-            : designLens === 'fampnn'
-                ? 'FA-MPNN pSCE is an angstrom-scale expected sidechain error. Lower is better, and the worst-residue readout catches local outliers the average can hide.'
-                : null;
+                : designLens === 'fampnn'
+                    ? 'FA-MPNN pSCE is an angstrom-scale expected sidechain error. Lower is better, and the worst-residue readout catches local outliers the average can hide.'
+                    : null;
 
     const structureMetricCards = (() => {
         if (!selectedDesign) return [] as StructureMetricCard[];
@@ -721,34 +856,22 @@ export default function StructureViewerPane({
             ] satisfies StructureMetricCard[];
         }
 
-        return [
-            {
-                label: bfactorLabel,
-                value: formatMetricValue(selectedDesign.plddt_overall ?? null, 1),
-                accentClass: getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null),
-            },
-            {
-                label: 'PAE',
-                value: formatMetricValue(selectedDesign.pae_overall ?? null, 2),
-                accentClass: getMetricColor('pae_overall', selectedDesign.pae_overall ?? null),
-            },
-            {
-                label: 'pTM',
-                value: formatMetricValue(selectedDesign.ptm ?? null, 3),
-                accentClass: 'text-violet-400',
-            },
-            {
-                label: 'iPTM',
-                value: formatMetricValue(selectedDesign.iptm ?? null, 3),
-                accentClass: 'text-amber-400',
-            },
-            {
-                label: 'ipSAE',
-                value: formatMetricValue(selectedDesign.ipsae ?? null, 3),
-                accentClass: getMetricColor('ipsae', selectedDesign.ipsae ?? null),
-            },
-        ] satisfies StructureMetricCard[];
+        return buildStructureViewerSummaryCards({
+            confidenceLabel: headlineConfidenceLabel,
+            designLens,
+            selectedDesign,
+        }).map((card: StructureViewerSummaryCardSpec) => ({
+            label: card.label,
+            value: formatMetricValue(card.value, card.decimals, card.suffix ?? ''),
+            accentClass: card.accentClass ?? (card.accentField ? getMetricColor(card.accentField, card.value) : 'text-slate-200'),
+        })) satisfies StructureMetricCard[];
     })();
+    const chainMetricChainCount = Object.keys(chainMetrics).length;
+    const confidenceResidueCount = plddtProfile.length > 0
+        ? plddtProfile.length
+        : Object.values(chainMetrics).reduce((sum, metric) => sum + (metric?.length || 0), 0);
+    const interfacePairScoreCount = ipsaeInterface?.pair_scores?.length ?? 0;
+    const chainPairIptmChainCount = chainPairIptm?.chain_ids?.length ?? 0;
 
     const overlayTabs = [
         { id: 'metrics', label: 'Metrics' },
@@ -1021,6 +1144,55 @@ export default function StructureViewerPane({
             startHeight: referenceWindow.height,
         };
     }, [referenceWindow.height, referenceWindow.width]);
+    const quickViewById = useMemo(
+        () => new Map(viewerQuickViews.map((quickView) => [quickView.id, quickView] as const)),
+        [viewerQuickViews],
+    );
+    const renderSectionButtons = useCallback((compact = false) => (
+        <div className={`flex flex-wrap gap-1 ${compact ? '' : 'mb-3'}`}>
+            {viewerSections.map((section) => {
+                const quickView = quickViewById.get(section.id);
+                const active = quickView ? isQuickViewActive(quickView) : false;
+                return (
+                    <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => quickView && applyQuickView(quickView)}
+                        disabled={!quickView}
+                        className={`rounded border px-2 py-1 text-[10px] uppercase tracking-wider transition-colors ${active
+                            ? 'border-blue-500/50 bg-blue-500/15 text-blue-200'
+                            : 'border-slate-700/60 bg-slate-900/50 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                            }`}
+                    >
+                        {section.label}
+                    </button>
+                );
+            })}
+        </div>
+    ), [applyQuickView, isQuickViewActive, quickViewById, viewerSections]);
+    const renderQuickViewBar = useCallback((compact = false) => (
+        <div className={`flex flex-wrap items-center gap-1 ${compact ? '' : 'ml-1'}`}>
+            {viewerQuickViews.map((quickView) => {
+                const active = isQuickViewActive(quickView);
+                return (
+                    <button
+                        key={quickView.id}
+                        type="button"
+                        onClick={() => applyQuickView(quickView)}
+                        className={`rounded-lg border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${active
+                            ? 'border-blue-400/60 bg-blue-500/20 text-blue-100'
+                            : compact
+                                ? 'border-slate-700/70 bg-slate-900/75 text-slate-300 hover:border-slate-500 hover:text-white'
+                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500 hover:text-white'
+                            }`}
+                        title={`Focus ${quickView.label.toLowerCase()} signals`}
+                    >
+                        {quickView.label}
+                    </button>
+                );
+            })}
+        </div>
+    ), [applyQuickView, isQuickViewActive, viewerQuickViews]);
 
     // Toggleable Analytics Panel for fullscreen
     const FullscreenOverlay = () => (
@@ -1030,7 +1202,7 @@ export default function StructureViewerPane({
                 {overlayTabs.map(tab => (
                     <button
                         key={tab.id}
-                        onClick={() => setOverlayView(tab.id as OverlayView)}
+                        onClick={() => handleOverlayTabClick(tab.id as OverlayView)}
                         className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${overlayView === tab.id
                             ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
                             : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
@@ -1068,6 +1240,7 @@ export default function StructureViewerPane({
                                         {stageGuidance}
                                     </div>
                                 )}
+                                {renderSectionButtons(true)}
                                 {designLens === 'rfantibody' && setRfMetricScope && (
                                     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-violet-500/20 bg-violet-500/5 px-2 py-2">
                                         <div className="text-[10px] uppercase tracking-wider text-violet-200">RF Lens</div>
@@ -1182,8 +1355,8 @@ export default function StructureViewerPane({
                                     </div>
                                     <button
                                         type="button"
-                                        onClick={() => runChainMetrics.mutate()}
-                                        disabled={chainMetricsBusy}
+                                        onClick={onRunChainMetrics}
+                                        disabled={!onRunChainMetrics || chainMetricsBusy}
                                         className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${chainMetricsBusy
                                             ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                             : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
@@ -1204,8 +1377,8 @@ export default function StructureViewerPane({
                                             </div>
                                             <button
                                                 type="button"
-                                                onClick={() => runFampnnPsceProfile.mutate()}
-                                                disabled={fampnnPsceBusy}
+                                                onClick={onRunFampnnPsceProfile}
+                                                disabled={!onRunFampnnPsceProfile || fampnnPsceBusy}
                                                 className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
                                                     ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                                     : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
@@ -1226,8 +1399,8 @@ export default function StructureViewerPane({
                                     </div>
                                     <button
                                         type="button"
-                                        onClick={() => runPaeMatrix.mutate()}
-                                        disabled={paeBusy}
+                                        onClick={onRunPaeMatrix}
+                                        disabled={!onRunPaeMatrix || paeBusy}
                                         className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
                                             ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                             : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
@@ -1238,6 +1411,53 @@ export default function StructureViewerPane({
                                 </div>
                                 {paeRun?.error_message && (
                                     <div className="text-[10px] text-rose-300">Last PAE error: {paeRun.error_message}</div>
+                                )}
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-slate-200">Interface ipSAE</div>
+                                        <div className="text-[10px] text-slate-500">{ipsaeInterfaceStatusCopy}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={onRunIpsaeInterface}
+                                        disabled={!onRunIpsaeInterface || ipsaeInterfaceBusy}
+                                        className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${ipsaeInterfaceBusy
+                                            ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                            : 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                                            }`}
+                                    >
+                                        {ipsaeInterfaceBusy ? 'Running…' : hasIpsaeInterface ? 'Refresh' : 'Run'}
+                                    </button>
+                                </div>
+                                {ipsaeInterfaceRun?.error_message && (
+                                    <div className="text-[10px] text-rose-300">Last interface-ipSAE error: {ipsaeInterfaceRun.error_message}</div>
+                                )}
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-slate-200">Contact Map</div>
+                                        <div className="text-[10px] text-slate-500">{contactMapStatusCopy}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={onRunContactMap}
+                                        disabled={!onRunContactMap || contactMapBusy}
+                                        className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${contactMapBusy
+                                            ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                            : 'border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+                                            }`}
+                                    >
+                                        {contactMapBusy ? 'Running…' : hasContactMap ? 'Refresh' : 'Run'}
+                                    </button>
+                                </div>
+                                {contactMapRun?.error_message && (
+                                    <div className="text-[10px] text-rose-300">Last contact-map error: {contactMapRun.error_message}</div>
+                                )}
+                                {(chainPairIptmLoading || hasChainPairIptm) && (
+                                    <div className="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-2 text-[10px] text-slate-400">
+                                        {chainPairIptmLoading
+                                            ? 'Loading chain-pair iPTM matrix…'
+                                            : `Chain-pair iPTM matrix ready for ${chainPairIptm?.chain_ids?.length ?? 0} chains.`}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -1546,8 +1766,8 @@ export default function StructureViewerPane({
                                 <div className="uppercase tracking-wider text-[10px]">{paeStatusCopy}</div>
                                 <button
                                     type="button"
-                                    onClick={() => runPaeMatrix.mutate()}
-                                    disabled={paeBusy}
+                                    onClick={onRunPaeMatrix}
+                                    disabled={!onRunPaeMatrix || paeBusy}
                                     className={`rounded border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
                                         ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                         : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
@@ -1563,12 +1783,25 @@ export default function StructureViewerPane({
         </div>
     );
 
+    const analyticsSidebarSpacingClass = viewerLayout.isStacked ? 'space-y-3' : 'space-y-4';
+    const analyticsSidebarWidthClass = viewerLayout.isStacked ? 'w-full min-w-0' : 'flex-1 min-w-[280px] max-w-[400px]';
+    const analyticsPanelPaddingClass = viewerLayout.isStacked ? 'p-3' : 'p-4';
+    const analyticsSectionGridClass = viewerLayout.isStacked ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-2 gap-3';
+    const analyticsStatCardClass = viewerLayout.isStacked
+        ? 'rounded-lg bg-slate-900/50 px-2.5 py-2.5 text-center'
+        : 'rounded-lg bg-slate-900/50 px-3 py-3 text-center';
+    const analyticsHeadlineMetricClass = viewerLayout.isStacked ? 'text-xl font-bold' : 'text-2xl font-bold';
+    const analyticsSecondaryValueClass = viewerLayout.isStacked ? 'text-base font-semibold' : 'text-lg font-semibold';
+
     // Full sidebar for normal mode
     const AnalyticsSidebar = () => (
-        <div className="flex-1 min-w-[280px] max-w-[400px] space-y-4">
+        <div
+            data-structure-viewer-analytics-layout={viewerLayout.isStacked ? 'stacked' : 'sidebar'}
+            className={`${analyticsSidebarWidthClass} ${analyticsSidebarSpacingClass}`}
+        >
             {/* Design Title */}
             {selectedDesign && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <div className={`bg-slate-800/50 rounded-lg border border-slate-700/50 ${analyticsPanelPaddingClass}`}>
                     <h3 className="font-medium text-white truncate mb-2">{selectedDesign.name}</h3>
                     <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                         {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
@@ -1583,13 +1816,22 @@ export default function StructureViewerPane({
 
             {/* Key Metrics */}
             {selectedDesign && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
-                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">{metricSectionTitle}</h4>
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'summary' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Summary</h4>
+                            <div className="mt-1 text-[11px] text-slate-500">{metricSectionTitle}</div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400">
+                            Headline metrics
+                        </div>
+                    </div>
                     {stageGuidance && (
                         <div className="mb-3 rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2 text-[11px] leading-5 text-slate-300">
                             {stageGuidance}
                         </div>
                     )}
+                    {renderSectionButtons(viewerLayout.isStacked)}
                     {designLens === 'rfantibody' && setRfMetricScope && (
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
                             <div className="text-[10px] uppercase tracking-wider text-violet-200">RF Lens</div>
@@ -1607,10 +1849,10 @@ export default function StructureViewerPane({
                             </div>
                         </div>
                     )}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className={analyticsSectionGridClass}>
                         {structureMetricCards.map((metric) => (
                             <div key={metric.label} className="bg-slate-900/50 rounded-lg p-3 text-center">
-                                <div className={`text-2xl font-bold ${metric.accentClass}`}>
+                                <div className={`${analyticsHeadlineMetricClass} ${metric.accentClass}`}>
                                     {metric.value}
                                 </div>
                                 <div className="text-xs text-slate-500 mt-1">{metric.label}</div>
@@ -1644,10 +1886,130 @@ export default function StructureViewerPane({
                 </div>
             )}
 
+            {/* Confidence Section */}
+            {selectedDesign && (
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'confidence' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Confidence</h4>
+                            <div className="mt-1 text-[11px] text-slate-500">{confidenceSemantics.profileTitle} and chain-level residue coverage</div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400">
+                            {hasResidueConfidence ? 'Ready' : chainMetricsStatusCopy}
+                        </div>
+                    </div>
+                    <div className={analyticsSectionGridClass}>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-white`}>{confidenceResidueCount || '—'}</div>
+                            <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Residue Values</div>
+                        </div>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-cyan-200`}>{chainMetricChainCount || '—'}</div>
+                            <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Chains With Metrics</div>
+                        </div>
+                    </div>
+                    <div className="mt-3 space-y-3 border-t border-slate-700/50 pt-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chain Metrics</div>
+                                <div className="mt-1 text-sm text-slate-400">{chainMetricsStatusCopy}</div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onRunChainMetrics}
+                                disabled={!onRunChainMetrics || chainMetricsBusy}
+                                className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${chainMetricsBusy
+                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                    : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                    }`}
+                            >
+                                {chainMetricsBusy ? 'Running…' : chainMetricChainCount ? 'Refresh' : 'Run'}
+                            </button>
+                        </div>
+                        {chainMetricsRun?.error_message && (
+                            <div className="text-xs text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
+                        )}
+                        {hasResidueConfidence ? (
+                            <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+                                {headlineConfidenceLabel} overlays are ready. Use the quick-view buttons above to jump straight into residue coloring.
+                            </div>
+                        ) : (
+                            <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+                                Residue-level confidence will light up here once residue metrics or chain metrics are available for this design.
+                            </div>
+                        )}
+                        {antibodySelections?.length ? (
+                            <div className="text-xs text-violet-200">CDR overlay is available for this design.</div>
+                        ) : null}
+                    </div>
+                </div>
+            )}
+
+            {/* Interface Section */}
+            {selectedDesign && (
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'interface' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Interface</h4>
+                            <div className="mt-1 text-[11px] text-slate-500">ipSAE, chain-pair agreement, and interface-specific confidence</div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400">
+                            {ipsaeInterfaceStatusCopy}
+                        </div>
+                    </div>
+                    <div className={analyticsSectionGridClass}>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-amber-200`}>{formatMetricValue(ipsaeInterface?.ipsae ?? selectedDesign.ipsae ?? null, 3)}</div>
+                            <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Interface ipSAE</div>
+                        </div>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-cyan-200`}>{chainPairIptmChainCount || interfacePairScoreCount || '—'}</div>
+                            <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Interface Pairs</div>
+                        </div>
+                    </div>
+                    <div className="mt-3 space-y-3 border-t border-slate-700/50 pt-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Interface ipSAE</div>
+                                <div className="mt-1 text-sm text-slate-400">{ipsaeInterfaceStatusCopy}</div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onRunIpsaeInterface}
+                                disabled={!onRunIpsaeInterface || ipsaeInterfaceBusy}
+                                className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${ipsaeInterfaceBusy
+                                    ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                    : 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                                    }`}
+                            >
+                                {ipsaeInterfaceBusy ? 'Running…' : hasIpsaeInterface ? 'Refresh' : 'Run'}
+                            </button>
+                        </div>
+                        {ipsaeInterfaceRun?.error_message && (
+                            <div className="text-xs text-rose-300">Last interface-ipSAE error: {ipsaeInterfaceRun.error_message}</div>
+                        )}
+                        {(chainPairIptmLoading || hasChainPairIptm) ? (
+                            <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+                                {chainPairIptmLoading
+                                    ? 'Loading chain-pair iPTM matrix…'
+                                    : `Chain-pair iPTM matrix ready for ${chainPairIptmChainCount} chains.`}
+                            </div>
+                        ) : (
+                            <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+                                Run interface analysis to populate pairwise interface confidence and chain-pair agreement.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Structure Analysis */}
-            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+            <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'geometry' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                 <div className="mb-3 flex items-center justify-between gap-3">
-                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Structure Analysis</h4>
+                    <div>
+                        <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Geometry</h4>
+                        <div className="mt-1 text-[11px] text-slate-500">Structure summary, PAE, and contact topology</div>
+                    </div>
                     <div className="flex items-center gap-2">
                         <span className={`text-[10px] uppercase tracking-wider ${structureAnalysisStatus === 'completed' ? 'text-emerald-300' : structureAnalysisStatus === 'failed' ? 'text-rose-300' : 'text-slate-500'}`}>
                             {structureAnalysisStatusCopy}
@@ -1699,57 +2061,13 @@ export default function StructureViewerPane({
                 <div className="mt-4 space-y-3 border-t border-slate-700/50 pt-3">
                     <div className="flex items-center justify-between gap-3">
                         <div>
-                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chain Metrics</div>
-                            <div className="mt-1 text-sm text-slate-400">{chainMetricsStatusCopy}</div>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => runChainMetrics.mutate()}
-                            disabled={chainMetricsBusy}
-                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${chainMetricsBusy
-                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
-                                : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                                }`}
-                        >
-                            {chainMetricsBusy ? 'Running…' : Object.keys(chainMetrics).length ? 'Refresh' : 'Run'}
-                        </button>
-                    </div>
-                    {chainMetricsRun?.error_message && (
-                        <div className="text-xs text-rose-300">Last chain-metrics error: {chainMetricsRun.error_message}</div>
-                    )}
-                    {designLens === 'fampnn' && (
-                        <>
-                            <div className="flex items-center justify-between gap-3">
-                                <div>
-                                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">FA-MPNN PSCE Profile</div>
-                                    <div className="mt-1 text-sm text-slate-400">{fampnnPsceStatusCopy}</div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => runFampnnPsceProfile.mutate()}
-                                    disabled={fampnnPsceBusy}
-                                    className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
-                                        ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
-                                        : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
-                                        }`}
-                                >
-                                    {fampnnPsceBusy ? 'Running…' : hasFampnnPsceProfile ? 'Refresh' : 'Run'}
-                                </button>
-                            </div>
-                            {fampnnPsceProfileRun?.error_message && (
-                                <div className="text-xs text-rose-300">Last PSCE-profile error: {fampnnPsceProfileRun.error_message}</div>
-                            )}
-                        </>
-                    )}
-                    <div className="flex items-center justify-between gap-3">
-                        <div>
                             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">PAE Matrix</div>
                             <div className="mt-1 text-sm text-slate-400">{paeStatusCopy}</div>
                         </div>
                         <button
                             type="button"
-                            onClick={() => runPaeMatrix.mutate()}
-                            disabled={paeBusy}
+                            onClick={onRunPaeMatrix}
+                            disabled={!onRunPaeMatrix || paeBusy}
                             className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${paeBusy
                                 ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                 : 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20'
@@ -1760,6 +2078,26 @@ export default function StructureViewerPane({
                     </div>
                     {paeRun?.error_message && (
                         <div className="text-xs text-rose-300">Last PAE error: {paeRun.error_message}</div>
+                    )}
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Contact Map</div>
+                            <div className="mt-1 text-sm text-slate-400">{contactMapStatusCopy}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onRunContactMap}
+                            disabled={!onRunContactMap || contactMapBusy}
+                            className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${contactMapBusy
+                                ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
+                                : 'border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+                                }`}
+                        >
+                            {contactMapBusy ? 'Running…' : hasContactMap ? 'Refresh' : 'Run'}
+                        </button>
+                    </div>
+                    {contactMapRun?.error_message && (
+                        <div className="text-xs text-rose-300">Last contact-map error: {contactMapRun.error_message}</div>
                     )}
                 </div>
             </div>
@@ -1772,17 +2110,29 @@ export default function StructureViewerPane({
                 />
             )}
 
-            {selectedDesign && designLens === 'fampnn' && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+            {selectedDesign && hasDesignabilitySection && (
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'designability' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Designability</h4>
+                            <div className="mt-1 text-[11px] text-slate-500">FA-MPNN PSCE and FrustraMPNN residue-level stress hotspots</div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400">
+                            {designabilityStatusCopy}
+                        </div>
+                    </div>
+                    <div className="space-y-4">
+                        {hasFampnnDesign && (
+                            <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-4">
+                                <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                             <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Per-Residue PSCE</h4>
                             <div className="mt-1 text-sm text-slate-400">{fampnnPsceStatusCopy}</div>
                         </div>
                         <button
                             type="button"
-                            onClick={() => runFampnnPsceProfile.mutate()}
-                            disabled={fampnnPsceBusy}
+                            onClick={onRunFampnnPsceProfile}
+                            disabled={!onRunFampnnPsceProfile || fampnnPsceBusy}
                             className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
                                 ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
                                 : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
@@ -1849,8 +2199,8 @@ export default function StructureViewerPane({
             )}
 
             {/* Frustration Analysis (FrustraMPNN) */}
-            {selectedDesign?.frustration_high_count != null && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                        {hasFrustrationSummary && (
+                            <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
                         <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Frustration Analysis</h4>
                         {selectedDesign.frustration_csv_relpath && (
@@ -1922,6 +2272,9 @@ export default function StructureViewerPane({
                             </div>
                         </div>
                     )}
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -1984,7 +2337,7 @@ export default function StructureViewerPane({
             {/* Color Mode */}
             <select
                 value={effectiveColorMode}
-                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce')}
+                onChange={(e) => handleColorModeChange(e.target.value as StructureViewerColorMode)}
                 className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
             >
                 <option value="default">Chain Colors</option>
@@ -1997,6 +2350,8 @@ export default function StructureViewerPane({
                     CDR Regions
                 </option>
             </select>
+
+            {renderQuickViewBar(isCompact)}
 
             {/* Color Legend */}
             {effectiveColorMode === 'plddt' && !isCompact && (
@@ -2082,12 +2437,15 @@ export default function StructureViewerPane({
             className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
-            <div className={isFullscreen ? 'h-full w-full relative' : 'flex gap-4'}>
+            <div
+                data-structure-viewer-layout={viewerLayout.isStacked ? 'stacked' : 'split'}
+                className={isFullscreen ? 'h-full w-full relative' : viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
+            >
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
-                        <ViewerToolbar isCompact={isFullscreen} />
+                        <ViewerToolbar isCompact={isFullscreen || viewerLayout.isStacked} />
                     </div>
 
                     {/* Main Viewer - ALWAYS at this exact tree position */}
@@ -2096,7 +2454,7 @@ export default function StructureViewerPane({
                             ? 'absolute inset-0'
                             : 'relative rounded-lg overflow-hidden border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: 450 }}
+                        style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
                         <MolstarViewer
                             key={selectedDesignId + '_' + effectiveColorMode}
