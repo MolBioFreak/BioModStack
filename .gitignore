@@ -46,6 +46,7 @@ rcsb/
 # IDE
 .idea/
 .vscode/
+.hermes/
 *.swp
 *.swo
 
@@ -69,7 +70,8 @@ models/
 !platform/api/config/models/
 platform/api/config/models/*
 !platform/api/config/models/nanopore.yaml
-apptainer/
+!platform/api/config/models/boltz_cp_experimental.yaml
+
 !platform/api/config/models/protein_cad_experimental.yaml
 !apptainer/
 apptainer/*
@@ -159,6 +161,7 @@ platform/api/inputs/
 # Scratch test scripts
 test_*.nf
 spawn_result.json
+platform/api/tmp_import_*.py
 
 # Recovery artifacts (local only)
 inputs/recovered_rfantibody/

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
 import type {
     AntibodyData,
     AntibodyCdrIndelConfig,
@@ -10,6 +10,7 @@ import type {
     ChainMetric,
     ContactMapData,
     Design,
+    FampnnPsceProfile,
     IpsaeInterfaceAnalysis,
     DesignFilters,
     DesignSortField,
@@ -29,6 +30,7 @@ import {
     getOutputSourceLabel,
     inferDesignAnalysisLens,
     inferDesignOutputSource,
+    inferJobOutputSource,
     inferPreferredAnalysisLens,
     type AnalysisLens,
     type OutputSourceFilter,
@@ -60,7 +62,7 @@ const TABS = [
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
-const MAX_BULK_SELECTION_DESIGNS = 10000;
+const MAX_BULK_SELECTION_DESIGNS = 50000;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
     'plddt',
@@ -455,53 +457,31 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
     );
 };
 
-const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => {
-    const stage = String(job?.awaiting_stage || job?.current_stage || '').toLowerCase();
-    const stageFamily = String(job?.stage_family || '').toLowerCase();
-    const stageMode = String(job?.stage_mode || '').toLowerCase();
-    const modelId = String(job?.model_id || '').toLowerCase();
-    const mode = String(job?.mode || '').toLowerCase();
-    const candidateDir = String(job?.awaiting_payload?.candidate_dir || '').toLowerCase();
+const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => inferJobOutputSource(job);
 
-    if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
-    if (
-        stage === 'post_boltzgen' ||
-        stageFamily.includes('boltzgen') ||
-        stageMode.includes('nanobody_binder') ||
-        stageMode.includes('antibody_binder') ||
-        (modelId === 'boltzgen' && (mode === 'nanobody_binder' || mode === 'antibody_binder'))
-    ) {
-        return 'boltzgen';
-    }
-    if (
-        stage === 'post_ppiflow_generator' ||
-        stageMode === 'generator_backbone_refine' ||
-        (modelId === 'ppiflow' && mode === 'generator_backbone_refine')
-    ) {
-        return 'ppiflow';
-    }
-    if (
-        stage === 'post_caliby' ||
-        stageFamily.includes('caliby') ||
-        stageMode.includes('caliby') ||
-        modelId === 'caliby_experimental' ||
-        candidateDir.includes('caliby')
-    ) {
-        return 'caliby';
-    }
-    if (
-        stage.includes('ppiflow') ||
-        stage.includes('maturation') ||
-        candidateDir.includes('ppiflow') ||
-        candidateDir.includes('backbone_refine') ||
-        candidateDir.includes('maturation')
-    ) {
-        return 'ppiflow';
-    }
-    if (stage === 'post_fampnn' || candidateDir.includes('fampnn')) return 'fampnn';
-    if (stage === 'post_rfantibody' || candidateDir.includes('rfantibody')) return 'rfantibody';
-    return 'all';
-};
+const OUTPUT_SOURCE_FILTER_ORDER: OutputSourceFilter[] = ['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'imported', 'validation'];
+const SCOPED_OUTPUT_SOURCE_FILTERS = OUTPUT_SOURCE_FILTER_ORDER.filter(
+    (source): source is Exclude<OutputSourceFilter, 'all'> => source !== 'all',
+);
+const OUTPUT_SOURCE_BUTTON_LABELS: Array<[OutputSourceFilter, string]> = [
+    ['all', 'All'],
+    ['rfantibody', 'RFantibody'],
+    ['boltzgen', 'BoltzGen'],
+    ['fampnn', 'FAMPNN'],
+    ['caliby', 'Caliby'],
+    ['ppiflow', 'PPIFlow'],
+    ['imported', 'Imported'],
+    ['validation', 'Validation'],
+];
+type OutputSourceAnalysisLens = Extract<AnalysisLens, OutputSourceFilter>;
+
+const isScopedOutputSourceFilter = (value: string): value is Exclude<OutputSourceFilter, 'all'> => (
+    SCOPED_OUTPUT_SOURCE_FILTERS.includes(value as Exclude<OutputSourceFilter, 'all'>)
+);
+
+const isAnalysisLensOutputSource = (value: OutputSourceFilter): value is OutputSourceAnalysisLens => (
+    value !== 'all' && value !== 'imported'
+);
 
 const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
     if (!job) return false;
@@ -1063,9 +1043,10 @@ const LINEAGE_GROUP_ORDER: Record<string, number> = {
     fampnn: 2,
     caliby: 3,
     ppiflow: 4,
-    validation: 5,
-    frustrampnn: 6,
-    child: 7,
+    imported: 5,
+    validation: 6,
+    frustrampnn: 7,
+    child: 8,
 };
 const normalizeLoopScopeLabel = (value: unknown): string | null => {
     if (Array.isArray(value)) {
@@ -1100,6 +1081,9 @@ const normalizeLoopScopeLabel = (value: unknown): string | null => {
     return null;
 };
 const getLineageFamily = (job: Job): string => {
+    const outputSource = inferJobOutputSource(job);
+    if (outputSource === 'imported') return 'imported';
+
     const stageFamily = String(job.stage_family || '').trim().toLowerCase();
     if (stageFamily) {
         if (stageFamily.includes('boltzgen')) return 'boltzgen';
@@ -1115,6 +1099,7 @@ const getLineageFamily = (job: Job): string => {
 };
 const getLineageGroupLabel = (job: Job): string => {
     const family = getLineageFamily(job);
+    if (family === 'imported') return 'Imported';
     if (family === 'validation') {
         const validator = String(job.params?.structure_validator || '').toLowerCase();
         if (validator === 'protenix') return 'Validation';
@@ -1125,6 +1110,7 @@ const getLineageGroupLabel = (job: Job): string => {
 const getLineageOutputLabel = (job: Job): string => {
     const family = getLineageFamily(job);
     const stageMode = String(job.stage_mode || '').trim().toLowerCase();
+    if (family === 'imported') return 'Imported';
     if (family === 'boltzgen') {
         if (stageMode === 'nanobody_binder') return 'Nanobody Generation';
         if (stageMode === 'antibody_binder') return 'Antibody Generation';
@@ -2184,13 +2170,7 @@ export function ResultsViewer() {
     }, [navigate]);
     const handleSelectLineageGroup = useCallback((family: string) => {
         if (!activeLineageRootJob?.id) return;
-        const sourceFilter = (
-            family === 'rfantibody'
-            || family === 'boltzgen'
-            || family === 'fampnn'
-            || family === 'ppiflow'
-            || family === 'validation'
-        ) ? family as OutputSourceFilter : 'all';
+        const sourceFilter = isScopedOutputSourceFilter(family) ? family : 'all';
         manualOutputSourceSelectionRef.current = true;
         outputSourceSelectionJobRef.current = activeLineageRootJob.id;
         setOutputSourceFilter(sourceFilter);
@@ -2404,6 +2384,13 @@ export function ResultsViewer() {
         enabled: !!selectedDesignId,
         staleTime: 30_000,
     });
+    const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
+    const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
+        if (selectedDesign) {
+            return inferDesignAnalysisLens(selectedDesign as any);
+        }
+        return inferPreferredAnalysisLens(activeJob, designs as any) ?? null;
+    }, [activeJob, designs, selectedDesign]);
 
     // Fetch backbone summary for toggle UI
     const { data: backboneSummaryData } = useQuery({
@@ -2548,6 +2535,7 @@ export function ResultsViewer() {
     const structureAnalysisBusy = runStructureAnalysis.isPending
         || structureAnalysisRun?.status === 'queued'
         || structureAnalysisRun?.status === 'running';
+    const structureViewerAnalysisEnabled = !!selectedDesignId && (activeTab === 'overview' || activeTab === 'structure');
 
     const { data: antibodyAnalysisRun } = useQuery({
         queryKey: ['design-analysis', 'antibody_annotation_pack', selectedDesignId],
@@ -2607,7 +2595,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
@@ -2633,6 +2621,39 @@ export function ResultsViewer() {
         || chainMetricsAnalysisRun?.status === 'queued'
         || chainMetricsAnalysisRun?.status === 'running';
 
+    const { data: fampnnPsceProfileAnalysisRun } = useQuery({
+        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
+                : null
+        ),
+        enabled: structureViewerAnalysisEnabled && selectedDesignLens === 'fampnn',
+        staleTime: 60000,
+        refetchInterval: (query) => {
+            const status = (query.state.data as PersistedAnalysisRun<FampnnPsceProfile> | null | undefined)?.status;
+            return status === 'queued' || status === 'running' ? 1500 : false;
+        },
+    });
+    const fampnnPsceProfileAnalysis = fampnnPsceProfileAnalysisRun?.status === 'completed'
+        ? (fampnnPsceProfileAnalysisRun.result as FampnnPsceProfile | null)
+        : null;
+    const runFampnnPsceProfileAnalysis = useMutation({
+        mutationFn: async () => {
+            if (!selectedDesignId) {
+                throw new Error('No design selected');
+            }
+            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile');
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId] });
+        },
+    });
+    const fampnnPsceProfileAnalysisBusy = runFampnnPsceProfileAnalysis.isPending
+        || fampnnPsceProfileAnalysisRun?.status === 'queued'
+        || fampnnPsceProfileAnalysisRun?.status === 'running';
+
     const { data: ipsaeAnalysisRun } = useQuery({
         queryKey: ['design-analysis', 'ipsae_interface', selectedDesignId],
         queryFn: () => (
@@ -2640,7 +2661,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<IpsaeInterfaceAnalysis>(selectedDesignId, 'ipsae_interface').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null | undefined)?.status;
@@ -2673,7 +2694,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
@@ -2706,7 +2727,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 }).then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && activeTab === 'overview',
+        enabled: structureViewerAnalysisEnabled,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
@@ -2731,6 +2752,99 @@ export function ResultsViewer() {
     const contactMapAnalysisBusy = runContactMapAnalysis.isPending
         || contactMapAnalysisRun?.status === 'queued'
         || contactMapAnalysisRun?.status === 'running';
+
+    const { data: chainPairIptmData, isLoading: chainPairIptmLoading } = useQuery({
+        queryKey: ['design-chain-pair-iptm', selectedDesignId],
+        queryFn: () => (
+            selectedDesignId
+                ? fetchChainPairIptm(selectedDesignId).then((response) => response.data)
+                : null
+        ),
+        enabled: structureViewerAnalysisEnabled,
+        staleTime: 60000,
+    });
+
+    const onRunChainMetricsAnalysis = useCallback(() => {
+        if (!selectedDesignId || chainMetricsAnalysisBusy) return;
+        runChainMetricsAnalysis.mutate();
+    }, [chainMetricsAnalysisBusy, runChainMetricsAnalysis, selectedDesignId]);
+    const onRunFampnnPsceProfileAnalysis = useCallback(() => {
+        if (!selectedDesignId || fampnnPsceProfileAnalysisBusy) return;
+        runFampnnPsceProfileAnalysis.mutate();
+    }, [fampnnPsceProfileAnalysisBusy, runFampnnPsceProfileAnalysis, selectedDesignId]);
+    const onRunPaeMatrixAnalysis = useCallback(() => {
+        if (!selectedDesignId || paeMatrixAnalysisBusy) return;
+        runPaeMatrixAnalysis.mutate();
+    }, [paeMatrixAnalysisBusy, runPaeMatrixAnalysis, selectedDesignId]);
+    const onRunIpsaeAnalysis = useCallback(() => {
+        if (!selectedDesignId || ipsaeAnalysisBusy) return;
+        runIpsaeAnalysis.mutate();
+    }, [ipsaeAnalysisBusy, runIpsaeAnalysis, selectedDesignId]);
+    const onRunContactMapAnalysis = useCallback(() => {
+        if (!selectedDesignId || contactMapAnalysisBusy) return;
+        runContactMapAnalysis.mutate();
+    }, [contactMapAnalysisBusy, runContactMapAnalysis, selectedDesignId]);
+    const onRunStructureSummaryAnalysis = useCallback(() => {
+        if (!selectedDesignId || structureAnalysisBusy) return;
+        runStructureAnalysis.mutate();
+    }, [runStructureAnalysis, selectedDesignId, structureAnalysisBusy]);
+
+    const structureViewerAnalyses = useMemo(() => ({
+        structureAnalysisRun: structureAnalysisRun ?? null,
+        structureAnalysis: structureAnalysis ?? null,
+        onRunStructureAnalysis: selectedDesignId ? onRunStructureSummaryAnalysis : undefined,
+        structureAnalysisBusy,
+        chainMetricsRun: chainMetricsAnalysisRun ?? null,
+        chainMetrics: chainMetricsAnalysis ?? null,
+        onRunChainMetrics: selectedDesignId ? onRunChainMetricsAnalysis : undefined,
+        chainMetricsBusy: chainMetricsAnalysisBusy,
+        fampnnPsceProfileRun: fampnnPsceProfileAnalysisRun ?? null,
+        fampnnPsceProfile: fampnnPsceProfileAnalysis ?? null,
+        onRunFampnnPsceProfile: selectedDesignId ? onRunFampnnPsceProfileAnalysis : undefined,
+        fampnnPsceBusy: fampnnPsceProfileAnalysisBusy,
+        paeMatrixRun: paeMatrixAnalysisRun ?? null,
+        paeMatrixData: paeMatrixAnalysis ?? null,
+        onRunPaeMatrix: selectedDesignId ? onRunPaeMatrixAnalysis : undefined,
+        paeMatrixBusy: paeMatrixAnalysisBusy,
+        ipsaeInterfaceRun: ipsaeAnalysisRun ?? null,
+        ipsaeInterface: ipsaeAnalysis ?? null,
+        onRunIpsaeInterface: selectedDesignId ? onRunIpsaeAnalysis : undefined,
+        ipsaeInterfaceBusy: ipsaeAnalysisBusy,
+        contactMapRun: contactMapAnalysisRun ?? null,
+        contactMap: contactMapAnalysis ?? null,
+        onRunContactMap: selectedDesignId ? onRunContactMapAnalysis : undefined,
+        contactMapBusy: contactMapAnalysisBusy,
+        chainPairIptm: chainPairIptmData ?? null,
+        chainPairIptmLoading,
+    }), [
+        chainMetricsAnalysis,
+        chainMetricsAnalysisBusy,
+        chainMetricsAnalysisRun,
+        chainPairIptmData,
+        chainPairIptmLoading,
+        contactMapAnalysis,
+        contactMapAnalysisBusy,
+        contactMapAnalysisRun,
+        fampnnPsceProfileAnalysis,
+        fampnnPsceProfileAnalysisBusy,
+        fampnnPsceProfileAnalysisRun,
+        ipsaeAnalysis,
+        ipsaeAnalysisBusy,
+        ipsaeAnalysisRun,
+        onRunChainMetricsAnalysis,
+        onRunContactMapAnalysis,
+        onRunFampnnPsceProfileAnalysis,
+        onRunIpsaeAnalysis,
+        onRunPaeMatrixAnalysis,
+        onRunStructureSummaryAnalysis,
+        paeMatrixAnalysis,
+        paeMatrixAnalysisBusy,
+        paeMatrixAnalysisRun,
+        selectedDesignId,
+        structureAnalysis,
+        structureAnalysisBusy,
+        structureAnalysisRun,
+    ]);
 
     // Antibody selections for Molstar are sourced from backend-issued chain/range overlays.
     // Do not synthesize them from parent workflow hints.
@@ -2757,10 +2871,10 @@ export function ResultsViewer() {
 
     const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
-        if (outputSourceFilter !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === outputSourceFilter)) {
+        if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => inferDesignOutputSource(design as any) === outputSourceFilter)) {
             return outputSourceFilter;
         }
-        if (antibodySourceFilter !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === antibodySourceFilter)) {
+        if (isAnalysisLensOutputSource(antibodySourceFilter) && designs.some((design) => inferDesignOutputSource(design as any) === antibodySourceFilter)) {
             return antibodySourceFilter;
         }
         return inferPreferredAnalysisLens(activeJob, designs as any) ?? 'auto';
@@ -3041,7 +3155,6 @@ export function ResultsViewer() {
         targetMaxDist,
     ]);
 
-    const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
     const preferredRfMetricScope = useMemo(
         () => getPreferredRfMetricScope(activeJob, designs[0] || null),
         [activeJob, designs],
@@ -3071,12 +3184,6 @@ export function ResultsViewer() {
         )
     );
     const hasCdrOverlay = Boolean(antibodySelections?.length);
-    const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
-        if (selectedDesign) {
-            return inferDesignAnalysisLens(selectedDesign as any);
-        }
-        return inferPreferredAnalysisLens(activeJob, designs as any) ?? null;
-    }, [activeJob, designs, selectedDesign]);
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not AlphaFold pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
     useEffect(() => {
@@ -3103,11 +3210,11 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
-            if (source === 'rfantibody' || source === 'boltzgen' || source === 'fampnn' || source === 'caliby' || source === 'ppiflow' || source === 'validation') grouped[source].push(design);
-            else grouped.all.push(design);
+            if (source === 'all') grouped.all.push(design);
+            else grouped[source].push(design);
         }
         grouped.ppiflow.sort((a, b) => {
             const ordinalDelta = (getPpiflowSourceOrdinal(a) ?? Number.MAX_SAFE_INTEGER) - (getPpiflowSourceOrdinal(b) ?? Number.MAX_SAFE_INTEGER);
@@ -3502,9 +3609,11 @@ export function ResultsViewer() {
                     ? 'text-violet-300'
                     : selectedDesignSource === 'boltzgen'
                         ? 'text-amber-300'
-                        : selectedDesignSource === 'fampnn'
-                            ? 'text-emerald-300'
-                            : 'text-cyan-300',
+                        : selectedDesignSource === 'imported'
+                            ? 'text-sky-300'
+                            : selectedDesignSource === 'fampnn'
+                                ? 'text-emerald-300'
+                                : 'text-cyan-300',
             },
             { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
             ...(selectedDesignSource === 'fampnn'
@@ -4111,12 +4220,7 @@ export function ResultsViewer() {
             : 'name';
         const nextSortDir = nextState.sort_dir === 'desc' ? 'desc' : 'asc';
         const nextRfReviewSet = nextState.rf_review_set === 'raw' ? 'raw' : 'filtered';
-        const nextOutputSourceFilter = (nextState.output_source_filter === 'rfantibody'
-            || nextState.output_source_filter === 'boltzgen'
-            || nextState.output_source_filter === 'fampnn'
-            || nextState.output_source_filter === 'caliby'
-            || nextState.output_source_filter === 'ppiflow'
-            || nextState.output_source_filter === 'validation'
+        const nextOutputSourceFilter = ((typeof nextState.output_source_filter === 'string' && isScopedOutputSourceFilter(nextState.output_source_filter))
             || nextState.output_source_filter === 'all')
             ? nextState.output_source_filter
             : 'all';
@@ -4982,7 +5086,7 @@ export function ResultsViewer() {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleSelectLineageGroup(group.family)}
-                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'boltzgen' || group.family === 'fampnn' || group.family === 'caliby' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
+                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === (isScopedOutputSourceFilter(group.family) ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
                                                                     ? 'border-sky-400/60 bg-sky-500/15 text-white'
                                                                     : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
                                                                     }`}
@@ -6692,14 +6796,7 @@ export function ResultsViewer() {
                                                 structureFormat={structureFormat}
                                                 antibodySelections={antibodySelections}
                                                 antibodyStructureUrl={antibodyData?.imgt_pdb_url}
-                                                structureAnalysis={structureAnalysis}
-                                                structureAnalysisRun={structureAnalysisRun}
-                                                onRunStructureAnalysis={() => {
-                                                    if (!structureAnalysisBusy) {
-                                                        runStructureAnalysis.mutate();
-                                                    }
-                                                }}
-                                                structureAnalysisBusy={structureAnalysisBusy}
+                                                viewerAnalyses={structureViewerAnalyses}
                                                 activeJob={activeJob}
                                                 getMetricColor={getMetricColor}
                                                 rfMetricScope={rfMetricScope}
@@ -6733,7 +6830,7 @@ export function ResultsViewer() {
                                                                         onChange={(e) => setSelectedDesignId(e.target.value)}
                                                                         className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
-                                                                        {(['rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'validation'] as OutputSourceFilter[])
+                                                                        {SCOPED_OUTPUT_SOURCE_FILTERS
                                                                             .filter((source) => antibodyDesignGroups[source].length > 0 && (antibodySourceFilter === 'all' || antibodySourceFilter === source))
                                                                             .map((source) => (
                                                                                 <optgroup key={source} label={`${getOutputSourceLabel(antibodyDesignGroups[source][0])} (${antibodyDesignGroups[source].length})`}>
@@ -6749,7 +6846,7 @@ export function ResultsViewer() {
                                                                 </div>
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
-                                                                {(['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'validation'] as OutputSourceFilter[]).map((source) => {
+                                                                {OUTPUT_SOURCE_FILTER_ORDER.map((source) => {
                                                                     const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
                                                                     if (source !== 'all' && count === 0) return null;
                                                                     const active = antibodySourceFilter === source;
@@ -7754,14 +7851,7 @@ export function ResultsViewer() {
                                                 </span>
                                             </div>
                                             <div className="mb-4 flex flex-wrap items-center gap-2">
-                                                {([
-                                                    ['all', 'All'],
-                                                    ['rfantibody', 'RFantibody'],
-                                                    ['boltzgen', 'BoltzGen'],
-                                                    ['fampnn', 'FAMPNN'],
-                                                    ['ppiflow', 'PPIFlow'],
-                                                    ['validation', 'Validation'],
-                                                ] as Array<[OutputSourceFilter, string]>).map(([value, label]) => (
+                                                {OUTPUT_SOURCE_BUTTON_LABELS.map(([value, label]) => (
                                                     <button
                                                         key={value}
                                                         type="button"
@@ -7944,18 +8034,7 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 max-w-[260px]">
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${inferDesignOutputSource(d as any) === 'validation'
-                                                                            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                                                                            : inferDesignOutputSource(d as any) === 'boltzgen'
-                                                                                ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                                                                            : inferDesignOutputSource(d as any) === 'fampnn'
-                                                                                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                                                                                : inferDesignOutputSource(d as any) === 'ppiflow'
-                                                                                    ? 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200'
-                                                                                : inferDesignOutputSource(d as any) === 'rfantibody'
-                                                                                    ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
-                                                                                    : 'border-slate-600 bg-slate-800 text-slate-300'
-                                                                            }`}>
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${getOutputSourceBadgeClass(inferDesignOutputSource(d as any))}`}>
                                                                             {getOutputSourceLabel(d as any)}
                                                                         </span>
                                                                         {d.frustration_high_count != null && (

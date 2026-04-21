@@ -20,6 +20,10 @@ import {
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
+import {
+    deriveBoltzgenScaffoldSelectionUpdate,
+    resolveBoltzgenReferencePreviewEnabled,
+} from './antibodyDenovoBoltzgenScaffold';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 import {
@@ -603,6 +607,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [boltzgenCdrH2Length, setBoltzgenCdrH2Length] = useState(initialValues?.boltzgen_cdr_h2_length || '6-10');
     const [boltzgenCdrH3Length, setBoltzgenCdrH3Length] = useState(initialValues?.boltzgen_cdr_h3_length || '12-18');
     const [showBoltzgenFrameworkBrowser, setShowBoltzgenFrameworkBrowser] = useState(false);
+    const [boltzgenViewReferenceStructure, setBoltzgenViewReferenceStructure] = useState(
+        () => resolveBoltzgenReferencePreviewEnabled(initialValues)
+    );
     const [boltzgenCheckpointMode, setBoltzgenCheckpointMode] = useState<BoltzgenCheckpointMode>(
         (initialValues?.boltzgen_checkpoint_mode as BoltzgenCheckpointMode) || 'both'
     );
@@ -1283,6 +1290,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (typeof initialValues.boltzgen_step_scale === 'number') setBoltzgenStepScale(initialValues.boltzgen_step_scale);
             if (typeof initialValues.boltzgen_noise_scale === 'number') setBoltzgenNoiseScale(initialValues.boltzgen_noise_scale);
             if (typeof initialValues.boltzgen_budget === 'number') setBoltzgenBudget(initialValues.boltzgen_budget);
+            if (typeof initialValues.boltzgen_view_reference_structure === 'boolean') {
+                setBoltzgenViewReferenceStructure(initialValues.boltzgen_view_reference_structure);
+            }
             if (typeof initialValues.boltzgen_alpha === 'number') setBoltzgenAlpha(initialValues.boltzgen_alpha);
             if (typeof initialValues.boltzgen_max_rmsd === 'number') setBoltzgenMaxRmsd(initialValues.boltzgen_max_rmsd);
             if (typeof initialValues.boltzgen_min_plddt === 'number') setBoltzgenMinPlddt(initialValues.boltzgen_min_plddt);
@@ -3122,6 +3132,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                     </button>
                                                 </div>
 
+                                                <label className="mb-3 flex items-center gap-2 text-xs text-slate-400">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={boltzgenViewReferenceStructure}
+                                                        onChange={(e) => setBoltzgenViewReferenceStructure(e.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                                    />
+                                                    Open the selected reference structure in the framework viewer
+                                                </label>
+
                                                 {sabdabFramework?.pdbCode && (
                                                     <div className="mb-3 flex items-center gap-2 text-xs">
                                                         <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
@@ -3132,6 +3152,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                             onClick={() => {
                                                                 setSabdabFramework(null);
                                                                 setBoltzgenNanobodyFramework(DEFAULT_BOLTZGEN_VHH_FRAMEWORK);
+                                                                setFrameworkPdbUrl(null);
+                                                                setParsedFrameworkChains([]);
+                                                                if (viewerMode === 'framework') {
+                                                                    setShow3DViewer(false);
+                                                                }
                                                             }}
                                                             className="text-slate-400 hover:text-red-400"
                                                         >
@@ -3144,14 +3169,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                     <div className="mb-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
                                                         <FrameworkBrowser
                                                             onSelect={(framework) => {
+                                                                const scaffoldSelection = deriveBoltzgenScaffoldSelectionUpdate({
+                                                                    framework,
+                                                                    viewReferenceStructure: boltzgenViewReferenceStructure,
+                                                                });
                                                                 setSabdabFramework(framework);
-                                                                if (framework?.sequence) {
-                                                                    setBoltzgenNanobodyFramework(framework.sequence);
+                                                                if (scaffoldSelection.nextFrameworkSequence) {
+                                                                    setBoltzgenNanobodyFramework(scaffoldSelection.nextFrameworkSequence);
                                                                 }
-                                                                if (framework?.cdrH3Length) {
-                                                                    const min = Math.max(8, framework.cdrH3Length - 3);
-                                                                    const max = framework.cdrH3Length + 3;
-                                                                    setBoltzgenCdrH3Length(`${min}-${max}`);
+                                                                if (scaffoldSelection.nextCdrH3Length) {
+                                                                    setBoltzgenCdrH3Length(scaffoldSelection.nextCdrH3Length);
+                                                                }
+                                                                if (scaffoldSelection.shouldOpenReferencePreview && scaffoldSelection.referencePdbUrl) {
+                                                                    setFrameworkPdbUrl(scaffoldSelection.referencePdbUrl);
+                                                                    setViewerMode('framework');
+                                                                    setShow3DViewer(true);
+                                                                } else {
+                                                                    setFrameworkPdbUrl(null);
+                                                                    setParsedFrameworkChains([]);
+                                                                    if (viewerMode === 'framework') {
+                                                                        setShow3DViewer(false);
+                                                                    }
                                                                 }
                                                                 setShowBoltzgenFrameworkBrowser(false);
                                                             }}
@@ -5309,6 +5347,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setBoltzgenDesignsPerJob(p.boltzgen_designs_per_job);
                             loaded.push('boltzgen_designs_per_job');
                         }
+                        if (typeof p.boltzgen_view_reference_structure === 'boolean') {
+                            setBoltzgenViewReferenceStructure(p.boltzgen_view_reference_structure);
+                            loaded.push('boltzgen_view_reference_structure');
+                        }
                         if (typeof p.boltzgen_reuse === 'boolean') {
                             setBoltzgenReuseExisting(p.boltzgen_reuse);
                             loaded.push('boltzgen_reuse');
@@ -5586,6 +5628,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     boltzgen_mode: deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : undefined,
                     boltzgen_use_framework_template: deNovoGenerator === 'boltzgen' ? boltzgenUseFrameworkTemplate : undefined,
                     boltzgen_scaffold_source: deNovoGenerator === 'boltzgen' ? boltzgenScaffoldSource : undefined,
+                    boltzgen_view_reference_structure: deNovoGenerator === 'boltzgen' ? boltzgenViewReferenceStructure : undefined,
                     boltzgen_batch_size: deNovoGenerator === 'boltzgen' ? boltzgenBatchSize : undefined,
                     boltzgen_parallel_mode: deNovoGenerator === 'boltzgen' ? boltzgenParallelMode : undefined,
                     boltzgen_designs_per_job: deNovoGenerator === 'boltzgen' ? boltzgenDesignsPerJob : undefined,

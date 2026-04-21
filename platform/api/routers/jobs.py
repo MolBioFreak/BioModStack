@@ -44,8 +44,8 @@ from paths import (
     resolve_allowed_path,
     to_allowed_relative,
 )
+from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
-from services.nextflow import launch_nextflow_job
 from services.job_control import cancel_job_lineage
 from services.proteinbase_importer import import_proteinbase_bundle
 
@@ -79,6 +79,41 @@ PPI_FLOW_STAGE_FLAG_KEYS = {
     "run_post_validation_maturation",
     "run_post_boltz_maturation",
 }
+BOLTZ_ITERATION_FORWARD_KEYS = (
+    "boltz_use_msa",
+    "boltz_sampling_steps",
+    "boltz_recycling_steps",
+    "boltz_num_samples",
+    "boltz_diffusion_samples",
+    "boltz_max_parallel_samples",
+    "boltz_use_potentials",
+    "boltz_step_scale",
+    "boltz_method",
+    "boltz_predict_affinity",
+    "boltz_sampling_steps_affinity",
+    "boltz_diffusion_samples_affinity",
+    "boltz_affinity_mw_correction",
+    "boltz_anchor_target",
+    "boltz_anchor_strict",
+    "boltz_target_geometry_mode",
+    "boltz_extra_config",
+    "msa_preset",
+    "msa_use_gpu",
+    "msa_local_db",
+    "msa_cache_dir",
+    "msa_threads",
+    "colabfold_api_host",
+    "colabfold_api_min_interval",
+    "colabfold_api_poll_interval",
+    "msa_gpu_mode",
+    "msa_gpu_threshold",
+    "msa_preferred_gpus",
+    "msa_excluded_gpus",
+    "msa_gpu_server_mode",
+    "msa_gpu_server_wait_timeout",
+    "msa_gpu_server_db_load_mode",
+    "msa_gpu_server_startup_wait",
+)
 ANTIBODY_ITERATION_ACTION_LABELS = {
     "validate_boltz2": "Boltz-2 validation",
     "validate_protenix": "Protenix validation",
@@ -88,6 +123,12 @@ ANTIBODY_ITERATION_ACTION_LABELS = {
     "frustrampnn": "FrustraMPNN redesign",
     "ui_refinement": "refinement launch",
 }
+
+
+def _raise_if_workflow_launches_disabled(action: str) -> None:
+    if workflow_launches_allowed():
+        return
+    raise HTTPException(status_code=409, detail=workflow_launch_block_detail(action))
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -118,6 +159,12 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _copy_present_params(source: Dict[str, Any], dest: Dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        if key in source:
+            dest[key] = source[key]
 
 
 def _format_artifact_identity(artifact_class: Optional[str], stage_family: Optional[str], stage_mode: Optional[str]) -> str:
@@ -726,6 +773,23 @@ def _repair_job_for_response(job: Job) -> bool:
     stale_failed = str(job.error_message or "").startswith(
         "Reconciled as failed: no active process and no terminal .nextflow/history status"
     )
+    if history_status == "ERR":
+        if job.status != JobStatus.FAILED.value:
+            job.status = JobStatus.FAILED.value
+            changed = True
+        if job.queue_status != "failed":
+            job.queue_status = "failed"
+            changed = True
+        replacement_error = str(job.error_message or "").strip()
+        if not replacement_error or stale_failed:
+            replacement_error = "Reconciled as failed: terminal .nextflow/history status ERR"
+        if replacement_error != (job.error_message or ""):
+            job.error_message = replacement_error
+            changed = True
+        if not job.completed_at:
+            job.completed_at = datetime.utcnow()
+            changed = True
+        return changed
     if history_status == "OK" and (job.awaiting_input or gate_present or stale_failed):
         if not job.awaiting_input:
             job.awaiting_input = True
@@ -1018,6 +1082,181 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
         if isinstance(value, str):
             normalized[key] = _resolve_alias_path_for_runtime(value)
     return normalized
+
+
+MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3
+MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50
+STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR = "RF3 is predict-only and cannot be launched in complex mode."
+BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_input__"
+
+
+
+def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
+    if value_count < 1:
+        return 1
+
+    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
+    best = 1
+    for candidate in range(1, value_count + 1):
+        if value_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
+
+
+def _default_structure_prediction_pred_method(model_id: str) -> str:
+    normalized_model_id = str(model_id or "").strip().lower()
+    if normalized_model_id == "rf3":
+        return "rf3"
+    if normalized_model_id == "protenix":
+        return "protenix"
+    return "boltz"
+
+
+def _normalize_structure_prediction_pred_method(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {} if params is None else params
+
+    normalized = dict(params)
+    normalized_mode = str(mode or "").strip().lower()
+    normalized_model_id = str(model_id or "").strip().lower()
+
+    structure_modes = {"predict", "complex", "structure_prediction", "structure_validation"}
+    structure_models = {"boltz2", "protenix", "rf3", "template_structure_prediction"}
+    if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
+        return normalized
+
+    requested_pred_method = str(normalized.get("pred_method") or "").strip().lower()
+    if requested_pred_method == "boltz2":
+        requested_pred_method = "boltz"
+    if not requested_pred_method:
+        requested_pred_method = _default_structure_prediction_pred_method(normalized_model_id)
+
+    if normalized_mode == "complex":
+        if requested_pred_method == "rf3" or normalized_model_id == "rf3":
+            raise HTTPException(
+                status_code=422,
+                detail={"validation_errors": [STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR]},
+            )
+        if requested_pred_method in {"both", "all", "boltz_protenix"}:
+            normalized["pred_method"] = "boltz_protenix"
+            return normalized
+        if requested_pred_method == "protenix":
+            normalized["pred_method"] = "protenix"
+            return normalized
+        normalized["pred_method"] = "boltz"
+        return normalized
+
+    normalized["pred_method"] = requested_pred_method
+    return normalized
+
+
+def _normalize_boltz_cp_params_for_validation(
+    model_id: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if model_id != "boltz_cp_experimental" or not isinstance(params, dict):
+        return {} if params is None else params
+
+    normalized = dict(params)
+
+    input_path = _coerce_nonempty_text(normalized.get("input_path")) or _coerce_nonempty_text(
+        normalized.get("bcp_input_path")
+    )
+    if not input_path:
+        has_structure_launcher_inputs = any(
+            normalized.get(key)
+            for key in (
+                "sequence",
+                "complex_components",
+                "sequence_batch_entries",
+                "fixed_target_source_path",
+            )
+        ) or normalized.get("structure_launch_variant") == "boltz_cp_experimental"
+        if has_structure_launcher_inputs:
+            input_path = BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
+    if input_path:
+        normalized["input_path"] = input_path
+
+    gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
+        normalized.get("bcp_gpu_ids")
+    )
+    if not gpu_ids and isinstance(normalized.get("pinned_gpus"), list) and normalized["pinned_gpus"]:
+        gpu_ids = ",".join(str(gpu_id).strip() for gpu_id in normalized["pinned_gpus"] if str(gpu_id).strip())
+    if gpu_ids:
+        normalized["gpu_ids"] = gpu_ids
+
+    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
+        normalized.get("bcp_size_cp")
+    )
+    if gpu_ids:
+        gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
+        if gpu_count > 0:
+            size_cp = _largest_square_divisor(gpu_count, size_cp)
+    if size_cp is not None:
+        normalized["size_cp"] = size_cp
+
+    alias_mappings = {
+        "input_format": "bcp_input_format",
+        "output_format": "bcp_output_format",
+        "write_full_pae": "bcp_write_full_pae",
+        "recycling_steps": "bcp_recycling_steps",
+        "sampling_steps": "bcp_sampling_steps",
+        "diffusion_samples": "bcp_diffusion_samples",
+        "seed": "bcp_seed",
+    }
+    for canonical_key, alias_key in alias_mappings.items():
+        if canonical_key not in normalized and alias_key in normalized:
+            normalized[canonical_key] = normalized[alias_key]
+
+    if "recycling_steps" not in normalized and "boltz_recycling_steps" in normalized:
+        normalized["recycling_steps"] = normalized["boltz_recycling_steps"]
+    if "sampling_steps" not in normalized and "boltz_sampling_steps" in normalized:
+        normalized["sampling_steps"] = normalized["boltz_sampling_steps"]
+    if "diffusion_samples" not in normalized and "boltz_num_samples" in normalized:
+        normalized["diffusion_samples"] = normalized["boltz_num_samples"]
+
+    return normalized
+
+
+def _normalize_boltz_no_msa_quality_params(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if model_id != "boltz2" or mode not in {"predict", "complex"} or not isinstance(params, dict):
+        return {} if not isinstance(params, dict) else params
+
+    normalized = dict(params)
+    if "boltz_use_msa" not in normalized or _to_bool(normalized.get("boltz_use_msa")):
+        return normalized
+
+    sampling_steps = _coerce_positive_int(normalized.get("boltz_sampling_steps"))
+    recycling_steps = _coerce_positive_int(normalized.get("boltz_recycling_steps"))
+
+    if sampling_steps is not None and sampling_steps < MIN_BOLTZ_NO_MSA_SAMPLING_STEPS:
+        normalized["boltz_sampling_steps"] = MIN_BOLTZ_NO_MSA_SAMPLING_STEPS
+    if recycling_steps is not None and recycling_steps < MIN_BOLTZ_NO_MSA_RECYCLING_STEPS:
+        normalized["boltz_recycling_steps"] = MIN_BOLTZ_NO_MSA_RECYCLING_STEPS
+
+    return normalized
+
+
+def _supports_colabfold_api_single_job(model_id: str, mode: str) -> bool:
+    normalized_model = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+
+    if normalized_model == "boltz_cp_experimental":
+        return normalized_mode == "design"
+
+    return normalized_model in {"boltz2", "rf3", "protenix"} and normalized_mode in {"predict", "complex"}
 
 
 def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
@@ -2865,34 +3104,7 @@ def _build_manual_mutagenesis_iteration_job(
             if key in base_params:
                 launch_params[key] = base_params[key]
     else:
-        for key in (
-            "boltz_use_msa",
-            "boltz_sampling_steps",
-            "boltz_recycling_steps",
-            "boltz_num_samples",
-            "boltz_use_potentials",
-            "boltz_step_scale",
-            "boltz_predict_affinity",
-            "boltz_diffusion_samples_affinity",
-            "msa_preset",
-            "msa_use_gpu",
-            "msa_local_db",
-            "msa_cache_dir",
-            "msa_threads",
-            "colabfold_api_host",
-            "colabfold_api_min_interval",
-            "colabfold_api_poll_interval",
-            "msa_gpu_mode",
-            "msa_gpu_threshold",
-            "msa_preferred_gpus",
-            "msa_excluded_gpus",
-            "msa_gpu_server_mode",
-            "msa_gpu_server_wait_timeout",
-            "msa_gpu_server_db_load_mode",
-            "msa_gpu_server_startup_wait",
-        ):
-            if key in base_params:
-                launch_params[key] = base_params[key]
+        _copy_present_params(base_params, launch_params, BOLTZ_ITERATION_FORWARD_KEYS)
 
     if param_overrides:
         launch_params.update(dict(param_overrides))
@@ -3182,34 +3394,7 @@ def _build_cdr_indel_iteration_job(
             if key in base_params:
                 launch_params[key] = base_params[key]
     else:
-        for key in (
-            "boltz_use_msa",
-            "boltz_sampling_steps",
-            "boltz_recycling_steps",
-            "boltz_num_samples",
-            "boltz_use_potentials",
-            "boltz_step_scale",
-            "boltz_predict_affinity",
-            "boltz_diffusion_samples_affinity",
-            "msa_preset",
-            "msa_use_gpu",
-            "msa_local_db",
-            "msa_cache_dir",
-            "msa_threads",
-            "colabfold_api_host",
-            "colabfold_api_min_interval",
-            "colabfold_api_poll_interval",
-            "msa_gpu_mode",
-            "msa_gpu_threshold",
-            "msa_preferred_gpus",
-            "msa_excluded_gpus",
-            "msa_gpu_server_mode",
-            "msa_gpu_server_wait_timeout",
-            "msa_gpu_server_db_load_mode",
-            "msa_gpu_server_startup_wait",
-        ):
-            if key in base_params:
-                launch_params[key] = base_params[key]
+        _copy_present_params(base_params, launch_params, BOLTZ_ITERATION_FORWARD_KEYS)
 
     if param_overrides:
         cleaned_overrides = dict(param_overrides)
@@ -4344,6 +4529,7 @@ async def create_job(
     session: AsyncSession = Depends(get_session)
 ):
     """Create and queue a new pipeline job."""
+    _raise_if_workflow_launches_disabled("create new workflow jobs")
     registry = get_registry()
 
     # Keep model schema in sync with disk changes during long-lived API sessions.
@@ -4358,19 +4544,26 @@ async def create_job(
             job_data.model_id,
             job_data.params,
         )
+        job_data.params = _normalize_structure_prediction_pred_method(
+            job_data.model_id,
+            job_data.mode,
+            job_data.params,
+        )
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
         job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
+        job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
         job_data.params = _normalize_antibody_job_params(job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
+    validation_params = _normalize_boltz_cp_params_for_validation(job_data.model_id, job_data.params)
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
     if not job_data.model_id.startswith('template_') and not is_mutagenesis:
         # Validate model and mode
-        errors = registry.validate_job_params(job_data.model_id, job_data.mode, job_data.params)
+        errors = registry.validate_job_params(job_data.model_id, job_data.mode, validation_params)
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
@@ -4507,14 +4700,13 @@ async def create_job(
         )
 
     if msa_provider == "colabfold_api":
-        is_structure_model = job_data.model_id in {"boltz2", "rf3", "protenix"}
-        is_structure_mode = job_data.mode in {"predict", "complex"}
-        if not is_structure_model or not is_structure_mode:
+        if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "msa_provider=colabfold_api is currently supported only for "
-                    "single structure_prediction jobs (boltz2/rf3/protenix predict|complex)."
+                    "msa_provider=colabfold_api is currently supported only for single-job "
+                    "structure launches (boltz2/rf3/protenix predict|complex, "
+                    "boltz_cp_experimental design)."
                 ),
             )
         if mutagenesis_variants:
@@ -5374,6 +5566,7 @@ async def resubmit_job(
     Resubmit a failed or cancelled job with the same parameters.
     Creates a new job with a fresh ID but copies all settings from the original.
     """
+    _raise_if_workflow_launches_disabled("resubmit workflow jobs")
     # Find original job
     result = await session.execute(select(Job).where(Job.id == job_id))
     original_job = result.scalar_one_or_none()
@@ -6223,6 +6416,7 @@ async def resume_job(
     If from_stage is specified, it is recorded as a stage hint for cache-based
     resume behavior. The underlying Nextflow resume remains cache-driven.
     """
+    _raise_if_workflow_launches_disabled("resume workflow jobs")
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     

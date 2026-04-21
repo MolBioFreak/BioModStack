@@ -39,6 +39,7 @@ from services.gpu_config import read_scheduler_config, write_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.stage_review import has_stage_gate, nextflow_history_status, refresh_gate_payload
+from services.workflow_adapter import workflow_adapter_enabled
 
 
 @dataclass
@@ -531,6 +532,122 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
         "count": len(raw_pdbs),
         "opened_gate": opened_gate,
     }
+
+
+def _reconcile_terminal_history_without_process(
+    job: Any,
+    *,
+    history_status: str,
+    gate_present: bool,
+    age_seconds: float,
+    stale_fail_after_seconds: float,
+) -> bool:
+    if history_status == "OK" and not gate_present and not getattr(job, "awaiting_input", False):
+        job.status = "completed"
+        job.queue_status = "completed"
+        job.paused = False
+        job.assigned_gpu = None
+        job.current_stage = "Complete"
+        job.stage_progress = None
+        job.error_message = None
+        if getattr(job, "completed_at", None) is None:
+            job.completed_at = datetime.utcnow()
+        logger.info(
+            f"[COMPLETION] {job.name} reconciled as completed "
+            f"(no process found, age: {age_seconds:.0f}s, history_status=OK)"
+        )
+        return True
+
+    if history_status == "OK" or gate_present or getattr(job, "awaiting_input", False):
+        job.status = "awaiting_input"
+        job.queue_status = "completed"
+        job.paused = False
+        job.assigned_gpu = None
+        job.error_message = None
+        if getattr(job, "awaiting_stage", None):
+            job.current_stage = job.awaiting_stage
+        logger.info(
+            f"[COMPLETION] {job.name} reconciled as awaiting input "
+            f"(no process found, age: {age_seconds:.0f}s, "
+            f"history_status={history_status or 'n/a'}, gate={gate_present})"
+        )
+        return True
+
+    if history_status == "ERR":
+        existing_error = str(getattr(job, "error_message", "") or "").strip()
+        unresolved_reason = existing_error
+        if not unresolved_reason or unresolved_reason.startswith(
+            "Reconciled as failed: no active process and no terminal .nextflow/history status"
+        ):
+            unresolved_reason = "Reconciled as failed: terminal .nextflow/history status ERR"
+        if job.status == "running":
+            job.status = "failed"
+        job.queue_status = "failed"
+        job.error_message = unresolved_reason
+        if getattr(job, "completed_at", None) is None:
+            job.completed_at = datetime.utcnow()
+        logger.warning(
+            f"[COMPLETION] {job.name} reconciled as failed "
+            f"(no process found, age: {age_seconds:.0f}s, history_status=ERR): {unresolved_reason}"
+        )
+        return True
+
+    if age_seconds < stale_fail_after_seconds:
+        logger.info(
+            f"[COMPLETION] {job.name} remains running while waiting "
+            f"for terminal .nextflow/history state "
+            f"(age: {age_seconds:.0f}s, threshold: {stale_fail_after_seconds}s)"
+        )
+        return False
+
+    bootstrap_artifacts_present = False
+    if getattr(job, "output_dir", None):
+        try:
+            out_dir = Path(job.output_dir)
+            bootstrap_artifacts_present = any(
+                (out_dir / candidate).exists()
+                for candidate in ("nextflow.log", ".nextflow.log")
+            )
+        except Exception:
+            bootstrap_artifacts_present = False
+
+    launch_never_bootstrapped = (
+        not history_status
+        and not gate_present
+        and not getattr(job, "awaiting_input", False)
+        and not getattr(job, "nextflow_run_id", None)
+        and not getattr(job, "stage_work_dir", None)
+        and not bootstrap_artifacts_present
+    )
+
+    if job.status == "running" and launch_never_bootstrapped:
+        job.status = "queued"
+        job.queue_status = "queued"
+        job.error_message = None
+        job.completed_at = None
+        job.started_at = None
+        job.assigned_gpu = None
+        job.current_stage = None
+        job.stage_progress = None
+        logger.warning(
+            f"[COMPLETION] {job.name} never completed launcher bootstrap "
+            f"(no process/log/history, age: {age_seconds:.0f}s); re-queued"
+        )
+    elif job.status == "running":
+        unresolved_reason = (
+            "Reconciled as failed: no active process and no terminal "
+            ".nextflow/history status (expected OK/ERR)"
+        )
+        job.status = "failed"
+        job.queue_status = "failed"
+        job.error_message = unresolved_reason
+        job.completed_at = datetime.utcnow()
+        logger.warning(
+            f"[COMPLETION] {job.name} reconciled as failed "
+            f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
+        )
+
+    return True
 
 
 def _normalize_protenix_profile(params: Dict[str, Any]) -> str:
@@ -2185,27 +2302,30 @@ class GPUOrchestrator:
                     logger.debug(f"[COMPLETION] Could not query launcher running jobs: {proc_err}")
                 
                 # Get all running processes once (expensive operation)
-                try:
-                    ps_result = subprocess.run(
-                        ['ps', 'aux'],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    all_processes = ps_result.stdout if ps_result.returncode == 0 else ""
-                except Exception as e:
-                    logger.debug(f"[COMPLETION] Failed to get process list: {e}")
-                    all_processes = ""
-                
-                # Count FAMPNN/Nextflow processes per GPU
+                adapter_authoritative = workflow_adapter_enabled()
+                all_processes = ""
                 gpu_has_activity = {}
-                for line in all_processes.split('\n'):
-                    if 'seq_design.py' in line or 'nextflow' in line:
-                        # Try to extract gpu_id from the process args
-                        gpu_match = re.search(r'gpu_id[=\s]+(\d+)', line)
-                        if gpu_match:
-                            gpu_id = int(gpu_match.group(1))
-                            gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
+                if not adapter_authoritative:
+                    try:
+                        ps_result = subprocess.run(
+                            ['ps', 'aux'],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        all_processes = ps_result.stdout if ps_result.returncode == 0 else ""
+                    except Exception as e:
+                        logger.debug(f"[COMPLETION] Failed to get process list: {e}")
+                        all_processes = ""
+
+                    # Count FAMPNN/Nextflow processes per GPU
+                    for line in all_processes.split('\n'):
+                        if 'seq_design.py' in line or 'nextflow' in line:
+                            # Try to extract gpu_id from the process args
+                            gpu_match = re.search(r'gpu_id[=\s]+(\d+)', line)
+                            if gpu_match:
+                                gpu_id = int(gpu_match.group(1))
+                                gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
                 
                 stale_fail_after_seconds = 300
                 try:
@@ -2402,17 +2522,16 @@ class GPUOrchestrator:
                             else:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
-                                if history_status == "OK" and not gate_present and not job.awaiting_input:
-                                    job.status = "completed"
-                                    job.queue_status = "completed"
-                                    job.paused = False
-                                    job.assigned_gpu = None
-                                    job.current_stage = "Complete"
-                                    job.stage_progress = None
-                                    job.error_message = None
-                                    if job.completed_at is None:
-                                        job.completed_at = datetime.utcnow()
-
+                                reconciled_now = _reconcile_terminal_history_without_process(
+                                    job,
+                                    history_status=history_status,
+                                    gate_present=gate_present,
+                                    age_seconds=age_seconds,
+                                    stale_fail_after_seconds=stale_fail_after_seconds,
+                                )
+                                if not reconciled_now:
+                                    continue
+                                if history_status == "OK" and job.status == "completed":
                                     try:
                                         if job.parent_job_id is None and job.output_dir:
                                             existing_designs = (
@@ -2435,78 +2554,6 @@ class GPUOrchestrator:
                                         logger.warning(
                                             f"[COMPLETION] Terminal OK ingestion failed for {job.name}: {ingest_err}"
                                         )
-
-                                    logger.info(
-                                        f"[COMPLETION] {job.name} reconciled as completed "
-                                        f"(no process found, age: {age_seconds:.0f}s, history_status=OK)"
-                                    )
-                                elif history_status == "OK" or gate_present or job.awaiting_input:
-                                    job.status = "awaiting_input"
-                                    job.queue_status = "completed"
-                                    job.paused = False
-                                    job.assigned_gpu = None
-                                    job.error_message = None
-                                    if job.awaiting_stage:
-                                        job.current_stage = job.awaiting_stage
-                                    logger.info(
-                                        f"[COMPLETION] {job.name} reconciled as awaiting input "
-                                        f"(no process found, age: {age_seconds:.0f}s, "
-                                        f"history_status={history_status or 'n/a'}, gate={gate_present})"
-                                    )
-                                elif age_seconds >= stale_fail_after_seconds:
-                                    bootstrap_artifacts_present = False
-                                    if job.output_dir:
-                                        try:
-                                            out_dir = Path(job.output_dir)
-                                            bootstrap_artifacts_present = any(
-                                                (out_dir / candidate).exists()
-                                                for candidate in ("nextflow.log", ".nextflow.log")
-                                            )
-                                        except Exception:
-                                            bootstrap_artifacts_present = False
-
-                                    launch_never_bootstrapped = (
-                                        not history_status
-                                        and not gate_present
-                                        and not job.awaiting_input
-                                        and not getattr(job, "nextflow_run_id", None)
-                                        and not getattr(job, "stage_work_dir", None)
-                                        and not bootstrap_artifacts_present
-                                    )
-
-                                    if job.status == "running" and launch_never_bootstrapped:
-                                        job.status = "queued"
-                                        job.queue_status = "queued"
-                                        job.error_message = None
-                                        job.completed_at = None
-                                        job.started_at = None
-                                        job.assigned_gpu = None
-                                        job.current_stage = None
-                                        job.stage_progress = None
-                                        logger.warning(
-                                            f"[COMPLETION] {job.name} never completed launcher bootstrap "
-                                            f"(no process/log/history, age: {age_seconds:.0f}s); re-queued"
-                                        )
-                                    elif job.status == "running":
-                                        unresolved_reason = (
-                                            "Reconciled as failed: no active process and no terminal "
-                                            ".nextflow/history status (expected OK/ERR)"
-                                        )
-                                        job.status = "failed"
-                                        job.queue_status = "failed"
-                                        job.error_message = unresolved_reason
-                                        job.completed_at = datetime.utcnow()
-                                        logger.warning(
-                                            f"[COMPLETION] {job.name} reconciled as failed "
-                                            f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
-                                        )
-                                else:
-                                    logger.info(
-                                        f"[COMPLETION] {job.name} remains running while waiting "
-                                        f"for terminal .nextflow/history state "
-                                        f"(age: {age_seconds:.0f}s, threshold: {stale_fail_after_seconds}s)"
-                                    )
-                                    continue
 
                             reconciled += 1
                 

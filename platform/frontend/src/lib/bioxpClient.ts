@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api } from './api.js';
 
 export type AxisName = 'x' | 'y' | 'z' | 'g' | 'door';
 export type ThermalBankName = 'nest' | 'lid' | 'pedestal';
@@ -202,19 +202,28 @@ export interface CameraStreamOptions {
     nonce?: number;
 }
 
-export interface DaemonStatus {
+export interface RuntimeStatus {
     running: boolean;
     healthy?: boolean;
     stale_process?: boolean;
     host: string;
     port: number;
+    runtime_url?: string | null;
+    linkage_configured: boolean;
+    linked_runtime_reachable: boolean;
+    hardware_connected: boolean;
+    admin_control_available: boolean;
+    maintenance_mode?: string | null;
+    recommended_url?: string | null;
     detail: string | null;
-    inferred_via_proxy?: boolean;
-    probe_error?: {
+    proxy_error?: {
         status_code?: number;
         detail?: unknown;
     } | null;
+    inferred_via_proxy?: boolean;
 }
+
+export type DaemonStatus = RuntimeStatus;
 
 export interface ProtocolCompilePayload {
     source_type?: 'native' | 'oem_xml';
@@ -296,38 +305,18 @@ export const useDisconnectLinkage = () => {
     });
 };
 
-export const useDaemonStatus = () =>
-    useQuery<DaemonStatus, Error>({
-        queryKey: ['bioxp', 'daemon'],
+export const useRuntimeStatus = () =>
+    useQuery<RuntimeStatus, Error>({
+        queryKey: ['bioxp', 'runtime'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/daemon/status');
+            const res = await api.get('/api/bioxp/runtime/status');
             return res.data;
         },
         refetchInterval: 10000,
         retry: false,
     });
 
-export const useDaemonStart = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: async () => {
-            const res = await api.post('/api/bioxp/daemon/start');
-            return res.data;
-        },
-        onSuccess: () => invalidateBioXp(queryClient)
-    });
-};
-
-export const useDaemonStop = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: async () => {
-            const res = await api.post('/api/bioxp/daemon/stop');
-            return res.data;
-        },
-        onSuccess: () => invalidateBioXp(queryClient)
-    });
-};
+export const useDaemonStatus = useRuntimeStatus;
 
 export const useBioXpStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
     useQuery<BioXpStatus, Error>({
