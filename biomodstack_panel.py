@@ -39,9 +39,12 @@ from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     API_SERVICE,
+    DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     FRONTEND_SERVICE,
     build_launch_ui_command,
+    operator_frontend_url,
+    operator_runtime_mode,
     service_is_active,
 )
 
@@ -49,7 +52,6 @@ PROJECT_ROOT = get_code_root()
 API_PORT = 8000
 FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
-FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/bms/"
 
 # Paths
 DB_PATH = get_db_path()
@@ -106,25 +108,27 @@ def check_api_status() -> bool:
             return False
 
 def check_frontend_status() -> bool:
-    """Check if Frontend dev server is running."""
-    # First try HTTP check
+    """Check if the frontend is responding on the active runtime hosted-web URL."""
+    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT)
     try:
         import urllib.request
-        req = urllib.request.Request(f"{FRONTEND_URL}", method="GET")
+        req = urllib.request.Request(frontend_url, method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
-        try:
-            return service_is_active(FRONTEND_SERVICE)
-        except Exception:
-            pass
-    
-    # Fallback: check for vite process (without port - vite doesn't show port in process name)
-    try:
-        result = subprocess.run(["pgrep", "-f", "vite"],
-                                capture_output=True, timeout=2)
-        return result.returncode == 0
-    except Exception:
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        if runtime_mode == DEV_RUNTIME_MODE:
+            try:
+                return service_is_active(FRONTEND_SERVICE)
+            except Exception:
+                pass
+
+            try:
+                result = subprocess.run(["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
+                                        capture_output=True, timeout=2)
+                return result.returncode == 0
+            except Exception:
+                return False
         return False
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
@@ -390,24 +394,31 @@ class BioModStackPanel(Adw.Application):
 
     def _on_open_ui(self, button):
         show_notification("Opening UI", "Launching the BioModStack shell...")
-        subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT), env=self._script_env())
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        subprocess.Popen(
+            build_launch_ui_command(project_root=PROJECT_ROOT, runtime_mode=runtime_mode),
+            env=self._script_env(),
+        )
 
     def _on_open_browser(self, button):
-        webbrowser.open(FRONTEND_URL)
+        webbrowser.open(operator_frontend_url(project_root=PROJECT_ROOT))
     
     def _on_start_all(self, button):
         show_notification("Starting", "Starting all services...")
-        subprocess.Popen(["bash", str(START_SCRIPT)], env=self._script_env())
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        subprocess.Popen(["bash", str(START_SCRIPT), "--runtime", runtime_mode], env=self._script_env())
         GLib.timeout_add_seconds(5, self._refresh_status)
     
     def _on_restart_all(self, button):
         show_notification("Restarting", "Restarting all services...")
-        subprocess.Popen(["bash", str(START_SCRIPT), "restart"], env=self._script_env())
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        subprocess.Popen(["bash", str(START_SCRIPT), "restart", "--runtime", runtime_mode], env=self._script_env())
         GLib.timeout_add_seconds(3, self._refresh_status)
     
     def _on_stop_all(self, button):
         show_notification("Stopping", "Stopping all services...")
-        subprocess.Popen(["bash", str(STOP_SCRIPT)], env=self._script_env())
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        subprocess.Popen(["bash", str(STOP_SCRIPT), "--runtime", runtime_mode], env=self._script_env())
         GLib.timeout_add_seconds(2, self._refresh_status)
 
     def _script_env(self) -> dict:

@@ -190,6 +190,31 @@ def runtime_frontend_url(runtime_mode: str | None = None) -> str:
     return f"{origin}{basename}"
 
 
+def active_runtime_mode(project_root: Path | None = None) -> str | None:
+    root = (project_root or get_project_root()).resolve()
+    active_modes = [
+        mode
+        for mode in (DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE)
+        if all(service["active"] for service in runtime_service_descriptors(root, mode))
+    ]
+    if len(active_modes) == 1:
+        return active_modes[0]
+    return None
+
+
+def operator_runtime_mode(project_root: Path | None = None, runtime_mode: str | None = None) -> str:
+    if runtime_mode:
+        return resolve_runtime_mode(runtime_mode)
+    detected_mode = active_runtime_mode(project_root)
+    if detected_mode:
+        return detected_mode
+    return resolve_runtime_mode(None)
+
+
+def operator_frontend_url(project_root: Path | None = None, runtime_mode: str | None = None) -> str:
+    return runtime_frontend_url(operator_runtime_mode(project_root=project_root, runtime_mode=runtime_mode))
+
+
 def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, str]]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
@@ -233,7 +258,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         }
     return {
         "runtime_mode": mode,
-        "runtime_active": any(service["active"] for service in services),
+        "runtime_active": all(service["active"] for service in services),
         "runtime_manager": "systemd-user",
         "api_url": f"http://127.0.0.1:{API_PORT}",
         "frontend_origin": runtime_frontend_origin(),
@@ -484,6 +509,10 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     daemon_reload(project_root=project_root)
 
 
+def ensure_target_enabled(project_root: Path | None = None) -> None:
+    run_systemctl("enable", TARGET_UNIT, project_root=project_root)
+
+
 def service_is_active(service_name: str, project_root: Path | None = None) -> bool:
     result = run_systemctl("is-active", service_name, check=False, project_root=project_root)
     return result.returncode == 0 and result.stdout.strip() == "active"
@@ -498,6 +527,10 @@ def read_pid_cwd(pid: int) -> str | None:
         return os.readlink(f"/proc/{pid}/cwd")
     except OSError:
         return None
+
+
+def read_pid_cgroup(pid: int) -> str:
+    return Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8")
 
 
 def is_biomodstack_api_process(cmdline: str, cwd: str | None, project_root: Path | None = None) -> bool:
@@ -520,6 +553,70 @@ def is_biomodstack_frontend_process(cmdline: str, cwd: str | None, project_root:
     if any(token in cmd for token in ("vite", "npm run dev", "vite.js")) and frontend_dir in cmd:
         return True
     return cwd == frontend_dir and any(token in cmd for token in ("vite", "npm run dev", "node "))
+
+
+def _docker_container_id_for_pid(pid: int) -> str | None:
+    try:
+        cgroup = read_pid_cgroup(pid)
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return None
+    for pattern in (
+        r"/docker/([0-9a-f]{12,64})(?:/|$)",
+        r"docker-([0-9a-f]{12,64})\.scope",
+    ):
+        match = re.search(pattern, cgroup)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _docker_container_labels(container_id: str) -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", container_id, "--format", "{{json .Config.Labels}}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    payload = result.stdout.strip()
+    if not payload or payload == "null":
+        return {}
+    try:
+        labels = json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(labels, dict):
+        return {}
+    return {str(key): str(value) for key, value in labels.items()}
+
+
+def pid_is_biomodstack_runtime_container(pid: int, kind: str, project_root: Path | None = None) -> bool:
+    root = (project_root or get_project_root()).resolve()
+    expected_service = {
+        "api": "bms-api",
+        "frontend": "bms-web",
+    }.get(kind)
+    if expected_service is None:
+        raise ValueError(f"Unknown listener kind: {kind}")
+
+    container_id = _docker_container_id_for_pid(pid)
+    if not container_id:
+        return False
+    labels = _docker_container_labels(container_id)
+    config_files = {
+        entry.strip()
+        for entry in labels.get("com.docker.compose.project.config_files", "").split(",")
+        if entry.strip()
+    }
+    return (
+        labels.get("com.docker.compose.service") == expected_service
+        and labels.get("com.docker.compose.project.working_dir") == str(root)
+        and str(root / "compose.core-runtime.yml") in config_files
+    )
 
 
 def _parse_pid_tokens(text: str) -> list[int]:
@@ -667,7 +764,21 @@ def should_cleanup_legacy_listeners_before_start(
     project_root: Path | None = None,
 ) -> bool:
     mode = resolve_runtime_mode(runtime_mode)
-    return not all(service_is_active(name, project_root=project_root) for name in runtime_service_names(mode))
+    if all(service_is_active(name, project_root=project_root) for name in runtime_service_names(mode)):
+        return False
+    if mode != CONTAINER_RUNTIME_MODE:
+        return True
+
+    root = (project_root or get_project_root()).resolve()
+    runtime_listener_found = False
+    for kind, port in (("api", API_PORT), ("frontend", FRONTEND_PORT)):
+        pids = listener_pids(port)
+        if not pids:
+            continue
+        runtime_listener_found = True
+        if not all(pid_is_biomodstack_runtime_container(pid, kind, root) for pid in pids):
+            return True
+    return not runtime_listener_found
 
 
 def runtime_http_wait_timeout_seconds(runtime_mode: str | None = None) -> float:
@@ -683,6 +794,7 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
     frontend_url = runtime_frontend_url(mode)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
+    ensure_target_enabled(root)
     incompatible_services = incompatible_runtime_service_names(mode)
     run_systemctl("stop", *incompatible_services, check=False, project_root=root)
     if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
@@ -711,6 +823,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     frontend_url = runtime_frontend_url(mode)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
+    ensure_target_enabled(root)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
     run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
     cleanup_legacy_listener("api", root)

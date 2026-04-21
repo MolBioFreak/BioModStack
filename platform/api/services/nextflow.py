@@ -42,6 +42,13 @@ from antibody_pipeline_contract import (
     is_antibody_pipeline_mode,
 )
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
+from .boltz_cp_shard_plans import (
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    coerce_boltz_cp_shard_plan_id,
+    get_boltz_cp_logical_size_cp,
+    infer_boltz_cp_shard_plan_id,
+    largest_square_divisor as boltz_cp_largest_square_divisor,
+)
 from .gpu_config import read_scheduler_config
 from .workflow_adapter import (
     cancel_via_workflow_adapter,
@@ -448,20 +455,7 @@ def _parse_boltz_cp_gpu_ids(value: object) -> List[int]:
 
 
 def _largest_square_divisor(gpu_count: int, requested_size_cp: object) -> int:
-    if gpu_count < 1:
-        return 1
-    requested = _coerce_int(requested_size_cp, gpu_count)
-    if requested < 1:
-        requested = gpu_count
-    best = 1
-    for candidate in range(1, gpu_count + 1):
-        if gpu_count % candidate != 0:
-            continue
-        root = int(candidate ** 0.5)
-        if root * root != candidate or candidate > requested:
-            continue
-        best = candidate
-    return best
+    return boltz_cp_largest_square_divisor(gpu_count, requested_size_cp)
 
 
 def _derive_boltz_cp_gpu_launch_settings(
@@ -2849,6 +2843,7 @@ def build_nextflow_command(
     elif model_id == 'boltz_cp_experimental':
         boltz_cp_mappings = {
             'input_path': 'bcp_input_path',
+            'shard_plan_id': 'bcp_shard_plan_id',
             'gpu_ids': 'bcp_gpu_ids',
             'size_cp': 'bcp_size_cp',
             'input_format': 'bcp_input_format',
@@ -2878,15 +2873,20 @@ def build_nextflow_command(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
+        shard_plan_id = coerce_boltz_cp_shard_plan_id(params.get('bcp_shard_plan_id'))
+        if shard_plan_id is None:
+            shard_plan_id = infer_boltz_cp_shard_plan_id(params.get('bcp_size_cp'), default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID)
+        params['bcp_shard_plan_id'] = shard_plan_id
+
+        requested_size_cp = get_boltz_cp_logical_size_cp(shard_plan_id, params.get('bcp_size_cp'))
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
-            requested_size_cp=params.get('bcp_size_cp'),
+            requested_size_cp=requested_size_cp,
             fallback_gpu_ids=params.get('bcp_gpu_ids') or '0,1,2,3',
         )
-        if derived_gpu_ids and not params.get('bcp_gpu_ids'):
+        if derived_gpu_ids:
             params['bcp_gpu_ids'] = derived_gpu_ids
-        if not params.get('bcp_size_cp'):
-            params['bcp_size_cp'] = derived_size_cp
+        params['bcp_size_cp'] = derived_size_cp
 
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')

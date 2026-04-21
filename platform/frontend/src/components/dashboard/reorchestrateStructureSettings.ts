@@ -1,10 +1,15 @@
 import type { Job } from '../../lib/api.js';
 import {
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     buildBoltzCpSubmitParams,
     deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
+    getBoltzCpLogicalSizeCp,
     getPredictorFamiliesForSelection,
+    inferBoltzCpShardPlanId,
+    normalizeBoltzCpShardPlanId,
     parseBoltzCpGpuIds,
+    type BoltzCpShardPlanId,
     type StructurePredictionMode,
     type StructurePredictorFamily,
 } from '../structurePredictionUiState.js';
@@ -34,7 +39,7 @@ export interface StructureReorchestrateSettings {
         enabled: boolean;
         pinnedGpus: number[];
         lockGpus: boolean;
-        requestedSizeCp: number;
+        shardPlanId: BoltzCpShardPlanId;
         outputFormat: StructureBoltzCpOutputFormat;
         writeFullPae: boolean;
         seed: string;
@@ -72,7 +77,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
         enabled: false,
         pinnedGpus: [],
         lockGpus: false,
-        requestedSizeCp: 4,
+        shardPlanId: BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
         outputFormat: 'mmcif',
         writeFullPae: false,
         seed: '',
@@ -243,7 +248,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
             enabled: boltzCpEnabled,
             pinnedGpus: boltzCpPinnedGpus,
             lockGpus: boltzCpPinnedGpus.length > 0 && toBoolean(params.lock_gpus, DEFAULTS.boltzCp.lockGpus),
-            requestedSizeCp: toInteger(params.bcp_size_cp ?? params.size_cp, DEFAULTS.boltzCp.requestedSizeCp),
+            shardPlanId: normalizeBoltzCpShardPlanId(params.bcp_shard_plan_id ?? params.shard_plan_id ?? inferBoltzCpShardPlanId(params.bcp_size_cp ?? params.size_cp)),
             outputFormat: normalizeBoltzCpOutputFormat(params.bcp_output_format ?? params.output_format),
             writeFullPae: toBoolean(params.bcp_write_full_pae ?? params.write_full_pae, DEFAULTS.boltzCp.writeFullPae),
             seed: normalizeBoltzCpSeed(params.bcp_seed ?? params.seed),
@@ -303,15 +308,16 @@ export const buildStructureReorchestrateOverrides = (
         const fallbackGpuIds = resolveBoltzCpAutoFallbackGpuIds(job);
         const previousLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: previous.boltzCp.pinnedGpus,
-            requestedSizeCp: previous.boltzCp.requestedSizeCp,
+            requestedSizeCp: getBoltzCpLogicalSizeCp(previous.boltzCp.shardPlanId),
             fallbackGpuIds,
         });
         const nextLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: next.boltzCp.pinnedGpus,
-            requestedSizeCp: next.boltzCp.requestedSizeCp,
+            requestedSizeCp: getBoltzCpLogicalSizeCp(next.boltzCp.shardPlanId),
             fallbackGpuIds,
         });
         const previousParams = buildBoltzCpSubmitParams({
+            shardPlanId: previous.boltzCp.shardPlanId,
             outputFormat: previous.boltzCp.outputFormat,
             writeFullPae: previous.boltzCp.writeFullPae,
             seed: previous.boltzCp.seed,
@@ -319,6 +325,7 @@ export const buildStructureReorchestrateOverrides = (
             sizeCp: previousLaunch.sizeCp,
         });
         const nextParams = buildBoltzCpSubmitParams({
+            shardPlanId: next.boltzCp.shardPlanId,
             outputFormat: next.boltzCp.outputFormat,
             writeFullPae: next.boltzCp.writeFullPae,
             seed: next.boltzCp.seed,
@@ -336,6 +343,7 @@ export const buildStructureReorchestrateOverrides = (
             next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.lockGpus : false,
             previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.lockGpus : false,
         );
+        maybeSet('bcp_shard_plan_id', nextParams.bcp_shard_plan_id, previousParams.bcp_shard_plan_id);
         maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
         maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);

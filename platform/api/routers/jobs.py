@@ -61,6 +61,14 @@ from services.stage_review import (
     resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
+from services.boltz_cp_shard_plans import (
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    coerce_boltz_cp_shard_plan_id,
+    get_boltz_cp_logical_size_cp,
+    get_boltz_cp_shard_plan_catalog,
+    infer_boltz_cp_shard_plan_id,
+    largest_square_divisor as boltz_cp_largest_square_divisor,
+)
 
 router = APIRouter()
 
@@ -1092,19 +1100,12 @@ BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_inpu
 
 
 def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
-    if value_count < 1:
-        return 1
+    return boltz_cp_largest_square_divisor(value_count, requested_size_cp)
 
-    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
-    best = 1
-    for candidate in range(1, value_count + 1):
-        if value_count % candidate != 0:
-            continue
-        root = int(candidate ** 0.5)
-        if root * root != candidate or candidate > requested:
-            continue
-        best = candidate
-    return best
+
+@router.get("/api/jobs/boltz-cp/shard-plans")
+def list_boltz_cp_shard_plans() -> Dict[str, Any]:
+    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=4)
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1185,6 +1186,17 @@ def _normalize_boltz_cp_params_for_validation(
     if input_path:
         normalized["input_path"] = input_path
 
+    shard_plan_id = coerce_boltz_cp_shard_plan_id(
+        normalized.get("shard_plan_id") or normalized.get("bcp_shard_plan_id")
+    )
+    if shard_plan_id is None:
+        shard_plan_id = infer_boltz_cp_shard_plan_id(
+            normalized.get("size_cp") or normalized.get("bcp_size_cp"),
+            default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+        )
+    if shard_plan_id:
+        normalized["shard_plan_id"] = shard_plan_id
+
     gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
         normalized.get("bcp_gpu_ids")
     )
@@ -1193,17 +1205,22 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
-    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
-        normalized.get("bcp_size_cp")
+    requested_size_cp = get_boltz_cp_logical_size_cp(
+        shard_plan_id,
+        normalized.get("size_cp") or normalized.get("bcp_size_cp"),
     )
     if gpu_ids:
         gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
-        if gpu_count > 0:
-            size_cp = _largest_square_divisor(gpu_count, size_cp)
+        size_cp = _largest_square_divisor(gpu_count, requested_size_cp) if gpu_count > 0 else requested_size_cp
+    else:
+        size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
+            normalized.get("bcp_size_cp")
+        ) or requested_size_cp
     if size_cp is not None:
         normalized["size_cp"] = size_cp
 
     alias_mappings = {
+        "shard_plan_id": "bcp_shard_plan_id",
         "input_format": "bcp_input_format",
         "output_format": "bcp_output_format",
         "write_full_pae": "bcp_write_full_pae",

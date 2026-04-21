@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
 from database import Design, Job
+from paths import resolve_runtime_data_path
 from services.aligned_error_utils import fingerprint_aligned_error_artifact
 
 
@@ -47,7 +48,7 @@ def _json_hash(payload: dict[str, Any]) -> str:
 
 def _structure_fingerprint(path_str: str | None) -> dict[str, Any]:
     path = Path(path_str or "").expanduser()
-    resolved = path.resolve()
+    resolved = resolve_runtime_data_path(path) if path.is_absolute() else path.resolve()
     if not resolved.exists():
         raise ValueError(f"Structure file not found: {resolved}")
     stat = resolved.stat()

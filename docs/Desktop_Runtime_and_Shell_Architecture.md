@@ -1,285 +1,276 @@
 # Desktop Runtime and Shell Architecture
 
-## What was broken
+This document describes the current BioModStack runtime/service model and the
+shells that sit on top of it.
 
-The original BioModStack desktop launcher model let a GTK panel or shell script start
-long-lived API/frontend children directly with `nohup` / `subprocess.Popen(...)`.
-That looked detached, but the processes still inherited the caller's GNOME app scope.
-On the live workstation this meant:
+## Core idea
 
-- panel PID, uvicorn, and Vite all sat inside the same
-  `app-gnome-biomodstack-*.scope`
-- that scope used `KillMode=control-group`
-- if the panel died, logged out, restarted strangely, or the scope was collected,
-  the backend died too
+BioModStack shells are clients, not supervisors.
 
-That is a supervision/ownership bug, not a web-stack problem.
+The browser, Electron shell, GTK panel, tray, and optional Android thin-shell
+path all sit on top of one shared runtime/service layer. They should open the
+hosted `/bms/` UI, inspect status, and request start/stop/restart actions
+through the shared control plane. They should not own long-lived API/frontend
+processes directly.
 
-## Fix direction
+## Current runtime ownership
 
-Keep the familiar entrypoints (`./start_ui.sh`, panel buttons, tray menu), but make
-those control surfaces talk to dedicated `systemd --user` services:
+### Dev runtime
+
+Dev mode is still supported for explicit repository-first work:
 
 - `biomodstack-api.service`
 - `biomodstack-frontend.service`
-- `biomodstack.target`
 
-Control surfaces should:
+Those units own the dev API/frontend process shape and write to:
 
-- `systemctl --user start biomodstack.target`
-- `systemctl --user stop biomodstack.target`
-- `systemctl --user restart biomodstack-api.service biomodstack-frontend.service`
-- inspect logs / health
-- open the browser or embedded shell
+- `~/.local/state/biomodstack/logs/api.log`
+- `~/.local/state/biomodstack/logs/frontend.log`
 
-They should not own backend process lifetime.
+### Containerized core runtime
 
-## Runtime contract
+The default runtime mode is now `container`.
 
-### Service layer
+Container mode uses:
 
-Dev runtime services
-- `biomodstack-api.service`
-- `biomodstack-frontend.service`
-- continue to own the explicit development process shape
-- write to `~/.local/state/biomodstack/logs/api.log` and `frontend.log`
-
-Containerized core runtime
 - `biomodstack-core-runtime.service`
-- runs `scripts/run_biomodstack_core_runtime.sh`
-- uses `compose.core-runtime.yml` to launch `bms-api` and `bms-web`
-- writes to `~/.local/state/biomodstack/logs/core-runtime.log`
-- preserves the same browser/API health contract on ports 5173 and 8000
+- `compose.core-runtime.yml`
+- `scripts/run_biomodstack_core_runtime.sh`
 
-Target unit
-- `biomodstack.target`
-- groups either the dev pair or the container runtime for start/stop convenience
-- may be enabled later for login-time auto-start if desired
+That service owns the hosted API/web pair and writes to:
 
-### Concrete repo surfaces
+- `~/.local/state/biomodstack/logs/core-runtime.log`
 
-The service-layer/control split now lives in these files:
+### Host-native workflow adapter
+
+Container mode does not make Nextflow execution container-owned. The honest
+runtime boundary is:
+
+- API/web runtime is containerized
+- workflow launch/cancel/running-job ownership remains host-native
+- the bridge is `biomodstack-workflow-adapter.service`
+- the API reaches it through `BMS_WORKFLOW_ADAPTER_URL`
+- the local health endpoint is
+  `http://127.0.0.1:8001/api/workflow-adapter/health`
+
+This is the current production stance for BioModStack container mode.
+
+## Default runtime and launch rules
+
+Runtime selection resolves in this order:
+
+1. explicit `--runtime ...`
+2. `BMS_RUNTIME_MODE`
+3. `container`
+
+That behavior is implemented in `biomodstack_services.py` and surfaced by
+`scripts/manage_desktop_services.py`.
+
+Launch-surface selection is separate from runtime selection:
+
+- default surface: browser
+- optional additive surface: Electron
+- explicit `--surface none` is allowed for service-only startup
+
+Launch preferences live at:
+
+- `~/.config/biomodstack/launch_preferences.json`
+
+## Concrete repo surfaces
+
+The current service/runtime/shell split lives in these files:
 
 - `biomodstack_services.py`
-  - renders/install user units
-  - runs `systemctl --user`
-  - owns health checks, status text, and legacy listener cleanup
+  - runtime-mode resolution
+  - systemd unit rendering/install
+  - service lifecycle and readiness checks
+  - browser/Electron launch preference handling
+- `biomodstack_runtime_profile.py`
+  - install-profile persistence
+  - generated compatibility env exports
+  - generated container-runtime env file
+  - runtime-path resolution and precedence rules
 - `scripts/manage_desktop_services.py`
-  - single control-plane entry for `start`, `stop`, `restart`, `restart-api`, `status`
-  - supports `--runtime dev|container`
-- `scripts/run_biomodstack_api.sh`
-  - API runtime wrapper used by `biomodstack-api.service`
-  - sources `~/.biomodstack/env.sh` before snapshotting launch env
-  - makes `BMS_API_MODE=dev|prod` explicit instead of assuming reload semantics forever
-- `scripts/run_biomodstack_frontend.sh`
-  - frontend runtime wrapper used by `biomodstack-frontend.service`
-  - keeps dev-mode ownership explicit and points production runtime to the container stack
+  - shared desktop/runtime control-plane CLI
+- `scripts/launch_biomodstack_ui.py`
+  - raises browser or Electron after ensuring services are running
+- `start_ui.sh`
+  - stable service-control entrypoint
+- `start_ui_electron.sh`
+  - additive Electron wrapper around `launch_biomodstack_ui.py`
 - `scripts/run_biomodstack_core_runtime.sh`
-  - compose wrapper for `compose.core-runtime.yml`
-  - used by `biomodstack-core-runtime.service`
-- `docker/api.Dockerfile`, `docker/web.Dockerfile`, `docker/web/nginx.conf`
-  - first-wave container scaffold for `bms-api` and `bms-web`
-- `start_ui.sh`, `start_ui_electron.sh`, `restart_api.sh`, `stop_services.sh`
-  - stable shell entrypoints preserved for operators and desktop launchers
-  - `start_ui.sh` remains service control only
-  - `start_ui_electron.sh` is the additive opt-in Electron shell launcher
+  - compose wrapper for the containerized API/web runtime
+- `platform/api/routers/system.py`
+  - runtime-state and install-profile API routes
+- `platform/api/routers/workflow_adapter.py`
+  - host-native workflow launch/cancel/running-jobs surface
+- `platform/api/routers/mobile_ui_updates.py`
+  - manifest/bundle/file endpoints for optional mobile shell updates
+- `platform/desktop-electron/src/main.ts`
+  - Electron shell bootstrap, tray/menu wiring, and IPC registration
+- `platform/desktop-electron/src/serviceControl.ts`
+  - Electron bridge to `scripts/manage_desktop_services.py`
+- `platform/desktop-electron/src/shellPaths.ts`
+  - Electron-side path resolution using env, install profile, and heuristics
+- `platform/frontend/src/runtime/navigation.ts`
+  - router basename handling for hosted/browser/Electron shells
+- `platform/frontend/src/runtime/cordovaShell.ts`
+  - optional Cordova shell readiness hook
 - `biomodstack_panel.py`, `biomodstack_tray.py`
-  - GUI control surfaces that should remain clients of the service layer
+  - GTK control surfaces that remain clients of the shared service layer
 
-### Safety rules
+## Path and profile contract
 
-- GUI may request service changes, but never spawn the long-lived child directly
-- port cleanup may only kill listeners that positively identify as BioModStack
-- if a foreign process owns port 8000 or 5173, fail loudly instead of killing it
-- logs and health checks remain stable regardless of which shell is used
-- stale GUI-scope API listeners may appear as worker children rather than the top-level
-  shell/uv process, so cleanup must walk ancestor PIDs before deciding whether a port
-  owner is foreign
+Runtime/data-path state is now centered around the install profile and generated
+env files.
 
-## Shells are clients, not supervisors
+Primary files:
 
-Once the service layer is correct, multiple shells become possible at the same time:
+- `~/.config/biomodstack/install_profile.json`
+- `~/.config/biomodstack/core-runtime.env`
+- `~/.biomodstack/env.sh`
+- `~/.config/biomodstack/launch_preferences.json`
 
-- browser tab
-- GTK panel
-- tray app
-- Tauri desktop app
-- Electron desktop app
-- CLI or remote admin surface
+Path precedence is:
 
-That is the big architectural win: the shell becomes optional.
+1. explicit environment variables
+2. install profile
+3. repo/workstation heuristics
 
-## Recommended desktop-shell priority
+Important install-profile outputs include:
 
-### 1. Browser + thin native controller (immediate default)
+- `data_root`
+- `inputs_dir`
+- `db_path`
+- `container_dir`
+- `weights_root`
+- `colabfold_db`
+- `msa_cache_dir`
+- `sabdab_cache_dir`
+- `workflow_adapter_url`
+- API/web host ports
+- container-state paths
+- `core_runtime_mode`
 
-Best for now if the goal is reliability with minimal work.
+The API system routes expose this through local-only endpoints such as:
 
-Use for:
-- service control
-- opening the web UI
-- notifications
-- tray/menu integration
-- log/status access
+- `GET /api/system/runtime-state`
+- `GET /api/system/install-profile`
+- `PUT /api/system/install-profile`
 
-Pros
-- least moving parts
-- no extra Chromium bundle
-- preserves current UI exactly
-- keeps all feature work in the web frontend
+These routes are intentionally limited to localhost/testclient callers.
 
-Cons
-- does not feel like a self-contained app
-- weaker native desktop affordances than a packaged shell
+## Browser and GTK surfaces
 
-### 2. Tauri (recommended native shell if you want a "real app")
+The browser remains the default operator surface.
 
-Tauri is the best general next step if the goal is a desktop wrapper around an already
-web-based BioModStack UI without paying the full Electron tax.
+GTK panel/tray remain useful local helpers for:
 
-Why Tauri is strong here
-- much lighter RAM footprint than Electron
-- uses the system webview on Linux instead of bundling Chromium
-- good fit for a control shell that opens the existing web UI and talks to the API
-- easy place to add tray integration, native notifications, autostart, log viewer,
-  file pickers, and service-control commands
-- better appliance feel without making the desktop shell the owner of the runtime
+- start/stop/restart
+- status inspection
+- log access
+- opening the hosted UI
 
-Where Tauri is especially useful for BioModStack
-- workstation control app for launch/stop/status
-- results browser / recent jobs shell
-- native notifications for job completion / queue failures
-- saved connection profiles (local workstation, remote workstation, robot-adjacent
-  node, future cluster frontends)
-- local file/drop integration for design imports or result export workflows
+They should never become the owner of backend lifetime.
 
-Tauri downsides
-- adds Rust build/package complexity
-- Linux webview differences must be tested carefully with heavy React/plot/3D views
-- if you rely on Chromium-specific behavior for visualization widgets, Electron may
-  still be simpler
+## Electron shell
 
-### 3. Electron (good when you need maximum web-app compatibility)
+The Electron shell is now a real optional launch surface rather than a future
+placeholder.
 
-Electron is still a valid choice, just not my first recommendation for this stack.
+Current Electron behavior includes:
 
-Choose Electron if you specifically want:
-- the most predictable Chromium behavior for complex web viewers
-- a large Node desktop ecosystem
-- easier reuse of existing web tooling and dev habits
-- multi-window desktop behavior with fewer platform-specific surprises
-- deep JS-first desktop development with minimal Rust involvement
+- launching the same hosted `/bms/` UI as the browser path
+- persistent shell storage partition via `persist:biomodstack-shell`
+- preload-provided shell context including router basename/runtime mode
+- tray and application menu integration
+- open-in-browser support
+- runtime status/start/stop/restart/restart-api through the shared Python
+  service-control layer
+- open results folder, logs, and shell-data folder helpers
+- zoom controls and always-on-top toggle
+- safe fallback to browser when Electron is only a persisted preference and the
+  shell runtime is unavailable
 
-Where Electron can help BioModStack generally
-- wrap the existing React UI with almost no frontend rewrite
-- package a single-app desktop distribution for workstation users
-- provide native menus, tray, notifications, auto-updates, and log panes
-- create focused operator surfaces like:
-  - BioXP cockpit app
-  - job monitor app
-  - results/review app
-  - workstation infra console
+Important guardrail:
 
-Electron downsides
-- highest RAM and disk overhead
-- duplicates a Chromium runtime per packaged app
-- does not solve supervision by itself; if it launches the backend directly, it can
-  recreate the same ownership bug in a shinier form
+- `start_ui_electron.sh` and the Electron app do not own API/frontend process
+  lifetime directly; they call the shared service layer
 
-## Recommendation: Tauri first, Electron only if webview compatibility forces it
+## Optional Android thin-shell and update channel
 
-If the question is "what is better than Electron here?", the answer is:
+BioModStack does not move the runtime onto the phone.
 
-- Tauri is better if the desktop shell is mostly a native wrapper/control surface
-  around the existing local web app.
-- Electron is better only if the frontend needs Chromium-level consistency or the
-  team wants the easiest all-JS desktop path.
+The current Android/mobile contract is additive:
 
-For BioModStack specifically, I would choose:
+- the hosted `/bms/` UI remains the product truth
+- the frontend exposes `signalCordovaAppReady()` so a Cordova-style shell can
+  confirm readiness exactly once through `__BMS_CORDOVA_CONFIRM_READY__`
+- the API exposes mobile update endpoints under `/api/mobile-ui/*`
+- update assets default to `${BMS_DATA}/mobile-ui-updates` unless
+  `BMS_MOBILE_UI_UPDATES_DIR` overrides the location
 
-1. service decoupling first
-2. browser + GTK/tray controller as the near-term steady state
-3. Tauri as the first serious native-shell candidate
-4. Electron only if visualization compatibility or packaging UX clearly outweighs
-   the resource cost
+The update surface currently serves:
 
-## How a native shell should be useful generally
+- channel manifests
+- versioned ZIP bundles
+- versioned extracted asset files
 
-A desktop shell should add native workstation value that the browser alone is bad at.
-It should not duplicate every feature of the main UI blindly.
+That gives BioModStack an update/feed contract for an optional APK shell without
+pretending the repo's primary runtime now lives on Android.
 
-Good shell responsibilities:
-- runtime status
-  - API up/down
-  - frontend up/down
-  - queue depth
-  - active jobs
-  - GPU / disk / thermal summaries
-- native notifications
-  - job finished
-  - job failed
-  - queue stalled
-  - robot/manual intervention required
-- service management
-  - start/stop/restart
-  - log tail
-  - diagnostics bundle export
-- local file workflow
-  - open results folders
-  - drag/drop imports
-  - reveal artifacts in file manager
-- connection/profile management
-  - local workstation
-  - remote workstation over Tailscale
-  - future cluster control endpoints
-- focused operator modes
-  - infra console
-  - BioXP operator panel
-  - review/triage dashboard
+## Safety and non-regression rules
 
-Things the shell should usually avoid owning:
-- job orchestration semantics
-- queue/business logic
-- model configuration truth
-- artifact/database truth
-- long-running pipeline execution lifecycle
+- shells may request service actions, but must not become backend supervisors
+- container mode must stay honest about workflow ownership through the adapter
+- browser/Electron/mobile shells should all point at the same hosted UI contract
+- explicit Electron launch requests should fail clearly when the shell runtime is absent
+- persisted Electron preferences should degrade safely to browser when needed
+- local admin/runtime mutation routes stay localhost-only unless the scope is
+  intentionally widened later
 
-Those belong in the API/runtime layer.
+## Operator commands
 
-## Future frontend cleanup
+Default startup:
 
-The current frontend service still runs Vite dev mode. That is acceptable for now as a
-service-lifetime fix, but the long-term production posture should be one of:
+```bash
+./start_ui.sh start
+./start_ui.sh status
+```
 
-1. static production build served by the API or a tiny web server, or
-2. a packaged shell that points at the API plus a production-built local frontend
+Explicit container mode:
 
-That would reduce dev-server fragility and make either Tauri or Electron packaging
-cleaner.
+```bash
+./start_ui.sh start --runtime container
+./start_ui.sh restart-api --runtime container
+./start_ui.sh stop --runtime container
+```
 
-## Suggested rollout
+Browser or Electron shell launch:
 
-### Phase 1 — landed now
-- decouple API/frontend from GUI scope
-- standardize on `systemd --user` ownership
-- keep shell entrypoints stable
+```bash
+python3 scripts/launch_biomodstack_ui.py --surface browser --runtime container
+./start_ui_electron.sh --runtime container
+```
 
-### Phase 2 — productionize frontend
-- build frontend assets in production mode
-- decide whether API serves them or a tiny dedicated static server does
-- keep `/bms/` path semantics stable
+Direct compose wrapper:
 
-### Phase 3 — native shell
-- prototype Tauri first
-- expose service controls, logs, notifications, and profile switching
-- load the existing web UI rather than rewriting it
+```bash
+./scripts/run_biomodstack_core_runtime.sh up
+./scripts/run_biomodstack_core_runtime.sh ps
+./scripts/run_biomodstack_core_runtime.sh down
+```
 
-### Phase 4 — specialized operator shells
-- optional dedicated shells for robotics, infra, and review workflows
-- all of them remain clients of the same API/runtime
+## Bottom line
 
-## Related implementation plan
+The current BioModStack architecture is:
 
-For a concrete Electron-first execution plan that preserves direct browser access,
-see:
-- `docs/plans/2026-04-19-electron-shell-port-with-web-access.md`
+- service-layer-owned runtime
+- containerized core API/web surface by default
+- host-native workflow execution through the workflow adapter
+- browser as the default shell
+- Electron as an additive packaged desktop shell
+- optional Android thin-shell/update support around the same hosted UI
+
+That separation is what keeps the runtime honest while still allowing multiple
+operator surfaces to coexist.
