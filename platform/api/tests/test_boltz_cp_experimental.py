@@ -146,6 +146,11 @@ def test_boltz_cp_structure_launcher_defaults_size_cp_to_largest_square_divisor(
 
 
 
+def test_boltz_cp_single_job_supports_colabfold_api_msa_provider() -> None:
+    assert jobs._supports_colabfold_api_single_job("boltz_cp_experimental", "design") is True
+
+
+
 def test_boltz_cp_structure_launcher_clamps_requested_size_cp_to_valid_square_divisor() -> None:
     registry = ModelRegistry()
     validation_params = jobs._normalize_boltz_cp_params_for_validation(
