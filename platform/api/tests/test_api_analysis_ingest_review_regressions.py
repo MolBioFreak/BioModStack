@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -16,8 +18,9 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from database import AnalysisRun, Base, Design, Job
+import paths
 from services import analysis_subprocess, result_ingester
-from services.analysis_registry import CHAIN_METRICS_ANALYSIS
+from services.analysis_registry import CHAIN_METRICS_ANALYSIS, PAE_MATRIX_ANALYSIS
 from services.stage_review import _rfantibody_review_metadata_refresh_required
 
 
@@ -100,6 +103,146 @@ async def test_chain_metrics_analysis_persists_design_chain_metrics(
     assert (tmp_path / "analysis_cache" / "run-1" / "result.json").exists()
 
     await engine.dispose()
+
+
+def test_run_analysis_rewrites_legacy_host_structure_paths_to_active_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        session_factory, engine = await _build_session_factory(tmp_path)
+        legacy_root = (tmp_path / "host-data").resolve()
+        active_root = (tmp_path / "runtime-data").resolve()
+        runtime_file = active_root / "bms_results" / "job-legacy" / "model_0.pdb"
+        runtime_file.parent.mkdir(parents=True)
+        runtime_file.write_text("MODEL\nENDMDL\n", encoding="utf-8")
+        legacy_path = legacy_root / "bms_results" / "job-legacy" / "model_0.pdb"
+
+        async with session_factory() as session:
+            session.add(
+                Job(
+                    id="job-legacy",
+                    name="legacy-path-job",
+                    model_id="boltz2",
+                    mode="predict",
+                    params={},
+                    created_at=datetime.utcnow(),
+                )
+            )
+            session.add(
+                Design(
+                    id="design-legacy",
+                    job_id="job-legacy",
+                    name="design-legacy",
+                    pdb_path=str(legacy_path),
+                    created_at=datetime.utcnow(),
+                )
+            )
+            session.add(
+                AnalysisRun(
+                    id="run-legacy",
+                    subject_kind="design",
+                    subject_id="design-legacy",
+                    analysis_type=CHAIN_METRICS_ANALYSIS,
+                    status="queued",
+                    params_json={},
+                    params_hash="hash",
+                    input_signature="sig",
+                    code_version="test",
+                    cache_key="cache",
+                )
+            )
+            await session.commit()
+
+        captured: dict[str, Path] = {}
+        expected_metrics = {
+            "A": {"type": "protein", "length": 1, "residue_numbers": [1]},
+        }
+
+        monkeypatch.setattr("services.analysis_subprocess.async_session", session_factory)
+        monkeypatch.setattr(
+            "services.analysis_subprocess.build_artifact_manifest_for_run",
+            lambda _run: {
+                "cache_dir": "analysis_cache/run-legacy",
+                "result_json": "analysis_cache/run-legacy/result.json",
+                "summary_json": "analysis_cache/run-legacy/summary.json",
+            },
+        )
+        monkeypatch.setattr("services.analysis_subprocess.resolve_allowed_path", lambda raw: tmp_path / raw)
+        monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+        monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
+        monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
+
+        def _fake_get_per_chain_metrics(path: str | Path) -> dict[str, object]:
+            captured["structure_path"] = Path(path)
+            return expected_metrics
+
+        monkeypatch.setattr("services.analysis_subprocess.get_per_chain_metrics", _fake_get_per_chain_metrics)
+
+        assert await analysis_subprocess._run_analysis("run-legacy") == 0
+
+        assert captured["structure_path"] == runtime_file
+
+        async with session_factory() as session:
+            run = (await session.execute(select(AnalysisRun).where(AnalysisRun.id == "run-legacy"))).scalar_one()
+            design = (await session.execute(select(Design).where(Design.id == "design-legacy"))).scalar_one()
+
+        assert run.status == "completed"
+        assert design.chain_metrics == expected_metrics
+
+        await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_compute_pae_matrix_rewrites_legacy_host_paths_to_active_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    legacy_root = (tmp_path / "host-data").resolve()
+    active_root = (tmp_path / "runtime-data").resolve()
+    runtime_file = active_root / "bms_results" / "job-legacy" / "model_0.pdb"
+    runtime_artifact = active_root / "bms_results" / "job-legacy" / "confidence_model_0.json"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text("MODEL\nENDMDL\n", encoding="utf-8")
+    runtime_artifact.write_text('{"pae": [[1.0]]}', encoding="utf-8")
+
+    legacy_structure_path = legacy_root / "bms_results" / "job-legacy" / "model_0.pdb"
+    legacy_artifact_path = legacy_root / "bms_results" / "job-legacy" / "confidence_model_0.json"
+
+    monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+    monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
+    monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
+
+    captured: dict[str, Path] = {}
+
+    class _FakeMatrix:
+        def tolist(self) -> list[list[float]]:
+            return [[1.0]]
+
+    def _fake_load_aligned_error_artifact(**kwargs):
+        captured["aligned_error_path"] = Path(kwargs["aligned_error_path"])
+        captured["structure_path"] = Path(kwargs["structure_path"])
+        return SimpleNamespace(path=runtime_artifact, format="confidence_json", matrix=_FakeMatrix())
+
+    monkeypatch.setattr("services.analysis_subprocess.load_aligned_error_artifact", _fake_load_aligned_error_artifact)
+
+    design = SimpleNamespace(
+        id="design-legacy",
+        name="design-legacy",
+        pdb_path=str(legacy_structure_path),
+        aligned_error_path=str(legacy_artifact_path),
+        aligned_error_format="confidence_json",
+        aligned_error_key="pae",
+    )
+
+    result, summary, inline_payload = analysis_subprocess._compute_pae_matrix(design, {"max_size": 200})
+
+    assert captured["aligned_error_path"] == runtime_artifact
+    assert captured["structure_path"] == runtime_file
+    assert result["size"] == 1
+    assert summary["source_mode"] == "confidence_json"
+    assert inline_payload is None
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,11 @@ import argparse
 import json
 from pathlib import Path
 
+from local_msa_runtime import (
+    DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
+    DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+)
 from prepare_protenix_msa import choose_backend, load_json, summarize_payload
 from run_local_msa import inspect_mmseqs_runtime, parse_gpu_csv
 
@@ -24,9 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preferred-gpus", default=None, help="Preferred GPU CSV")
     parser.add_argument("--excluded-gpus", default=None, help="Excluded GPU CSV")
     parser.add_argument("--gpu-server-mode", default="persistent", help="GPU server mode")
-    parser.add_argument("--gpu-server-wait-timeout", type=int, default=120, help="GPU server wait timeout")
-    parser.add_argument("--gpu-server-db-load-mode", type=int, default=0, help="GPU server db load mode")
-    parser.add_argument("--gpu-server-startup-wait", type=float, default=1.0, help="GPU server startup wait")
+    parser.add_argument("--gpu-server-wait-timeout", type=int, default=DEFAULT_GPUSERVER_WAIT_TIMEOUT, help="GPU server wait timeout")
+    parser.add_argument("--gpu-server-db-load-mode", type=int, default=DEFAULT_GPUSERVER_DB_LOAD_MODE, help="GPU server db load mode")
+    parser.add_argument("--gpu-server-startup-wait", type=float, default=DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS, help="GPU server startup wait")
     parser.add_argument("--small-max-tasks", type=int, default=1, help="Auto-mode ColabFold API max task count")
     parser.add_argument("--small-max-protein-chains", type=int, default=4, help="Auto-mode ColabFold API max protein chain count")
     parser.add_argument("--small-max-total-residues", type=int, default=1500, help="Auto-mode ColabFold API residue cutoff")

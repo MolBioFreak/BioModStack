@@ -68,53 +68,58 @@ export function SequenceHeader({
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
 
     return (
-        <div className="sequence-header flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
-            {/* Left: Sequence info */}
-            <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-semibold text-slate-100">
-                        {sequenceData.name}
-                        {isDirty && <span className="text-blue-400 ml-1">*</span>}
-                    </h2>
-                    {sequenceData.circular && (
-                        <span className="px-2 py-0.5 text-xs bg-emerald-900/50 text-emerald-400 rounded">
-                            Circular
-                        </span>
-                    )}
-                    <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded uppercase">
-                        {sequenceData.sequenceType}
-                    </span>
-                </div>
+        <div className="sequence-header bg-slate-800 border-b border-slate-700">
+            <div
+                data-sequence-header-scroll
+                className="overflow-x-auto px-4 py-2"
+            >
+                <div className="flex min-w-max items-center justify-between gap-4">
+                    {/* Left: Sequence info */}
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-lg font-semibold text-slate-100">
+                                {sequenceData.name}
+                                {isDirty && <span className="text-blue-400 ml-1">*</span>}
+                            </h2>
+                            {sequenceData.circular && (
+                                <span className="px-2 py-0.5 text-xs bg-emerald-900/50 text-emerald-400 rounded">
+                                    Circular
+                                </span>
+                            )}
+                            <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded uppercase">
+                                {sequenceData.sequenceType}
+                            </span>
+                        </div>
 
-                <div className="flex items-center gap-3 text-sm text-slate-400">
-                    <span>{sequenceData.sequence.length.toLocaleString()} {unitLabel}</span>
-                    <span>•</span>
-                    <span>GC: {gcContent}%</span>
-                    <span>•</span>
-                    <span>{sequenceData.features.length} features</span>
-                    {sequenceData.primers && sequenceData.primers.length > 0 && (
-                        <>
+                        <div className="flex items-center gap-3 text-sm text-slate-400">
+                            <span>{sequenceData.sequence.length.toLocaleString()} {unitLabel}</span>
                             <span>•</span>
-                            <span>{sequenceData.primers.length} primers</span>
-                        </>
-                    )}
-                    {sequenceData.version != null && (
-                        <>
+                            <span>GC: {gcContent}%</span>
                             <span>•</span>
-                            <span>v{sequenceData.version}</span>
-                        </>
-                    )}
-                    {sequenceData.operation && (
-                        <>
-                            <span>•</span>
-                            <span>{sequenceData.operation.replace(/_/g, ' ')}</span>
-                        </>
-                    )}
-                </div>
-            </div>
+                            <span>{sequenceData.features.length} features</span>
+                            {sequenceData.primers && sequenceData.primers.length > 0 && (
+                                <>
+                                    <span>•</span>
+                                    <span>{sequenceData.primers.length} primers</span>
+                                </>
+                            )}
+                            {sequenceData.version != null && (
+                                <>
+                                    <span>•</span>
+                                    <span>v{sequenceData.version}</span>
+                                </>
+                            )}
+                            {sequenceData.operation && (
+                                <>
+                                    <span>•</span>
+                                    <span>{sequenceData.operation.replace(/_/g, ' ')}</span>
+                                </>
+                            )}
+                        </div>
+                    </div>
 
-            {/* Right: Actions */}
-            <div className="flex items-center gap-2">
+                    {/* Right: Actions */}
+                    <div className="flex items-center gap-2">
                 {onOpenLibrary && (
                     <button
                         onClick={onOpenLibrary}
@@ -308,6 +313,8 @@ export function SequenceHeader({
                         Save
                     </button>
                 )}
+                    </div>
+                </div>
             </div>
         </div>
     );

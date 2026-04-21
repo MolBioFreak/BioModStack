@@ -682,7 +682,7 @@ This preserves backwards compatibility while creating a clean upgrade path.
 
 - `docs/Workstation Set Up and Install Guide.md`
 - `docs/Desktop_Runtime_and_Shell_Architecture.md`
-- `docs/plans/2026-04-19-launch-surface-control-plane-tranche-a.md`
+- `docs/plans/archive/2026-04-19-launch-surface-control-plane-tranche-a.md`
   - only if cross-linking is useful
 - `README.md` if operator install instructions live there
 

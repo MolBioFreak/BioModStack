@@ -28,66 +28,63 @@ Every model integration usually touches some subset of:
 ### Antibody and binder workflows
 
 - `antibody_denovo`
-  staged antibody de novo and refinement pipeline
+  primary de novo binder workflow for nanobody/VHH campaigns. Launch RFantibody, BoltzGen nanobody mode, or seeded PPIFlow generation, then reopen selected outputs in Antibody Refinement for loop-focused sequence redesign, PPIFlow reattempt/maturation, structure validation, and review.
 - `antibody_design`
-  antibody toolkit modes
+  antibody toolkit / shell-driven modes for template-guided setup, nanobody/VHH refinement, ImmuneBuilder prediction, inverse-folding redesign, and resume/review flows.
 - `bindcraft`
-  minibinder / peptide binder design
+  generic de novo minibinder / peptide binder generation against hotspot-conditioned targets.
 - `protein_local_redesign`
-  constrained remodel + redesign workflow
+  constrained local remodel + redesign workflow for existing binders or complexes.
 - `protein_cad_experimental`
-  experimental La-Proteina / DISCO non-binder design workflow
+  experimental La-Proteina / DISCO non-binder protein CAD family.
 - `caliby_experimental`
-  experimental structure-conditioned sequence design workflow
+  experimental structure-conditioned sequence-design surface that also appears as an optional redesign backend in nanobody refinement.
 - `protein_hunter_experimental`
-  experimental broad binder and unconditional generator workflow
+  early experimental broad protein-hunting / exploration surface.
+- `oligo_design`
+  oligomer / nucleic-acid-aware generation surface (Oligo Designer / RFDpoly).
 
-### Generic prediction / design / docking
+### Prediction, redesign, docking, and sequencing surfaces
 
-- `rfdiffusion`
 - `boltz2`
 - `protenix`
 - `af2`
 - `rf3`
 - `fampnn`
 - `proteinmpnn`
+- `ligandmpnn`
 - `diffdock`
 - `unidock`
 - `docking`
 - `boltzgen`
-- `oligo_design`
 - `mutagenesis`
-- `protein_cad_experimental`
-- `caliby_experimental`
-- `protein_hunter_experimental`
-
-### Sequencing
-
 - `nanopore`
 
 ## Live Model Inventory By Function
 
-### Backbone and generative design
+### De novo binder generation and nanobody refinement loop
 
 - RFantibody
-- RFdiffusion
-- BindCraft
-- BoltzGen
-- Protein Hunter
-- RFDpoly / Oligo Designer
-- La-Proteina
-- DISCO
-
-### Sequence design and redesign
-
+- BoltzGen nanobody mode
+- seeded PPIFlow generation / backbone-refine / maturation stages
 - FAMPNN
 - AntiFold
 - ProteinMPNN
-- Caliby
-- FrustraMPNN
-- IgGM
+- Caliby experimental redesign option
+- Boltz-2
+- Protenix
+- OpenMM
+- ANARCI / ANARCII
 
-### Prediction and validation
+### Generic binder generation and redesign
+
+- BindCraft
+- RFdiffusion
+- BoltzGen
+- Protein Local Redesign
+- Mutagenesis
+
+### Structure prediction
 
 - Boltz-2
 - Protenix
@@ -95,17 +92,33 @@ Every model integration usually touches some subset of:
 - RF3
 - ImmuneBuilder-facing antibody structure prediction surface
 
-### Post-processing and scoring
+### Sequence design and redesign
 
-- ThermoMPNN
-- AntiBERTy
-- OpenMM
-- ANARCI / ANARCII
+- FAMPNN
+- ProteinMPNN
+- LigandMPNN
+- AntiFold
+- FrustraMPNN
+- Caliby
 
 ### Docking
 
 - DiffDock
 - Uni-Dock
+- generic docking wrapper
+
+### Experimental protein CAD
+
+- La-Proteina
+- DISCO
+- Protein Hunter
+- Caliby Experimental
+
+### Sequencing and molecular biology operations
+
+- Oxford Nanopore launch / review
+- Dorado-aligned nanopore outputs under the nanopore family
+- Oligo Designer / RFDpoly
 
 ## Integration Notes That Matter
 
