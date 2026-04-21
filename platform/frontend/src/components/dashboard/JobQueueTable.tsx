@@ -345,7 +345,7 @@ export function JobQueueTable({
                                 }}
                                 className={`${buttonClass} rounded bg-cyan-500/20 text-cyan-400 transition-colors hover:bg-cyan-500/30 hover:text-cyan-300`}
                             >
-                                Resume+
+                                Re-orchestrate
                             </button>
                         )}
                         <button

@@ -20,9 +20,6 @@ import {
     useSetChillerRates,
     useChillerSnapshot,
     useClearLock,
-    useDaemonStart,
-    useDaemonStatus,
-    useDaemonStop,
     useDisconnectLinkage,
     useGetLinkage,
     useHomeAxis,
@@ -41,6 +38,7 @@ import {
     useMoveRelative,
     usePrepareInterlock,
     useReconnectRuntime,
+    useRuntimeStatus,
     useSetThermalFan,
     useSetThermalPwm,
     useSetThermalRates,
@@ -54,6 +52,7 @@ import {
 } from '../lib/bioxpClient';
 import type { AxisMotionResult, AxisName, AxisStatus, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
 import { BioXpProtocolRunner } from './BioXpProtocolRunner';
+import { deriveRuntimeStatusSummary } from './bioxpConnectionSemantics.js';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -1326,9 +1325,7 @@ export const BioXpCockpit = () => {
     const setLinkage = useSetLinkage();
     const disconnectLinkage = useDisconnectLinkage();
 
-    const { data: daemon, isLoading: daemonLoading, isError: daemonStatusIsError, error: daemonStatusError } = useDaemonStatus();
-    const daemonStart = useDaemonStart();
-    const daemonStop = useDaemonStop();
+    const { data: runtimeStatus, isLoading: runtimeLoading, isError: runtimeStatusIsError, error: runtimeStatusError } = useRuntimeStatus();
     const reconnectRuntime = useReconnectRuntime();
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
@@ -1338,42 +1335,25 @@ export const BioXpCockpit = () => {
     const clearLock = useClearLock();
 
     const hardwareReachable = !!status && !statusIsError && status.hardware_connected;
+    const linkageConfigured = Boolean(linkage?.configured || linkage?.url || status?.linkage_configured || runtimeStatus?.linkage_configured);
+    const runtimeSummary = deriveRuntimeStatusSummary({
+        linkageConfigured,
+        runtimeLoading,
+        runtimeStatus: runtimeStatus ?? (runtimeStatusIsError
+            ? {
+                linkage_configured: linkageConfigured,
+                linked_runtime_reachable: false,
+                hardware_connected: false,
+                admin_control_available: false,
+                maintenance_mode: 'robot-local',
+                detail: getErrorMessage(runtimeStatusError) ?? 'Runtime status probe failed.',
+            }
+            : null),
+    });
+    const runtimeStatusHelp = runtimeSummary.detail;
     const hasRecentHardwareContact =
         lastHealthyAt != null &&
         (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
-    const daemonRunning = !!daemon?.running;
-    const daemonInferred = !!daemon?.inferred_via_proxy;
-    const daemonState =
-        daemonLoading
-            ? 'checking'
-            : daemonRunning
-                ? (daemonInferred ? 'inferred' : 'running')
-                : daemonStatusIsError
-                    ? (hardwareReachable ? 'proxy-running' : 'unknown')
-                    : 'stopped';
-    const daemonBadgeClass =
-        daemonState === 'running'
-            ? 'bg-success/10 text-success border-success/30'
-            : daemonState === 'stopped'
-                ? 'bg-error/10 text-error border-error/30'
-                : 'bg-warning/10 text-warning border-warning/30';
-    const daemonLabel =
-        daemonState === 'checking'
-            ? 'CHECKING...'
-            : daemonState === 'running'
-                ? 'RUNNING'
-                : daemonState === 'inferred' || daemonState === 'proxy-running'
-                    ? 'RUNNING (PROXY)'
-                    : daemonState === 'unknown'
-                        ? 'UNKNOWN'
-                        : 'STOPPED';
-    const daemonStatusHelp =
-        daemon?.detail
-        ?? (daemonState === 'proxy-running'
-            ? 'SSH daemon probe is unavailable, but the BioXP proxy is still reaching the live robot runtime.'
-            : daemonStatusIsError
-                ? (getErrorMessage(daemonStatusError) ?? 'Daemon status probe failed.')
-                : null);
     const connectionPollingEnabled = hardwareReachable && activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !hardwareBusy;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
@@ -1449,7 +1429,7 @@ export const BioXpCockpit = () => {
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
     const linkageHelp =
         status?.status === 'not_configured'
-            ? 'No linkage is configured yet. Use the recommended daemon URL below and press Connect.'
+            ? 'No linkage is configured yet. Use the recommended runtime URL below and press Connect.'
             : status?.proxy_error?.detail
                 ? getErrorMessage(status.proxy_error.detail)
                 : null;
@@ -1926,7 +1906,7 @@ export const BioXpCockpit = () => {
 
             {motionPowerApiMissing && (
                 <div className="rounded border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] text-warning">
-                    Linked robot daemon is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Arm Motion`, `Driver Power Diag`, and `Hard Reset` require the newer daemon update.
+                    Linked robot runtime is older than this BMS UI. `Enable 24V / Prep Axes` is using the legacy interlock-prep path; `Arm Motion`, `Driver Power Diag`, and `Hard Reset` require the newer runtime update.
                 </div>
             )}
 
@@ -2079,48 +2059,28 @@ export const BioXpCockpit = () => {
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <SectionCard
-                            title="Remote Daemon Control"
-                            subtitle={`Start or stop the BioXP API daemon on ${daemon?.host ?? 'robot'}:${daemon?.port ?? 8123} via SSH.`}
+                            title="Linked Runtime Status"
+                            subtitle={`HTTP reachability for the robot-owned BioXP runtime at ${runtimeStatus?.runtime_url ?? linkage?.url ?? linkage?.recommended_url ?? 'http://robot:8123'}.`}
                         >
                             <div className="flex items-center gap-4 flex-wrap">
-                                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${daemonBadgeClass}`}>
-                                    DAEMON: {daemonLabel}
+                                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${runtimeSummary.badgeClassName}`}>
+                                    RUNTIME: {runtimeSummary.label}
                                 </div>
-                                {daemonState === 'running' ? (
-                                    <button
-                                        onClick={() => daemonStop.mutate()}
-                                        disabled={daemonStop.isPending}
-                                        className="px-4 py-1.5 bg-error/20 hover:bg-error/30 text-error text-xs font-semibold rounded-lg transition-colors"
-                                    >
-                                        {daemonStop.isPending ? 'STOPPING...' : 'STOP SERVER'}
-                                    </button>
-                                ) : daemonState === 'stopped' ? (
-                                    <button
-                                        onClick={() => daemonStart.mutate()}
-                                        disabled={daemonStart.isPending}
-                                        className="px-4 py-1.5 bg-success/20 hover:bg-success/30 text-success text-xs font-semibold rounded-lg transition-colors"
-                                    >
-                                        {daemonStart.isPending ? 'STARTING...' : 'START SERVER'}
-                                    </button>
-                                ) : (
-                                    <button
-                                        disabled
-                                        className="px-4 py-1.5 bg-warning/10 text-warning/70 text-xs font-semibold rounded-lg border border-warning/20 cursor-not-allowed"
-                                    >
-                                        PROBE UNAVAILABLE
-                                    </button>
-                                )}
+                                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${runtimeSummary.adminControlAvailable ? 'bg-accent/10 text-accent border-accent/30' : 'bg-surface-tertiary text-content border-border-primary'}`}>
+                                    ADMIN: {runtimeSummary.adminLabel}
+                                </div>
                             </div>
-                            {(daemonStart.isError || daemonStop.isError || daemonStatusHelp) && (
-                                <div className={`text-xs ${daemonStart.isError || daemonStop.isError ? 'text-error' : 'text-warning'}`}>
-                                    {getErrorMessage(daemonStart.error) || getErrorMessage(daemonStop.error) || daemonStatusHelp}
-                                </div>
-                            )}
+                            {runtimeStatusHelp ? (
+                                <div className="text-xs text-content-muted">{runtimeStatusHelp}</div>
+                            ) : null}
+                            <div className="text-xs text-content-muted">
+                                {runtimeSummary.adminDetail}
+                            </div>
                         </SectionCard>
 
                         <SectionCard
                             title="Proxy Linkage"
-                            subtitle="Point BMS at the BioXP hardware daemon. The status poll is strict and will not fake success."
+                            subtitle="Point BMS at the robot-local BioXP runtime. The status poll is strict and will not fake success."
                         >
                             <div className="flex gap-2">
                                 <input
@@ -2295,7 +2255,7 @@ export const BioXpCockpit = () => {
                             )}
                         </SectionCard>
 
-                        <SectionCard title="Telemetry Payload" subtitle="This is the raw status object returned from the BioXP daemon through the BMS proxy.">
+                        <SectionCard title="Telemetry Payload" subtitle="This is the raw status object returned from the BioXP runtime through the BMS proxy.">
                             <JsonBlock title="Status JSON" data={statusIsError ? { error: getErrorMessage(statusError) } : status} fallback="Polling..." />
                         </SectionCard>
                     </div>
@@ -2304,9 +2264,8 @@ export const BioXpCockpit = () => {
 
             {activeTab === 'operator' && (
                 <BioXpProtocolRunner
-                    linkageConfigured={Boolean(linkage?.configured || linkage?.url)}
-                    daemonState={daemonState}
-                    daemonStatusHelp={daemonStatusHelp}
+                    linkageConfigured={runtimeSummary.linkageConfigured}
+                    runtimeSummary={runtimeSummary}
                 />
             )}
 
@@ -2314,7 +2273,7 @@ export const BioXpCockpit = () => {
                 !isConnected ? (
                     <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
                         <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a working daemon linkage first. Motion, latch, thermal, and chiller actions stay disabled until the runtime reports actual board reachability.</p>
+                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Motion, latch, thermal, and chiller actions stay disabled until the runtime reports actual board reachability.</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -2419,7 +2378,7 @@ export const BioXpCockpit = () => {
                 !isConnected ? (
                     <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
                         <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">The camera tab now depends on the real daemon responses. Bring the linkage online first, then capture or stream frames from the actual device.</p>
+                        <p className="text-xs text-content-muted mt-2">The camera tab now depends on the real runtime responses. Bring the linkage online first, then capture or stream frames from the actual device.</p>
                     </div>
                 ) : (
                     <div className="space-y-6">
@@ -2500,7 +2459,7 @@ export const BioXpCockpit = () => {
                         </div>
 
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                            <SectionCard title="Visible Camera Nodes" subtitle="Live device discovery from the daemon host.">
+                            <SectionCard title="Visible Camera Nodes" subtitle="Live device discovery from the robot runtime host.">
                                 <JsonBlock title="Devices" data={cameraDevices.data} fallback="No camera devices reported yet." />
                             </SectionCard>
                             <SectionCard title="Control Enumeration" subtitle="V4L2 control enumeration for the selected device.">
