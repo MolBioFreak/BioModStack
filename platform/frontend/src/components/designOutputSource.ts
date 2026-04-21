@@ -74,6 +74,9 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
 
 const normalizeArtifactClass = (value: unknown): string => String(value || '').trim().toLowerCase();
 const isValidatedArtifactClass = (artifactClass: string): boolean => artifactClass === 'validated_complex';
+const isBoltzValidationModelId = (modelId: string): boolean => (
+    modelId === 'boltz2' || modelId === 'boltz_cp_experimental'
+);
 
 const isImportedStageMarker = (value: unknown): boolean => {
     const normalized = String(value || '').trim().toLowerCase();
@@ -113,7 +116,7 @@ export const getValidationOutputLabel = (design: OutputSourceDesign): string => 
     const provenanceStageFamily = String(provenance?.stage_family || '').toLowerCase();
 
     if (
-        provenanceModelId === 'boltz2' ||
+        isBoltzValidationModelId(provenanceModelId) ||
         containsAny(stageFamily, ['boltz2']) ||
         containsAny(provenanceStageFamily, ['boltz2'])
     ) {
@@ -265,7 +268,7 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
         containsAny(stageFamily, ['validation', 'protenix', 'boltz2']) ||
         containsAny(provenanceStageFamily, ['validation', 'protenix', 'boltz2']) ||
         containsAny(stageMode, ['validation', 'post_structure_validation']) ||
-        provenanceModelId === 'boltz2' ||
+        isBoltzValidationModelId(provenanceModelId) ||
         provenanceModelId === 'protenix'
     ) {
         return 'validation';
