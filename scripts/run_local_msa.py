@@ -48,7 +48,20 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import TYPE_CHECKING, Optional, Dict, Any, List, Tuple
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+LIB_DIR = SCRIPT_DIR / "lib"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from local_msa.providers.colabfold_api import register_legacy_run_colabfold_api_msa_workflow
+from local_msa.providers.local_mmseqs import register_legacy_run_colabfold_msa_workflow
+
+if TYPE_CHECKING:
+    from lib.local_msa.cli.run_single import dispatch_single_request as _dispatch_single_request_ast_check
 
 from local_msa_runtime import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
@@ -1471,43 +1484,45 @@ def _postfilter_a3m_by_taxonomy(a3m_content: str, taxon_list: Optional[str]) -> 
     if not filter_domains:
         return a3m_content
 
+    def _should_keep_entry(entry_lines: List[str]) -> bool:
+        if not entry_lines:
+            return False
+        header = entry_lines[0]
+        if header == ">query" or "query" in header.lower()[:20]:
+            return True
+        tax_match = re.search(r"Tax=([^T]+?)(?:TaxID=|$)", header)
+        if not tax_match:
+            return True
+        tax_name = tax_match.group(1).strip().lower()
+        is_bacteria = any(
+            kw in tax_name
+            for kw in (
+                "bacteri",
+                "escherichia",
+                "salmonella",
+                "streptococcus",
+                "staphylococcus",
+                "pseudomonas",
+                "clostridium",
+                "bacillus",
+            )
+        )
+        if "Bacteria" in filter_domains:
+            return is_bacteria
+        return True
+
     filtered_entries: List[str] = []
     current_entry: List[str] = []
 
     for line in a3m_content.split("\n"):
         if line.startswith(">"):
-            if current_entry:
-                header = current_entry[0]
-                if header == ">query" or "query" in header.lower()[:20]:
-                    filtered_entries.append("\n".join(current_entry))
-                else:
-                    tax_match = re.search(r"Tax=([^T]+?)(?:TaxID=|$)", header)
-                    if tax_match:
-                        tax_name = tax_match.group(1).strip().lower()
-                        is_bacteria = any(
-                            kw in tax_name
-                            for kw in (
-                                "bacteri",
-                                "escherichia",
-                                "salmonella",
-                                "streptococcus",
-                                "staphylococcus",
-                                "pseudomonas",
-                                "clostridium",
-                                "bacillus",
-                            )
-                        )
-                        if "Bacteria" in filter_domains and is_bacteria:
-                            filtered_entries.append("\n".join(current_entry))
-                        elif "Bacteria" not in filter_domains:
-                            filtered_entries.append("\n".join(current_entry))
-                    else:
-                        filtered_entries.append("\n".join(current_entry))
+            if current_entry and _should_keep_entry(current_entry):
+                filtered_entries.append("\n".join(current_entry))
             current_entry = [line]
         else:
             current_entry.append(line)
 
-    if current_entry:
+    if current_entry and _should_keep_entry(current_entry):
         filtered_entries.append("\n".join(current_entry))
 
     return "\n".join(filtered_entries)
@@ -1819,6 +1834,26 @@ def run_mmseqs_gpuserver(
             log_handle.close()
 
 
+def _extract_tar_archive_safely(archive_path: Path, work_dir: Path) -> None:
+    """Extract a tar.gz archive without allowing path traversal or special-file escapes."""
+    root = work_dir.resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(archive_path, mode="r:gz") as tar:
+        safe_members = []
+        for member in tar.getmembers():
+            if not (member.isdir() or member.isreg()):
+                raise RuntimeError(f"Refusing to extract special entry from ColabFold archive: {member.name}")
+            if member.islnk() or member.issym():
+                raise RuntimeError(f"Refusing to extract link entry from ColabFold archive: {member.name}")
+            member_path = (work_dir / member.name).resolve()
+            if member_path != root and not member_path.is_relative_to(root):
+                raise RuntimeError(f"Refusing to extract path outside work dir from ColabFold archive: {member.name}")
+            safe_members.append(member)
+        tar.extractall(path=work_dir, members=safe_members)
+
+
+
 def _run_colabfold_api_search(
     sequence: str,
     work_dir: Path,
@@ -1922,8 +1957,7 @@ def _run_colabfold_api_search(
         timeout_seconds=download_timeout_seconds,
     )
 
-    with tarfile.open(archive_path, mode="r:gz") as tar:
-        tar.extractall(path=work_dir)
+    _extract_tar_archive_safely(archive_path=archive_path, work_dir=work_dir)
 
     a3m_paths = sorted(work_dir.rglob("*.a3m"))
     if not a3m_paths:
@@ -3326,57 +3360,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    common_kwargs = dict(
-        sequence=args.sequence,
-        job_name=args.name,
-        out_dir=args.out_dir,
-        db_path=args.db_path,
-        cache_dir=args.cache_dir,
-        max_age_days=args.max_age_days,
-        force_refresh=args.force_refresh,
-        cache_only=args.cache_only,
-        num_threads=args.threads,
-        use_gpu=args.use_gpu if args.use_gpu else None,
-        gpu_id=args.gpu_id,
-        cpu_only=args.cpu_only,
-        gpu_mode=args.gpu_mode,
-        gpu_threshold=args.gpu_threshold,
-        preferred_gpus=parse_gpu_csv(args.preferred_gpus),
-        excluded_gpus=parse_gpu_csv(args.excluded_gpus),
-        gpu_server_mode=args.gpu_server_mode,
-        gpu_server_wait_timeout=args.gpu_server_wait_timeout,
-        gpu_server_db_load_mode=args.gpu_server_db_load_mode,
-        gpu_server_startup_wait=args.gpu_server_startup_wait,
-        reference_sequence=args.reference_sequence,
-        preset=args.preset,
-        num_iterations=args.num_iterations,
-        use_env=bool(args.use_env) if args.use_env is not None else None,
-        use_expand=bool(args.use_expand) if args.use_expand is not None else None,
-        use_filter=bool(args.use_filter) if args.use_filter is not None else None,
-        evalue=args.evalue,
-        sensitivity=args.sensitivity,
-        max_seqs=args.max_seqs,
-        min_seq_id=args.min_seq_id,
-        min_coverage=args.min_coverage,
-        taxon_list=args.taxon_list,
-        min_depth_warning=args.min_depth_warning,
-        min_depth_fail=args.min_depth_fail,
-        fast_env_fallback_min_depth=args.fast_env_fallback_min_depth,
-    )
+    from local_msa.cli.run_single import build_single_request_from_namespace, dispatch_single_request
 
-    if args.msa_provider == "colabfold_api":
-        run_colabfold_api_msa_workflow(
-            **common_kwargs,
-            colabfold_api_host=args.colabfold_api_host,
-            colabfold_api_min_interval=args.colabfold_api_min_interval,
-            colabfold_api_poll_interval=args.colabfold_api_poll_interval,
-        )
-    else:
-        run_colabfold_msa_workflow(
-            **common_kwargs,
-            disallow_cpu_fallback=args.disallow_cpu_fallback,
-        )
+    request = build_single_request_from_namespace(args)
+    dispatch_single_request(
+        request,
+        local_executor=run_colabfold_msa_workflow,
+        colabfold_api_executor=run_colabfold_api_msa_workflow,
+        colabfold_api_options={
+            "colabfold_api_host": args.colabfold_api_host,
+            "colabfold_api_min_interval": args.colabfold_api_min_interval,
+            "colabfold_api_poll_interval": args.colabfold_api_poll_interval,
+        },
+    )
     return 0
+
+
+run_colabfold_api_msa_workflow = register_legacy_run_colabfold_api_msa_workflow(run_colabfold_api_msa_workflow)
+run_colabfold_msa_workflow = register_legacy_run_colabfold_msa_workflow(run_colabfold_msa_workflow)
 
 
 # Backward compatibility alias

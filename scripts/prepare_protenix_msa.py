@@ -27,13 +27,20 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+LIB_DIR = SCRIPT_DIR / "lib"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
 from local_msa_runtime import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
     DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     DEFAULT_GPUSERVER_WAIT_TIMEOUT,
 )
-from batch_msa import run_batch_msa
-from run_local_msa import inspect_mmseqs_runtime, parse_gpu_csv
+from local_msa.batching import run_batch_msa
+from local_msa.runtime import inspect_mmseqs_runtime, parse_gpu_csv
 
 DEFAULT_COLABFOLD_API_HOST = os.getenv("BMS_COLABFOLD_API_HOST") or "https://api.colabfold.com"
 DEFAULT_SMALL_MAX_TASKS = 1
