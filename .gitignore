@@ -15,6 +15,12 @@ eggs/
 lib/
 !platform/frontend/src/lib/
 !platform/frontend/src/lib/molstar-loader.ts
+!scripts/lib/
+scripts/lib/*
+!scripts/lib/local_msa/
+!scripts/lib/local_msa/**
+scripts/lib/local_msa/**/__pycache__/
+scripts/lib/local_msa/**/*.py[cod]
 lib64/
 parts/
 sdist/
