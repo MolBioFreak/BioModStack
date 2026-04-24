@@ -8,8 +8,12 @@ import {
     getPredictorFamiliesForSelection,
     inferBoltzCpShardPlanId,
     normalizeBoltzCpShardPlanId,
+    normalizeMsaTargetShardMinSizeGb,
+    normalizeMsaTargetShardMode,
+    normalizeMsaTargetShards,
     parseBoltzCpGpuIds,
     type BoltzCpShardPlanId,
+    type StructureMsaTargetShardMode,
     type StructurePredictionMode,
     type StructurePredictorFamily,
 } from '../structurePredictionUiState.js';
@@ -25,6 +29,9 @@ export interface StructureReorchestrateSettings {
     predictors: StructurePredictor[];
     msaProvider: StructureMsaProvider;
     msaPreset: StructureMsaPreset;
+    msaTargetShardMode: StructureMsaTargetShardMode;
+    msaTargetShards: number;
+    msaTargetShardMinSizeGb: number;
     skipMsa: boolean;
     msaAllowEmptyFallback: boolean;
     boltz: {
@@ -63,6 +70,9 @@ const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
     msaProvider: 'local',
     msaPreset: 'fast',
+    msaTargetShardMode: 'auto',
+    msaTargetShards: 4,
+    msaTargetShardMinSizeGb: 1,
     skipMsa: false,
     msaAllowEmptyFallback: false,
     boltz: {
@@ -234,6 +244,9 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
         predictors: predictors.length > 0 ? predictors : DEFAULTS.predictors,
         msaProvider: normalizeMsaProvider(params.msa_provider),
         msaPreset: normalizeMsaPreset(params.msa_preset),
+        msaTargetShardMode: normalizeMsaTargetShardMode(params.msa_target_shard_mode),
+        msaTargetShards: normalizeMsaTargetShards(params.msa_target_shards),
+        msaTargetShardMinSizeGb: normalizeMsaTargetShardMinSizeGb(params.msa_target_shard_min_size_gb),
         skipMsa: false,
         msaAllowEmptyFallback: toBoolean(params.msa_allow_empty_fallback, DEFAULTS.msaAllowEmptyFallback),
         boltz: {
@@ -293,6 +306,9 @@ export const buildStructureReorchestrateOverrides = (
 
     maybeSet('msa_provider', next.msaProvider, previous.msaProvider);
     maybeSet('msa_preset', next.msaPreset, previous.msaPreset);
+    maybeSet('msa_target_shard_mode', next.msaTargetShardMode, previous.msaTargetShardMode);
+    maybeSet('msa_target_shards', next.msaTargetShards, previous.msaTargetShards);
+    maybeSet('msa_target_shard_min_size_gb', next.msaTargetShardMinSizeGb, previous.msaTargetShardMinSizeGb);
     maybeSet('msa_allow_empty_fallback', next.msaAllowEmptyFallback, previous.msaAllowEmptyFallback);
 
     if (next.predictors.includes('boltz')) {
@@ -322,7 +338,6 @@ export const buildStructureReorchestrateOverrides = (
             writeFullPae: previous.boltzCp.writeFullPae,
             seed: previous.boltzCp.seed,
             gpuIds: previousLaunch.gpuIds,
-            sizeCp: previousLaunch.sizeCp,
         });
         const nextParams = buildBoltzCpSubmitParams({
             shardPlanId: next.boltzCp.shardPlanId,
@@ -330,7 +345,6 @@ export const buildStructureReorchestrateOverrides = (
             writeFullPae: next.boltzCp.writeFullPae,
             seed: next.boltzCp.seed,
             gpuIds: nextLaunch.gpuIds,
-            sizeCp: nextLaunch.sizeCp,
         });
 
         maybeSet(
@@ -345,7 +359,6 @@ export const buildStructureReorchestrateOverrides = (
         );
         maybeSet('bcp_shard_plan_id', nextParams.bcp_shard_plan_id, previousParams.bcp_shard_plan_id);
         maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
-        maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
         maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);

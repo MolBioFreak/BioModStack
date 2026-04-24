@@ -66,6 +66,10 @@ process RunBoltzCPExperimental {
     def bundleIdLiteral = shellQuote(params.get('bcp_bundle_id', ''))
     def bundleIndexLiteral = shellQuote(params.get('bcp_bundle_index', ''))
     def planManifestLiteral = shellQuote(params.get('bcp_plan_manifest_path', ''))
+    def storeRootLiteral = shellQuote(params.get('bcp_store_root', ''))
+    def assignedGpuLiteral = shellQuote(params.get('bcp_assigned_gpu', ''))
+    def bcpRole = (params.get('bcp_role', 'coordinator')).toString()
+    def quotedBcpRole = shellQuote(bcpRole)
     def parentJobLiteral = shellQuote(params.containsKey('bcp_parent_job_id') ? params['bcp_parent_job_id'] : (params.containsKey('job_id') ? params['job_id'] : ''))
     def parentShardPlanLiteral = shellQuote(params.get('bcp_shard_plan_id', ''))
     def quotedOutputFormat = shellQuote(outputFormat)
@@ -74,6 +78,10 @@ process RunBoltzCPExperimental {
 
     TASK_ROOT="\$PWD"
     REPO_PATH=${repoPath}
+    BCP_ROLE=${quotedBcpRole}
+    BCP_STORE_ROOT=${storeRootLiteral}
+    BCP_ASSIGNED_GPU=${assignedGpuLiteral}
+    BCP_BUNDLE_ID=${bundleIdLiteral}
     SIZE_CP=${sizeCp}
     NPROC=${nproc}
     SIZE_DP=${sizeDp}
@@ -106,26 +114,6 @@ process RunBoltzCPExperimental {
         exit 1
     fi
 
-    if [ \$((SIZE_CP)) -le 0 ]; then
-        echo "bcp_size_cp must be a positive integer" >&2
-        exit 1
-    fi
-
-    size_cp_axis=\$(python3 - <<'PY'
-import math
-print(math.isqrt(int("${sizeCp}")))
-PY
-)
-    if [ \$((size_cp_axis * size_cp_axis)) -ne \$SIZE_CP ]; then
-        echo "bcp_size_cp must be a perfect square" >&2
-        exit 1
-    fi
-
-    if [ \$((NPROC % SIZE_CP)) -ne 0 ]; then
-        echo "bcp_size_cp must divide the number of selected GPUs" >&2
-        exit 1
-    fi
-
     mkdir -p staged_input
     if [ -d ${inputConfigPath} ]; then
         cp -R ${inputConfigPath} staged_input/input_bundle
@@ -144,20 +132,123 @@ PY
     export MPLCONFIGDIR="\$TASK_ROOT/tmp_cache/matplotlib"
     export BOLTZ_CACHE=/boltzcache
     export PYTHONPATH="\$REPO_PATH/src\${PYTHONPATH:+:\$PYTHONPATH}"
+    BOLTZ_PYTHON="\$REPO_PATH/.venv/bin/python"
+    if [ ! -x "\$BOLTZ_PYTHON" ]; then
+        BOLTZ_PYTHON=python3
+    fi
+    export BOLTZ_PYTHON
 
-    if [ "\$USE_MSA" = "true" ] && [ "\$INPUT_FORMAT" = "config_files" ]; then
-        if [ -z "\$CODE_ROOT" ] || [ ! -f "\$CODE_ROOT/scripts/run_local_msa.py" ]; then
-            echo "Boltz-CP MSA materialization requires \$CODE_ROOT/scripts/run_local_msa.py" >&2
+    if [ "\$BCP_ROLE" = "child" ]; then
+        if [ -z "\$BCP_STORE_ROOT" ]; then
+            echo "bcp_store_root is required for child Boltz-CP worker execution" >&2
             exit 1
         fi
-        echo "Materializing MSA-enabled Boltz-CP input bundles via run_local_msa.py..."
-        # Keep these flags aligned with structure_prediction.nf, including the --msa-provider value sourced from MSA_PROVIDER.
-        export TASK_ROOT CODE_ROOT DATA_ARG
-        export MSA_PROVIDER MSA_PRESET MSA_LOCAL_DB MSA_CACHE_DIR MSA_THREADS MSA_USE_GPU
-        export COLABFOLD_API_HOST COLABFOLD_API_MIN_INTERVAL COLABFOLD_API_POLL_INTERVAL
-        export MSA_MIN_DEPTH_WARNING MSA_MIN_DEPTH_FAIL MSA_FORCE_REFRESH MSA_CACHE_ONLY
-        export MSA_USE_EXPAND MSA_USE_ENV MSA_NUM_ITERATIONS MSA_MIN_SEQ_ID MSA_MIN_COVERAGE MSA_TAXON_LIST
-        DATA_ARG="\$(python3 - <<'PY'
+        if [ -z "\$BCP_BUNDLE_ID" ]; then
+            echo "bcp_bundle_id is required for child Boltz-CP worker execution" >&2
+            exit 1
+        fi
+
+        assigned_gpu="\$BCP_ASSIGNED_GPU"
+        if [ -z "\$assigned_gpu" ] && [ -n "${gpuIds ? gpuIds[0] : ''}" ]; then
+            assigned_gpu="${gpuIds ? gpuIds[0] : ''}"
+        fi
+
+        mkdir -p cp_results/processed
+        cd "\$REPO_PATH"
+        set +e
+        if [ -n "\$assigned_gpu" ]; then
+            "\$BOLTZ_PYTHON" -m boltz.distributed.main large-protein run-bundle \
+                --store-root "\$BCP_STORE_ROOT" \
+                --bundle-id "\$BCP_BUNDLE_ID" \
+                --assigned-gpu "\$assigned_gpu" \
+                > "\$TASK_ROOT/run_bundle_output.txt" 2>&1
+        else
+            "\$BOLTZ_PYTHON" -m boltz.distributed.main large-protein run-bundle \
+                --store-root "\$BCP_STORE_ROOT" \
+                --bundle-id "\$BCP_BUNDLE_ID" \
+                > "\$TASK_ROOT/run_bundle_output.txt" 2>&1
+        fi
+        worker_rc=\$?
+        set -e
+
+        tee "\$TASK_ROOT/boltz_cp_experimental.log" < "\$TASK_ROOT/run_bundle_output.txt"
+
+        export TASK_ROOT BCP_STORE_ROOT BCP_BUNDLE_ID
+        export PLAN_MANIFEST_PATH=${planManifestLiteral}
+        export PARENT_JOB_ID=${parentJobLiteral}
+        export PARENT_SHARD_PLAN_ID=${parentShardPlanLiteral}
+        export ASSIGNED_GPU="\$assigned_gpu"
+        python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+store_root = Path(os.environ['BCP_STORE_ROOT'])
+bundle_id = os.environ['BCP_BUNDLE_ID']
+processed_dir = Path(os.environ['TASK_ROOT']) / 'cp_results' / 'processed'
+processed_dir.mkdir(parents=True, exist_ok=True)
+bundle_dir = store_root / 'bundles' / bundle_id
+result_path = bundle_dir / 'result.json'
+failure_path = bundle_dir / 'failure.json'
+marker_path = store_root / 'markers' / f'{bundle_id}.done'
+manifest = {
+    'bundle_id': bundle_id,
+    'store_root': str(store_root),
+    'plan_manifest_path': os.environ.get('PLAN_MANIFEST_PATH', '').strip(),
+    'parent_job_id': os.environ.get('PARENT_JOB_ID', '').strip(),
+    'parent_shard_plan_id': os.environ.get('PARENT_SHARD_PLAN_ID', '').strip(),
+    'assigned_gpu': os.environ.get('ASSIGNED_GPU', '').strip(),
+    'result_path': str(result_path),
+    'failure_path': str(failure_path),
+    'marker_path': str(marker_path),
+    'status': 'failed' if failure_path.exists() else ('complete' if result_path.exists() and marker_path.exists() else 'unknown'),
+}
+if result_path.exists():
+    (processed_dir / 'result.json').write_text(result_path.read_text(encoding='utf-8'), encoding='utf-8')
+if failure_path.exists():
+    (processed_dir / 'failure.json').write_text(failure_path.read_text(encoding='utf-8'), encoding='utf-8')
+if marker_path.exists():
+    (processed_dir / 'marker.json').write_text(marker_path.read_text(encoding='utf-8'), encoding='utf-8')
+(processed_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+PY
+
+        if [ \$worker_rc -ne 0 ]; then
+            exit \$worker_rc
+        fi
+    else
+        if [ \$((SIZE_CP)) -le 0 ]; then
+            echo "bcp_size_cp must be a positive integer" >&2
+            exit 1
+        fi
+
+        size_cp_axis=\$(python3 - <<'PY'
+import math
+print(math.isqrt(int("${sizeCp}")))
+PY
+)
+        if [ \$((size_cp_axis * size_cp_axis)) -ne \$SIZE_CP ]; then
+            echo "bcp_size_cp must be a perfect square" >&2
+            exit 1
+        fi
+
+        if [ \$((NPROC % SIZE_CP)) -ne 0 ]; then
+            echo "bcp_size_cp must divide the number of selected GPUs" >&2
+            exit 1
+        fi
+
+        if [ "\$USE_MSA" = "true" ] && [ "\$INPUT_FORMAT" = "config_files" ]; then
+            if [ -z "\$CODE_ROOT" ] || [ ! -f "\$CODE_ROOT/scripts/run_local_msa.py" ]; then
+                echo "Boltz-CP MSA materialization requires \$CODE_ROOT/scripts/run_local_msa.py" >&2
+                exit 1
+            fi
+            echo "Materializing MSA-enabled Boltz-CP input bundles via run_local_msa.py..."
+            # Keep these flags aligned with structure_prediction.nf, including the --msa-provider value sourced from MSA_PROVIDER.
+            export TASK_ROOT CODE_ROOT DATA_ARG
+            export MSA_PROVIDER MSA_PRESET MSA_LOCAL_DB MSA_CACHE_DIR MSA_THREADS MSA_USE_GPU
+            export COLABFOLD_API_HOST COLABFOLD_API_MIN_INTERVAL COLABFOLD_API_POLL_INTERVAL
+            export MSA_MIN_DEPTH_WARNING MSA_MIN_DEPTH_FAIL MSA_FORCE_REFRESH MSA_CACHE_ONLY
+            export MSA_USE_EXPAND MSA_USE_ENV MSA_NUM_ITERATIONS MSA_MIN_SEQ_ID MSA_MIN_COVERAGE MSA_TAXON_LIST
+            DATA_ARG="\$(python3 - <<'PY'
 import os
 import shutil
 import subprocess
@@ -248,9 +339,9 @@ def materialize_yaml(yaml_path: Path, name_prefix: str) -> None:
             cmd.append("--cache-only")
 
         subprocess.run(cmd, check=True, stdout=sys.stderr, stderr=sys.stderr)
-        msa_path = msa_out_dir / f"{msa_name}.a3m"
+        msa_path = msa_out_dir / f'{msa_name}.a3m'
         if not msa_path.exists():
-            raise SystemExit(f"run_local_msa.py did not produce expected file {msa_path}")
+            raise SystemExit(f'run_local_msa.py did not produce expected file {msa_path}')
         protein["msa"] = str(msa_path.resolve())
 
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -281,32 +372,32 @@ else:
     print(str(target_path))
 PY
 )"
-    fi
+        fi
 
-    cd "\$REPO_PATH"
-    python3 -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
-        src/boltz/distributed/main.py predict "\$DATA_ARG" \
-        --out_dir "\$TASK_ROOT" \
-        --cache /boltzcache \
-        --size_dp \$SIZE_DP \
-        --size_cp \$SIZE_CP \
-        --input_format "\$INPUT_FORMAT" \
-        --output_format "\$OUTPUT_FORMAT" \
-        --recycling_steps ${params.bcp_recycling_steps ?: 3} \
-        --sampling_steps ${params.bcp_sampling_steps ?: 200} \
-        --diffusion_samples ${params.bcp_diffusion_samples ?: 1} \
-        ${writeFullPaeFlag} \
-        ${seedFlag} \
-        2>&1 | tee "\$TASK_ROOT/boltz_cp_experimental.log"
+        cd "\$REPO_PATH"
+        python3 -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
+            src/boltz/distributed/main.py predict "\$DATA_ARG" \
+            --out_dir "\$TASK_ROOT" \
+            --cache /boltzcache \
+            --size_dp \$SIZE_DP \
+            --size_cp \$SIZE_CP \
+            --input_format "\$INPUT_FORMAT" \
+            --output_format "\$OUTPUT_FORMAT" \
+            --recycling_steps ${params.bcp_recycling_steps ?: 3} \
+            --sampling_steps ${params.bcp_sampling_steps ?: 200} \
+            --diffusion_samples ${params.bcp_diffusion_samples ?: 1} \
+            ${writeFullPaeFlag} \
+            ${seedFlag} \
+            2>&1 | tee "\$TASK_ROOT/boltz_cp_experimental.log"
 
-    result_dir="\$(find "\$TASK_ROOT" -maxdepth 1 -type d -name 'boltz_results_*' | head -n 1)"
-    if [ -z "\$result_dir" ]; then
-        echo "Boltz-CP run did not produce a boltz_results_* directory" >&2
-        exit 1
-    fi
-    mv "\$result_dir" "\$TASK_ROOT/cp_results"
+        result_dir="\$(find "\$TASK_ROOT" -maxdepth 1 -type d -name 'boltz_results_*' | head -n 1)"
+        if [ -z "\$result_dir" ]; then
+            echo "Boltz-CP run did not produce a boltz_results_* directory" >&2
+            exit 1
+        fi
+        mv "\$result_dir" "\$TASK_ROOT/cp_results"
 
-    python3 - <<'PY'
+        python3 - <<'PY'
 import json
 from pathlib import Path
 
@@ -338,6 +429,7 @@ if parent_shard_plan_id:
     payload["parent_shard_plan_id"] = parent_shard_plan_id
 manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 PY
+    fi
     """
 
     stub:
@@ -373,6 +465,7 @@ process BuildBoltzCPPlanManifest {
 
     output:
     path 'boltz_cp_plan_manifest.json', emit: manifest
+    path 'boltz_cp_plan_store.json', emit: plan_store
 
     script:
     def shardPlanId = (params.bcp_shard_plan_id ?: '2x2').toString()
@@ -397,8 +490,12 @@ process BuildBoltzCPPlanManifest {
     def msaMinSeqId = shellQuote(params.msa_min_seq_id ?: '')
     def msaMinCoverage = shellQuote(params.msa_min_coverage ?: '')
     def msaTaxonList = shellQuote(params.msa_taxon_list ?: '')
+    def defaultStoreRoot = new File((params.out_dir ?: '.').toString(), "run/boltz_cp_plan_store/${parent_job_id}").absolutePath
+    def storeRootPath = shellQuote((params.bcp_store_root ?: defaultStoreRoot).toString())
+    def configuredRamRootPath = shellQuote((params.bcp_configured_ram_root ?: '').toString())
     """
     set -euo pipefail
+    TASK_ROOT="\$PWD"
     REPO_PATH=${repoPath}
     INPUT_PATH=${inputPath}
     SHARD_PLAN_ID=${shellQuote(shardPlanId)}
@@ -411,6 +508,8 @@ process BuildBoltzCPPlanManifest {
     CODE_ROOT=${codeRoot}
     PARENT_JOB_ID=${shellQuote(parent_job_id)}
     BATCH_NAME=${shellQuote(batch_name)}
+    BCP_STORE_ROOT=${storeRootPath}
+    BCP_CONFIGURED_RAM_ROOT=${configuredRamRootPath}
     PHYSICAL_LAUNCH_SIZE_CP=${params.bcp_size_cp ?: 1}
     BCP_RECYCLING_STEPS=${params.bcp_recycling_steps ?: 3}
     BCP_SAMPLING_STEPS=${params.bcp_sampling_steps ?: 200}
@@ -436,6 +535,14 @@ process BuildBoltzCPPlanManifest {
     MSA_MIN_COVERAGE=${msaMinCoverage}
     MSA_TAXON_LIST=${msaTaxonList}
 
+    export TASK_ROOT REPO_PATH INPUT_PATH SHARD_PLAN_ID INPUT_FORMAT OUTPUT_FORMAT GPU_IDS WRITE_FULL_PAE SEED CONTAINER_PATH CODE_ROOT PARENT_JOB_ID BATCH_NAME BCP_STORE_ROOT BCP_CONFIGURED_RAM_ROOT PHYSICAL_LAUNCH_SIZE_CP BCP_RECYCLING_STEPS BCP_SAMPLING_STEPS BCP_DIFFUSION_SAMPLES BOLTZ_USE_MSA MSA_PROVIDER MSA_PRESET MSA_LOCAL_DB MSA_CACHE_DIR MSA_THREADS MSA_USE_GPU COLABFOLD_API_HOST COLABFOLD_API_MIN_INTERVAL COLABFOLD_API_POLL_INTERVAL MSA_MIN_DEPTH_WARNING MSA_MIN_DEPTH_FAIL MSA_FORCE_REFRESH MSA_CACHE_ONLY MSA_USE_EXPAND MSA_USE_ENV MSA_NUM_ITERATIONS MSA_MIN_SEQ_ID MSA_MIN_COVERAGE MSA_TAXON_LIST
+    export PYTHONPATH="\$REPO_PATH/src\${PYTHONPATH:+:\$PYTHONPATH}"
+    BOLTZ_PYTHON="\$REPO_PATH/.venv/bin/python"
+    if [ ! -x "\$BOLTZ_PYTHON" ]; then
+        BOLTZ_PYTHON=python3
+    fi
+    export BOLTZ_PYTHON
+
     python3 - <<'PY'
 import json
 import os
@@ -448,8 +555,6 @@ repo_path = Path(os.environ['REPO_PATH'])
 if not repo_path.exists():
     raise SystemExit(f"Boltz-CP repo not found: {repo_path}")
 sys.path.insert(0, str(repo_path / 'src'))
-
-from boltz.distributed.large_protein.plan import build_plan_manifest  # noqa: E402
 
 input_path = Path(os.environ['INPUT_PATH'])
 if not input_path.exists():
@@ -506,8 +611,8 @@ metadata = {
     'msa_threads': int(os.environ.get('MSA_THREADS', '32') or '32'),
     'msa_use_gpu': os.environ.get('MSA_USE_GPU', '').strip(),
     'colabfold_api_host': os.environ.get('COLABFOLD_API_HOST', '').strip(),
-    'colabfold_api_min_interval': int(os.environ.get('COLABFOLD_API_MIN_INTERVAL', '6') or '6'),
-    'colabfold_api_poll_interval': int(os.environ.get('COLABFOLD_API_POLL_INTERVAL', '6') or '6'),
+    'colabfold_api_min_interval': float(os.environ.get('COLABFOLD_API_MIN_INTERVAL', '6') or '6'),
+    'colabfold_api_poll_interval': float(os.environ.get('COLABFOLD_API_POLL_INTERVAL', '6') or '6'),
     'msa_min_depth_warning': int(os.environ.get('MSA_MIN_DEPTH_WARNING', '100') or '100'),
     'msa_min_depth_fail': int(os.environ.get('MSA_MIN_DEPTH_FAIL', '0') or '0'),
     'msa_force_refresh': os.environ.get('MSA_FORCE_REFRESH', '').strip().lower() == 'true',
@@ -523,11 +628,59 @@ metadata = {
 seed = os.environ.get('SEED', '').strip()
 if seed:
     metadata['bcp_seed'] = seed
-manifest = build_plan_manifest(metadata, os.environ['SHARD_PLAN_ID'])
-payload = manifest.to_dict()
-payload['physical_gpu_ids'] = physical_gpu_ids
-payload['physical_launch_size_cp'] = metadata['physical_launch_size_cp']
-Path('boltz_cp_plan_manifest.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+Path('boltz_cp_input_metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+required_bytes = max(sequence_length * sequence_length * 16, 1024 * 1024)
+Path('boltz_cp_plan_requirements.json').write_text(json.dumps({'required_bytes': required_bytes}, indent=2), encoding='utf-8')
+PY
+
+    INPUT_METADATA_JSON="\$(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.dumps(json.loads(Path('boltz_cp_input_metadata.json').read_text(encoding='utf-8')), separators=(',', ':')))
+PY
+)"
+    REQUIRED_BYTES="\$(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.loads(Path('boltz_cp_plan_requirements.json').read_text(encoding='utf-8'))['required_bytes'])
+PY
+)"
+
+    cd "\$REPO_PATH"
+    init_plan_args=(
+        "\$BOLTZ_PYTHON" -m boltz.distributed.main large-protein init-plan
+        --input-metadata-json "\$INPUT_METADATA_JSON"
+        --grid-size "\$SHARD_PLAN_ID"
+        --required-bytes "\$REQUIRED_BYTES"
+        --fallback-root "\$BCP_STORE_ROOT"
+    )
+    if [ -n "\$BCP_CONFIGURED_RAM_ROOT" ]; then
+        init_plan_args+=(--configured-ram-root "\$BCP_CONFIGURED_RAM_ROOT")
+    fi
+    store_root="\$("\${init_plan_args[@]}")"
+    export STORE_ROOT="\$store_root"
+    export PLAN_MANIFEST_PATH="\$store_root/metadata/plan_manifest.json"
+    export TASK_ROOT
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+store_root = Path(os.environ['STORE_ROOT']).resolve()
+plan_manifest_path = Path(os.environ['PLAN_MANIFEST_PATH']).resolve()
+task_root = Path(os.environ['TASK_ROOT']).resolve()
+manifest_payload = json.loads(plan_manifest_path.read_text(encoding='utf-8'))
+(task_root / 'boltz_cp_plan_manifest.json').write_text(json.dumps(manifest_payload, indent=2), encoding='utf-8')
+plan_store_payload = {
+    'plan_id': manifest_payload.get('plan_id', os.environ['PARENT_JOB_ID']),
+    'store_root': str(store_root),
+    'plan_manifest_path': str(plan_manifest_path),
+    'physical_launch_size_cp': int(os.environ.get('PHYSICAL_LAUNCH_SIZE_CP', '1') or '1'),
+    'shard_plan_id': os.environ['SHARD_PLAN_ID'],
+    'parent_job_id': os.environ['PARENT_JOB_ID'],
+    'batch_name': os.environ['BATCH_NAME'],
+}
+(task_root / 'boltz_cp_plan_store.json').write_text(json.dumps(plan_store_payload, indent=2), encoding='utf-8')
 PY
     """
 
@@ -550,6 +703,9 @@ PY
   ]
 }
 EOF
+    cat > boltz_cp_plan_store.json <<'EOF'
+{"plan_id":"${parent_job_id}","store_root":"${params.out_dir}/run/boltz_cp_plan_store/${parent_job_id}","plan_manifest_path":"${params.out_dir}/run/boltz_cp_plan_store/${parent_job_id}/metadata/plan_manifest.json","physical_launch_size_cp":1}
+EOF
     """
 }
 
@@ -563,6 +719,7 @@ process SpawnBoltzCPChildren {
     val parent_job_id
     val batch_name
     path manifest
+    path plan_store
 
     output:
     path 'spawn_boltz_cp_result.json', emit: result
@@ -573,6 +730,7 @@ process SpawnBoltzCPChildren {
     python3 ${params.code_root}/scripts/spawn_boltz_cp_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --manifest "\$(readlink -f ${manifest})" \\
+        --plan_store "\$(readlink -f ${plan_store})" \\
         --batch_name "${batch_name}" \\
         --api_url "${params.api_url}" \\
         --output spawn_boltz_cp_result.json \\
@@ -636,6 +794,7 @@ process FinalizeBoltzCPExperimentalChildren {
 
     input:
     path child_outputs_json
+    path plan_store
 
     output:
     path 'collected', emit: results_dir
@@ -647,11 +806,50 @@ process FinalizeBoltzCPExperimentalChildren {
     path 'aggregation_report.json', emit: report
 
     script:
+    def repoPath = shellQuote(params.bcp_repo_path ?: '')
     """
     set -euo pipefail
+    TASK_ROOT="\$PWD"
+    REPO_PATH=${repoPath}
+    PLAN_STORE_PATH="\$(readlink -f ${plan_store})"
+    export TASK_ROOT PLAN_STORE_PATH
     mkdir -p collected published bundle_manifests
+
+    STORE_ROOT="\$(python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+payload = json.loads(Path(os.environ['PLAN_STORE_PATH']).read_text(encoding='utf-8'))
+print(str(Path(payload['store_root']).resolve()))
+PY
+)"
+    if [ -z "\$STORE_ROOT" ]; then
+        echo "boltz_cp_plan_store.json is missing store_root" >&2
+        exit 1
+    fi
+    export STORE_ROOT
+
+    if [ ! -d "\$REPO_PATH" ]; then
+        echo "Boltz-CP repo not found: \$REPO_PATH" >&2
+        exit 1
+    fi
+    BOLTZ_PYTHON="\$REPO_PATH/.venv/bin/python"
+    if [ ! -x "\$BOLTZ_PYTHON" ]; then
+        BOLTZ_PYTHON=python3
+    fi
+    export BOLTZ_PYTHON
+
+    cd "\$REPO_PATH"
+    set +e
+    "\$BOLTZ_PYTHON" -m boltz.distributed.main large-protein finalize --store-root "\$STORE_ROOT" > "\$TASK_ROOT/large_protein_finalize.log" 2>&1
+    finalize_rc=\$?
+    set -e
+    cat "\$TASK_ROOT/large_protein_finalize.log"
+    cd "\$TASK_ROOT"
+
     python3 - <<'PY'
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -666,14 +864,20 @@ published.mkdir(exist_ok=True)
 collected.mkdir(exist_ok=True)
 bundle_manifests.mkdir(exist_ok=True)
 
+store_root = Path(os.environ['STORE_ROOT']).resolve()
+summary_path = store_root / 'metadata' / 'summary.json'
+summary = json.loads(summary_path.read_text(encoding='utf-8')) if summary_path.exists() else {}
+
 artifact_counts = {'pdb': 0, 'cif': 0, 'json': 0, 'npz': 0, 'bundle_manifests': 0}
 
 
-def copy_unique(src: Path, dest_dir: Path, prefix: str) -> None:
+def copy_unique(src: Path, dest_dir: Path, prefix: str | None = None) -> Path:
     destination = dest_dir / src.name
-    if destination.exists():
+    if destination.exists() and prefix:
         destination = dest_dir / f"{prefix}_{src.name}"
     shutil.copy2(src, destination)
+    return destination
+
 
 for child_index, raw_child_dir in enumerate(child_dirs, start=1):
     child_dir = Path(raw_child_dir)
@@ -692,20 +896,41 @@ for child_index, raw_child_dir in enumerate(child_dirs, start=1):
         for artifact in search_root.glob(suffix):
             copy_unique(artifact, published, prefix)
             artifact_counts[bucket] += 1
-    processed_root = child_dir / 'processed' / 'boltz_cp'
-    if processed_root.exists():
-        for manifest_path in processed_root.rglob('*.json'):
-            copy_unique(manifest_path, bundle_manifests, prefix)
-            artifact_counts['bundle_manifests'] += 1
 
-(Path('collected') / 'child_output_dirs.json').write_text(json.dumps(child_dirs, indent=2), encoding='utf-8')
-report = {
-    'status': 'complete',
-    'children_processed': len(child_dirs),
-    'artifacts': artifact_counts,
-}
+for bundle_dir in sorted((store_root / 'bundles').glob('*')):
+    manifest_path = bundle_dir / 'manifest.json'
+    if not manifest_path.exists():
+        continue
+    bundle_id = bundle_dir.name
+    copy_unique(manifest_path, bundle_manifests, bundle_id)
+    artifact_counts['bundle_manifests'] += 1
+    for extra_name in ('result.json', 'failure.json'):
+        extra_path = bundle_dir / extra_name
+        if extra_path.exists():
+            shutil.copy2(extra_path, bundle_manifests / f"{bundle_id}_{extra_name}")
+
+markers_dir = store_root / 'markers'
+if markers_dir.exists():
+    for marker_path in sorted(markers_dir.glob('*.done')):
+        shutil.copy2(marker_path, bundle_manifests / f"{marker_path.stem}_marker.json")
+
+(collected / 'child_output_dirs.json').write_text(json.dumps(child_dirs, indent=2), encoding='utf-8')
+(collected / 'plan_store.json').write_text(Path(os.environ['PLAN_STORE_PATH']).read_text(encoding='utf-8'), encoding='utf-8')
+if summary:
+    (collected / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+
+report = dict(summary) if summary else {}
+report.setdefault('status', payload.get('status', 'complete'))
+report['children_processed'] = len(child_dirs)
+report['artifacts'] = artifact_counts
+report['store_root'] = str(store_root)
+report['plan_store_path'] = os.environ['PLAN_STORE_PATH']
 Path('aggregation_report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
 PY
+
+    if [ \$finalize_rc -ne 0 ]; then
+        exit \$finalize_rc
+    fi
     """
 
     stub:

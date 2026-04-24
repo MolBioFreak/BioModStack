@@ -16,6 +16,9 @@ test('recognizes structure-validation jobs and derives boltz retry controls from
             structure_validator: 'boltz2',
             msa_provider: 'local',
             msa_preset: 'fast',
+            msa_target_shard_mode: 'off',
+            msa_target_shards: 2,
+            msa_target_shard_min_size_gb: 0.5,
             boltz_use_msa: true,
             boltz_sampling_steps: 200,
             boltz_recycling_steps: 10,
@@ -32,6 +35,9 @@ test('recognizes structure-validation jobs and derives boltz retry controls from
     assert.equal(settings.msaProvider, 'local');
     assert.equal(settings.skipMsa, false);
     assert.equal(settings.msaPreset, 'fast');
+    assert.equal(settings.msaTargetShardMode, 'off');
+    assert.equal(settings.msaTargetShards, 2);
+    assert.equal(settings.msaTargetShardMinSizeGb, 0.5);
     assert.equal(settings.boltz.samplingSteps, 200);
     assert.equal(settings.boltz.recyclingSteps, 10);
     assert.equal(settings.boltz.numSamples, 1);
@@ -64,6 +70,9 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
         msaProvider: 'colabfold_api',
         skipMsa: true,
         msaAllowEmptyFallback: true,
+        msaTargetShardMode: 'required',
+        msaTargetShards: 2,
+        msaTargetShardMinSizeGb: 0,
         boltz: {
             ...settings.boltz,
             samplingSteps: 400,
@@ -75,6 +84,9 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
     assert.deepEqual(overrides, {
         msa_provider: 'colabfold_api',
         msa_allow_empty_fallback: true,
+        msa_target_shard_mode: 'required',
+        msa_target_shards: 2,
+        msa_target_shard_min_size_gb: 0,
         boltz_use_msa: false,
         boltz_sampling_steps: 400,
         boltz_num_samples: 4,
@@ -158,7 +170,7 @@ test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
     assert.equal(settings.boltzCp.seed, '17');
 });
 
-test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing', () => {
+test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing without surfacing bcp_size_cp', () => {
     const job = {
         model_id: 'boltz_cp_experimental',
         mode: 'design',
@@ -187,10 +199,10 @@ test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing'
     assert.deepEqual(overrides.pinned_gpus, [2, 3]);
     assert.equal(overrides.bcp_shard_plan_id, '4x4');
     assert.equal(overrides.bcp_gpu_ids, '2,3');
-    assert.equal(overrides.bcp_size_cp, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_size_cp'), false);
 });
 
-test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU mode', () => {
+test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU mode without surfacing bcp_size_cp', () => {
     const job = {
         model_id: 'boltz_cp_experimental',
         mode: 'design',
@@ -225,7 +237,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
     assert.equal(overrides.lock_gpus, false);
     assert.equal(overrides.bcp_shard_plan_id, '2x2');
     assert.equal(overrides.bcp_gpu_ids, '0,1,2,3');
-    assert.equal(overrides.bcp_size_cp, 4);
+    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_size_cp'), false);
     assert.equal(overrides.bcp_output_format, 'mmcif');
     assert.equal(overrides.bcp_write_full_pae, false);
     assert.equal(overrides.bcp_seed, null);

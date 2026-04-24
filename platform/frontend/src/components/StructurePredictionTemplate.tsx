@@ -10,7 +10,11 @@ import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     BOLTZ_QUALITY_PRESETS,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
     buildBoltzCpSubmitParams,
+    buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
@@ -22,12 +26,16 @@ import {
     getStructurePredictorOptions,
     inferBoltzCpShardPlanId,
     normalizeBoltzCpShardPlanId,
+    normalizeMsaTargetShardMinSizeGb,
+    normalizeMsaTargetShardMode,
+    normalizeMsaTargetShards,
     resolveBoltzSamplingStepsFromSlider,
     resolveStructureLaunchConfig,
     resolveStructurePredictorSelection,
     resolveStructureSubmitTarget,
     resolveTargetPreviewSource,
     type StructurePredictionMode,
+    type StructureMsaTargetShardMode,
     type StructurePredictorSelection,
 } from './structurePredictionUiState.js';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
@@ -256,6 +264,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
     const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
         initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+    );
+    const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
+        normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
+    );
+    const [msaTargetShards, setMsaTargetShards] = useState<number>(
+        normalizeMsaTargetShards(initialValues?.msa_target_shards ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARDS)
+    );
+    const [msaTargetShardMinSizeGb, setMsaTargetShardMinSizeGb] = useState<number>(
+        normalizeMsaTargetShardMinSizeGb(initialValues?.msa_target_shard_min_size_gb ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB)
     );
     const [colabfoldApiHost, setColabfoldApiHost] = useState<string>(
         initialValues?.colabfold_api_host || 'https://api.colabfold.com'
@@ -604,7 +621,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 writeFullPae: bcpWriteFullPae,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
-                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -636,7 +652,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         }
 
         if (msaNeeded) {
-            params.msa_preset = msaPreset;
+            Object.assign(params, buildStructureMsaSubmitParams({
+                provider: msaProvider,
+                preset: msaPreset,
+                targetShardMode: msaTargetShardMode,
+                targetShards: msaTargetShards,
+                targetShardMinSizeGb: msaTargetShardMinSizeGb,
+            }));
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -645,7 +667,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.msa_min_depth_fail = msaMinDepthFail;
             if (msaCacheOnly) params.msa_cache_only = true;
             if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
-            params.msa_provider = msaProvider;
             if (msaProvider === 'colabfold_api') {
                 params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
                 params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);
@@ -730,6 +751,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         msaNumIterations,
         msaPreset,
         msaProvider,
+        msaTargetShardMinSizeGb,
+        msaTargetShardMode,
+        msaTargetShards,
         msaTaxonomy,
         msaUseEnv,
         msaUseExpand,
@@ -931,7 +955,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 writeFullPae: bcpWriteFullPae,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
-                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -977,7 +1000,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         // MSA Quality parameters (when MSA is enabled for any predictor)
         if (msaNeeded) {
-            params.msa_preset = msaPreset;  // Fast (default), Balanced, or Maximum
+            Object.assign(params, buildStructureMsaSubmitParams({
+                provider: msaProvider,
+                preset: msaPreset,
+                targetShardMode: msaTargetShardMode,
+                targetShards: msaTargetShards,
+                targetShardMinSizeGb: msaTargetShardMinSizeGb,
+            }));
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -987,7 +1016,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             if (msaForceRefresh && !msaCacheOnly) params.msa_force_refresh = true;
             if (msaCacheOnly) params.msa_cache_only = true;
             if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
-            params.msa_provider = msaProvider;
             if (msaProvider === 'colabfold_api') {
                 params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
                 params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);

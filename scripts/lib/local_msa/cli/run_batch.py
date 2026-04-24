@@ -60,6 +60,9 @@ def build_batch_request(
     gpu_server_wait_timeout: int | None,
     gpu_server_db_load_mode: int | None,
     gpu_server_startup_wait: float | None,
+    target_shard_mode: str | None = None,
+    target_shards: int | None = None,
+    target_shard_min_size_gb: float | None = None,
 ) -> BatchMSARequest:
     return BatchMSARequest(
         sequences=tuple(sequences),
@@ -90,6 +93,9 @@ def build_batch_request(
         gpu_server_wait_timeout=int(gpu_server_wait_timeout) if gpu_server_wait_timeout is not None else None,
         gpu_server_db_load_mode=int(gpu_server_db_load_mode) if gpu_server_db_load_mode is not None else None,
         gpu_server_startup_wait=float(gpu_server_startup_wait) if gpu_server_startup_wait is not None else None,
+        target_shard_mode=str(target_shard_mode) if target_shard_mode is not None else None,
+        target_shards=int(target_shards) if target_shards is not None else None,
+        target_shard_min_size_gb=float(target_shard_min_size_gb) if target_shard_min_size_gb is not None else None,
     )
 
 
@@ -123,4 +129,7 @@ def dispatch_batch_request(request: BatchMSARequest, *, executor: Callable[..., 
         gpu_server_wait_timeout=request.gpu_server_wait_timeout,
         gpu_server_db_load_mode=request.gpu_server_db_load_mode,
         gpu_server_startup_wait=request.gpu_server_startup_wait,
+        target_shard_mode=request.target_shard_mode,
+        target_shards=request.target_shards,
+        target_shard_min_size_gb=request.target_shard_min_size_gb,
     )

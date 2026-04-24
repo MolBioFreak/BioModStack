@@ -33,7 +33,7 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert any(param.name == "input_path" for param in model.params)
     assert any(param.name == "shard_plan_id" for param in model.params)
     assert any(param.name == "gpu_ids" for param in model.params)
-    assert any(param.name == "size_cp" for param in model.params)
+    assert not any(param.name == "size_cp" for param in model.params)
 
 
 def test_template_registry_loads_boltz_cp_experimental() -> None:
@@ -117,7 +117,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
     assert validation_params["input_path"] == jobs.BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
     assert validation_params["shard_plan_id"] == "4x4"
     assert validation_params["gpu_ids"] == "0,1,2,3"
-    assert validation_params["size_cp"] == 4
+    assert "size_cp" not in validation_params
     assert validation_params["input_format"] == "config_files"
     assert validation_params["output_format"] == "mmcif"
     assert validation_params["recycling_steps"] == 6
@@ -127,7 +127,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
 
 
 
-def test_boltz_cp_structure_launcher_defaults_size_cp_to_largest_square_divisor() -> None:
+def test_boltz_cp_structure_launcher_defaults_gpu_bridge_to_largest_square_divisor_without_exposing_size_cp() -> None:
     registry = ModelRegistry()
     validation_params = jobs._normalize_boltz_cp_params_for_validation(
         "boltz_cp_experimental",
@@ -147,7 +147,7 @@ def test_boltz_cp_structure_launcher_defaults_size_cp_to_largest_square_divisor(
 
     assert validation_params["shard_plan_id"] == "4x4"
     assert validation_params["gpu_ids"] == "2,3"
-    assert validation_params["size_cp"] == 1
+    assert "size_cp" not in validation_params
     assert registry.validate_job_params("boltz_cp_experimental", "design", validation_params) == []
 
 
@@ -157,7 +157,7 @@ def test_boltz_cp_single_job_supports_colabfold_api_msa_provider() -> None:
 
 
 
-def test_boltz_cp_structure_launcher_clamps_requested_size_cp_to_valid_square_divisor() -> None:
+def test_boltz_cp_structure_launcher_clamps_gpu_bridge_to_valid_square_divisor_without_exposing_size_cp() -> None:
     registry = ModelRegistry()
     validation_params = jobs._normalize_boltz_cp_params_for_validation(
         "boltz_cp_experimental",
@@ -175,7 +175,7 @@ def test_boltz_cp_structure_launcher_clamps_requested_size_cp_to_valid_square_di
 
     assert validation_params["shard_plan_id"] == "4x4"
     assert validation_params["gpu_ids"] == "2,3"
-    assert validation_params["size_cp"] == 1
+    assert "size_cp" not in validation_params
     assert registry.validate_job_params("boltz_cp_experimental", "design", validation_params) == []
 
 
@@ -380,6 +380,8 @@ def test_boltz_cp_workflow_branches_between_child_and_coordinator_paths() -> Non
     assert "def bcpRole = params.get('bcp_role', 'coordinator').toString()" in workflow_text
     assert "def useCoordinator = bcpRole != 'child' && logicalSizeCp > 1" in workflow_text
     assert "logicalSizeCp = ['1x1': 1, '2x2': 4, '4x4': 16]" in workflow_text
+    assert "BuildBoltzCPPlanManifest.out.plan_store" in workflow_text
+    assert "FinalizeBoltzCPExperimentalChildren(WaitForBoltzCPChildren.out.result, BuildBoltzCPPlanManifest.out.plan_store)" in workflow_text
 
 
 
@@ -387,12 +389,17 @@ def test_boltz_cp_module_exposes_plan_manifest_and_child_aggregation_processes()
     module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
     assert "process BuildBoltzCPPlanManifest" in module_text
-    assert "build_plan_manifest" in module_text
+    assert "large-protein init-plan" in module_text
+    assert "boltz_cp_plan_store.json" in module_text
     assert "physical_launch_size_cp" in module_text
     assert "process SpawnBoltzCPChildren" in module_text
     assert "scripts/spawn_boltz_cp_children.py" in module_text
+    assert "bcp_store_root" in module_text
+    assert "large-protein run-bundle" in module_text
+    assert 'CUDA_VISIBLE_DEVICES="$assigned_gpu"' not in module_text
     assert '--stage "boltz_cp_bundle"' in module_text
     assert "process FinalizeBoltzCPExperimentalChildren" in module_text
+    assert "large-protein finalize" in module_text
     assert "bundle_manifests" in module_text
     assert "parent_shard_plan_id" in module_text
 
@@ -404,10 +411,21 @@ def test_boltz_cp_spawn_script_uses_parent_child_job_contract() -> None:
     assert 'CHILD_STAGE = "boltz_cp_bundle"' in script_text
     assert '"model_id": "boltz_cp_experimental"' in script_text
     assert '"bcp_role": "child"' in script_text
+    assert '"bcp_store_root"' in script_text
     assert '"bcp_plan_manifest_path"' in script_text
     assert '"bcp_bundle_id"' in script_text
+    assert '"bcp_assigned_gpu"' in script_text
     assert '"batch_index": bundle_index' in script_text
     assert 'apply_child_resume_params' in script_text
+
+
+
+def test_boltz_cp_coordinator_does_not_force_disk_store_root_as_configured_ram_root() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert 'BCP_CONFIGURED_RAM_ROOT' in module_text
+    assert '--configured-ram-root "\\$BCP_CONFIGURED_RAM_ROOT"' in module_text
+    assert '--configured-ram-root "\\$BCP_STORE_ROOT"' not in module_text
 
 
 

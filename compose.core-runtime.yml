@@ -8,6 +8,10 @@ services:
     network_mode: host
     environment:
       BMS_HOME: /app
+      BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
+      BMS_CONTAINER_STATE_PATH: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+      BMS_INPUTS_CONTAINER_PATH: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
+      BMS_DB_CONTAINER_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
       BMS_DATA: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
       BMS_INPUTS: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
       BMS_DB_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
