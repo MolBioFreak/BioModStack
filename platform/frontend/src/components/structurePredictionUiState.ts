@@ -345,13 +345,19 @@ export const buildStructureMsaSubmitParams = ({
     targetShardMode,
     targetShards,
     targetShardMinSizeGb,
-}: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => ({
-    msa_provider: provider === 'colabfold_api' ? 'colabfold_api' : 'local',
-    msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
-    msa_target_shard_mode: normalizeMsaTargetShardMode(targetShardMode),
-    msa_target_shards: normalizeMsaTargetShards(targetShards),
-    msa_target_shard_min_size_gb: normalizeMsaTargetShardMinSizeGb(targetShardMinSizeGb),
-});
+}: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => {
+    const normalizedProvider = provider === 'colabfold_api' ? 'colabfold_api' : 'local';
+    const params: StructureMsaSubmitParams = {
+        msa_provider: normalizedProvider,
+        msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
+    };
+    if (normalizedProvider === 'local') {
+        params.msa_target_shard_mode = normalizeMsaTargetShardMode(targetShardMode);
+        params.msa_target_shards = normalizeMsaTargetShards(targetShards);
+        params.msa_target_shard_min_size_gb = normalizeMsaTargetShardMinSizeGb(targetShardMinSizeGb);
+    }
+    return params;
+};
 
 export const BOLTZ_QUALITY_PRESETS = [
     { id: 'quick' as const, label: 'Quick', samplingSteps: 50 },
