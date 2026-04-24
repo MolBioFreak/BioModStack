@@ -48,9 +48,9 @@ workflow BOLTZ_CP_EXPERIMENTAL {
 
         if (useCoordinator) {
             BuildBoltzCPPlanManifest(parentJobId, batchName, inputTarget)
-            SpawnBoltzCPChildren(parentJobId, batchName, BuildBoltzCPPlanManifest.out.manifest)
+            SpawnBoltzCPChildren(parentJobId, batchName, BuildBoltzCPPlanManifest.out.manifest, BuildBoltzCPPlanManifest.out.plan_store)
             WaitForBoltzCPChildren(parentJobId, SpawnBoltzCPChildren.out.result, batchName)
-            FinalizeBoltzCPExperimentalChildren(WaitForBoltzCPChildren.out.result)
+            FinalizeBoltzCPExperimentalChildren(WaitForBoltzCPChildren.out.result, BuildBoltzCPPlanManifest.out.plan_store)
 
             predictionDirChannel = FinalizeBoltzCPExperimentalChildren.out.results_dir
             processedDirChannel = FinalizeBoltzCPExperimentalChildren.out.bundle_manifests

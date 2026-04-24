@@ -99,6 +99,63 @@ def test_launch_request_posts_expected_payload_to_adapter(monkeypatch: pytest.Mo
 
 
 
+def test_launch_request_translates_container_paths_for_host_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setenv("BMS_STATE_DIR", "/mnt/BioModStack")
+    monkeypatch.setenv("BMS_CONTAINER_STATE_PATH", "/var/lib/biomodstack")
+    monkeypatch.setenv("BMS_INPUTS_CONTAINER_PATH", "/var/lib/biomodstack/inputs")
+    monkeypatch.setenv("BMS_DB_CONTAINER_PATH", "/var/lib/biomodstack/biomodstack.db")
+    monkeypatch.setattr(
+        workflow_adapter,
+        "resolve_runtime_paths",
+        lambda: {
+            "data_root": "/var/lib/biomodstack",
+            "inputs_dir": "/var/lib/biomodstack/inputs",
+            "db_path": "/var/lib/biomodstack/biomodstack.db",
+            "container_state_path": "/var/lib/biomodstack",
+            "inputs_container_path": "/var/lib/biomodstack/inputs",
+            "db_container_path": "/var/lib/biomodstack/biomodstack.db",
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout=0):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return _FakeHTTPResponse({"accepted": True, "job_id": "job-123", "launch_mode": "native-host"}, status=202)
+
+    monkeypatch.setattr(workflow_adapter.urllib.request, "urlopen", fake_urlopen)
+
+    workflow_adapter.launch_via_workflow_adapter(
+        job_id="job-123",
+        model_id="boltz_cp_experimental",
+        mode="design",
+        params={
+            "input_path": "/var/lib/biomodstack/inputs/smoke/input.yaml",
+            "db_path": "/var/lib/biomodstack/biomodstack.db",
+            "nested": {
+                "manifest": "/var/lib/biomodstack/bms_results/job-123/manifest.json",
+            },
+        },
+        output_dir="/var/lib/biomodstack/bms_results/job-123",
+    )
+
+    assert captured["payload"] == {
+        "job_id": "job-123",
+        "model_id": "boltz_cp_experimental",
+        "mode": "design",
+        "params": {
+            "input_path": "/mnt/BioModStack/inputs/smoke/input.yaml",
+            "db_path": "/mnt/BioModStack/biomodstack.db",
+            "nested": {
+                "manifest": "/mnt/BioModStack/bms_results/job-123/manifest.json",
+            },
+        },
+        "output_dir": "/mnt/BioModStack/bms_results/job-123",
+    }
+
+
+
 def test_cancel_request_posts_expected_payload_to_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
 
