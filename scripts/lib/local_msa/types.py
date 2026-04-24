@@ -32,6 +32,9 @@ class RuntimeOptions:
     gpu_server_wait_timeout: int
     gpu_server_db_load_mode: int
     gpu_server_startup_wait: float
+    target_shard_mode: str = "auto"
+    target_shards: int = 4
+    target_shard_min_size_gb: float = 1.0
     disallow_cpu_fallback: bool = False
 
 
@@ -97,3 +100,6 @@ class BatchMSARequest:
     gpu_server_wait_timeout: int | None
     gpu_server_db_load_mode: int | None
     gpu_server_startup_wait: float | None
+    target_shard_mode: str | None = None
+    target_shards: int | None = None
+    target_shard_min_size_gb: float | None = None

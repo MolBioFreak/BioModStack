@@ -36,7 +36,7 @@ process GenerateLocalMSA {
     script:
     def dbPath = params.msa_local_db
     def cacheDir = params.msa_cache_dir
-    def threads = params.msa_threads ?: 32
+    def threads = params.msa_threads ?: 48
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def gpuMode = params.msa_gpu_mode ?: "auto"
     def gpuThreshold = params.msa_gpu_threshold ?: 80
@@ -44,8 +44,8 @@ process GenerateLocalMSA {
     def excludedGpus = params.msa_excluded_gpus ? "--excluded-gpus \"${params.msa_excluded_gpus}\"" : ""
     def gpuServerMode = params.msa_gpu_server_mode ?: "persistent"
     def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
-    def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
-    def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
+    def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
     def msaProvider = params.msa_provider ?: "local"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
@@ -171,7 +171,7 @@ process BoltzFromSequence {
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
-    def msaThreads = params.msa_threads ?: 32
+    def msaThreads = params.msa_threads ?: 48
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     """
@@ -461,6 +461,9 @@ process PrepareComplexWithMSA {
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 32
+    def msaTargetShardMode = params.msa_target_shard_mode ?: "auto"
+    def msaTargetShards = params.msa_target_shards ?: 4
+    def msaTargetShardMinSizeGb = params.msa_target_shard_min_size_gb ?: 1.0
     def msaUseGpuEnabled = params.msa_use_gpu != false ? "true" : "false"
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def msaCacheOnly = params.msa_cache_only ? "true" : "false"
@@ -486,8 +489,8 @@ process PrepareComplexWithMSA {
     def msaExcludedGpus = params.msa_excluded_gpus ?: ""
     def msaGpuServerMode = params.msa_gpu_server_mode ?: "persistent"
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
-    def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 0
-    def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 1.0
+    def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
+    def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
     def msaProvider = params.msa_provider ?: "local"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
@@ -523,6 +526,9 @@ binder_chain = None
 msa_db_path = "${msaDbPath}"
 cache_dir = "${msaCacheDir}"
 msa_threads = int("${msaThreads}")
+msa_target_shard_mode = "${msaTargetShardMode}"
+msa_target_shards = int("${msaTargetShards}")
+msa_target_shard_min_size_gb = float("${msaTargetShardMinSizeGb}")
 msa_use_gpu_enabled = "${msaUseGpuEnabled}" == "true"
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
@@ -665,6 +671,9 @@ for comp in complex_def.get("components", []):
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
                         "--threads", str(msa_threads),
+                        "--target-shard-mode", msa_target_shard_mode,
+                        "--target-shards", str(msa_target_shards),
+                        "--target-shard-min-size-gb", str(msa_target_shard_min_size_gb),
                         "--preset", msa_preset,
                         "--gpu-mode", msa_gpu_mode,
                         "--gpu-threshold", str(msa_gpu_threshold),
@@ -834,6 +843,9 @@ for comp in complex_def.get("components", []):
                         "--db_path", msa_db_path,
                         "--cache_dir", cache_dir,
                         "--threads", str(msa_threads),
+                        "--target-shard-mode", msa_target_shard_mode,
+                        "--target-shards", str(msa_target_shards),
+                        "--target-shard-min-size-gb", str(msa_target_shard_min_size_gb),
                         "--preset", msa_preset,
                         "--gpu-mode", msa_gpu_mode,
                         "--gpu-threshold", str(msa_gpu_threshold),

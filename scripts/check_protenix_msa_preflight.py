@@ -19,6 +19,7 @@ from local_msa_runtime import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
     DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    resolve_protenix_local_gpu_server_mode,
 )
 from local_msa.adapters.protenix import choose_backend, load_json, summarize_payload
 from local_msa.runtime import inspect_mmseqs_runtime, parse_gpu_csv
@@ -73,6 +74,8 @@ def main() -> None:
     }
 
     if backend == "local":
+        contract = resolve_protenix_local_gpu_server_mode(args.gpu_server_mode)
+        report["local_msa_runtime_contract"] = contract
         if not str(args.db_path or "").strip() or not str(args.cache_dir or "").strip():
             runtime = {
                 "status": "local_msa_config_missing",
@@ -91,7 +94,7 @@ def main() -> None:
                 gpu_threshold=int(args.gpu_threshold),
                 preferred_gpus=parse_gpu_csv(args.preferred_gpus),
                 excluded_gpus=parse_gpu_csv(args.excluded_gpus),
-                gpu_server_mode=str(args.gpu_server_mode or "persistent"),
+                gpu_server_mode=contract["effective_gpu_server_mode"],
                 gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
                 gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
                 gpu_server_startup_wait=float(args.gpu_server_startup_wait),

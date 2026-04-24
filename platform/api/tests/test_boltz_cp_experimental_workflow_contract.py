@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+MODULE_PATH = REPO_ROOT / "modules" / "boltz_cp_experimental.nf"
+
+
+def test_build_plan_manifest_exports_env_before_embedded_python() -> None:
+    text = MODULE_PATH.read_text(encoding="utf-8")
+    process_marker = "process BuildBoltzCPPlanManifest {"
+    process_start = text.index(process_marker)
+    process_end = text.index("process SpawnBoltzCPChildren {", process_start)
+    process_block = text[process_start:process_end]
+
+    export_line = (
+        "export TASK_ROOT REPO_PATH INPUT_PATH SHARD_PLAN_ID INPUT_FORMAT OUTPUT_FORMAT GPU_IDS "
+        "WRITE_FULL_PAE SEED CONTAINER_PATH CODE_ROOT PARENT_JOB_ID BATCH_NAME BCP_STORE_ROOT"
+    )
+
+    assert export_line in process_block
+    assert process_block.index(export_line) < process_block.index("python3 - <<'PY'")
+    assert 'export PYTHONPATH="\\$REPO_PATH/src\\${PYTHONPATH:+:\\$PYTHONPATH}"' in process_block
+    assert 'BOLTZ_PYTHON="\\$REPO_PATH/.venv/bin/python"' in process_block
+    assert 'init_plan_args=(' in process_block
+    assert '--fallback-root "\\$BCP_STORE_ROOT"' in process_block
+    assert '--configured-ram-root "\\$BCP_CONFIGURED_RAM_ROOT"' in process_block
+    assert 'store_root="\\$("\\${init_plan_args[@]}")"' in process_block
+    assert "'colabfold_api_min_interval': float(os.environ.get('COLABFOLD_API_MIN_INTERVAL', '6') or '6')" in process_block
+    assert "'colabfold_api_poll_interval': float(os.environ.get('COLABFOLD_API_POLL_INTERVAL', '6') or '6')" in process_block
+
+
+def test_child_postprocess_exports_bundle_env_before_embedded_python() -> None:
+    text = MODULE_PATH.read_text(encoding="utf-8")
+    process_marker = "process RunBoltzCPExperimental {"
+    process_start = text.index(process_marker)
+    process_end = text.index("process BuildBoltzCPPlanManifest {", process_start)
+    process_block = text[process_start:process_end]
+
+    child_marker = 'if [ "\\$BCP_ROLE" = "child" ]; then'
+    child_start = process_block.index(child_marker)
+    export_line = 'export TASK_ROOT BCP_STORE_ROOT BCP_BUNDLE_ID'
+    export_index = process_block.index(export_line, child_start)
+    python_index = process_block.index("python3 - <<'PY'", export_index)
+    child_exit_index = process_block.index('if [ \\$worker_rc -ne 0 ]; then', python_index)
+
+    assert child_start < export_index < python_index < child_exit_index
+    assert "store_root = Path(os.environ['BCP_STORE_ROOT'])" in process_block[export_index:child_exit_index]
+    assert "bundle_id = os.environ['BCP_BUNDLE_ID']" in process_block[export_index:child_exit_index]
+    assert "processed_dir = Path(os.environ['TASK_ROOT']) / 'cp_results' / 'processed'" in process_block[export_index:child_exit_index]

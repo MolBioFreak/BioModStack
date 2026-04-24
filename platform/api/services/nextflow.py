@@ -1210,54 +1210,23 @@ async def run_batch_frustrampnn(pdb_paths: list, batch_id: str, parent_session) 
         logger.error(f"[FRUST BATCH] Error running batch FrustraMPNN: {e}", exc_info=True)
 
 
-async def launch_msa_batch_job(
-    job_id: str,
-    params: Dict[str, Any],
-    output_dir: str
-) -> None:
-    """
-    Launch an MSA batch job using batch_msa.py directly.
-    
-    This runs the batch MSA script and then unlocks child inference jobs.
-    """
-    from database import async_session, Job
-    from sqlalchemy import select
-    from schemas import JobStatus
-    
-    logger.info(f"[MSA BATCH] Launching job {job_id}")
-    
-    async with async_session() as session:
-        # Update job to running
-        result = await session.execute(select(Job).where(Job.id == job_id))
-        job = result.scalar_one_or_none()
-        if not job:
-            logger.error(f"[MSA BATCH] Job {job_id} not found")
-            return
-        
-        job.status = JobStatus.RUNNING.value
-        job.queue_status = 'running'
-        job.started_at = datetime.utcnow()
-        await session.commit()
-    
-    # Get sequences JSON and GPU ID
+def _build_msa_batch_command(params: Dict[str, Any], output_dir: str) -> List[str]:
     sequences_json = params.get('sequences_json', '[]')
     if isinstance(sequences_json, (list, dict)):
-        import json as _json
-        sequences_json = _json.dumps(sequences_json)
+        sequences_json = json.dumps(sequences_json)
     elif not isinstance(sequences_json, str):
         sequences_json = '[]'
+
     raw_gpu_id = params.get('gpu_id')
     try:
         gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
     except (TypeError, ValueError):
         gpu_id = None
+
     reference_sequence = params.get('reference_sequence', '')
-    force_refresh = params.get('msa_force_refresh', False)
-    msa_use_gpu_raw = params.get('msa_use_gpu', True)
-    if isinstance(msa_use_gpu_raw, str):
-        msa_use_gpu = msa_use_gpu_raw.strip().lower() not in {"0", "false", "no", "off"}
-    else:
-        msa_use_gpu = bool(msa_use_gpu_raw)
+    force_refresh = _coerce_bool(params.get('msa_force_refresh', False), default=False)
+    cache_only = _coerce_bool(params.get('msa_cache_only', False), default=False)
+    msa_use_gpu = _coerce_bool(params.get('msa_use_gpu', True), default=True)
     msa_max_seqs = params.get('msa_max_seqs')
     msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
     msa_use_expand = params.get('msa_use_expand')
@@ -1277,74 +1246,136 @@ async def launch_msa_batch_job(
     msa_gpu_server_wait_timeout = params.get('msa_gpu_server_wait_timeout')
     msa_gpu_server_db_load_mode = params.get('msa_gpu_server_db_load_mode')
     msa_gpu_server_startup_wait = params.get('msa_gpu_server_startup_wait')
-    
-    # Build batch_msa.py command
+    msa_threads = params.get('msa_threads')
+    msa_target_shard_mode = params.get('msa_target_shard_mode')
+    msa_target_shards = params.get('msa_target_shards')
+    msa_target_shard_min_size_gb = params.get('msa_target_shard_min_size_gb')
+
     from paths import get_colabfold_db, get_msa_cache_dir
-    db_path = str(get_colabfold_db())
-    cache_dir = str(get_msa_cache_dir())
-    script_path = PROJECT_ROOT / "scripts" / "batch_msa.py"
+    db_path = str(params.get('msa_local_db') or get_colabfold_db())
+    cache_dir = str(params.get('msa_cache_dir') or get_msa_cache_dir())
+    script_path = PROJECT_ROOT / 'scripts' / 'batch_msa.py'
     cmd = [
-        "python3", str(script_path),
-        "--sequences", sequences_json,
-        "--output_dir", output_dir,
-        "--db_path", db_path,
-        "--cache_dir", cache_dir,
-        "--preset", msa_preset,
+        'python3', str(script_path),
+        '--sequences', sequences_json,
+        '--output_dir', output_dir,
+        '--db_path', db_path,
+        '--cache_dir', cache_dir,
+        '--preset', msa_preset,
     ]
     if gpu_id is not None:
-        cmd.extend(["--gpu_id", str(gpu_id)])
+        cmd.extend(['--gpu_id', str(gpu_id)])
     if reference_sequence:
-        cmd.extend(["--reference_sequence", reference_sequence])
+        cmd.extend(['--reference_sequence', reference_sequence])
     if force_refresh:
-        cmd.append("--force_refresh")
+        cmd.append('--force_refresh')
+    if cache_only:
+        cmd.append('--cache-only')
     if msa_use_gpu is False:
-        cmd.append("--cpu-only")
+        cmd.append('--cpu-only')
     if msa_max_seqs is not None:
-        cmd.extend(["--max-seqs", str(msa_max_seqs)])
+        cmd.extend(['--max-seqs', str(msa_max_seqs)])
+    if msa_threads is not None:
+        cmd.extend(['--threads', str(max(1, int(msa_threads)))])
     if msa_use_expand is not None:
-        cmd.extend(["--use-expand", "1" if _coerce_bool(msa_use_expand) else "0"])
+        cmd.extend(['--use-expand', '1' if _coerce_bool(msa_use_expand) else '0'])
     if msa_use_env is not None:
-        cmd.extend(["--use-env", "1" if _coerce_bool(msa_use_env) else "0"])
+        cmd.extend(['--use-env', '1' if _coerce_bool(msa_use_env) else '0'])
     if msa_num_iterations is not None:
-        cmd.extend(["--num-iterations", str(msa_num_iterations)])
+        cmd.extend(['--num-iterations', str(msa_num_iterations)])
     if msa_evalue is not None:
-        cmd.extend(["--evalue", str(msa_evalue)])
+        cmd.extend(['--evalue', str(msa_evalue)])
     if msa_min_seq_id is not None:
-        cmd.extend(["--min-seq-id", str(msa_min_seq_id)])
+        cmd.extend(['--min-seq-id', str(msa_min_seq_id)])
     if msa_min_coverage is not None:
-        cmd.extend(["--min-coverage", str(msa_min_coverage)])
+        cmd.extend(['--min-coverage', str(msa_min_coverage)])
     if msa_taxon_list:
-        cmd.extend(["--taxon-list", str(msa_taxon_list)])
+        cmd.extend(['--taxon-list', str(msa_taxon_list)])
     if msa_min_depth_warning is not None:
-        cmd.extend(["--min-depth-warning", str(msa_min_depth_warning)])
+        cmd.extend(['--min-depth-warning', str(msa_min_depth_warning)])
     if msa_min_depth_fail is not None:
-        cmd.extend(["--min-depth-fail", str(msa_min_depth_fail)])
+        cmd.extend(['--min-depth-fail', str(msa_min_depth_fail)])
     if msa_gpu_mode:
-        cmd.extend(["--gpu-mode", str(msa_gpu_mode)])
+        cmd.extend(['--gpu-mode', str(msa_gpu_mode)])
     if msa_gpu_threshold is not None:
-        cmd.extend(["--gpu-threshold", str(msa_gpu_threshold)])
+        cmd.extend(['--gpu-threshold', str(msa_gpu_threshold)])
     if msa_preferred_gpus:
-        if isinstance(msa_preferred_gpus, list):
-            preferred = ",".join(str(v) for v in msa_preferred_gpus if str(v).strip())
-        else:
-            preferred = str(msa_preferred_gpus).strip()
+        preferred = (
+            ','.join(str(v) for v in msa_preferred_gpus if str(v).strip())
+            if isinstance(msa_preferred_gpus, list)
+            else str(msa_preferred_gpus).strip()
+        )
         if preferred:
-            cmd.extend(["--preferred-gpus", preferred])
+            cmd.extend(['--preferred-gpus', preferred])
     if msa_excluded_gpus:
-        if isinstance(msa_excluded_gpus, list):
-            excluded = ",".join(str(v) for v in msa_excluded_gpus if str(v).strip())
-        else:
-            excluded = str(msa_excluded_gpus).strip()
+        excluded = (
+            ','.join(str(v) for v in msa_excluded_gpus if str(v).strip())
+            if isinstance(msa_excluded_gpus, list)
+            else str(msa_excluded_gpus).strip()
+        )
         if excluded:
-            cmd.extend(["--excluded-gpus", excluded])
+            cmd.extend(['--excluded-gpus', excluded])
     if msa_gpu_server_mode:
-        cmd.extend(["--gpu-server-mode", str(msa_gpu_server_mode)])
+        cmd.extend(['--gpu-server-mode', str(msa_gpu_server_mode)])
     if msa_gpu_server_wait_timeout is not None:
-        cmd.extend(["--gpu-server-wait-timeout", str(msa_gpu_server_wait_timeout)])
+        cmd.extend(['--gpu-server-wait-timeout', str(msa_gpu_server_wait_timeout)])
     if msa_gpu_server_db_load_mode is not None:
-        cmd.extend(["--gpu-server-db-load-mode", str(msa_gpu_server_db_load_mode)])
+        cmd.extend(['--gpu-server-db-load-mode', str(msa_gpu_server_db_load_mode)])
     if msa_gpu_server_startup_wait is not None:
-        cmd.extend(["--gpu-server-startup-wait", str(msa_gpu_server_startup_wait)])
+        cmd.extend(['--gpu-server-startup-wait', str(msa_gpu_server_startup_wait)])
+    if msa_target_shard_mode:
+        cmd.extend(['--target-shard-mode', str(msa_target_shard_mode)])
+    if msa_target_shards is not None:
+        cmd.extend(['--target-shards', str(max(1, int(msa_target_shards)))])
+    if msa_target_shard_min_size_gb is not None:
+        cmd.extend(['--target-shard-min-size-gb', str(msa_target_shard_min_size_gb)])
+    return cmd
+
+
+async def launch_msa_batch_job(
+    job_id: str,
+    params: Dict[str, Any],
+    output_dir: str
+) -> None:
+    """
+    Launch an MSA batch job using batch_msa.py directly.
+
+    This runs the batch MSA script and then unlocks child inference jobs.
+    """
+    from database import async_session, Job
+    from sqlalchemy import select
+    from schemas import JobStatus
+
+    logger.info(f"[MSA BATCH] Launching job {job_id}")
+
+    async with async_session() as session:
+        # Update job to running
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        job = result.scalar_one_or_none()
+        if not job:
+            logger.error(f"[MSA BATCH] Job {job_id} not found")
+            return
+
+        job.status = JobStatus.RUNNING.value
+        job.queue_status = 'running'
+        job.started_at = datetime.utcnow()
+        await session.commit()
+
+    # Get activity metadata from params for logging/touch_query_activity.
+    raw_gpu_id = params.get('gpu_id')
+    try:
+        gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
+    except (TypeError, ValueError):
+        gpu_id = None
+    msa_use_gpu_raw = params.get('msa_use_gpu', True)
+    if isinstance(msa_use_gpu_raw, str):
+        msa_use_gpu = msa_use_gpu_raw.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        msa_use_gpu = bool(msa_use_gpu_raw)
+    msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
+
+    # Build batch_msa.py command
+    cmd = _build_msa_batch_command(params=params, output_dir=output_dir)
     
     logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
     
@@ -2845,7 +2876,6 @@ def build_nextflow_command(
             'input_path': 'bcp_input_path',
             'shard_plan_id': 'bcp_shard_plan_id',
             'gpu_ids': 'bcp_gpu_ids',
-            'size_cp': 'bcp_size_cp',
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
@@ -2873,12 +2903,19 @@ def build_nextflow_command(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
+        legacy_size_cp = params.pop('size_cp', None)
         shard_plan_id = coerce_boltz_cp_shard_plan_id(params.get('bcp_shard_plan_id'))
         if shard_plan_id is None:
-            shard_plan_id = infer_boltz_cp_shard_plan_id(params.get('bcp_size_cp'), default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID)
+            shard_plan_id = infer_boltz_cp_shard_plan_id(
+                params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
+                default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+            )
         params['bcp_shard_plan_id'] = shard_plan_id
 
-        requested_size_cp = get_boltz_cp_logical_size_cp(shard_plan_id, params.get('bcp_size_cp'))
+        requested_size_cp = get_boltz_cp_logical_size_cp(
+            shard_plan_id,
+            params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
+        )
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
             requested_size_cp=requested_size_cp,

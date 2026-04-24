@@ -160,7 +160,9 @@ def _run_colabfold_per_sequence(
     gpu_id: Optional[int],
     reference_sequence: Optional[str],
     force_refresh: bool,
+    cache_only: bool,
     cpu_only: bool,
+    threads: Optional[int],
     preset: str,
     max_seqs: Optional[int],
     use_expand: Optional[int],
@@ -180,6 +182,9 @@ def _run_colabfold_per_sequence(
     gpu_server_wait_timeout: Optional[int],
     gpu_server_db_load_mode: Optional[int],
     gpu_server_startup_wait: Optional[float],
+    target_shard_mode: Optional[str],
+    target_shards: Optional[int],
+    target_shard_min_size_gb: Optional[float],
 ) -> List[Dict[str, Any]]:
     """
     Fallback path that preserves full run_local_msa.py behavior for quality-critical presets.
@@ -216,8 +221,12 @@ def _run_colabfold_per_sequence(
             cmd.extend(["--reference-sequence", reference_sequence])
         if force_refresh:
             cmd.append("--force_refresh")
+        if cache_only:
+            cmd.append("--cache-only")
         if cpu_only:
             cmd.append("--cpu-only")
+        if threads is not None:
+            cmd.extend(["--threads", str(max(1, int(threads)))])
         if use_expand is not None:
             cmd.extend(["--use-expand", str(int(use_expand))])
         if use_env is not None:
@@ -252,6 +261,12 @@ def _run_colabfold_per_sequence(
             cmd.extend(["--gpu-server-db-load-mode", str(gpu_server_db_load_mode)])
         if gpu_server_startup_wait is not None:
             cmd.extend(["--gpu-server-startup-wait", str(gpu_server_startup_wait)])
+        if target_shard_mode:
+            cmd.extend(["--target-shard-mode", target_shard_mode])
+        if target_shards is not None:
+            cmd.extend(["--target-shards", str(max(1, int(target_shards)))])
+        if target_shard_min_size_gb is not None:
+            cmd.extend(["--target-shard-min-size-gb", str(target_shard_min_size_gb)])
 
         print(f"  COLABFOLD MODE: {name} ({preset})")
         proc = subprocess.run(cmd, text=True, capture_output=True)
@@ -302,6 +317,7 @@ def run_batch_msa(
     force_refresh: bool = False,
     cache_only: bool = False,
     cpu_only: bool = False,
+    threads: Optional[int] = None,
     max_seqs: Optional[int] = None,
     preset: str = "fast",
     use_expand: Optional[int] = None,
@@ -321,6 +337,9 @@ def run_batch_msa(
     gpu_server_wait_timeout: Optional[int] = None,
     gpu_server_db_load_mode: Optional[int] = None,
     gpu_server_startup_wait: Optional[float] = None,
+    target_shard_mode: Optional[str] = None,
+    target_shards: Optional[int] = None,
+    target_shard_min_size_gb: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Generate MSAs for multiple sequences.
@@ -397,7 +416,7 @@ def run_batch_msa(
                 })
                 continue
         
-        if cache_only:
+        if cache_only and not use_colabfold_mode:
             print(f"  CACHE MISS (cache-only): {name}")
             results.append({
                 "name": name,
@@ -426,7 +445,7 @@ def run_batch_msa(
             json.dump(manifest, f, indent=2)
         return manifest
 
-    if cache_only:
+    if cache_only and not use_colabfold_mode:
         manifest = {
             "total_sequences": len(sequences),
             "successful": sum(1 for r in results if r["success"]),
@@ -452,7 +471,9 @@ def run_batch_msa(
                     gpu_id=effective_gpu_id,
                     reference_sequence=reference_sequence,
                     force_refresh=force_refresh,
+                    cache_only=cache_only,
                     cpu_only=cpu_only,
+                    threads=threads,
                     preset=preset,
                     max_seqs=max_seqs,
                     use_expand=use_expand,
@@ -472,6 +493,9 @@ def run_batch_msa(
                     gpu_server_wait_timeout=gpu_server_wait_timeout,
                     gpu_server_db_load_mode=gpu_server_db_load_mode,
                     gpu_server_startup_wait=gpu_server_startup_wait,
+                    target_shard_mode=target_shard_mode,
+                    target_shards=target_shards,
+                    target_shard_min_size_gb=target_shard_min_size_gb,
                 )
             )
         except Exception as e:
@@ -729,6 +753,8 @@ if __name__ == "__main__":
                        help="GPU ID to use for search")
     parser.add_argument("--cpu-only", action="store_true",
                        help="Force CPU mode (disable GPU MMseqs2)")
+    parser.add_argument("--threads", type=int, default=None,
+                       help="Threads passed through to per-sequence run_local_msa.py mode")
     parser.add_argument("--max-seqs", type=int, default=None,
                        help="Maximum candidate sequences retained in search")
     parser.add_argument("--preset", type=str, default="fast",
@@ -772,6 +798,13 @@ if __name__ == "__main__":
                        help="MMseqs db-load-mode for gpuserver-backed searches")
     parser.add_argument("--gpu-server-startup-wait", type=float, default=None,
                        help="Seconds to wait after starting gpuserver")
+    parser.add_argument("--target-shard-mode", type=str, default=None,
+                       choices=["auto", "required", "off"],
+                       help="EnvDB target DB sharding policy passed to high-quality per-sequence local MSA runs")
+    parser.add_argument("--target-shards", type=int, default=None,
+                       help="Number of EnvDB target shards passed to high-quality per-sequence local MSA runs")
+    parser.add_argument("--target-shard-min-size-gb", type=float, default=None,
+                       help="Minimum EnvDB size in GiB before auto target sharding is enabled")
     
     args = parser.parse_args()
     
@@ -793,6 +826,7 @@ if __name__ == "__main__":
         force_refresh=args.force_refresh,
         cache_only=args.cache_only,
         cpu_only=args.cpu_only,
+        threads=args.threads,
         max_seqs=args.max_seqs,
         preset=args.preset,
         use_expand=args.use_expand,
@@ -812,6 +846,9 @@ if __name__ == "__main__":
         gpu_server_wait_timeout=args.gpu_server_wait_timeout,
         gpu_server_db_load_mode=args.gpu_server_db_load_mode,
         gpu_server_startup_wait=args.gpu_server_startup_wait,
+        target_shard_mode=args.target_shard_mode,
+        target_shards=args.target_shards,
+        target_shard_min_size_gb=args.target_shard_min_size_gb,
     )
     
     # Exit with error if any failed

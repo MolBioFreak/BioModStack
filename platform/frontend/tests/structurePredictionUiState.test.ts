@@ -5,6 +5,7 @@ import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     buildBoltzCpSubmitParams,
+    buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
@@ -142,7 +143,7 @@ test('boltz cp shard plan helpers expose stable logical topologies and non-colla
 test('boltz cp runtime bridge summary makes the logical plan primary and bridge sizing secondary', () => {
     assert.equal(
         getBoltzCpRuntimeBridgeSummary({ shardPlanId: '4x4', gpuIds: '0,1,2,3', sizeCp: 4 }),
-        'The selected logical plan stays 4x4 (16 logical shards); GPU count only affects the current runtime bridge. 0,1,2,3 → launch size_cp 4.',
+        'The selected logical plan stays 4x4 (16 logical shards); GPU count only affects the current runtime bridge. 0,1,2,3 → current physical launch = 4 CP ranks.',
     );
     assert.match(
         getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
@@ -150,7 +151,7 @@ test('boltz cp runtime bridge summary makes the logical plan primary and bridge 
     );
     assert.match(
         getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
-        /auto-selected GPU pool → launch size_cp 1/i,
+        /auto-selected GPU pool → current physical launch = 1 CP rank/i,
     );
 });
 
@@ -162,7 +163,6 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             writeFullPae: true,
             seed: '17',
             gpuIds: '0,1,2,3',
-            sizeCp: 4,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
@@ -172,7 +172,6 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             bcp_output_format: 'pdb',
             bcp_write_full_pae: true,
             bcp_gpu_ids: '0,1,2,3',
-            bcp_size_cp: 4,
             bcp_seed: 17,
         },
     );
@@ -184,7 +183,6 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             writeFullPae: false,
             seed: '  ',
             gpuIds: '',
-            sizeCp: 1,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
@@ -193,7 +191,42 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             bcp_shard_plan_id: '1x1',
             bcp_output_format: 'mmcif',
             bcp_write_full_pae: false,
-            bcp_size_cp: 1,
+        },
+    );
+});
+
+test('structure MSA submit params carry adaptive target-DB sharding controls for local high-quality runs', () => {
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'local',
+            preset: 'balanced',
+            targetShardMode: 'auto',
+            targetShards: 4,
+            targetShardMinSizeGb: 1,
+        }),
+        {
+            msa_provider: 'local',
+            msa_preset: 'balanced',
+            msa_target_shard_mode: 'auto',
+            msa_target_shards: 4,
+            msa_target_shard_min_size_gb: 1,
+        },
+    );
+
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'local',
+            preset: 'maximum',
+            targetShardMode: 'off',
+            targetShards: 2,
+            targetShardMinSizeGb: 0,
+        }),
+        {
+            msa_provider: 'local',
+            msa_preset: 'maximum',
+            msa_target_shard_mode: 'off',
+            msa_target_shards: 2,
+            msa_target_shard_min_size_gb: 0,
         },
     );
 });

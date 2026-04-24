@@ -2088,6 +2088,24 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
         return [], fallback_error or message
 
 
+def _coerce_gpu_proxy_stats_payload(payload: Any) -> tuple[List[GPUStatusEnhanced], Optional[str]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Workflow adapter returned invalid GPU stats payload: {payload!r}")
+
+    raw_gpus = payload.get("gpus", [])
+    if not isinstance(raw_gpus, list):
+        raise RuntimeError(f"Workflow adapter returned invalid GPU list: {raw_gpus!r}")
+
+    gpus: List[GPUStatusEnhanced] = []
+    for raw_gpu in raw_gpus:
+        gpus.append(GPUStatusEnhanced.model_validate(raw_gpu))
+
+    raw_error = payload.get("gpu_error")
+    error = None if raw_error in (None, "") else str(raw_error)
+    return gpus, error
+
+
+
 def get_gpu_stats_with_error(force_refresh: bool = False) -> tuple[List[GPUStatusEnhanced], Optional[str]]:
     global _gpu_status_cache, _gpu_status_error, _gpu_status_cache_time
 
@@ -2095,7 +2113,18 @@ def get_gpu_stats_with_error(force_refresh: bool = False) -> tuple[List[GPUStatu
     if not force_refresh and (now - _gpu_status_cache_time) < _GPU_STATUS_CACHE_TTL_SECONDS:
         return list(_gpu_status_cache), _gpu_status_error
 
-    gpus, error = _collect_gpu_stats()
+    error: Optional[str] = None
+    if _gpu_proxy_enabled():
+        try:
+            gpus, error = _coerce_gpu_proxy_stats_payload(request_via_workflow_adapter("GET", "/api/gpu/gpus"))
+        except Exception as exc:
+            proxy_error = str(exc).strip() or exc.__class__.__name__
+            logger.warning("GPU proxy stats error: %s", proxy_error)
+            gpus, local_error = _collect_gpu_stats()
+            error = proxy_error if not local_error else f"{proxy_error}; local fallback failed: {local_error}"
+    else:
+        gpus, error = _collect_gpu_stats()
+
     if error and error != _gpu_status_error:
         logger.warning("GPU stats error: %s", error)
     _gpu_status_cache = list(gpus)
