@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     buildBoltzCpSubmitParams,
+    buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
+    getBoltzCpLogicalSizeCp,
+    getBoltzCpRuntimeBridgeSummary,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
+    inferBoltzCpShardPlanId,
     inferTargetStructureFormat,
     resolveBoltzSamplingStepsFromSlider,
     resolveStructureLaunchConfig,
@@ -103,12 +110,12 @@ test('structure submit target preserves native predictor routing but forces bolt
 
 test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: undefined }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('2x2') }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: 4 }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4') }),
         { gpuIds: '2,3', sizeCp: 1 },
     );
 
@@ -118,49 +125,139 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: 9, fallbackGpuIds: '0,1,2,3' }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4'), fallbackGpuIds: '0,1,2,3' }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
+    );
+});
+
+test('boltz cp shard plan helpers expose stable logical topologies and non-collapsing plan descriptions', () => {
+    assert.equal(BOLTZ_CP_DEFAULT_SHARD_PLAN_ID, '2x2');
+    assert.equal(getBoltzCpLogicalSizeCp('1x1'), 1);
+    assert.equal(getBoltzCpLogicalSizeCp('2x2'), 4);
+    assert.equal(getBoltzCpLogicalSizeCp('4x4'), 16);
+    assert.equal(inferBoltzCpShardPlanId(1), '1x1');
+    assert.equal(inferBoltzCpShardPlanId(4), '2x2');
+    assert.equal(inferBoltzCpShardPlanId(16), '4x4');
+    assert.match(BOLTZ_CP_SHARD_PLAN_DEFINITIONS.find((plan) => plan.id === '4x4')?.description || '', /does not change with GPU count/i);
+});
+
+test('boltz cp runtime bridge summary makes the logical plan primary and bridge sizing secondary', () => {
+    assert.equal(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '4x4', gpuIds: '0,1,2,3', sizeCp: 4 }),
+        'The selected logical plan stays 4x4 (16 logical shards); GPU count only affects the current runtime bridge. 0,1,2,3 → current physical launch = 4 CP ranks.',
+    );
+    assert.match(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
+        /selected logical plan stays 2x2/i,
+    );
+    assert.match(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
+        /auto-selected GPU pool → current physical launch = 1 CP rank/i,
     );
 });
 
 test('boltz cp submit params expose only the workflow-specific knobs on top of shared structure inputs', () => {
     assert.deepEqual(
         buildBoltzCpSubmitParams({
+            shardPlanId: '4x4',
             outputFormat: 'pdb',
             writeFullPae: true,
             seed: '17',
             gpuIds: '0,1,2,3',
-            sizeCp: 4,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
+            bcp_shard_plan_id: '4x4',
             bcp_output_format: 'pdb',
             bcp_write_full_pae: true,
             bcp_gpu_ids: '0,1,2,3',
-            bcp_size_cp: 4,
             bcp_seed: 17,
         },
     );
 
     assert.deepEqual(
         buildBoltzCpSubmitParams({
+            shardPlanId: '1x1',
             outputFormat: 'mmcif',
             writeFullPae: false,
             seed: '  ',
             gpuIds: '',
-            sizeCp: 1,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
+            bcp_shard_plan_id: '1x1',
             bcp_output_format: 'mmcif',
             bcp_write_full_pae: false,
-            bcp_size_cp: 1,
         },
     );
+});
+
+test('structure MSA submit params carry adaptive target-DB sharding controls for local high-quality runs', () => {
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'local',
+            preset: 'balanced',
+            targetShardMode: 'auto',
+            targetShards: 4,
+            targetShardMinSizeGb: 1,
+        }),
+        {
+            msa_provider: 'local',
+            msa_preset: 'balanced',
+            msa_target_shard_mode: 'auto',
+            msa_target_shards: 4,
+            msa_target_shard_min_size_gb: 1,
+        },
+    );
+
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'local',
+            preset: 'maximum',
+            targetShardMode: 'off',
+            targetShards: 2,
+            targetShardMinSizeGb: 0,
+        }),
+        {
+            msa_provider: 'local',
+            msa_preset: 'maximum',
+            msa_target_shard_mode: 'off',
+            msa_target_shards: 2,
+            msa_target_shard_min_size_gb: 0,
+        },
+    );
+});
+
+test('structure MSA submit params leave ColabFold API provider free of local target-sharding knobs', () => {
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'colabfold_api',
+            preset: 'fast',
+            targetShardMode: 'required',
+            targetShards: 8,
+            targetShardMinSizeGb: 0,
+        }),
+        {
+            msa_provider: 'colabfold_api',
+            msa_preset: 'fast',
+        },
+    );
+});
+
+test('structure prediction template wires adaptive target sharding through state, template save, submit, and UI surfaces', () => {
+    const source = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+
+    assert.match(source, /const \[msaTargetShardMode, setMsaTargetShardMode\]/);
+    assert.match(source, /const \[msaTargetShards, setMsaTargetShards\]/);
+    assert.match(source, /const \[msaTargetShardMinSizeGb, setMsaTargetShardMinSizeGb\]/);
+    assert.equal((source.match(/buildStructureMsaSubmitParams\(/g) || []).length, 2);
+    assert.match(source, /EnvDB Target Sharding/);
+    assert.match(source, /Auto for balanced\/maximum/);
+    assert.match(source, /Off \/ unsharded fallback/);
 });
 
 test('boltz quality slider treats 200-step runs as the max preset and preserves legacy 1000-step runs as custom', () => {

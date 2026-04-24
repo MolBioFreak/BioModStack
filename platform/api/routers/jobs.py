@@ -61,6 +61,14 @@ from services.stage_review import (
     resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
+from services.boltz_cp_shard_plans import (
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    coerce_boltz_cp_shard_plan_id,
+    get_boltz_cp_logical_size_cp,
+    get_boltz_cp_shard_plan_catalog,
+    infer_boltz_cp_shard_plan_id,
+    largest_square_divisor as boltz_cp_largest_square_divisor,
+)
 
 router = APIRouter()
 
@@ -1092,19 +1100,12 @@ BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_inpu
 
 
 def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
-    if value_count < 1:
-        return 1
+    return boltz_cp_largest_square_divisor(value_count, requested_size_cp)
 
-    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
-    best = 1
-    for candidate in range(1, value_count + 1):
-        if value_count % candidate != 0:
-            continue
-        root = int(candidate ** 0.5)
-        if root * root != candidate or candidate > requested:
-            continue
-        best = candidate
-    return best
+
+@router.get("/api/jobs/boltz-cp/shard-plans")
+def list_boltz_cp_shard_plans() -> Dict[str, Any]:
+    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=4)
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1185,6 +1186,17 @@ def _normalize_boltz_cp_params_for_validation(
     if input_path:
         normalized["input_path"] = input_path
 
+    shard_plan_id = coerce_boltz_cp_shard_plan_id(
+        normalized.get("shard_plan_id") or normalized.get("bcp_shard_plan_id")
+    )
+    if shard_plan_id is None:
+        shard_plan_id = infer_boltz_cp_shard_plan_id(
+            normalized.get("size_cp") or normalized.get("bcp_size_cp"),
+            default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+        )
+    if shard_plan_id:
+        normalized["shard_plan_id"] = shard_plan_id
+
     gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
         normalized.get("bcp_gpu_ids")
     )
@@ -1193,17 +1205,8 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
-    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
-        normalized.get("bcp_size_cp")
-    )
-    if gpu_ids:
-        gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
-        if gpu_count > 0:
-            size_cp = _largest_square_divisor(gpu_count, size_cp)
-    if size_cp is not None:
-        normalized["size_cp"] = size_cp
-
     alias_mappings = {
+        "shard_plan_id": "bcp_shard_plan_id",
         "input_format": "bcp_input_format",
         "output_format": "bcp_output_format",
         "write_full_pae": "bcp_write_full_pae",
@@ -4522,6 +4525,46 @@ async def import_proteinbase_bundle_job(
     )
 
 
+def _build_msa_batch_child_params(
+    source_params: Dict[str, Any],
+    sequences_for_msa: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        'sequences': sequences_for_msa,
+        'sequences_json': json.dumps(sequences_for_msa),
+        'reference_sequence': source_params.get('msa_reference_sequence'),
+        'msa_force_refresh': source_params.get('msa_force_refresh', False),
+        'msa_cache_only': source_params.get('msa_cache_only', False),
+        'msa_use_gpu': source_params.get('msa_use_gpu', True),
+        'msa_max_seqs': source_params.get('msa_max_seqs'),
+        'msa_preset': source_params.get('msa_preset', 'fast'),
+        'msa_use_expand': source_params.get('msa_use_expand'),
+        'msa_use_env': source_params.get('msa_use_env'),
+        'msa_num_iterations': source_params.get('msa_num_iterations'),
+        'msa_evalue': source_params.get('msa_evalue'),
+        'msa_min_seq_id': source_params.get('msa_min_seq_id'),
+        'msa_min_coverage': source_params.get('msa_min_coverage'),
+        'msa_taxon_list': source_params.get('msa_taxon_list'),
+        'msa_min_depth_warning': source_params.get('msa_min_depth_warning'),
+        'msa_min_depth_fail': source_params.get('msa_min_depth_fail'),
+        'msa_gpu_mode': source_params.get('msa_gpu_mode'),
+        'msa_gpu_threshold': source_params.get('msa_gpu_threshold'),
+        'msa_preferred_gpus': source_params.get('msa_preferred_gpus'),
+        'msa_excluded_gpus': source_params.get('msa_excluded_gpus'),
+        'msa_gpu_server_mode': source_params.get('msa_gpu_server_mode'),
+        'msa_gpu_server_wait_timeout': source_params.get('msa_gpu_server_wait_timeout'),
+        'msa_gpu_server_db_load_mode': source_params.get('msa_gpu_server_db_load_mode'),
+        'msa_gpu_server_startup_wait': source_params.get('msa_gpu_server_startup_wait'),
+        'msa_local_db': source_params.get('msa_local_db'),
+        'msa_cache_dir': source_params.get('msa_cache_dir'),
+        'msa_threads': source_params.get('msa_threads'),
+        'msa_target_shard_mode': source_params.get('msa_target_shard_mode'),
+        'msa_target_shards': source_params.get('msa_target_shards'),
+        'msa_target_shard_min_size_gb': source_params.get('msa_target_shard_min_size_gb'),
+        'run_frustrampnn_batch': source_params.get('run_frustrampnn', False),
+    }
+
+
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(
     job_data: JobCreate,
@@ -4819,7 +4862,6 @@ async def create_job(
         pass
     
     if needs_msa and sequences_for_msa:
-        import json as json_lib
         msa_job_id = str(uuid.uuid4())
         msa_output_dir = str(Path(base_output_dir) / "msa_batch")
         os.makedirs(msa_output_dir, exist_ok=True)
@@ -4829,35 +4871,10 @@ async def create_job(
             name=f"{job_data.name}_msa",
             model_id='msa_batch',
             mode='msa_generation',
-            params={
-                'sequences': sequences_for_msa,
-                'sequences_json': json_lib.dumps(sequences_for_msa),
-                'reference_sequence': job_data.params.get('msa_reference_sequence'),
-                'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
-                'msa_cache_only': job_data.params.get('msa_cache_only', False),
-                'msa_use_gpu': job_data.params.get('msa_use_gpu', True),
-                'msa_max_seqs': job_data.params.get('msa_max_seqs'),
-                'msa_preset': job_data.params.get('msa_preset', 'fast'),
-                'msa_use_expand': job_data.params.get('msa_use_expand'),
-                'msa_use_env': job_data.params.get('msa_use_env'),
-                'msa_num_iterations': job_data.params.get('msa_num_iterations'),
-                'msa_evalue': job_data.params.get('msa_evalue'),
-                'msa_min_seq_id': job_data.params.get('msa_min_seq_id'),
-                'msa_min_coverage': job_data.params.get('msa_min_coverage'),
-                'msa_taxon_list': job_data.params.get('msa_taxon_list'),
-                'msa_min_depth_warning': job_data.params.get('msa_min_depth_warning'),
-                'msa_min_depth_fail': job_data.params.get('msa_min_depth_fail'),
-                'msa_gpu_mode': job_data.params.get('msa_gpu_mode'),
-                'msa_gpu_threshold': job_data.params.get('msa_gpu_threshold'),
-                'msa_preferred_gpus': job_data.params.get('msa_preferred_gpus'),
-                'msa_excluded_gpus': job_data.params.get('msa_excluded_gpus'),
-                'msa_gpu_server_mode': job_data.params.get('msa_gpu_server_mode'),
-                'msa_gpu_server_wait_timeout': job_data.params.get('msa_gpu_server_wait_timeout'),
-                'msa_gpu_server_db_load_mode': job_data.params.get('msa_gpu_server_db_load_mode'),
-                'msa_gpu_server_startup_wait': job_data.params.get('msa_gpu_server_startup_wait'),
-                # BATCH-STAGE-GATE: Store FrustraMPNN flag for post-batch execution
-                'run_frustrampnn_batch': job_data.params.get('run_frustrampnn', False),
-            },
+            params=_build_msa_batch_child_params(
+                source_params=job_data.params,
+                sequences_for_msa=sequences_for_msa,
+            ),
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
             batch_id=batch_id,

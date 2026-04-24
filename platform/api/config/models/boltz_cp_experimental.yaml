@@ -28,8 +28,8 @@ modes:
     description: Run Fold-CP multi-GPU structure prediction from a prepared Boltz input path
     params:
       - input_path
+      - shard_plan_id
       - gpu_ids
-      - size_cp
       - input_format
       - output_format
       - write_full_pae
@@ -47,16 +47,14 @@ params:
   - name: gpu_ids
     type: string
     description: Comma-separated host GPU IDs to expose to the CP run
-    required: true
+    required: false
     default: "0,1,2,3"
 
-  - name: size_cp
-    type: integer
-    description: Total number of context-parallel ranks; must be a perfect square and divide the selected GPU count
-    required: true
-    default: 4
-    minimum: 1
-    maximum: 16
+  - name: shard_plan_id
+    type: string
+    description: Logical Fold-CP shard geometry identifier (1x1, 2x2, or 4x4); physical launch width is derived from this plan and the available GPU pool
+    required: false
+    default: 2x2
 
   - name: input_format
     type: string

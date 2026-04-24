@@ -33,6 +33,7 @@ preset_params:
   template_mode_id: design
   structure_launch_variant: boltz_cp_experimental
   bcp_repo_path: /home/dalab/tmp/boltz-cp
+  bcp_shard_plan_id: 2x2
   bcp_input_format: config_files
   bcp_output_format: mmcif
   bcp_write_full_pae: false
