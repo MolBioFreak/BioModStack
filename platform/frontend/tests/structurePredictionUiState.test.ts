@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -229,6 +230,34 @@ test('structure MSA submit params carry adaptive target-DB sharding controls for
             msa_target_shard_min_size_gb: 0,
         },
     );
+});
+
+test('structure MSA submit params leave ColabFold API provider free of local target-sharding knobs', () => {
+    assert.deepEqual(
+        buildStructureMsaSubmitParams({
+            provider: 'colabfold_api',
+            preset: 'fast',
+            targetShardMode: 'required',
+            targetShards: 8,
+            targetShardMinSizeGb: 0,
+        }),
+        {
+            msa_provider: 'colabfold_api',
+            msa_preset: 'fast',
+        },
+    );
+});
+
+test('structure prediction template wires adaptive target sharding through state, template save, submit, and UI surfaces', () => {
+    const source = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+
+    assert.match(source, /const \[msaTargetShardMode, setMsaTargetShardMode\]/);
+    assert.match(source, /const \[msaTargetShards, setMsaTargetShards\]/);
+    assert.match(source, /const \[msaTargetShardMinSizeGb, setMsaTargetShardMinSizeGb\]/);
+    assert.equal((source.match(/buildStructureMsaSubmitParams\(/g) || []).length, 2);
+    assert.match(source, /EnvDB Target Sharding/);
+    assert.match(source, /Auto for balanced\/maximum/);
+    assert.match(source, /Off \/ unsharded fallback/);
 });
 
 test('boltz quality slider treats 200-step runs as the max preset and preserves legacy 1000-step runs as custom', () => {
