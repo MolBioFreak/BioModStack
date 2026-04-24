@@ -42,9 +42,12 @@ from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     API_SERVICE,
+    DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     FRONTEND_SERVICE,
     build_launch_ui_command,
+    operator_frontend_url,
+    operator_runtime_mode,
     service_is_active,
 )
 
@@ -52,7 +55,6 @@ PROJECT_ROOT = get_code_root()
 API_PORT = 8000
 FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
-FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/bms/"
 
 # Paths
 DB_PATH = get_db_path()
@@ -117,18 +119,30 @@ def check_api_status() -> bool:
             return False
 
 def check_frontend_status() -> bool:
-    """Check if Frontend dev server is running."""
+    """Check if the frontend is responding on the active runtime hosted-web URL."""
+    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT)
     try:
-        return service_is_active(FRONTEND_SERVICE)
+        import urllib.request
+
+        req = urllib.request.Request(frontend_url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
     except Exception:
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
-                capture_output=True, timeout=2
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+        if runtime_mode == DEV_RUNTIME_MODE:
+            try:
+                return service_is_active(FRONTEND_SERVICE)
+            except Exception:
+                pass
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
+                    capture_output=True, timeout=2
+                )
+                return result.returncode == 0
+            except Exception:
+                return False
+        return False
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
 
@@ -333,27 +347,31 @@ def show_db_info():
 def restart_all_services():
     """Restart all BioModStack services."""
     show_notification("Restarting", "Restarting all services...")
-    subprocess.Popen([str(START_SCRIPT), "restart"])
+    runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+    subprocess.Popen([str(START_SCRIPT), "restart", "--runtime", runtime_mode])
 
 def restart_api_only():
     """Restart only the API service."""
     show_notification("Restarting API", "Restarting API service...")
-    subprocess.Popen([str(RESTART_API_SCRIPT)])
+    runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+    subprocess.Popen([str(RESTART_API_SCRIPT), "--runtime", runtime_mode])
 
 def stop_all_services():
     """Stop all BioModStack services."""
     show_notification("Stopping", "Stopping all services...")
-    subprocess.Popen([str(STOP_SCRIPT)])
+    runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+    subprocess.Popen([str(STOP_SCRIPT), "--runtime", runtime_mode])
 
 def open_ui():
     """Open BioModStack UI in the Electron shell."""
     show_notification("Opening UI", "Launching the BioModStack shell...")
-    subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT))
+    runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
+    subprocess.Popen(build_launch_ui_command(project_root=PROJECT_ROOT, runtime_mode=runtime_mode))
 
 
 def open_browser_ui():
     """Open BioModStack UI in the hosted browser surface."""
-    webbrowser.open(FRONTEND_URL)
+    webbrowser.open(operator_frontend_url(project_root=PROJECT_ROOT))
 
 
 def open_results_folder():

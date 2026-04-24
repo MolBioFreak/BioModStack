@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from paths import resolve_runtime_data_path
+
 
 STANDARD_RESIDUES = {
     "ALA", "ARG", "ASN", "ASP", "CYS",
@@ -45,7 +47,10 @@ class AlignedErrorArtifact:
 def _normalize_path(path_value: str | Path | None) -> Path | None:
     if not path_value:
         return None
-    return Path(path_value).expanduser().resolve()
+    candidate = Path(path_value).expanduser()
+    if candidate.is_absolute():
+        return resolve_runtime_data_path(candidate)
+    return candidate.resolve()
 
 
 def _parse_pdb_atom_line(line: str) -> dict[str, Any] | None:

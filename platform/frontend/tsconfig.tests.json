@@ -13,6 +13,7 @@
   "include": [
     "src/components/designOutputSource.ts",
     "src/components/structureViewerLayout.ts",
+    "src/components/molstarTouchInteraction.ts",
     "src/components/MolBioToolkit/utils/alignmentLabels.ts",
     "src/components/MolBioToolkit/utils/seqVizTouch.ts",
     "src/components/MolBioToolkit/utils/viewerLayout.ts",

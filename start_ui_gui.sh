@@ -1,21 +1,60 @@
 #!/bin/bash
-# BioModStack browser launcher - starts services and opens the web UI.
+# BioModStack browser launcher - restarts services and opens the hosted web UI.
 # For the Electron shell, use ./start_ui_electron.sh instead.
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
-API_LOG="/tmp/biomodstack_api.log"
-FRONTEND_LOG="/tmp/biomodstack_frontend.log"
+RUNTIME_MODE="${BMS_RUNTIME_MODE:-container}"
+FORWARDED_ARGS=()
 
-# Always restart to ensure fresh state (as requested by user)
-notify-send "BioModStack" "♻️  Restarting ALL services (API + UI)..." -i applications-science
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --runtime)
+            if [ "$#" -lt 2 ]; then
+                echo "start_ui_gui.sh: --runtime requires a value" >&2
+                exit 2
+            fi
+            RUNTIME_MODE="$2"
+            FORWARDED_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --runtime=*)
+            RUNTIME_MODE="${1#*=}"
+            FORWARDED_ARGS+=("$1")
+            shift
+            ;;
+        *)
+            FORWARDED_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
-# Run restart logic
-"$PROJECT_DIR/start_ui.sh" restart
+notify() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "BioModStack" "$1" -i applications-science || true
+    fi
+}
 
-# Wait for services to stabilize
+browser_url="http://localhost:5173/bms/"
+case "${RUNTIME_MODE,,}" in
+    dev)
+        browser_url="http://localhost:5173/"
+        ;;
+    container)
+        ;;
+    *)
+        ;;
+esac
+
+notify "♻️  Restarting ALL services (API + UI)..."
+"$PROJECT_DIR/start_ui.sh" restart "${FORWARDED_ARGS[@]}"
+
 sleep 5
 
-# Show notification and open browser
-notify-send "BioModStack" "✅ Services restarted! Opening UI..." -i applications-science
-xdg-open http://localhost:5173/bms/
+notify "✅ Services restarted! Opening UI..."
+if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$browser_url" || true
+fi

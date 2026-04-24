@@ -64,16 +64,23 @@ export function clampMolBioPanelWidth(width: number, bounds: MolBioPanelWidthBou
 }
 
 export function getMolBioPanelBounds(side: 'left' | 'right', viewportWidth: number): MolBioPanelWidthBounds {
-    const safeViewportWidth = Number.isFinite(viewportWidth) ? Math.max(960, Math.round(viewportWidth)) : 1440;
+    const safeViewportWidth = Number.isFinite(viewportWidth) ? Math.max(320, Math.round(viewportWidth)) : 1440;
+    const isPhoneViewport = safeViewportWidth < 640;
     if (side === 'left') {
+        const min = isPhoneViewport ? 176 : 224;
         return {
-            min: 224,
-            max: Math.min(480, Math.max(320, safeViewportWidth - 480)),
+            min,
+            max: isPhoneViewport
+                ? Math.min(320, Math.max(min + 32, safeViewportWidth - 96))
+                : Math.min(480, Math.max(320, safeViewportWidth - 480)),
         };
     }
+    const min = isPhoneViewport ? 208 : 256;
     return {
-        min: 256,
-        max: Math.min(640, Math.max(384, safeViewportWidth - 320)),
+        min,
+        max: isPhoneViewport
+            ? Math.min(360, Math.max(min + 32, safeViewportWidth - 96))
+            : Math.min(640, Math.max(384, safeViewportWidth - 320)),
     };
 }
 
@@ -86,7 +93,7 @@ export function resolveMolBioViewerLayout({
     isLibraryPanelCollapsed,
     isToolPanelCollapsed,
 }: ResolveMolBioViewerLayoutOptions): ResolvedMolBioViewerLayout {
-    const safeViewportWidth = Number.isFinite(viewportWidth) ? Math.max(960, Math.round(viewportWidth)) : 1440;
+    const safeViewportWidth = Number.isFinite(viewportWidth) ? Math.max(320, Math.round(viewportWidth)) : 1440;
     const leftPanelBounds = getMolBioPanelBounds('left', safeViewportWidth);
     const rightPanelBounds = getMolBioPanelBounds('right', safeViewportWidth);
     const defaultRightPanelWidth = getDefaultMolBioToolPanelWidth(activePanel);
