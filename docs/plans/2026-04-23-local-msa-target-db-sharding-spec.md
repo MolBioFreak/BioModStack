@@ -117,11 +117,10 @@ A toy proof was already created at `/mnt/BioModStack/tmp/hermes-mmseqs-shard-fea
 
 1. **Do not increase the default MSA thread budget.**
    - Treat `msa_threads` as the total budget.
-   - Example: `msa_threads=32`, `target_shard_workers=4` means four concurrent workers with `--threads 8`, not four workers with `--threads 32`.
+   - Example: `msa_threads=32`, `target_shards=4` means four concurrent shard searches with `--threads 8`, not four workers with `--threads 32`.
 
-2. **Default policy should become adaptive sharding for high-quality local EnvDB jobs after validation.**
-   - The first implementation tranche may default to `off` for bisectability and benchmark collection.
-   - The rollout target is `target_shard_mode=auto` by default for local `balanced`/`maximum` jobs where `use_env=True`, the target database is large enough, disk space is safe, and a shard set is available or can be built.
+2. **Default policy is adaptive sharding for high-quality local EnvDB jobs, gated by fallback and validation.**
+   - The implemented posture is `target_shard_mode=auto` by default for local `balanced`/`maximum` jobs where `use_env=True`, the target database is large enough, and the shard set is available or can be built.
    - `target_shard_mode=off` must remain available for controls, debugging, and emergency rollback.
    - Default-on means `auto`, not `required`: production jobs may fall back to the unsharded control path and must record the fallback.
    - `fast`/screening mode and the remote ColabFold API provider are unchanged.
@@ -246,61 +245,48 @@ Exact names can change during implementation, but these concepts should not be s
 
 ### 4.2 Parameter semantics
 
-Expose these local-MMseqs parameters:
+The implemented Phase-1 surface is intentionally smaller than the early sketch: EnvDB search-only sharding, CPU MMseqs for shard workers by default, and no separate stage/backend/root knobs until benchmarks justify them.
 
 CLI flags on `run_local_msa.py` and `batch_msa.py`:
 
 ```text
---target-shard-mode off|auto|required
---target-shard-stages envdb|uniref|all
---target-shard-count INT
---target-shard-workers INT
---target-shard-backend cpu|inherit
---target-shard-root PATH
---target-shard-keep-temp
+--target-shard-mode auto|required|off
+--target-shards INT
+--target-shard-min-size-gb FLOAT
 ```
 
-API/Nextflow parameter names:
+API/Nextflow/frontend parameter names:
 
 ```text
 msa_target_shard_mode
-msa_target_shard_stages
-msa_target_shard_count
-msa_target_shard_workers
-msa_target_shard_backend
-msa_target_shard_root
-msa_target_shard_keep_temp
+msa_target_shards
+msa_target_shard_min_size_gb
 ```
 
-Initial defaults:
+Implemented defaults:
 
 ```text
-mode: off
-stages: envdb
-count: 0
-workers: 0
-backend: cpu
-root: <db_path>/shards
-keep_temp: false
+mode: auto
+shards: 4
+min_size_gb: 1.0
+msa_threads: 32 total budget
 ```
 
-When `mode=auto` or `required` and `count=0`, the resolver may choose a conservative default for EnvDB only:
+Policy semantics:
+
+- `auto`: attempt sharding for local `balanced`/`maximum` when EnvDB is effective, the EnvDB target DB is present, `shards > 1`, `shards <= msa_threads`, and the target DB meets the size threshold; fall back to the unsharded EnvDB control path on sharding failure and record the fallback.
+- `required`: same eligibility checks, but fail instead of falling back if sharding is unavailable or fails.
+- `off`: always use the unsharded EnvDB control path.
+- `fast` remains a screening preset. Even if fast later triggers shallow-depth EnvDB rescue, the adaptive high-quality sharding policy is scoped to `balanced`/`maximum`.
+- `msa_provider=colabfold_api` is unchanged; frontend submission helpers do not attach local target-sharding knobs to the remote provider.
+
+With Christian's preferred `msa_threads=32`, the implemented default is:
 
 ```text
-shard_count = 4 if total_threads >= 16 else 2
-workers = min(shard_count, max(1, total_threads // 8))
-threads_per_worker = max(1, total_threads // workers)
+4 shard workers x 8 threads = 32 total
 ```
 
-With Christian's preferred `msa_threads=32`, normal useful configurations are:
-
-```text
-2 workers x 16 threads = 32 total
-4 workers x 8 threads  = 32 total
-8 workers x 4 threads  = 32 total
-```
-
-The implementation must reject or clamp any configuration where `workers * threads_per_worker > total_threads`.
+The sharding owner is `scripts/lib/local_msa/sharding.py`; API, Nextflow, batch, and frontend surfaces only pass policy knobs through.
 
 ### 4.3 Shard storage layout
 
@@ -360,7 +346,7 @@ Phase 1 sharded EnvDB search:
 ```text
 ensure splitdb(envdb, split_prefix, shard_count)
 
-for each shard concurrently, bounded by target_shard_workers:
+for each target shard concurrently, bounded by target_shards:
     search profile_db_or_query_db shard_db shard_result_db shard_tmp \
         --num-iterations <current config value or phase-gated override> \
         -a -e <evalue> --max-seqs <max_seqs> \
@@ -551,13 +537,9 @@ mmseqs mergedbs <query_or_profile_db> <merged_result_db> <result_shard_0> ... <r
 5. Add optional keyword parameters to `run_colabfold_msa_workflow(...)` with safe defaults:
 
 ```python
-target_shard_mode: str = "off"
-target_shard_stages: str = "envdb"
-target_shard_count: int = 0
-target_shard_workers: int = 0
-target_shard_backend: str = "cpu"
-target_shard_root: str | None = None
-target_shard_keep_temp: bool = False
+target_shard_mode: str = "auto"
+target_shards: int = DEFAULT_TARGET_SHARDS
+target_shard_min_size_gb: float = DEFAULT_TARGET_SHARD_MIN_SIZE_GB
 ```
 
 6. Build a `TargetShardPolicy` after DB paths and runtime are resolved.
@@ -604,33 +586,27 @@ Add to `<job>_msa_quality.json`:
 
 ```json
 {
-  "target_sharding_requested": true,
-  "target_sharding_effective": true,
-  "target_shard_mode": "auto",
-  "target_shard_stages": ["envdb"],
-  "target_shard_count": 4,
-  "target_shard_workers": 4,
-  "target_shard_threads_per_worker": 8,
-  "target_shard_total_threads_budget": 32,
-  "target_shard_backend": "cpu",
-  "target_shard_fallback_used": false,
-  "target_shard_metrics": {
-    "envdb": {
-      "elapsed_seconds": 123.4,
-      "per_shard": [
-        {"index": 0, "elapsed_seconds": 31.2, "returncode": 0},
-        {"index": 1, "elapsed_seconds": 35.9, "returncode": 0}
-      ]
-    }
+  "target_sharding": {
+    "mode_requested": "auto",
+    "enabled": true,
+    "mode_effective": "auto",
+    "reason": "maximum EnvDB target search will run as 4 shard worker(s) x 8 thread(s) within total thread budget 32",
+    "shard_count": 4,
+    "threads_per_worker": 8,
+    "total_threads": 32,
+    "fallback_allowed": true,
+    "manifest_path": "/mnt/BioModStack/msa_cache/.target_shards/colabfold_envdb_202108_db.shards-4/manifest.json",
+    "reused_manifest": true,
+    "search_was_sharded": true
   }
 }
 ```
 
 **Tests:**
 
-- Default parser args produce sharding mode `off`.
+- Default parser args produce sharding mode `auto`, 4 shards, and 1.0 GiB minimum size.
 - Explicit parser args reach `run_colabfold_msa_workflow(...)` through `dispatch_single_request(...)`.
-- EnvDB sharding uses `mmseqs_cpu` when `backend=cpu` even if the main run selected GPU.
+- EnvDB sharding uses the CPU MMseqs binary for Phase-1 shard workers even if the main run selected GPU.
 - `mode=auto` falls back and records fallback when the sharded runner raises.
 - `mode=required` raises and does not continue unsharded.
 - Existing unsharded tests still pass.
@@ -696,16 +672,13 @@ python -m py_compile scripts/batch_msa.py scripts/lib/local_msa/cli/run_batch.py
 5. In `nextflow.config`, define default params with safe defaults:
 
 ```groovy
-msa_target_shard_mode = 'off'
-msa_target_shard_stages = 'envdb'
-msa_target_shard_count = 0
-msa_target_shard_workers = 0
-msa_target_shard_backend = 'cpu'
-msa_target_shard_root = null
-msa_target_shard_keep_temp = false
+msa_threads = 32
+msa_target_shard_mode = 'auto'
+msa_target_shards = 4
+msa_target_shard_min_size_gb = 1.0
 ```
 
-6. Keep frontend exposure out of Phase 1 unless Christian explicitly asks for UI controls.
+These defaults intentionally keep `msa_threads` as the total budget; `auto/4/1.0` is the implemented adaptive posture for local high-quality EnvDB jobs, while `off` remains available for rollback/debug. Frontend advanced local-MSA controls now expose these three knobs and hide them from the ColabFold API submission payload.
 
 **Verification command:**
 
@@ -895,15 +868,15 @@ Add a top-level report section:
 Also print a concise runtime line to stdout:
 
 ```text
-Target sharding: envdb, 4 shards, 4 workers x 8 threads = 32 total, backend=cpu
+Target sharding: envdb, 4 shards x 8 threads = 32 total, phase1_backend=cpu
 ```
 
 ### 6.5 Safety around gpuserver
 
 Initial policy:
 
-- If `target_shard_backend=cpu`, sharded workers use the CPU MMseqs binary and do not pass `--gpu`, `--gpu-server`, or gpuserver flags.
-- If `target_shard_backend=inherit`, do not allow gpuserver in Phase 1 unless an explicit future PR implements shard-aware server handling.
+- Phase 1 shard workers use the CPU MMseqs binary and do not pass `--gpu`, `--gpu-server`, or gpuserver flags.
+- There is no user-facing `target_shard_backend` switch in the implemented Phase-1 surface; GPU/gpuserver-per-shard remains future work.
 - If the main run selected GPU for UniRef, this does not require the EnvDB sharded stage to use GPU.
 
 Future GPU shard work must define:
@@ -961,10 +934,8 @@ python3 scripts/run_local_msa.py \
   --use-env 1 \
   --threads 32 \
   --target-shard-mode required \
-  --target-shard-stages envdb \
-  --target-shard-count 4 \
-  --target-shard-workers 4 \
-  --target-shard-backend cpu \
+  --target-shards 4 \
+  --target-shard-min-size-gb 1.0 \
   --force_refresh
 ```
 
@@ -990,26 +961,23 @@ python3 scripts/run_local_msa.py \
 
 ## 8. Rollout policy
 
-### Stage A: Hidden experimental CLI
+### Stage A: CLI/runtime implementation
 
-- Implement CLI-only sharding.
-- No frontend controls.
-- Default off only for the first implementation/benchmark tranche.
-- Use `target_shard_mode=required` for benchmark evidence.
+- Implement CLI/runtime sharding with `auto|required|off`, `--target-shards`, and `--target-shard-min-size-gb`.
+- Keep `target_shard_mode=required` useful for benchmark evidence and `off` useful for controls.
 
-### Stage B: API/Nextflow pass-through
+### Stage B: API/Nextflow/frontend pass-through
 
 - Add backend param forwarding.
-- Still no prominent UI control.
 - Allow power users/operators to pass `msa_target_shard_*` params through API payloads or config.
+- Surface advanced local-MSA controls in the structure launcher, scoped to the local provider.
 
-### Stage C: Benchmark-gated UI exposure
+### Stage C: Benchmark-gated production confidence
 
 Only after acceptance gates pass:
 
-- Add an advanced local-MSA setting in the structure launcher.
-- Label it experimental until a larger panel passes.
-- Move local `balanced`/`maximum` EnvDB-backed jobs toward `target_shard_mode=auto` as the normal/default behavior, with a visible/advanced override to force `off`.
+- Keep the advanced local-MSA setting available for rollback/debug.
+- Treat local `balanced`/`maximum` EnvDB-backed jobs with `target_shard_mode=auto` as the normal/default behavior when equivalence and reliability are proven.
 
 ### Stage D: Production adaptive default
 
