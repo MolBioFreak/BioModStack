@@ -39,11 +39,21 @@ import sys
 import gzip
 import shutil
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import TYPE_CHECKING, List, Dict, Any, Optional
 
-_default_data_root = Path(os.path.expanduser(os.getenv("BMS_DATA") or "~/.biomodstack"))
-DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or str(_default_data_root / "colabfold_db")
-DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or str(_default_data_root / "msa_cache")
+SCRIPT_DIR = Path(__file__).resolve().parent
+LIB_DIR = SCRIPT_DIR / "lib"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from local_msa.batching import register_legacy_run_batch_msa
+from local_msa.cli.run_batch import build_batch_request, dispatch_batch_request, parse_sequences_json
+from local_msa.config import DEFAULT_CACHE_DIR, DEFAULT_DB_PATH
+
+if TYPE_CHECKING:
+    from lib.local_msa.cli.run_batch import dispatch_batch_request as _dispatch_batch_request_ast_check
 
 
 def read_persisted_msa_pinned_gpu_id(cache_dir: Optional[Path]) -> Optional[int]:
@@ -735,6 +745,9 @@ def run_batch_msa(
     return manifest
 
 
+register_legacy_run_batch_msa(run_batch_msa)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="True Batch MSA Generation")
     parser.add_argument("--sequences", required=True, 
@@ -810,13 +823,12 @@ if __name__ == "__main__":
     
     # Parse sequences JSON
     try:
-        sequences = json.loads(args.sequences)
-    except json.JSONDecodeError as e:
+        sequences = parse_sequences_json(args.sequences)
+    except ValueError as e:
         print(f"Error parsing sequences JSON: {e}")
         sys.exit(1)
-    
-    # Run batch MSA
-    manifest = run_batch_msa(
+
+    request = build_batch_request(
         sequences=sequences,
         output_dir=Path(args.output_dir),
         db_path=Path(args.db_path),
@@ -850,6 +862,9 @@ if __name__ == "__main__":
         target_shards=args.target_shards,
         target_shard_min_size_gb=args.target_shard_min_size_gb,
     )
+
+    # Run batch MSA
+    manifest = dispatch_batch_request(request, executor=run_batch_msa)
     
     # Exit with error if any failed
     if manifest["successful"] < manifest["total_sequences"]:
