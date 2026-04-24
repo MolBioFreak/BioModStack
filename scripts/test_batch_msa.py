@@ -9,6 +9,19 @@ if str(SCRIPT_DIR) not in sys.path:
 import batch_msa
 
 
+def test_batch_script_exports_package_run_batch_msa() -> None:
+    from local_msa.batching import run_batch_msa
+
+    assert batch_msa.run_batch_msa is run_batch_msa
+
+
+def test_batch_script_exports_package_defaults() -> None:
+    from local_msa.config import DEFAULT_CACHE_DIR, DEFAULT_DB_PATH
+
+    assert batch_msa.DEFAULT_DB_PATH == DEFAULT_DB_PATH
+    assert batch_msa.DEFAULT_CACHE_DIR == DEFAULT_CACHE_DIR
+
+
 def test_run_batch_msa_balanced_mode_delegates_cache_only_and_threads(tmp_path: Path, monkeypatch) -> None:
     captured = {}
 
