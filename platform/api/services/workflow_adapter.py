@@ -4,7 +4,10 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+from biomodstack_runtime_profile import resolve_runtime_paths
 
 
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 15.0
@@ -108,6 +111,48 @@ def _request_json(method: str, path: str, payload: dict[str, Any] | None = None)
 
 
 
+def _container_to_host_path(value: str) -> str:
+    if not value:
+        return value
+
+    resolved = resolve_runtime_paths()
+    host_state_dir = str(os.getenv("BMS_STATE_DIR") or resolved.get("data_root") or "")
+    container_state_path = str(os.getenv("BMS_CONTAINER_STATE_PATH") or resolved.get("container_state_path") or "")
+    inputs_container_path = str(os.getenv("BMS_INPUTS_CONTAINER_PATH") or resolved.get("inputs_container_path") or "")
+    db_container_path = str(os.getenv("BMS_DB_CONTAINER_PATH") or resolved.get("db_container_path") or "")
+
+    mappings = [
+        (db_container_path.rstrip("/"), str(Path(host_state_dir) / "biomodstack.db") if host_state_dir else ""),
+        (inputs_container_path.rstrip("/"), str(Path(host_state_dir) / "inputs") if host_state_dir else ""),
+        (container_state_path.rstrip("/"), host_state_dir),
+    ]
+    mappings = [(container_root, host_root) for container_root, host_root in mappings if container_root and host_root]
+    mappings.sort(key=lambda pair: len(pair[0]), reverse=True)
+
+    for container_root, host_root in mappings:
+        if value == container_root:
+            return host_root
+        prefix = f"{container_root}/"
+        if value.startswith(prefix):
+            suffix = value[len(prefix):]
+            return str(Path(host_root) / suffix)
+    return value
+
+
+
+def _translate_container_paths(value: Any) -> Any:
+    if isinstance(value, str):
+        return _container_to_host_path(value)
+    if isinstance(value, list):
+        return [_translate_container_paths(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_translate_container_paths(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _translate_container_paths(item) for key, item in value.items()}
+    return value
+
+
+
 def launch_via_workflow_adapter(
     *,
     job_id: str,
@@ -116,6 +161,8 @@ def launch_via_workflow_adapter(
     params: dict[str, Any],
     output_dir: str,
 ) -> dict[str, Any]:
+    translated_params = _translate_container_paths(params)
+    translated_output_dir = _container_to_host_path(output_dir)
     return _request_json(
         "POST",
         "/api/workflow-adapter/launch",
@@ -123,8 +170,8 @@ def launch_via_workflow_adapter(
             "job_id": job_id,
             "model_id": model_id,
             "mode": mode,
-            "params": params,
-            "output_dir": output_dir,
+            "params": translated_params,
+            "output_dir": translated_output_dir,
         },
     )
 

@@ -87,13 +87,29 @@ Current capabilities include:
 
 - runtime linkage and disconnect
 - linked-runtime reachability/status via the BioXP proxy
-- proxied hardware status
+- proxied hardware status for the currently exposed BMS BioXP route family
 - manual axis status and motion actions for `x`, `y`, `z`, `g`, and `door`
 - motion power and interlock preparation
 - camera device/control/stream handling
 - thermal and chiller control flows
 - latch and LED actions
 - protocol/operator surface integration through the BioXP cockpit
+
+Current operational caveats:
+
+- BMS currently proxies the subset of robot-local routes used by the cockpit; it
+  is not yet a full mirror of the robot-local BioXP API.
+- The robot-local runtime already exposes additional surfaces such as
+  `/motion/reference/status` and `/liquid/*` that are not yet available through
+  `/api/bioxp/*` in BMS.
+- `/api/bioxp/status` and `/api/bioxp/daemon/status` can diverge transiently
+  during reconnect/recovery windows; treat that as control-plane status drift,
+  not as a standalone hardware verdict.
+- Repeated camera/UVC control-query failures and the historical Novo USB/CAN
+  reset pattern should be documented as unresolved transport/recovery
+  instability. Software reconnect/reset behavior remains a major confounder, so
+  the current docs do not treat this as a closed "bad componentry" or blanket
+  hardware-failure verdict.
 
 Runtime dependencies:
 
