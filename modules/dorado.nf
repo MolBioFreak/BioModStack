@@ -297,7 +297,7 @@ process FastqAlign {
     path "fastq_align.log", emit: log
 
     script:
-    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def allowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     """
     set -euo pipefail
@@ -309,11 +309,11 @@ process FastqAlign {
     fi
 
     minimap2 "\${MM2_ARGS[@]}" \\
-        ${reference} ${fastq} 2>fastq_align.log \\
+        "${reference}" "${fastq}" 2>fastq_align.log \\
         | samtools sort -@ ${task.cpus} -o aligned.bam
 
     samtools index aligned.bam
-    cp ${reference} reference.fasta
+    cp "${reference}" reference.fasta
     samtools faidx reference.fasta
     """
 }
@@ -333,10 +333,16 @@ process FastqPlasmidQC {
     path fastq
 
     output:
+    path "aligned.bam", emit: alignment_bam
+    path "aligned.bam.bai", emit: alignment_bai
     path "read_lengths.tsv", emit: lengths
     path "fastq_qc_summary.tsv", emit: summary
     path "fastq_alignment_stats.tsv", emit: alignment_stats
     path "fastq_coverage.tsv", emit: coverage
+    path "per_base_support.tsv", emit: per_base_support
+    path "qc_manifest.json", emit: qc_manifest
+    path "reference_qc.fasta", emit: reference
+    path "reference_qc.fasta.fai", emit: reference_index
     path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth
     path "igv_position_gradient.bedgraph", emit: igv_position_gradient
     path "igv_gc_content.bedgraph", emit: igv_gc_content
@@ -357,12 +363,13 @@ process FastqPlasmidQC {
     script:
     def expectedSize = (params.expected_plasmid_size ?: 7000) as Integer
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
-    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def igvTrackWindowBp = (params.igv_track_window_bp ?: 100) as Integer
     def igvReportMaxSites = (params.igv_report_max_sites ?: 40) as Integer
     def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
     def codeRoot = params.code_root ?: projectDir
+    def manifestJobId = params.job_id ?: 'nanopore-fastq-qc'
     """
     set -euo pipefail
 
@@ -509,6 +516,14 @@ process FastqPlasmidQC {
         echo "Missing parser script: ${codeRoot}/scripts/build_fastq_igv_tracks.py" >&2
         exit 1
     fi
+    if [[ ! -f "${codeRoot}/scripts/build_fastq_support_tables.py" ]]; then
+        echo "Missing parser script: ${codeRoot}/scripts/build_fastq_support_tables.py" >&2
+        exit 1
+    fi
+    if [[ ! -f "${codeRoot}/scripts/build_sequence_qc_manifest.py" ]]; then
+        echo "Missing parser script: ${codeRoot}/scripts/build_sequence_qc_manifest.py" >&2
+        exit 1
+    fi
 
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_fastq_igv_tracks.py" \\
         --bam "${bam}" \\
@@ -527,8 +542,22 @@ process FastqPlasmidQC {
         --out-report-sites-bed igv_report_sites.bed \\
         --out-report-sites-tsv igv_report_sites.tsv
 
+    "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_fastq_support_tables.py" \\
+        --bam "${bam}" \\
+        --reference-fasta reference_qc.fasta \\
+        --out-per-base-support per_base_support.tsv \\
+        --samtools-cmd "\${SAMTOOLS_CMD[@]}"
+
     bam_local=\$(basename "${bam}")
     bai_local=\$(basename "${bai}")
+    if [[ "\${bam_local}" != "aligned.bam" ]]; then
+        cp "${bam}" aligned.bam
+        bam_local="aligned.bam"
+    fi
+    if [[ "\${bai_local}" != "aligned.bam.bai" ]]; then
+        cp "${bai}" aligned.bam.bai
+        bai_local="aligned.bam.bai"
+    fi
 
     cat > igv_track_config.json <<JSON
 [
@@ -719,6 +748,26 @@ JSON
         echo "Coverage mean/median: \${mean_coverage}/\${median_coverage}"
         echo "Consensus: \${consensus_status} (\${consensus_length} bp)"
     } > fastq_qc.log
+
+    "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\
+        --out qc_manifest.json \\
+        --job-id "${manifestJobId}" \\
+        --sample-name "fastq_plasmid_qc" \\
+        --reference-fasta reference_qc.fasta \\
+        --reference-index reference_qc.fasta.fai \\
+        --summary fastq_qc_summary.tsv \\
+        --alignment-stats fastq_alignment_stats.tsv \\
+        --coverage fastq_coverage.tsv \\
+        --per-base-support per_base_support.tsv \\
+        --consensus fastq_consensus.fasta \\
+        --consensus-index fastq_consensus.fasta.fai \\
+        --consensus-status "\${consensus_status}" \\
+        --alignment-bam "\${bam_local}" \\
+        --alignment-bai "\${bai_local}" \\
+        --igv-track-config igv_track_config.json \\
+        --igv-report igv_report.html \\
+        --igv-report-log igv_report.log \\
+        --log fastq_qc.log
     """
 }
 
@@ -894,7 +943,7 @@ process FastqDimerAnalysis {
     def singleRefMinMapq = (params.single_ref_split_min_mapq ?: 20) as Integer
     def singleRefMinSegBp = (params.single_ref_split_min_segment_bp ?: 250) as Integer
     def singleRefMaxGapBp = (params.single_ref_split_max_query_gap_bp ?: 500) as Integer
-    def minimapPreset = ((params.fastq_minimap2_preset ?: 'lr:hq') as String).trim()
+    def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
     """

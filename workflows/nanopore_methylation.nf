@@ -49,7 +49,7 @@ workflow NANOPORE_METHYLATION {
     println("* BAM min MAPQ: ${(params.bam_min_mapq ?: 0)}")
     println("* FASTQ path: ${params.fastq_path}")
     if (params.fastq_path && params.fastq_path.toString().trim()) {
-        println("* FASTQ minimap2 preset: ${(params.fastq_minimap2_preset ?: 'lr:hq')}")
+        println("* FASTQ minimap2 preset: ${(params.fastq_minimap2_preset ?: 'map-ont')}")
         println("* FASTQ keep secondary alignments: ${(params.fastq_minimap2_allow_secondary == true)}")
     }
     println("* Dorado model: ${params.dorado_model ?: 'sup'}")
@@ -80,6 +80,14 @@ workflow NANOPORE_METHYLATION {
 
     if (has_fastq && !has_reference) {
         error("FASTQ analysis requires --reference_fasta for alignment, consensus, and plasmid QC outputs")
+    }
+
+    if (has_fastq) {
+        def allowed_fastq_minimap_presets = ['map-ont', 'map-hifi', 'map-pb', 'sr'] as Set
+        def fastq_minimap_preset = (params.fastq_minimap2_preset ?: 'map-ont').toString().trim()
+        if (!allowed_fastq_minimap_presets.contains(fastq_minimap_preset)) {
+            error("Unsupported --fastq_minimap2_preset '${fastq_minimap_preset}'. Bundled minimap2 2.24 supports: ${allowed_fastq_minimap_presets.join(', ')}")
+        }
     }
 
     def analysis_bam = null
@@ -208,6 +216,10 @@ workflow NANOPORE_METHYLATION {
                     "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
                     "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
                     "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
+                    "${params.out_dir}/fastq_qc/per_base_support.tsv",
+                    "${params.out_dir}/fastq_qc/qc_manifest.json",
+                    "${params.out_dir}/fastq_qc/reference_qc.fasta",
+                    "${params.out_dir}/fastq_qc/reference_qc.fasta.fai",
                     "${params.out_dir}/fastq_qc/igv_coverage_depth.bedgraph",
                     "${params.out_dir}/fastq_qc/igv_position_gradient.bedgraph",
                     "${params.out_dir}/fastq_qc/igv_gc_content.bedgraph",
