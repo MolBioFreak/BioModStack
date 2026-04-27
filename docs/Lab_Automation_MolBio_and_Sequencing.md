@@ -66,7 +66,8 @@ The canonical sequencing model config is:
 - [platform/api/config/models/nanopore.yaml](../platform/api/config/models/nanopore.yaml)
 
 The workflow logic lives in:
-- [main.nf](../main.nf)
+- [ngs.nf](../ngs.nf), which dispatches the nanopore workflow entrypoint
+- [workflows/nanopore_methylation.nf](../workflows/nanopore_methylation.nf)
 - the Dorado/modkit modules under `modules/`
 
 ## BioXP Robotics Surface
