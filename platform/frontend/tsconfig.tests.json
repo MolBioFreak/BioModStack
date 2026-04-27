@@ -12,6 +12,7 @@
   },
   "include": [
     "src/components/designOutputSource.ts",
+    "src/components/gpuToggleState.ts",
     "src/components/structureViewerLayout.ts",
     "src/components/molstarTouchInteraction.ts",
     "src/components/MolBioToolkit/utils/alignmentLabels.ts",
