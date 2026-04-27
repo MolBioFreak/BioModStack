@@ -35,7 +35,9 @@ workflow BOLTZ_CP_EXPERIMENTAL {
         def shardPlanId = (params.bcp_shard_plan_id ?: '2x2').toString()
         def logicalSizeCp = ['1x1': 1, '2x2': 4, '4x4': 16].get(shardPlanId, sizeCp) as Integer
         def bcpRole = params.get('bcp_role', 'coordinator').toString()
-        def useCoordinator = bcpRole != 'child' && logicalSizeCp > 1
+        def requestedBackend = (params.bcp_backend ?: 'dram-context-spill-workhorse').toString()
+        def requiresPlanRuntime = requestedBackend == 'dram-context-spill-workhorse'
+        def useCoordinator = bcpRole != 'child' && (logicalSizeCp > 1 || requiresPlanRuntime)
         def parentJobId = (params.containsKey('job_id') ? params['job_id'] : java.util.UUID.randomUUID().toString().take(8)).toString()
         def batchName = (params.batch_name ?: "boltz_cp_${parentJobId}").toString()
 
@@ -89,8 +91,10 @@ workflow {
     println("* Role: ${bcpRole}")
     println("* Input path: ${params.bcp_input_path}")
     println("* Logical shard plan: ${shardPlanId} (${logicalSizeCp} logical shards)")
-    println("* Physical GPU IDs: ${params.bcp_gpu_ids ?: '0,1,2,3'}")
+    println("* Physical GPU IDs: ${params.bcp_gpu_ids ?: params.gpu_id}")
     println("* Physical launch size_cp: ${params.bcp_size_cp ?: 4}")
+    println("* Backend: ${params.bcp_backend ?: 'dram-context-spill-workhorse'}")
+    println("* Data-plane boundary: current large-protein coordinator is control-plane/tile-store; not native distributed context-parallel Boltz prediction")
     println("* Input format: ${params.bcp_input_format ?: 'config_files'}")
     println("* Sampling steps: ${params.bcp_sampling_steps ?: 200}")
     BOLTZ_CP_EXPERIMENTAL()
