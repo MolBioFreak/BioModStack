@@ -3,10 +3,10 @@ name: Fold-CP Experimental
 version: "0.1.0"
 category: structure_prediction
 description: >
-  Experimental single-example Boltz-2 inference using DTensor context
-  parallelism (CP) across multiple GPUs. Accepts either a prepared Boltz YAML
-  / FASTA input or a preprocessed Boltz directory, then launches the checked-out
-  Fold-CP fork through torch.distributed.
+  Experimental Fold-CP large-protein control-plane workflow. Current backend
+  metadata distinguishes DRAM context-spill workhorse proofs from the
+  shared-cache legacy path, which is not native distributed context parallel:
+  that path performs one single full Boltz prediction then output tiling.
 container: boltz2-pre-community-20260417-211613.sif
 
 ui_icon: sparkles
@@ -24,12 +24,13 @@ outputs:
 
 modes:
   - id: design
-    name: Distributed Prediction
-    description: Run Fold-CP multi-GPU structure prediction from a prepared Boltz input path
+    name: Fold-CP Large-Protein Backend
+    description: Select an honest experimental backend and shard-plan metadata without claiming serial output tiling is native distributed CP
     params:
       - input_path
       - shard_plan_id
       - gpu_ids
+      - backend
       - input_format
       - output_format
       - write_full_pae
@@ -46,9 +47,22 @@ params:
 
   - name: gpu_ids
     type: string
-    description: Comma-separated host GPU IDs to expose to the CP run
+    description: Comma-separated host GPU IDs to expose to the CP run. If omitted, the scheduler-assigned GPU is used for standalone launches.
     required: false
-    default: "0,1,2,3"
+
+  - name: backend
+    type: string
+    description: >
+      Large-protein experimental backend. dram-context-spill-workhorse runs the
+      current DRAM-backed live-state operation proof; shared-cache-serial-output-tiling
+      is control-plane publication only, not native distributed context parallel,
+      because it performs one single full Boltz prediction then output tiling.
+    required: false
+    default: dram-context-spill-workhorse
+    enum:
+      - dram-context-spill-workhorse
+      - shared-cache-serial-output-tiling
+      - metadata-only
 
   - name: shard_plan_id
     type: string
