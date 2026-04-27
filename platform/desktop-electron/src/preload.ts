@@ -1,22 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-import { resolvePointerZoomStep } from './pointerZoom.js';
-import {
-  ADJUST_ZOOM_CHANNEL,
-  GET_SHELL_CONTEXT_CHANNEL,
-  GET_STATUS_CHANNEL,
-  GET_ZOOM_FACTOR_CHANNEL,
-  OPEN_IN_BROWSER_CHANNEL,
-  RESET_ZOOM_CHANNEL,
-  RESTART_ALL_CHANNEL,
-  RESTART_API_CHANNEL,
-  SET_ZOOM_FACTOR_CHANNEL,
-  START_ALL_CHANNEL,
-  STOP_ALL_CHANNEL,
-  resolveShellContext,
-  type BiomodstackDesktopApi,
-  type ShellRuntimeMode,
-} from './windowState';
+import type {
+  BiomodstackDesktopApi,
+  ShellContext,
+  ShellRuntimeMode,
+} from './windowState.js';
 
 declare global {
   interface Window {
@@ -25,7 +13,73 @@ declare global {
   }
 }
 
-const shellContext = resolveShellContext();
+const GET_SHELL_CONTEXT_CHANNEL = 'biomodstack:get-shell-context';
+const GET_STATUS_CHANNEL = 'biomodstack:get-status';
+const START_ALL_CHANNEL = 'biomodstack:start-all';
+const STOP_ALL_CHANNEL = 'biomodstack:stop-all';
+const RESTART_ALL_CHANNEL = 'biomodstack:restart-all';
+const RESTART_API_CHANNEL = 'biomodstack:restart-api';
+const OPEN_IN_BROWSER_CHANNEL = 'biomodstack:open-in-browser';
+const GET_ZOOM_FACTOR_CHANNEL = 'biomodstack:get-zoom-factor';
+const SET_ZOOM_FACTOR_CHANNEL = 'biomodstack:set-zoom-factor';
+const ADJUST_ZOOM_CHANNEL = 'biomodstack:adjust-zoom';
+const RESET_ZOOM_CHANNEL = 'biomodstack:reset-zoom';
+
+type PointerZoomGesture = {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  deltaY: number;
+};
+
+function resolvePointerZoomStep(gesture: PointerZoomGesture): 1 | -1 | null {
+  if ((!gesture.ctrlKey && !gesture.metaKey) || gesture.deltaY === 0) {
+    return null;
+  }
+  return gesture.deltaY < 0 ? 1 : -1;
+}
+
+function normalizeOrigin(origin: string): string {
+  return origin.trim().replace(/\/+$/, '');
+}
+
+function normalizeRouterBasename(basename: string): string {
+  const trimmed = basename.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, '');
+  return withoutTrailingSlash ? `${withoutTrailingSlash}/` : '/';
+}
+
+function buildHostedUrl(frontendOrigin: string, routerBasename: string): string {
+  if (routerBasename === '/') {
+    return `${frontendOrigin}/`;
+  }
+  return `${frontendOrigin}${routerBasename}`;
+}
+
+function resolvePreloadShellContext(options: Partial<ShellContext> = {}): ShellContext {
+  const runtimeMode = options.runtimeMode ?? (process.env.BMS_RUNTIME_MODE === 'dev' ? 'dev' : 'container');
+  const frontendOrigin = normalizeOrigin(
+    options.frontendOrigin ?? process.env.BMS_FRONTEND_ORIGIN ?? 'http://127.0.0.1:5173',
+  );
+  const routerBasename = normalizeRouterBasename(
+    options.routerBasename ?? process.env.BMS_ROUTER_BASENAME ?? (runtimeMode === 'dev' ? '/' : '/bms/'),
+  );
+  const hostedUrl = buildHostedUrl(frontendOrigin, routerBasename);
+
+  return {
+    runtimeMode,
+    frontendOrigin,
+    routerBasename,
+    windowUrl: options.windowUrl ?? hostedUrl,
+    browserUrl: options.browserUrl ?? hostedUrl,
+  };
+}
+
+const shellContext = resolvePreloadShellContext();
 
 const biomodstackApi: BiomodstackDesktopApi = {
   getShellContext: () => ipcRenderer.invoke(GET_SHELL_CONTEXT_CHANNEL),
