@@ -161,6 +161,7 @@ def spawn_boltz_cp_children(
             "bcp_shard_plan_id": shard_plan.get("name") or manifest.get("plan_id") or input_metadata.get("shard_plan_id") or "2x2",
             "bcp_parent_job_id": parent_job_id,
             "bcp_store_root": store_root,
+            "bcp_backend": input_metadata.get("bcp_backend", "dram-context-spill-workhorse"),
             "bcp_plan_manifest_path": plan_manifest_path,
             "bcp_bundle_id": bundle.get("bundle_id"),
             "bcp_bundle_index": bundle_index,
@@ -199,6 +200,13 @@ def spawn_boltz_cp_children(
             "msa_taxon_list",
             "code_root",
             "lock_gpus",
+            "bcp_context_store_manifest_path",
+            "bcp_context_state_path",
+            "bcp_context_layer_state_path",
+            "bcp_context_execution_mode",
+            "bcp_context_tile_tokens",
+            "bcp_context_key_tile_tokens",
+            "bcp_context_query_tile_tokens",
         ):
             if passthrough_key in input_metadata and input_metadata[passthrough_key] not in (None, ""):
                 child_params[passthrough_key] = input_metadata[passthrough_key]

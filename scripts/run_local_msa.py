@@ -57,14 +57,15 @@ if str(SCRIPT_DIR) not in sys.path:
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from local_msa.db_integrity import validate_alignment_index_keyspace
+from local_msa.mmseqs_stage_report import command_report, effective_gpu_stages
 from local_msa.providers.colabfold_api import register_legacy_run_colabfold_api_msa_workflow
 from local_msa.providers.local_mmseqs import register_legacy_run_colabfold_msa_workflow
 from local_msa.sharding import (
     DEFAULT_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_TARGET_SHARDS,
     build_target_shard_plan_from_gb,
-    ensure_target_shards,
-    run_sharded_target_search,
+    run_native_target_split_search,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
 
 from local_msa_runtime import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    GPUSERVER_DB_LOAD_MODE_CHOICES,
     DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     DEFAULT_GPUSERVER_WAIT_TIMEOUT,
     DEFAULT_MSA_SERVER_STATUS_URL,
@@ -130,6 +132,116 @@ MSA_PRESETS = {
         "description": "UniRef30 only - quick screening (~3-5s)"
     }
 }
+
+
+def _mmseqs_prefix_status(prefix: str | Path) -> Dict[str, Any]:
+    prefix = Path(prefix)
+    dbtype = Path(str(prefix) + ".dbtype")
+    index = Path(str(prefix) + ".index")
+    return {
+        "path": str(prefix),
+        "exists": prefix.exists(),
+        "dbtype_exists": dbtype.exists(),
+        "index_exists": index.exists(),
+        "ready": prefix.exists() and dbtype.exists(),
+    }
+
+
+def build_runtime_db_integrity_preflight(
+    db_path: str | Path,
+    *,
+    use_env: bool,
+    use_expand: bool,
+) -> Dict[str, Any]:
+    """Lightweight runtime DB preflight for local ColabFold/MMseqs runs.
+
+    The full forensic validator scans entire multi-GB index files. This runtime
+    gate stays cheap enough for every MSA request: it checks required prefixes,
+    dbtype/index presence, and only samples alignment keyspace when expansion is
+    actually requested.
+    """
+    root = Path(db_path)
+    issues: List[str] = []
+    families: Dict[str, Dict[str, Any]] = {}
+    required_families = ["uniref30_2302_db"]
+    if use_env:
+        required_families.append("colabfold_envdb_202108_db")
+
+    labels = {
+        "uniref30_2302_db": "UniRef",
+        "colabfold_envdb_202108_db": "EnvDB",
+    }
+
+    for family in required_families:
+        label = labels.get(family, family)
+        target = root / family
+        sequence = root / f"{family}_seq"
+        alignment = root / f"{family}_aln"
+        target_status = _mmseqs_prefix_status(target)
+        sequence_status = _mmseqs_prefix_status(sequence)
+        alignment_status = _mmseqs_prefix_status(alignment)
+        family_issues: List[str] = []
+
+        if not target_status["ready"]:
+            family_issues.append(f"{label} target DB prefix is missing")
+        if not target_status["index_exists"]:
+            family_issues.append(f"{label} target DB index is missing")
+        if not sequence_status["ready"]:
+            family_issues.append(f"{label} sequence DB prefix is missing")
+        if not sequence_status["index_exists"]:
+            family_issues.append(f"{label} sequence DB index is missing")
+
+        alignment_keyspace_compatible: Optional[bool] = None
+        alignment_keyspace_reason: Optional[str] = None
+        if use_expand:
+            if not alignment_status["ready"]:
+                family_issues.append(f"{label} alignment DB prefix is missing")
+            if not alignment_status["index_exists"]:
+                family_issues.append(f"{label} alignment DB index is missing")
+            if alignment_status["ready"] and alignment_status["index_exists"]:
+                validation = validate_alignment_index_keyspace(target, alignment)
+                alignment_keyspace_compatible = bool(validation.compatible)
+                alignment_keyspace_reason = validation.reason
+                if not validation.compatible:
+                    family_issues.append(f"{label} alignment DB keyspace validation failed: {validation.reason}")
+
+        issues.extend(family_issues)
+        families[family] = {
+            "label": label,
+            "target": target_status,
+            "sequence": sequence_status,
+            "alignment": alignment_status,
+            "target_db_ready": bool(target_status["ready"]),
+            "sequence_db_ready": bool(sequence_status["ready"]),
+            "alignment_db_ready": bool(alignment_status["ready"]),
+            "alignment_keyspace_compatible": alignment_keyspace_compatible,
+            "alignment_keyspace_reason": alignment_keyspace_reason,
+            "issues": family_issues,
+        }
+
+    return {
+        "checked": True,
+        "db_root": str(root),
+        "required_families": required_families,
+        "use_env_required": bool(use_env),
+        "use_expand_required": bool(use_expand),
+        "compatible": not issues,
+        "issues": issues,
+        "families": families,
+    }
+
+
+def write_runtime_db_integrity_preflight(
+    out_dir: str | Path,
+    job_name: str,
+    report: Dict[str, Any],
+) -> str:
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    report_path = Path(out_dir) / f"{job_name}_local_db_integrity.json"
+    report["report_path"] = str(report_path)
+    with report_path.open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, sort_keys=True)
+    return str(report_path)
 
 
 def compute_sequence_hash(sequence: str) -> str:
@@ -457,6 +569,219 @@ def resolve_mmseqs_binaries(db_path: str | Path) -> tuple[Path, Path | None]:
     ]
     mmseqs_gpu = next((candidate for candidate in gpu_candidates if candidate.exists()), None)
     return mmseqs_cpu, mmseqs_gpu
+
+
+GPU_TARGET_DB_SUFFIXES = ("_gpu", "_padded", "_paddedseq")
+
+
+def _mmseqs_db_prefix_ready(prefix: str | Path) -> bool:
+    prefix = Path(prefix)
+    return prefix.exists() and Path(str(prefix) + ".dbtype").exists()
+
+
+def resolve_mmseqs_gpu_target_db(target_db: str | Path) -> Optional[Path]:
+    """Return the padded MMseqs GPU-search target DB for a logical target DB.
+
+    MMseqs GPU search does not accept an ordinary createdb/search DB as the
+    target; the target must be prepared with `mmseqs makepaddedseqdb`. Empty
+    `<target>.GPU_READY` marker files are therefore not sufficient evidence.
+    """
+    target = Path(target_db)
+    for suffix in GPU_TARGET_DB_SUFFIXES:
+        candidate = Path(str(target) + suffix)
+        if _mmseqs_db_prefix_ready(candidate):
+            return candidate
+    return None
+
+
+def describe_mmseqs_gpu_target_db(target_db: str | Path) -> Dict[str, Any]:
+    target = Path(target_db)
+    resolved = resolve_mmseqs_gpu_target_db(target)
+    candidates = [str(Path(str(target) + suffix)) for suffix in GPU_TARGET_DB_SUFFIXES]
+    return {
+        "logical_target_db": str(target),
+        "gpu_target_db": str(resolved) if resolved else None,
+        "ready": resolved is not None,
+        "candidate_prefixes": candidates,
+        "gpu_ready_marker": str(Path(str(target) + ".GPU_READY")),
+        "gpu_ready_marker_exists": Path(str(target) + ".GPU_READY").exists(),
+        "required_command": f"mmseqs makepaddedseqdb {target} {target}_gpu",
+    }
+
+
+def _replace_search_target_db(params: List[str], target_db: Path) -> List[str]:
+    updated = [str(part) for part in params]
+    if len(updated) < 3 or updated[0] != "search":
+        raise ValueError("Expected MMseqs search params with target DB at argv[2]")
+    updated[2] = str(target_db)
+    return updated
+
+
+def _read_mmseqs_index_rows(index_path: str | Path) -> List[Tuple[int, int, int, List[str]]]:
+    rows: List[Tuple[int, int, int, List[str]]] = []
+    for line_number, line in enumerate(Path(index_path).read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            raise RuntimeError(f"Invalid MMseqs index row {line_number} in {index_path}: {line!r}")
+        try:
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), parts[3:]))
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid MMseqs index integers at row {line_number} in {index_path}: {line!r}") from exc
+    return rows
+
+
+def _collect_alignment_result_target_keys(record: bytes) -> set[int]:
+    keys: set[int] = set()
+    body = record[:-1] if record.endswith(b"\x00") else record
+    for raw_line in body.split(b"\n"):
+        if not raw_line:
+            continue
+        target_token = raw_line.split(b"\t", 1)[0]
+        if not target_token:
+            continue
+        try:
+            keys.add(int(target_token))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Cannot parse MMseqs alignment-result target key from line prefix {raw_line[:80]!r}"
+            ) from exc
+    return keys
+
+
+def _remap_alignment_result_record(record: bytes, key_map: Dict[int, int]) -> Tuple[bytes, int]:
+    trailing_nul = b"\x00" if record.endswith(b"\x00") else b""
+    body = record[:-1] if trailing_nul else record
+    remapped_hits = 0
+    remapped_lines: List[bytes] = []
+    for raw_line in body.split(b"\n"):
+        if not raw_line:
+            remapped_lines.append(raw_line)
+            continue
+        parts = raw_line.split(b"\t", 1)
+        if len(parts) != 2:
+            raise RuntimeError(f"Invalid MMseqs alignment-result line without tab separator: {raw_line[:80]!r}")
+        try:
+            gpu_key = int(parts[0])
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Cannot parse MMseqs alignment-result target key from line prefix {raw_line[:80]!r}"
+            ) from exc
+        logical_key = key_map.get(gpu_key)
+        if logical_key is None:
+            raise RuntimeError(f"GPU target lookup is missing target key {gpu_key}")
+        remapped_lines.append(str(logical_key).encode("ascii") + b"\t" + parts[1])
+        remapped_hits += 1
+    return b"\n".join(remapped_lines) + trailing_nul, remapped_hits
+
+
+def _load_gpu_lookup_filenumber_map(lookup_path: str | Path, required_keys: set[int]) -> Dict[int, int]:
+    mapping: Dict[int, int] = {}
+    lookup_path = Path(lookup_path)
+    with lookup_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if len(mapping) == len(required_keys):
+                break
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 3:
+                continue
+            try:
+                gpu_key = int(parts[0])
+            except ValueError:
+                continue
+            if gpu_key not in required_keys:
+                continue
+            try:
+                mapping[gpu_key] = int(parts[2])
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid logical fileNumber for GPU lookup key {gpu_key} at {lookup_path}:{line_number}: {parts[2]!r}"
+                ) from exc
+    missing = sorted(required_keys - set(mapping))
+    if missing:
+        preview = ", ".join(str(key) for key in missing[:10])
+        plural = "s" if len(missing) != 1 else ""
+        raise RuntimeError(
+            f"GPU target lookup {lookup_path} is missing {len(missing)} target key{plural}: {preview}"
+        )
+    return mapping
+
+
+def remap_mmseqs_result_target_keys_from_gpu_lookup(
+    *,
+    result_db: str | Path,
+    gpu_target_db: str | Path,
+    output_db: str | Path,
+    stage: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Rewrite MMseqs alignment-result target IDs from padded-GPU to logical keyspace.
+
+    `mmseqs makepaddedseqdb` creates a GPU target DB whose numeric target IDs
+    are remapped. Search results against that padded target therefore cannot be
+    consumed directly by ColabFold's logical `<target>_seq` / `<target>_aln`
+    stages. The padded target `.lookup` stores the original logical target key
+    in its third `fileNumber` column; rewrite the first column of each alignment
+    result row through that mapping before result2profile/expandaln/result2msa.
+    """
+    result_db = Path(result_db)
+    gpu_target_db = Path(gpu_target_db)
+    output_db = Path(output_db)
+    if result_db.resolve() == output_db.resolve():
+        raise RuntimeError("Refusing to remap MMseqs result DB in place")
+
+    index_path = Path(str(result_db) + ".index")
+    dbtype_path = Path(str(result_db) + ".dbtype")
+    lookup_path = Path(str(gpu_target_db) + ".lookup")
+    if not result_db.exists():
+        raise RuntimeError(f"MMseqs result DB is missing: {result_db}")
+    if not index_path.exists():
+        raise RuntimeError(f"MMseqs result DB index is missing: {index_path}")
+    if not dbtype_path.exists():
+        raise RuntimeError(f"MMseqs result DB dbtype is missing: {dbtype_path}")
+    if not lookup_path.exists():
+        raise RuntimeError(f"GPU target lookup is missing: {lookup_path}")
+
+    rows = _read_mmseqs_index_rows(index_path)
+    required_keys: set[int] = set()
+    source_bytes = result_db.read_bytes()
+    records: List[Tuple[int, bytes, List[str]]] = []
+    for query_key, offset, length, extra in rows:
+        record = source_bytes[offset: offset + length]
+        if len(record) != length:
+            raise RuntimeError(
+                f"MMseqs result DB record for query {query_key} is truncated: expected {length} bytes, got {len(record)}"
+            )
+        required_keys.update(_collect_alignment_result_target_keys(record))
+        records.append((query_key, record, extra))
+
+    key_map = _load_gpu_lookup_filenumber_map(lookup_path, required_keys) if required_keys else {}
+    output_db.parent.mkdir(parents=True, exist_ok=True)
+    output_index_rows: List[str] = []
+    output_payload = bytearray()
+    remapped_hits = 0
+    for query_key, record, extra in records:
+        remapped_record, record_remapped_hits = _remap_alignment_result_record(record, key_map)
+        offset = len(output_payload)
+        output_payload.extend(remapped_record)
+        remapped_hits += record_remapped_hits
+        extra_columns = "" if not extra else "\t" + "\t".join(extra)
+        output_index_rows.append(f"{query_key}\t{offset}\t{len(remapped_record)}{extra_columns}\n")
+
+    output_db.write_bytes(bytes(output_payload))
+    Path(str(output_db) + ".index").write_text("".join(output_index_rows), encoding="utf-8")
+    shutil.copyfile(dbtype_path, Path(str(output_db) + ".dbtype"))
+    return {
+        "stage": stage,
+        "result_db": str(result_db),
+        "gpu_target_db": str(gpu_target_db),
+        "lookup_path": str(lookup_path),
+        "output_db": str(output_db),
+        "result_records": len(records),
+        "target_hits": remapped_hits,
+        "unique_target_keys": len(required_keys),
+        "remapped_hits": remapped_hits,
+    }
 
 
 def load_scheduler_gpu_policy(config_path: Optional[Path] = None) -> Dict[str, Optional[List[int]]]:
@@ -2307,6 +2632,7 @@ def run_colabfold_msa_workflow(
     min_depth_warning: int = 100,
     min_depth_fail: int = 0,
     fast_env_fallback_min_depth: int = 25,
+    allow_degraded_quality: bool = False,
 ):
     """
     Generate MSA using FULL ColabFold-compatible workflow.
@@ -2362,6 +2688,9 @@ def run_colabfold_msa_workflow(
         fast_env_fallback_min_depth: For preset=fast when use_env is disabled,
             automatically run EnvDB search if UniRef-only depth is below this.
             Set to 0 to disable this fallback.
+        allow_degraded_quality: Permit high-quality local MSA runs to continue
+            after core ColabFold stages fail. Defaults to False so maximum and
+            balanced do not silently feed degraded A3Ms downstream.
     """
     def _should_retry_direct_gpu_on_cpu(err: Exception) -> bool:
         msg = str(err).lower()
@@ -2399,6 +2728,17 @@ def run_colabfold_msa_workflow(
         config["sensitivity"] = sensitivity
     if max_seqs is not None:
         config["max_seqs"] = max(1, int(max_seqs))
+    filterresult_qsc = 0.8 if config["use_filter"] else config["qsc"]
+    filterresult_max_seq_id = 1.0 if config["use_filter"] else config["max_seq_id"]
+    degraded_reasons: List[str] = []
+    db_integrity_report: Dict[str, Any] = {
+        "checked": False,
+        "reason": "not_checked",
+        "compatible": None,
+        "issues": [],
+        "families": {},
+    }
+    db_integrity_report_path: Optional[str] = None
     
     # Resolve DB paths before cache lookup so cache profile can reflect effective config.
     db_path = Path(db_path)
@@ -2406,8 +2746,62 @@ def run_colabfold_msa_workflow(
     envdb = db_path / "colabfold_envdb_202108_db"
     env_available = envdb.exists() and Path(str(envdb) + ".dbtype").exists()
     if config["use_env"] and not env_available:
-        print("WARNING: Environmental DB not found, falling back to UniRef30 only", flush=True)
+        message = "Environmental DB prefix is missing"
+        if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+            raise RuntimeError(
+                f"{message}; refusing degraded high-quality local MSA. "
+                "Install/repair the local ColabFold EnvDB bundle or pass "
+                "--allow-degraded-quality to continue intentionally with UniRef30 only."
+            )
+        degraded_reasons.append("envdb_missing")
+        print(f"WARNING: {message}; falling back to UniRef30 only", flush=True)
         config["use_env"] = False
+
+    db_integrity_report = build_runtime_db_integrity_preflight(
+        db_path,
+        use_env=bool(config["use_env"]),
+        use_expand=bool(config["use_expand"]),
+    )
+    db_integrity_report_path = write_runtime_db_integrity_preflight(out_dir, job_name, db_integrity_report)
+    if db_integrity_report["issues"]:
+        first_issue = str(db_integrity_report["issues"][0])
+        uniref_core_invalid = any(
+            str(issue).startswith(("UniRef target", "UniRef sequence"))
+            for issue in db_integrity_report["issues"]
+        )
+        env_core_invalid = any(
+            str(issue).startswith(("EnvDB target", "EnvDB sequence"))
+            for issue in db_integrity_report["issues"]
+        )
+        alignment_invalid = any("alignment" in str(issue) for issue in db_integrity_report["issues"])
+        if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+            raise RuntimeError(
+                f"{first_issue}; refusing degraded high-quality local MSA. "
+                "Repair/rebuild the local ColabFold DB bundle or pass "
+                "--allow-degraded-quality to continue intentionally. "
+                f"Integrity report: {db_integrity_report_path}"
+            )
+        if uniref_core_invalid:
+            raise RuntimeError(
+                f"{first_issue}; local UniRef30 DB is required and cannot be degraded away. "
+                f"Integrity report: {db_integrity_report_path}"
+            )
+        if env_core_invalid:
+            degraded_reasons.append("envdb_integrity_invalid")
+            config["use_env"] = False
+            print(
+                f"WARNING: EnvDB integrity preflight failed ({first_issue}); falling back to UniRef30 only. "
+                f"Integrity report: {db_integrity_report_path}",
+                flush=True,
+            )
+        if alignment_invalid and config["use_expand"]:
+            degraded_reasons.append("alignment_integrity_invalid")
+            config["use_expand"] = False
+            print(
+                f"WARNING: Alignment DB integrity preflight failed ({first_issue}); skipping expansion. "
+                f"Integrity report: {db_integrity_report_path}",
+                flush=True,
+            )
 
     cache_profile = build_cache_profile(
         preset=preset,
@@ -2484,6 +2878,8 @@ def run_colabfold_msa_workflow(
                         "sanitized_invalid_chars_removed": int(removed_invalid_chars),
                         "selected_gpu_id": None,
                         "used_gpu_mmseqs": None,
+                        "db_integrity": db_integrity_report,
+                        "db_integrity_report_path": db_integrity_report_path,
                         "from_cache": True,
                     }, f, indent=2)
                 
@@ -2523,6 +2919,41 @@ def run_colabfold_msa_workflow(
         effective_preferred_gpus = list(runtime.get("effective_preferred_gpus") or [])
         selected_gpu_id = runtime["selected_gpu_id"]
         use_gpu_flag = bool(runtime["use_gpu_mmseqs"])
+        gpu_mmseqs_requested = bool(use_gpu_flag)
+        gpu_target_db_status: Dict[str, Dict[str, Any]] = {
+            "uniref30_2302_db": describe_mmseqs_gpu_target_db(uniref_db),
+        }
+        if config["use_env"]:
+            gpu_target_db_status["colabfold_envdb_202108_db"] = describe_mmseqs_gpu_target_db(envdb)
+        gpu_target_fallback_reason: Optional[str] = None
+        gpu_uniref_search_db = uniref_db
+        gpu_envdb_search_db = envdb
+
+        if use_gpu_flag:
+            missing_gpu_targets = [
+                f"{name} (expected one of: {', '.join(status['candidate_prefixes'])})"
+                for name, status in gpu_target_db_status.items()
+                if not status.get("ready")
+            ]
+            if missing_gpu_targets:
+                gpu_target_fallback_reason = "gpu_db_not_ready: " + "; ".join(missing_gpu_targets)
+                message = (
+                    "GPU MMseqs target DB not prepared for padded GPU search: "
+                    + "; ".join(missing_gpu_targets)
+                    + ". Build each target with `mmseqs makepaddedseqdb <target_db> <target_db>_gpu`; "
+                    "empty .GPU_READY markers are not sufficient."
+                )
+                if normalized_gpu_mode == "required" or normalized_gpu_server_mode == "required" or disallow_cpu_fallback:
+                    raise RuntimeError(message)
+                print(f"WARNING: {message} Falling back to CPU MMseqs.", flush=True)
+                use_gpu_flag = False
+                selected_gpu_id = None
+                normalized_gpu_server_mode = "off"
+                mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+            else:
+                gpu_uniref_search_db = Path(gpu_target_db_status["uniref30_2302_db"]["gpu_target_db"])
+                if config["use_env"]:
+                    gpu_envdb_search_db = Path(gpu_target_db_status["colabfold_envdb_202108_db"]["gpu_target_db"])
 
         if runtime["status"] == "cpu_forced":
             mmseqs_bin = Path(runtime["mmseqs_bin"])
@@ -2570,9 +3001,29 @@ def run_colabfold_msa_workflow(
         gpuserver_sources: Dict[str, str] = {}
         gpuserver_host_status: Dict[str, Dict[str, Any]] = {}
         isolated_task_context = bool(runtime.get("isolated_task_context"))
+        mmseqs_stage_reports: List[Dict[str, Any]] = []
+        gpu_target_result_remaps: List[Dict[str, Any]] = []
+        envdb_acceleration_fallback_reason: Optional[str] = gpu_target_fallback_reason
+        envdb_acceleration_backend_hint: Optional[str] = None
+
+        def run_mmseqs_stage(stage: str, mmseqs_bin_arg, params, env_arg):
+            report = command_report(stage, mmseqs_bin_arg, params)
+            started = time.monotonic()
+            try:
+                result = run_mmseqs(mmseqs_bin_arg, params, env_arg)
+                report.returncode = int(getattr(result, "returncode", 0) or 0)
+                return result
+            except Exception as exc:
+                report.returncode = 1
+                report.fallback_reason = str(exc)
+                raise
+            finally:
+                report.elapsed_seconds = time.monotonic() - started
+                mmseqs_stage_reports.append(report.to_json())
 
         def _run_search_with_gpu_server(
             *,
+            stage: str,
             target_db: Path,
             base_search_params: List[str],
             prefilter_mode: int,
@@ -2586,7 +3037,7 @@ def run_colabfold_msa_workflow(
                     max_seqs=config["max_seqs"],
                     prefilter_mode=prefilter_mode,
                     db_load_mode=gpu_server_db_load_mode,
-                    include_envdb=(target_db.name == envdb.name),
+                    include_envdb=(Path(target_db) in {Path(envdb), Path(gpu_envdb_search_db)}),
                     status_url=gpuserver_status_url,
                 )
                 gpuserver_host_status[target_db.name] = host_status
@@ -2595,7 +3046,7 @@ def run_colabfold_msa_workflow(
                         f"Reusing host gpuserver for {target_db.name} via {gpuserver_status_url}.",
                         flush=True,
                     )
-                    run_mmseqs(mmseqs_bin, base_search_params + [
+                    run_mmseqs_stage(stage, mmseqs_bin, base_search_params + [
                         "--db-load-mode", str(gpu_server_db_load_mode),
                         "--gpu", "1",
                         "--gpu-server", "1",
@@ -2633,7 +3084,7 @@ def run_colabfold_msa_workflow(
                     f"(pid={server_meta.get('pid')}, gpu={env.get('CUDA_VISIBLE_DEVICES', 'auto')})",
                     flush=True,
                 )
-                run_mmseqs(mmseqs_bin, base_search_params + [
+                run_mmseqs_stage(stage, mmseqs_bin, base_search_params + [
                     "--db-load-mode", str(gpu_server_db_load_mode),
                     "--gpu", "1",
                     "--gpu-server", "1",
@@ -2657,7 +3108,7 @@ def run_colabfold_msa_workflow(
                 log_path=gpuserver_log,
                 startup_wait_seconds=gpu_server_startup_wait,
             ):
-                run_mmseqs(mmseqs_bin, base_search_params + [
+                run_mmseqs_stage(stage, mmseqs_bin, base_search_params + [
                     "--db-load-mode", str(gpu_server_db_load_mode),
                     "--gpu", "1",
                     "--gpu-server", "1",
@@ -2677,7 +3128,7 @@ def run_colabfold_msa_workflow(
                 f.write(f">query\n{sequence}\n")
             
             query_db = os.path.join(tmp_dir, "qdb")
-            run_mmseqs(mmseqs_bin, [
+            run_mmseqs_stage("createdb", mmseqs_bin, [
                 "createdb", query_fasta, query_db,
                 "--shuffle", "0", "--dbtype", "1"
             ], env)
@@ -2688,14 +3139,23 @@ def run_colabfold_msa_workflow(
             print(f"Searching UniRef30 ({config['num_iterations']} iterations)...", flush=True)
             
             result_db = os.path.join(tmp_dir, "res")
-            base_search_params = [
+            uniref_base_search_params_cpu = [
                 "search", query_db, str(uniref_db), result_db,
                 os.path.join(tmp_dir, "tmp"),
                 "--num-iterations", str(config["num_iterations"]),
                 "-a",  # Report alignments
                 "-e", str(config["evalue"]),
                 "--max-seqs", str(config["max_seqs"]),
+                "-s", str(config["sensitivity"]),
             ]
+            base_search_params = (
+                _replace_search_target_db(uniref_base_search_params_cpu, gpu_uniref_search_db)
+                if use_gpu_flag
+                else uniref_base_search_params_cpu
+            )
+            uniref_search_used_gpu_padded_target = False
+            if use_gpu_flag and Path(base_search_params[2]) != uniref_db:
+                print(f"Using padded GPU UniRef target DB: {base_search_params[2]}", flush=True)
             
             if use_gpu_flag:
                 used_gpu_server = False
@@ -2703,12 +3163,14 @@ def run_colabfold_msa_workflow(
                 if normalized_gpu_server_mode != "off":
                     try:
                         _run_search_with_gpu_server(
-                            target_db=uniref_db,
+                            stage="uniref_search",
+                            target_db=gpu_uniref_search_db,
                             base_search_params=base_search_params,
                             prefilter_mode=1,
                             tmp_dir=tmp_dir,
                         )
                         used_gpu_server = True
+                        uniref_search_used_gpu_padded_target = Path(base_search_params[2]) != uniref_db
                     except Exception as e:
                         if normalized_gpu_server_mode == "required":
                             raise
@@ -2729,12 +3191,13 @@ def run_colabfold_msa_workflow(
                 if not used_gpu_server:
                     if direct_gpu_allowed:
                         try:
-                            run_mmseqs(mmseqs_bin, base_search_params + [
+                            run_mmseqs_stage("uniref_search", mmseqs_bin, base_search_params + [
                                 "--db-load-mode", "2",  # mmap databases into RAM for faster I/O
                                 "--gpu", "1",
                                 "--prefilter-mode", "1",
                                 "--threads", str(num_threads),
                             ], env)
+                            uniref_search_used_gpu_padded_target = Path(base_search_params[2]) != uniref_db
                         except RuntimeError as e:
                             if not _should_retry_direct_gpu_on_cpu(e):
                                 raise
@@ -2743,21 +3206,21 @@ def run_colabfold_msa_workflow(
                                 flush=True,
                             )
                             use_gpu_flag = False
-                            run_mmseqs(mmseqs_bin, base_search_params + [
+                            uniref_search_used_gpu_padded_target = False
+                            run_mmseqs_stage("uniref_search", mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin, uniref_base_search_params_cpu + [
                                 "--db-load-mode", "2",  # mmap databases into RAM for faster I/O
-                                "-s", str(config["sensitivity"]),
                                 "--threads", str(num_threads),
                             ], env)
                     else:
-                        run_mmseqs(mmseqs_bin, base_search_params + [
+                        uniref_search_used_gpu_padded_target = False
+                        run_mmseqs_stage("uniref_search", mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin, uniref_base_search_params_cpu + [
                             "--db-load-mode", "2",  # mmap databases into RAM for faster I/O
-                            "-s", str(config["sensitivity"]),
                             "--threads", str(num_threads),
                         ], env)
             else:
-                run_mmseqs(mmseqs_bin, base_search_params + [
+                uniref_search_used_gpu_padded_target = False
+                run_mmseqs_stage("uniref_search", mmseqs_bin, base_search_params + [
                     "--db-load-mode", "2",  # mmap databases into RAM for faster I/O
-                    "-s", str(config["sensitivity"]),
                     "--threads", str(num_threads),
                 ], env)
             
@@ -2766,22 +3229,74 @@ def run_colabfold_msa_workflow(
             # ═══════════════════════════════════════════════════════════════════
             profile_db = os.path.join(tmp_dir, "prof_res")
             has_profile = False
-            
-            # ColabFold uses profile_1 (first iteration profile), but check all iterations
-            for iter_num in [1, 2, 3, config["num_iterations"]]:
-                profile_source = os.path.join(tmp_dir, f"tmp/latest/profile_{iter_num}")
-                if os.path.exists(profile_source + ".dbtype"):
-                    print(f"Found profile at iteration {iter_num}", flush=True)
-                    run_mmseqs(mmseqs_bin, ["mvdb", profile_source, profile_db], env)
-                    # Link headers
-                    run_mmseqs(mmseqs_bin, ["lndb", query_db + "_h", profile_db + "_h"], env)
+            profile_builder_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+
+            if uniref_search_used_gpu_padded_target:
+                # GPU search uses a makepaddedseqdb target. Its result DB target
+                # IDs are in the padded GPU keyspace, not the logical ColabFold
+                # target keyspace used by *_seq/*_aln. Rewrite result rows via
+                # the padded target .lookup before any downstream logical-stage
+                # result2profile/expandaln/filter/result2msa command sees them.
+                try:
+                    remap_report = remap_mmseqs_result_target_keys_from_gpu_lookup(
+                        result_db=result_db,
+                        gpu_target_db=gpu_uniref_search_db,
+                        output_db=os.path.join(tmp_dir, "res_logical"),
+                        stage="uniref_search",
+                    )
+                    gpu_target_result_remaps.append(remap_report)
+                    result_db = str(remap_report["output_db"])
+                    print(
+                        "Remapped UniRef GPU search result target IDs back to logical UniRef keyspace.",
+                        flush=True,
+                    )
+                except RuntimeError as e:
+                    raise RuntimeError(
+                        f"Could not remap UniRef padded-GPU search results to logical target keyspace ({e}); "
+                        "refusing to continue with a corrupted local MSA."
+                    ) from e
+
+                # The profile MMseqs writes under tmp/latest is also in the
+                # padded target's coordinate space. Rebuild the profile from the
+                # remapped GPU hits against the logical target DB before any
+                # high-quality UniRef/EnvDB stages consume it.
+                try:
+                    print(
+                        "Rebuilding UniRef profile from GPU search results against logical UniRef target DB...",
+                        flush=True,
+                    )
+                    run_mmseqs_stage("uniref_result2profile", profile_builder_bin, [
+                        "result2profile", query_db, str(uniref_db), result_db, profile_db,
+                        "--threads", str(num_threads),
+                        "--db-load-mode", "2",
+                    ], env)
                     has_profile = True
-                    break
+                except RuntimeError as e:
+                    message = f"Could not rebuild UniRef profile from padded GPU search results ({e})"
+                    if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                        raise RuntimeError(
+                            f"{message}; refusing degraded high-quality local MSA. "
+                            "Pass --allow-degraded-quality to continue intentionally."
+                        ) from e
+                    degraded_reasons.append("uniref_gpu_profile_rebuild_failed")
+                    print(f"WARNING: {message}; using query DB for env search", flush=True)
+                    profile_db = query_db
+            else:
+                # ColabFold uses profile_1 (first iteration profile), but check all iterations
+                for iter_num in [1, 2, 3, config["num_iterations"]]:
+                    profile_source = os.path.join(tmp_dir, f"tmp/latest/profile_{iter_num}")
+                    if os.path.exists(profile_source + ".dbtype"):
+                        print(f"Found profile at iteration {iter_num}", flush=True)
+                        run_mmseqs_stage("profile_mvdb", mmseqs_bin, ["mvdb", profile_source, profile_db], env)
+                        # Link headers
+                        run_mmseqs_stage("profile_lndb", mmseqs_bin, ["lndb", query_db + "_h", profile_db + "_h"], env)
+                        has_profile = True
+                        break
             
             if not has_profile:
                 # GPU paths do not always emit tmp/latest/profile_*. Build profile DB directly.
                 try:
-                    run_mmseqs(mmseqs_bin, [
+                    run_mmseqs_stage("result2profile", profile_builder_bin, [
                         "result2profile", query_db, str(uniref_db), result_db, profile_db,
                         "--threads", str(num_threads),
                         "--db-load-mode", "2",
@@ -2800,25 +3315,41 @@ def run_colabfold_msa_workflow(
             # ═══════════════════════════════════════════════════════════════════
             can_expand = False
             if config["use_expand"]:
-                # Check if alignment database is valid for expansion
+                # Check if alignment database is valid for expansion. A plain
+                # file-size check is not enough: a bad rebuild can leave an
+                # `_aln.index` in a different numeric keyspace from the target
+                # DB, which makes expandaln emit `Missing alignments...`.
                 aln_db = Path(str(uniref_db) + "_aln")
-                aln_index = Path(str(uniref_db) + "_aln.index")
-                if aln_db.exists() and aln_index.exists():
-                    # Verify the aln file is larger than its index (sanity check)
-                    aln_size = aln_db.stat().st_size
-                    index_size = aln_index.stat().st_size
-                    if aln_size > index_size:
+                if aln_db.exists():
+                    validation = validate_alignment_index_keyspace(uniref_db, aln_db)
+                    if validation.compatible:
                         can_expand = True
                     else:
-                        print(f"WARNING: Alignment database appears incomplete ({aln_size} bytes < {index_size} bytes index), skipping expansion", flush=True)
+                        message = f"UniRef alignment DB keyspace validation failed: {validation.reason}"
+                        if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                            raise RuntimeError(
+                                f"{message}; refusing degraded high-quality local MSA. "
+                                "Repair/rebuild the local ColabFold UniRef alignment DB or pass "
+                                "--allow-degraded-quality to continue intentionally."
+                            )
+                        degraded_reasons.append("uniref_aln_keyspace_invalid")
+                        print(f"WARNING: {message}; skipping expansion", flush=True)
                 else:
-                    print("WARNING: Alignment database not found, skipping expansion", flush=True)
+                    message = "UniRef alignment DB prefix is missing"
+                    if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                        raise RuntimeError(
+                            f"{message}; refusing degraded high-quality local MSA. "
+                            "Repair/rebuild the local ColabFold UniRef alignment DB or pass "
+                            "--allow-degraded-quality to continue intentionally."
+                        )
+                    degraded_reasons.append("uniref_aln_missing")
+                    print(f"WARNING: {message}; skipping expansion", flush=True)
             
             if can_expand:
                 print("Expanding alignments to recover cluster members...", flush=True)
                 expanded_db = os.path.join(tmp_dir, "res_exp")
                 try:
-                    run_mmseqs(mmseqs_bin, [
+                    run_mmseqs_stage("uniref_expandaln", mmseqs_bin, [
                         "expandaln", query_db, str(uniref_db) + "_seq",
                         result_db, str(uniref_db) + "_aln", expanded_db,
                         "--expansion-mode", "0",
@@ -2830,7 +3361,7 @@ def run_colabfold_msa_workflow(
                     
                     # Realign expanded hits
                     realigned_db = os.path.join(tmp_dir, "res_exp_realign")
-                    run_mmseqs(mmseqs_bin, [
+                    run_mmseqs_stage("uniref_align", mmseqs_bin, [
                         "align", profile_db if has_profile else query_db, 
                         str(uniref_db) + "_seq",
                         expanded_db, realigned_db,
@@ -2842,7 +3373,14 @@ def run_colabfold_msa_workflow(
                     ], env)
                     result_db = realigned_db
                 except RuntimeError as e:
-                    print(f"WARNING: Alignment expansion failed ({e}), continuing without expansion", flush=True)
+                    message = f"Alignment expansion failed ({e})"
+                    if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                        raise RuntimeError(
+                            f"{message}; refusing degraded high-quality local MSA. "
+                            "Pass --allow-degraded-quality to continue intentionally."
+                        ) from e
+                    degraded_reasons.append("uniref_expandaln_failed")
+                    print(f"WARNING: {message}, continuing without expansion", flush=True)
             
             # ═══════════════════════════════════════════════════════════════════
             # STEP 5: Quality filtering (Maximum/Balanced presets)
@@ -2850,13 +3388,13 @@ def run_colabfold_msa_workflow(
             if config["use_filter"]:
                 print("Filtering MSA by quality metrics...", flush=True)
                 filtered_db = os.path.join(tmp_dir, "res_filtered")
-                run_mmseqs(mmseqs_bin, [
+                run_mmseqs_stage("uniref_filterresult", mmseqs_bin, [
                     "filterresult", query_db, str(uniref_db) + "_seq",
                     result_db, filtered_db,
                     "--qid", "0",
-                    "--qsc", str(config["qsc"]),
+                    "--qsc", str(filterresult_qsc),
                     "--diff", "0",
-                    "--max-seq-id", str(config["max_seq_id"]),
+                    "--max-seq-id", str(filterresult_max_seq_id),
                     "--filter-min-enable", "100",
                     "--threads", str(num_threads),
                 ], env)
@@ -2874,10 +3412,10 @@ def run_colabfold_msa_workflow(
                 "--qsc", "0",
                 "--max-seq-id", "0.95",
             ]
-            run_mmseqs(mmseqs_bin, [
+            run_mmseqs_stage("uniref_result2msa", mmseqs_bin, [
                 "result2msa", query_db, str(uniref_db) + "_seq",
                 result_db, uniref_a3m_db,
-                "--msa-format-mode", "5",
+                "--msa-format-mode", "6",
                 "--threads", str(num_threads),
                 "--db-load-mode", "2",  # Preload sequence DB into RAM
             ] + filter_params, env)
@@ -2896,7 +3434,7 @@ def run_colabfold_msa_workflow(
                 try:
                     preview_dir = os.path.join(tmp_dir, "uniref_preview")
                     os.makedirs(preview_dir, exist_ok=True)
-                    run_mmseqs(mmseqs_bin, [
+                    run_mmseqs_stage("uniref_preview_unpack", mmseqs_bin, [
                         "unpackdb", uniref_a3m_db, preview_dir,
                         "--unpack-name-mode", "0",
                         "--unpack-suffix", ".a3m",
@@ -2946,7 +3484,7 @@ def run_colabfold_msa_workflow(
                     and effective_preferred_gpus
                 ):
                     reclaimed = reclaim_conflicting_gpuserver_instances(
-                        target_db=envdb,
+                        target_db=gpu_envdb_search_db,
                         preferred_gpus=effective_preferred_gpus,
                         cache_dir=cache_dir,
                     )
@@ -2957,14 +3495,23 @@ def run_colabfold_msa_workflow(
                         )
                 
                 env_result_db = os.path.join(tmp_dir, "res_env")
-                env_base_search_params = [
-                    "search", profile_db if has_profile else query_db, 
+                env_base_search_params_cpu = [
+                    "search", profile_db if has_profile else query_db,
                     str(envdb), env_result_db,
                     os.path.join(tmp_dir, "tmp_env"),
                     "--num-iterations", str(config["num_iterations"]),
                     "-a", "-e", str(config["evalue"]),
                     "--max-seqs", str(config["max_seqs"]),
+                    "-s", str(config["sensitivity"]),
                 ]
+                env_base_search_params = (
+                    _replace_search_target_db(env_base_search_params_cpu, gpu_envdb_search_db)
+                    if use_gpu_flag
+                    else env_base_search_params_cpu
+                )
+                env_search_used_gpu_padded_target = False
+                if use_gpu_flag and Path(env_base_search_params[2]) != envdb:
+                    print(f"Using padded GPU EnvDB target DB: {env_base_search_params[2]}", flush=True)
 
                 target_shard_plan = build_target_shard_plan_from_gb(
                     mode=target_shard_mode,
@@ -2979,49 +3526,78 @@ def run_colabfold_msa_workflow(
                 )
                 if target_shard_plan.enabled:
                     print(
-                        f"Target DB sharding enabled for EnvDB: {target_shard_plan.shard_count} shard(s) "
-                        f"x {target_shard_plan.threads_per_worker} thread(s) "
-                        f"(total budget {target_shard_plan.total_threads}).",
+                        f"MMseqs native target splitting enabled for EnvDB: split={target_shard_plan.shard_count}, "
+                        f"threads={target_shard_plan.total_threads} (global budget).",
                         flush=True,
                     )
                     try:
-                        shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
-                        target_shard_materialization = ensure_target_shards(
-                            mmseqs_bin=shard_mmseqs_bin,
-                            target_db=envdb,
-                            shard_count=target_shard_plan.shard_count,
-                            shard_cache_dir=target_shard_plan.shard_cache_dir,
-                            env=env,
-                            run_mmseqs=run_mmseqs,
-                        )
-                        print(
-                            f"{'Reusing' if target_shard_materialization.reused else 'Built'} EnvDB target shards: "
-                            f"{target_shard_materialization.manifest_path}",
-                            flush=True,
-                        )
-                        run_sharded_target_search(
-                            mmseqs_bin=shard_mmseqs_bin,
-                            query_db=profile_db if has_profile else query_db,
-                            target_db=envdb,
-                            result_db=env_result_db,
-                            tmp_dir=os.path.join(tmp_dir, "tmp_env_sharded"),
-                            base_search_params=env_base_search_params,
-                            shards=target_shard_materialization.shards,
-                            threads_per_worker=target_shard_plan.threads_per_worker,
-                            env=env,
-                            run_mmseqs=run_mmseqs,
-                            extra_search_params=[
-                                "--db-load-mode", str(gpu_server_db_load_mode),
-                                "-s", str(config["sensitivity"]),
-                            ],
-                            max_parallel_workers=target_shard_plan.shard_count,
-                        )
-                        target_sharded_env_search = True
+                        # Use MMseqs' native search splitting so iterative/profile
+                        # barriers stay inside the MMseqs search workflow. The old
+                        # BioModStack splitdb + per-shard search + mergedbs path ran
+                        # independent shard-local iterations and was not
+                        # high-quality-equivalent.
+                        def _run_envdb_native_split(native_bin, extra_params: List[str], base_params: Optional[List[str]] = None) -> None:
+                            run_native_target_split_search(
+                                mmseqs_bin=native_bin,
+                                base_search_params=base_params or env_base_search_params,
+                                split_count=target_shard_plan.shard_count,
+                                total_threads=target_shard_plan.total_threads,
+                                env=env,
+                                run_mmseqs=lambda bin_arg, args, env_arg: run_mmseqs_stage(
+                                    "envdb_search", bin_arg, args, env_arg
+                                ),
+                                extra_search_params=extra_params,
+                                split_mode=0,
+                            )
+
+                        if use_gpu_flag:
+                            try:
+                                envdb_acceleration_backend_hint = "gpu_native_split"
+                                _run_envdb_native_split(
+                                    mmseqs_bin,
+                                    [
+                                        "--db-load-mode", str(gpu_server_db_load_mode),
+                                        "--gpu", "1",
+                                        "--prefilter-mode", "1",
+                                    ],
+                                )
+                                target_sharded_env_search = True
+                                env_search_used_gpu_padded_target = Path(env_base_search_params[2]) != envdb
+                            except Exception as gpu_exc:
+                                if normalized_gpu_mode == "required" or normalized_gpu_server_mode == "required" or disallow_cpu_fallback:
+                                    raise RuntimeError(
+                                        f"GPU EnvDB native target split required but failed: {gpu_exc}"
+                                    ) from gpu_exc
+                                envdb_acceleration_fallback_reason = str(gpu_exc)
+                                envdb_acceleration_backend_hint = "cpu_native_split"
+                                print(
+                                    f"WARNING: GPU EnvDB native target split failed ({gpu_exc}); "
+                                    "falling back to CPU native target split.",
+                                    flush=True,
+                                )
+                                shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+                                _run_envdb_native_split(
+                                    shard_mmseqs_bin,
+                                    ["--db-load-mode", "2"],
+                                    base_params=env_base_search_params_cpu,
+                                )
+                                target_sharded_env_search = True
+                                env_search_used_gpu_padded_target = False
+                        else:
+                            envdb_acceleration_backend_hint = "cpu_native_split"
+                            shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+                            _run_envdb_native_split(
+                                shard_mmseqs_bin,
+                                ["--db-load-mode", "2"],
+                            )
+                            target_sharded_env_search = True
+                            env_search_used_gpu_padded_target = False
                     except Exception as e:
                         if not target_shard_plan.fallback_allowed:
                             raise
+                        envdb_acceleration_fallback_reason = str(e)
                         print(
-                            f"WARNING: EnvDB target sharding failed ({e}); falling back to unsharded EnvDB search.",
+                            f"WARNING: EnvDB native target split search failed ({e}); falling back to unsharded EnvDB search.",
                             flush=True,
                         )
                 elif target_shard_mode != "off":
@@ -3033,12 +3609,14 @@ def run_colabfold_msa_workflow(
                     if normalized_gpu_server_mode != "off":
                         try:
                             _run_search_with_gpu_server(
-                                target_db=envdb,
+                                stage="envdb_search",
+                                target_db=gpu_envdb_search_db,
                                 base_search_params=env_base_search_params,
                                 prefilter_mode=1,
                                 tmp_dir=tmp_dir,
                             )
                             used_gpu_server = True
+                            env_search_used_gpu_padded_target = Path(env_base_search_params[2]) != envdb
                         except Exception as e:
                             if normalized_gpu_server_mode == "required":
                                 raise
@@ -3059,12 +3637,13 @@ def run_colabfold_msa_workflow(
                     if not used_gpu_server:
                         if direct_gpu_allowed:
                             try:
-                                run_mmseqs(mmseqs_bin, env_base_search_params + [
+                                run_mmseqs_stage("envdb_search", mmseqs_bin, env_base_search_params + [
                                     "--db-load-mode", "2",  # mmap databases into RAM
                                     "--gpu", "1",
                                     "--prefilter-mode", "1",
                                     "--threads", str(num_threads),
                                 ], env)
+                                env_search_used_gpu_padded_target = Path(env_base_search_params[2]) != envdb
                             except RuntimeError as e:
                                 if not _should_retry_direct_gpu_on_cpu(e):
                                     raise
@@ -3073,66 +3652,128 @@ def run_colabfold_msa_workflow(
                                     flush=True,
                                 )
                                 use_gpu_flag = False
-                                run_mmseqs(mmseqs_bin, env_base_search_params + [
+                                env_search_used_gpu_padded_target = False
+                                shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+                                run_mmseqs_stage("envdb_search", shard_mmseqs_bin, env_base_search_params_cpu + [
                                     "--db-load-mode", "2",  # mmap databases into RAM
-                                    "-s", str(config["sensitivity"]),
                                     "--threads", str(num_threads),
                                 ], env)
                         else:
-                            run_mmseqs(mmseqs_bin, env_base_search_params + [
+                            env_search_used_gpu_padded_target = False
+                            shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+                            run_mmseqs_stage("envdb_search", shard_mmseqs_bin, env_base_search_params_cpu + [
                                 "--db-load-mode", "2",  # mmap databases into RAM
-                                "-s", str(config["sensitivity"]),
                                 "--threads", str(num_threads),
                             ], env)
                 elif not target_sharded_env_search:
-                    run_mmseqs(mmseqs_bin, env_base_search_params + [
+                    env_search_used_gpu_padded_target = False
+                    run_mmseqs_stage("envdb_search", mmseqs_bin, env_base_search_params + [
                         "--db-load-mode", "2",  # mmap databases into RAM
-                        "-s", str(config["sensitivity"]),
                         "--threads", str(num_threads),
                     ], env)
                 
+                if env_search_used_gpu_padded_target:
+                    try:
+                        remap_report = remap_mmseqs_result_target_keys_from_gpu_lookup(
+                            result_db=env_result_db,
+                            gpu_target_db=gpu_envdb_search_db,
+                            output_db=os.path.join(tmp_dir, "res_env_logical"),
+                            stage="envdb_search",
+                        )
+                        gpu_target_result_remaps.append(remap_report)
+                        env_result_db = str(remap_report["output_db"])
+                        print(
+                            "Remapped EnvDB GPU search result target IDs back to logical EnvDB keyspace.",
+                            flush=True,
+                        )
+                    except RuntimeError as e:
+                        raise RuntimeError(
+                            f"Could not remap EnvDB padded-GPU search results to logical target keyspace ({e}); "
+                            "refusing to continue with a corrupted local MSA."
+                        ) from e
+
                 # Expand environmental hits if enabled
                 if config["use_expand"]:
-                    env_expanded = os.path.join(tmp_dir, "res_env_exp")
-                    run_mmseqs(mmseqs_bin, [
-                        "expandaln", profile_db if has_profile else query_db,
-                        str(envdb) + "_seq",
-                        env_result_db, str(envdb) + "_aln", env_expanded,
-                        "-e", "inf",
-                        "--expansion-mode", "0",
-                        "--threads", str(num_threads),
-                    ], env)
-                    
-                    # Realign expanded environmental hits
-                    env_tmp_dir = os.path.join(tmp_dir, "tmp_env")
-                    env_profile = os.path.join(env_tmp_dir, f"latest/profile_{config['num_iterations']}")
-                    if os.path.exists(env_profile + ".dbtype"):
-                        align_profile = env_profile
+                    env_aln_db = Path(str(envdb) + "_aln")
+                    env_validation = validate_alignment_index_keyspace(envdb, env_aln_db)
+                    if not env_validation.compatible:
+                        message = f"EnvDB alignment DB keyspace validation failed: {env_validation.reason}"
+                        if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                            raise RuntimeError(
+                                f"{message}; refusing degraded high-quality local MSA. "
+                                "Repair/rebuild the local ColabFold EnvDB alignment DB or pass "
+                                "--allow-degraded-quality to continue intentionally."
+                            )
+                        degraded_reasons.append("envdb_aln_keyspace_invalid")
+                        print(f"WARNING: {message}; skipping EnvDB expansion", flush=True)
                     else:
-                        align_profile = profile_db if has_profile else query_db
-                    
-                    env_realigned = os.path.join(tmp_dir, "res_env_realign")
-                    run_mmseqs(mmseqs_bin, [
-                        "align", align_profile, str(envdb) + "_seq",
-                        env_expanded, env_realigned,
-                        "-e", "10",
-                        "--max-accept", "100000",
-                        "--alt-ali", "10",
-                        "-a",
-                        "--threads", str(num_threads),
-                    ], env)
-                    env_result_db = env_realigned
+                        env_expanded = os.path.join(tmp_dir, "res_env_exp")
+                        run_mmseqs_stage("envdb_expandaln", mmseqs_bin, [
+                            "expandaln", profile_db if has_profile else query_db,
+                            str(envdb) + "_seq",
+                            env_result_db, str(envdb) + "_aln", env_expanded,
+                            "-e", "inf",
+                            "--expansion-mode", "0",
+                            "--threads", str(num_threads),
+                        ], env)
+
+                        # Realign expanded environmental hits
+                        env_tmp_dir = os.path.join(tmp_dir, "tmp_env")
+                        env_profile = os.path.join(env_tmp_dir, "latest/profile_1")
+                        if env_search_used_gpu_padded_target:
+                            env_profile = os.path.join(tmp_dir, "prof_env_res")
+                            try:
+                                print(
+                                    "Rebuilding EnvDB profile from GPU search results against logical EnvDB target DB...",
+                                    flush=True,
+                                )
+                                run_mmseqs_stage("envdb_result2profile", profile_builder_bin, [
+                                    "result2profile",
+                                    env_base_search_params_cpu[1],
+                                    str(envdb),
+                                    env_result_db,
+                                    env_profile,
+                                    "--threads", str(num_threads),
+                                    "--db-load-mode", "2",
+                                ], env)
+                                align_profile = env_profile
+                            except RuntimeError as e:
+                                message = f"Could not rebuild EnvDB profile from padded GPU search results ({e})"
+                                if preset in {"maximum", "balanced"} and not allow_degraded_quality:
+                                    raise RuntimeError(
+                                        f"{message}; refusing degraded high-quality local MSA. "
+                                        "Pass --allow-degraded-quality to continue intentionally."
+                                    ) from e
+                                degraded_reasons.append("envdb_gpu_profile_rebuild_failed")
+                                print(f"WARNING: {message}; using UniRef/query profile for EnvDB realign", flush=True)
+                                align_profile = profile_db if has_profile else query_db
+                        elif os.path.exists(env_profile + ".dbtype"):
+                            align_profile = env_profile
+                        else:
+                            align_profile = profile_db if has_profile else query_db
+
+                        env_realigned = os.path.join(tmp_dir, "res_env_realign")
+                        run_mmseqs_stage("envdb_align", mmseqs_bin, [
+                            "align", align_profile, str(envdb) + "_seq",
+                            env_expanded, env_realigned,
+                            "-e", "10",
+                            "--max-accept", "100000",
+                            "--alt-ali", "10",
+                            "-a",
+                            "--threads", str(num_threads),
+                        ], env)
+                        env_result_db = env_realigned
                 
                 # Filter environmental results
                 if config["use_filter"]:
                     env_filtered = os.path.join(tmp_dir, "res_env_filtered")
-                    run_mmseqs(mmseqs_bin, [
+                    run_mmseqs_stage("envdb_filterresult", mmseqs_bin, [
                         "filterresult", query_db, str(envdb) + "_seq",
                         env_result_db, env_filtered,
                         "--qid", "0",
-                        "--qsc", str(config["qsc"]),
+                        "--qsc", str(filterresult_qsc),
                         "--diff", "0",
-                        "--max-seq-id", str(config["max_seq_id"]),
+                        "--max-seq-id", str(filterresult_max_seq_id),
                         "--filter-min-enable", "100",
                         "--threads", str(num_threads),
                     ], env)
@@ -3140,10 +3781,10 @@ def run_colabfold_msa_workflow(
                 
                 # Generate Environmental MSA
                 env_a3m_db = os.path.join(tmp_dir, "env.a3m")
-                run_mmseqs(mmseqs_bin, [
+                run_mmseqs_stage("envdb_result2msa", mmseqs_bin, [
                     "result2msa", query_db, str(envdb) + "_seq",
                     env_result_db, env_a3m_db,
-                    "--msa-format-mode", "5",
+                    "--msa-format-mode", "6",
                     "--threads", str(num_threads),
                     "--db-load-mode", "2",  # Preload sequence DB into RAM
                 ] + filter_params, env)
@@ -3154,7 +3795,7 @@ def run_colabfold_msa_workflow(
             if env_a3m_db and os.path.exists(env_a3m_db + ".dbtype"):
                 print("Merging UniRef30 and Environmental MSAs...", flush=True)
                 final_a3m_db = os.path.join(tmp_dir, "final.a3m")
-                run_mmseqs(mmseqs_bin, [
+                run_mmseqs_stage("merge_msa", mmseqs_bin, [
                     "mergedbs", query_db, final_a3m_db,
                     uniref_a3m_db, env_a3m_db
                 ], env)
@@ -3162,7 +3803,7 @@ def run_colabfold_msa_workflow(
                 final_a3m_db = uniref_a3m_db
             
             # Unpack to final A3M file
-            run_mmseqs(mmseqs_bin, [
+            run_mmseqs_stage("unpack_final", mmseqs_bin, [
                 "unpackdb", final_a3m_db, tmp_dir,
                 "--unpack-name-mode", "0",
                 "--unpack-suffix", ".a3m"
@@ -3248,7 +3889,48 @@ def run_colabfold_msa_workflow(
             # Count MSA depth
             msa_depth = a3m_content.count('\n>') + (1 if a3m_content.startswith('>') else 0)
             print(f"Final MSA depth: {msa_depth} sequences", flush=True)
+
+            effective_gpu_stage_names = effective_gpu_stages(mmseqs_stage_reports)
+            envdb_search_stage_reports = [
+                report for report in mmseqs_stage_reports
+                if report.get("stage") == "envdb_search" and report.get("module") == "search"
+            ]
+            last_envdb_search_report = envdb_search_stage_reports[-1] if envdb_search_stage_reports else None
+            envdb_effective_gpu = bool(
+                last_envdb_search_report
+                and (
+                    last_envdb_search_report.get("uses_gpu_flag")
+                    or last_envdb_search_report.get("uses_gpu_server")
+                )
+            )
+            if last_envdb_search_report:
+                if last_envdb_search_report.get("uses_gpu_server"):
+                    envdb_backend = "gpu_server_native_split" if last_envdb_search_report.get("split_count") else "gpu_server"
+                elif last_envdb_search_report.get("uses_gpu_flag"):
+                    envdb_backend = "gpu_native_split" if last_envdb_search_report.get("split_count") else "gpu_unsharded"
+                elif last_envdb_search_report.get("split_count"):
+                    envdb_backend = "cpu_native_split"
+                else:
+                    envdb_backend = "cpu_unsharded"
+            else:
+                envdb_backend = envdb_acceleration_backend_hint or "not_run"
+            if envdb_acceleration_backend_hint and not envdb_effective_gpu:
+                envdb_backend = envdb_acceleration_backend_hint
+            envdb_acceleration = {
+                "backend": envdb_backend,
+                "requested_gpu": bool(gpu_mmseqs_requested),
+                "effective_gpu": envdb_effective_gpu,
+                "target_split": bool(target_sharded_env_search),
+                "uses_gpu_server": bool(last_envdb_search_report and last_envdb_search_report.get("uses_gpu_server")),
+                "split_count": last_envdb_search_report.get("split_count") if last_envdb_search_report else None,
+                "split_mode": last_envdb_search_report.get("split_mode") if last_envdb_search_report else None,
+                "threads": last_envdb_search_report.get("threads") if last_envdb_search_report else None,
+                "fallback_from_gpu": bool(envdb_acceleration_fallback_reason),
+                "fallback_reason": envdb_acceleration_fallback_reason,
+            }
             
+            mmseqs_stage_report_path = os.path.join(out_dir, f"{job_name}_mmseqs_stage_report.json")
+
             # Quality report
             quality_report = {
                 "msa_depth": msa_depth,
@@ -3260,6 +3942,9 @@ def run_colabfold_msa_workflow(
                 "use_env_effective": bool(effective_use_env),
                 "auto_env_fallback_triggered": bool(auto_env_fallback_triggered),
                 "fast_env_fallback_min_depth": int(max(0, fast_env_fallback_min_depth)),
+                "allow_degraded_quality": bool(allow_degraded_quality),
+                "degraded_quality": bool(degraded_reasons),
+                "degraded_reasons": list(degraded_reasons),
                 "uniref_only_depth": uniref_only_depth,
                 "use_expand": config["use_expand"],
                 "use_filter": config["use_filter"],
@@ -3268,7 +3953,14 @@ def run_colabfold_msa_workflow(
                 "taxon_filter": taxon_list,
                 "sanitized_invalid_chars_removed": int(removed_invalid_chars),
                 "selected_gpu_id": selected_gpu_id,
-                "used_gpu_mmseqs": use_gpu_flag,
+                "gpu_mmseqs_requested": gpu_mmseqs_requested,
+                "used_gpu_mmseqs": bool(effective_gpu_stage_names),
+                "effective_gpu_stages": effective_gpu_stage_names,
+                "mmseqs_gpu_target_dbs": gpu_target_db_status,
+                "mmseqs_gpu_target_result_remaps": gpu_target_result_remaps,
+                "envdb_acceleration": envdb_acceleration,
+                "mmseqs_stage_reports": mmseqs_stage_reports,
+                "mmseqs_stage_report_path": mmseqs_stage_report_path,
                 "gpuserver_mode_requested": gpu_server_mode,
                 "gpuserver_mode_effective": normalized_gpu_server_mode,
                 "gpuserver_db_load_mode": gpu_server_db_load_mode,
@@ -3284,6 +3976,8 @@ def run_colabfold_msa_workflow(
                     }
                     for name, status in gpuserver_host_status.items()
                 },
+                "db_integrity": db_integrity_report,
+                "db_integrity_report_path": db_integrity_report_path,
                 "target_sharding": {
                     "mode_requested": target_shard_mode,
                     "enabled": bool(target_shard_plan.enabled) if target_shard_plan else False,
@@ -3293,6 +3987,8 @@ def run_colabfold_msa_workflow(
                     "threads_per_worker": target_shard_plan.threads_per_worker if target_shard_plan else num_threads,
                     "total_threads": target_shard_plan.total_threads if target_shard_plan else num_threads,
                     "fallback_allowed": bool(target_shard_plan.fallback_allowed) if target_shard_plan else False,
+                    "implementation": "mmseqs_native_search_split" if target_sharded_env_search else "unsharded",
+                    "native_split_mode": 0 if target_sharded_env_search else None,
                     "manifest_path": str(target_shard_materialization.manifest_path) if target_shard_materialization else None,
                     "reused_manifest": bool(target_shard_materialization.reused) if target_shard_materialization else None,
                     "search_was_sharded": bool(target_sharded_env_search),
@@ -3321,6 +4017,21 @@ def run_colabfold_msa_workflow(
             with open(final_a3m, 'w') as f:
                 f.write(a3m_content)
             
+            mmseqs_stage_report_payload = {
+                "job_name": job_name,
+                "preset": preset,
+                "gpu_mmseqs_requested": gpu_mmseqs_requested,
+                "used_gpu_mmseqs": bool(effective_gpu_stage_names),
+                "effective_gpu_stages": effective_gpu_stage_names,
+                "mmseqs_gpu_target_dbs": gpu_target_db_status,
+                "mmseqs_gpu_target_result_remaps": gpu_target_result_remaps,
+                "envdb_acceleration": envdb_acceleration,
+                "stages": mmseqs_stage_reports,
+            }
+            with open(mmseqs_stage_report_path, 'w') as f:
+                json.dump(mmseqs_stage_report_payload, f, indent=2)
+            print(f"MMseqs stage report: {mmseqs_stage_report_path}", flush=True)
+
             report_path = os.path.join(out_dir, f"{job_name}_msa_quality.json")
             with open(report_path, 'w') as f:
                 json.dump(quality_report, f, indent=2)
@@ -3390,7 +4101,7 @@ Quality Presets:
         "--gpu-server-db-load-mode",
         type=int,
         default=DEFAULT_GPUSERVER_DB_LOAD_MODE,
-        choices=[0, 1, 2, 3],
+        choices=GPUSERVER_DB_LOAD_MODE_CHOICES,
         help=f"MMseqs db-load-mode for gpuserver-backed searches (default: {DEFAULT_GPUSERVER_DB_LOAD_MODE})",
     )
     parser.add_argument("--gpu-server-startup-wait", type=float, default=DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
@@ -3443,6 +4154,8 @@ Quality Presets:
                         help="Fail if MSA has fewer sequences (0 = no fail)")
     parser.add_argument("--fast-env-fallback-min-depth", type=int, default=25,
                         help="For preset=fast with use_env disabled, auto-run EnvDB when UniRef depth is below this (0 disables fallback)")
+    parser.add_argument("--allow-degraded-quality", action="store_true",
+                        help="Allow high-quality local MSA runs to continue after core ColabFold stages fail (default: fail fast)")
     parser.add_argument("--target-shard-mode", dest="target_shard_mode", type=str, default="auto",
                         choices=["auto", "required", "off"],
                         help="EnvDB target DB sharding policy for high-quality local MSA runs (default: auto)")

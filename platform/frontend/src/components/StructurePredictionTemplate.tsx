@@ -9,6 +9,8 @@ import MolstarViewer from './MolstarViewer';
 import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
+    BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
+    BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
@@ -39,6 +41,8 @@ import {
     type StructurePredictorSelection,
 } from './structurePredictionUiState.js';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 
 interface StructurePredictionTemplateProps {
     onBack: () => void;
@@ -133,6 +137,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onOpenTemplateManager }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const { gpuOptions } = useLiveGpuCatalog();
     const normalizeProtenixModel = (model?: string) => {
         if (!model) return 'protenix_base_20250630_v1.0.0';
         if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
@@ -160,9 +165,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
     // Core state
+    const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
     const [jobName, setJobName] = useState(initialValues?.name || 'structure_prediction');
-    const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
-    const [lockGpus, setLockGpus] = useState(false);
+    const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
+    const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
+    const clearGpuPinning = () => {
+        setPinnedGpus([]);
+        setLockGpus(false);
+    };
     const [sequence, setSequence] = useState(initialPrimarySequence);
     const [sequenceName, setSequenceName] = useState(initialPrimaryName);
     const [primaryChainId, setPrimaryChainId] = useState<string>(initialPrimaryChain);
@@ -571,10 +581,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         (usesBoltz && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
         (usesProtenix && protenixUseMsa);
+    const boltzCpFallbackGpuIds = useMemo(() => {
+        const explicitGpuIds = initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids;
+        const explicitGpuIdsText = String(explicitGpuIds ?? '').trim();
+        return explicitGpuIdsText || gpuOptions.map((gpu) => gpu.index).join(',');
+    }, [gpuOptions, initialValues?.gpu_ids, initialValues?.bcp_gpu_ids]);
     const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
         pinnedGpus,
         requestedSizeCp: getBoltzCpLogicalSizeCp(bcpShardPlanId),
-        fallbackGpuIds: String(initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids ?? '0,1,2,3'),
+        fallbackGpuIds: boltzCpFallbackGpuIds,
     });
     useEffect(() => {
         if (!isBoltzCpLaunch) return;
@@ -1297,7 +1312,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         </label>
                         <div className="flex gap-2">
                             <button
-                                onClick={() => setPinnedGpus([])}
+                                onClick={clearGpuPinning}
                                 className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
                                     ? 'bg-slate-600 text-white ring-2 ring-slate-400'
                                     : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
@@ -1305,27 +1320,22 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             >
                                 Auto
                             </button>
-                            {[
-                                { id: 0, name: '5090' },
-                                { id: 1, name: '5060Ti' },
-                                { id: 2, name: '3090#1' },
-                                { id: 3, name: '3090#2' },
-                            ].map(gpu => (
+                            {gpuOptions.map(gpu => (
                                 <button
-                                    key={gpu.id}
+                                    key={gpu.index}
                                     onClick={() => {
                                         setPinnedGpus(prev =>
-                                            prev.includes(gpu.id)
-                                                ? prev.filter(g => g !== gpu.id)
-                                                : [...prev, gpu.id].sort()
+                                            prev.includes(gpu.index)
+                                                ? prev.filter(g => g !== gpu.index)
+                                                : [...prev, gpu.index].sort((a, b) => a - b)
                                         );
                                     }}
-                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
+                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.index)
                                         ? 'bg-blue-600 text-white ring-2 ring-blue-400'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {gpu.name}
+                                    {gpu.label}
                                 </button>
                             ))}
                         </div>
@@ -1674,7 +1684,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             />
                             <label htmlFor="boltz-potentials" className="cursor-pointer">
                                 <span className="text-slate-200 font-medium">Use Potentials (Boltz-2x)</span>
-                                <p className="text-xs text-slate-500">Enable physics-based potentials. More accurate but slower.</p>
+                                <p className="text-xs text-slate-500">Enable physics/FK steering potentials. Can improve geometry, but high sample counts multiply internal particles and should use memory-safe batching.</p>
                             </label>
                         </div>
 
@@ -1854,20 +1864,23 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                     onChange={(e) => setBoltzNumSamples(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
                                     min={1}
                                     max={32}
+                                    title={BOLTZ_NUM_SAMPLES_HELP_TEXT}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
+                                <p className="mt-1 text-[11px] leading-snug text-slate-500">{BOLTZ_NUM_SAMPLES_HELP_TEXT}</p>
                             </div>
                             <div>
-                                <label className="text-xs text-slate-400 block mb-1">Max Parallel</label>
+                                <label className="text-xs text-slate-400 block mb-1">Denoiser Chunk Limit</label>
                                 <input
                                     type="number"
                                     value={boltzMaxParallelSamples}
                                     onChange={(e) => setBoltzMaxParallelSamples(Math.max(1, Math.min(boltzNumSamples, parseInt(e.target.value) || 1)))}
                                     min={1}
                                     max={boltzNumSamples}
-                                    title="Max samples to run in parallel (1 = serial, lower VRAM usage)"
+                                    title={BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
+                                <p className="mt-1 text-[11px] leading-snug text-slate-500">{BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}</p>
                             </div>
                         </div>
 

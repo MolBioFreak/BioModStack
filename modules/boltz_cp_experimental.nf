@@ -22,7 +22,7 @@ process RunBoltzCPExperimental {
     path '*.log'
 
     script:
-    def gpuIds = (params.bcp_gpu_ids ?: '0,1,2,3').toString().split(',').collect { it.trim() }.findAll { it }
+    def gpuIds = (params.bcp_gpu_ids ?: params.gpu_id).toString().split(',').collect { it.trim() }.findAll { it }
     def nproc = gpuIds ? gpuIds.size() : 1
     def sizeCp = (params.bcp_size_cp ?: 4) as Integer
     def sizeDp = Math.max((int) (nproc / sizeCp), 1)
@@ -473,7 +473,8 @@ process BuildBoltzCPPlanManifest {
     def outputFormat = (params.bcp_output_format ?: 'mmcif').toString()
     def repoPath = shellQuote(params.bcp_repo_path ?: '')
     def inputPath = shellQuote(input_config.toString())
-    def gpuIds = shellQuote(params.bcp_gpu_ids ?: '0,1,2,3')
+    def gpuIds = shellQuote(params.bcp_gpu_ids ?: params.gpu_id)
+    def backend = shellQuote(params.bcp_backend ?: 'dram-context-spill-workhorse')
     def writeFullPae = shellQuote((params.bcp_write_full_pae?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']) ? 'true' : 'false')
     def seed = shellQuote(params.bcp_seed ?: '')
     def containerPath = shellQuote(params.bcp_container_path ?: '')
@@ -493,6 +494,13 @@ process BuildBoltzCPPlanManifest {
     def defaultStoreRoot = new File((params.out_dir ?: '.').toString(), "run/boltz_cp_plan_store/${parent_job_id}").absolutePath
     def storeRootPath = shellQuote((params.bcp_store_root ?: defaultStoreRoot).toString())
     def configuredRamRootPath = shellQuote((params.bcp_configured_ram_root ?: '').toString())
+    def contextStoreManifestPath = shellQuote((params.bcp_context_store_manifest_path ?: '').toString())
+    def contextStatePath = shellQuote((params.bcp_context_state_path ?: '').toString())
+    def contextLayerStatePath = shellQuote((params.bcp_context_layer_state_path ?: '').toString())
+    def contextExecutionMode = shellQuote((params.bcp_context_execution_mode ?: 'cuda').toString())
+    def contextTileTokens = shellQuote((params.bcp_context_tile_tokens ?: '').toString())
+    def contextKeyTileTokens = shellQuote((params.bcp_context_key_tile_tokens ?: '').toString())
+    def contextQueryTileTokens = shellQuote((params.bcp_context_query_tile_tokens ?: '').toString())
     """
     set -euo pipefail
     TASK_ROOT="\$PWD"
@@ -502,6 +510,7 @@ process BuildBoltzCPPlanManifest {
     INPUT_FORMAT=${shellQuote(inputFormat)}
     OUTPUT_FORMAT=${shellQuote(outputFormat)}
     GPU_IDS=${gpuIds}
+    BCP_BACKEND=${backend}
     WRITE_FULL_PAE=${writeFullPae}
     SEED=${seed}
     CONTAINER_PATH=${containerPath}
@@ -510,6 +519,13 @@ process BuildBoltzCPPlanManifest {
     BATCH_NAME=${shellQuote(batch_name)}
     BCP_STORE_ROOT=${storeRootPath}
     BCP_CONFIGURED_RAM_ROOT=${configuredRamRootPath}
+    BCP_CONTEXT_STORE_MANIFEST_PATH=${contextStoreManifestPath}
+    BCP_CONTEXT_STATE_PATH=${contextStatePath}
+    BCP_CONTEXT_LAYER_STATE_PATH=${contextLayerStatePath}
+    BCP_CONTEXT_EXECUTION_MODE=${contextExecutionMode}
+    BCP_CONTEXT_TILE_TOKENS=${contextTileTokens}
+    BCP_CONTEXT_KEY_TILE_TOKENS=${contextKeyTileTokens}
+    BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}
     PHYSICAL_LAUNCH_SIZE_CP=${params.bcp_size_cp ?: 1}
     BCP_RECYCLING_STEPS=${params.bcp_recycling_steps ?: 3}
     BCP_SAMPLING_STEPS=${params.bcp_sampling_steps ?: 200}
@@ -535,7 +551,7 @@ process BuildBoltzCPPlanManifest {
     MSA_MIN_COVERAGE=${msaMinCoverage}
     MSA_TAXON_LIST=${msaTaxonList}
 
-    export TASK_ROOT REPO_PATH INPUT_PATH SHARD_PLAN_ID INPUT_FORMAT OUTPUT_FORMAT GPU_IDS WRITE_FULL_PAE SEED CONTAINER_PATH CODE_ROOT PARENT_JOB_ID BATCH_NAME BCP_STORE_ROOT BCP_CONFIGURED_RAM_ROOT PHYSICAL_LAUNCH_SIZE_CP BCP_RECYCLING_STEPS BCP_SAMPLING_STEPS BCP_DIFFUSION_SAMPLES BOLTZ_USE_MSA MSA_PROVIDER MSA_PRESET MSA_LOCAL_DB MSA_CACHE_DIR MSA_THREADS MSA_USE_GPU COLABFOLD_API_HOST COLABFOLD_API_MIN_INTERVAL COLABFOLD_API_POLL_INTERVAL MSA_MIN_DEPTH_WARNING MSA_MIN_DEPTH_FAIL MSA_FORCE_REFRESH MSA_CACHE_ONLY MSA_USE_EXPAND MSA_USE_ENV MSA_NUM_ITERATIONS MSA_MIN_SEQ_ID MSA_MIN_COVERAGE MSA_TAXON_LIST
+    export TASK_ROOT REPO_PATH INPUT_PATH SHARD_PLAN_ID INPUT_FORMAT OUTPUT_FORMAT GPU_IDS BCP_BACKEND WRITE_FULL_PAE SEED CONTAINER_PATH CODE_ROOT PARENT_JOB_ID BATCH_NAME BCP_STORE_ROOT BCP_CONFIGURED_RAM_ROOT BCP_CONTEXT_STORE_MANIFEST_PATH BCP_CONTEXT_STATE_PATH BCP_CONTEXT_LAYER_STATE_PATH BCP_CONTEXT_EXECUTION_MODE BCP_CONTEXT_TILE_TOKENS BCP_CONTEXT_KEY_TILE_TOKENS BCP_CONTEXT_QUERY_TILE_TOKENS PHYSICAL_LAUNCH_SIZE_CP BCP_RECYCLING_STEPS BCP_SAMPLING_STEPS BCP_DIFFUSION_SAMPLES BOLTZ_USE_MSA MSA_PROVIDER MSA_PRESET MSA_LOCAL_DB MSA_CACHE_DIR MSA_THREADS MSA_USE_GPU COLABFOLD_API_HOST COLABFOLD_API_MIN_INTERVAL COLABFOLD_API_POLL_INTERVAL MSA_MIN_DEPTH_WARNING MSA_MIN_DEPTH_FAIL MSA_FORCE_REFRESH MSA_CACHE_ONLY MSA_USE_EXPAND MSA_USE_ENV MSA_NUM_ITERATIONS MSA_MIN_SEQ_ID MSA_MIN_COVERAGE MSA_TAXON_LIST
     export PYTHONPATH="\$REPO_PATH/src\${PYTHONPATH:+:\$PYTHONPATH}"
     BOLTZ_PYTHON="\$REPO_PATH/.venv/bin/python"
     if [ ! -x "\$BOLTZ_PYTHON" ]; then
@@ -599,6 +615,14 @@ metadata = {
     'container_path': os.environ.get('CONTAINER_PATH', '').strip(),
     'physical_gpu_ids': physical_gpu_ids,
     'gpu_ids': physical_gpu_ids,
+    'bcp_backend': os.environ.get('BCP_BACKEND', '').strip(),
+    'bcp_context_store_manifest_path': os.environ.get('BCP_CONTEXT_STORE_MANIFEST_PATH', '').strip(),
+    'bcp_context_state_path': os.environ.get('BCP_CONTEXT_STATE_PATH', '').strip(),
+    'bcp_context_layer_state_path': os.environ.get('BCP_CONTEXT_LAYER_STATE_PATH', '').strip(),
+    'bcp_context_execution_mode': os.environ.get('BCP_CONTEXT_EXECUTION_MODE', '').strip(),
+    'bcp_context_tile_tokens': os.environ.get('BCP_CONTEXT_TILE_TOKENS', '').strip(),
+    'bcp_context_key_tile_tokens': os.environ.get('BCP_CONTEXT_KEY_TILE_TOKENS', '').strip(),
+    'bcp_context_query_tile_tokens': os.environ.get('BCP_CONTEXT_QUERY_TILE_TOKENS', '').strip(),
     'physical_launch_size_cp': int(os.environ.get('PHYSICAL_LAUNCH_SIZE_CP', '1') or '1'),
     'bcp_recycling_steps': int(os.environ.get('BCP_RECYCLING_STEPS', '3') or '3'),
     'bcp_sampling_steps': int(os.environ.get('BCP_SAMPLING_STEPS', '200') or '200'),
@@ -869,6 +893,21 @@ summary_path = store_root / 'metadata' / 'summary.json'
 summary = json.loads(summary_path.read_text(encoding='utf-8')) if summary_path.exists() else {}
 
 artifact_counts = {'pdb': 0, 'cif': 0, 'json': 0, 'npz': 0, 'bundle_manifests': 0}
+published_original_artifacts = []
+viewer_ingest_design_name = None
+
+
+def _artifact_bucket(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    if suffix == '.pdb':
+        return 'pdb'
+    if suffix in {'.cif', '.mmcif'}:
+        return 'cif'
+    if suffix == '.json':
+        return 'json'
+    if suffix == '.npz':
+        return 'npz'
+    return None
 
 
 def copy_unique(src: Path, dest_dir: Path, prefix: str | None = None) -> Path:
@@ -877,6 +916,42 @@ def copy_unique(src: Path, dest_dir: Path, prefix: str | None = None) -> Path:
         destination = dest_dir / f"{prefix}_{src.name}"
     shutil.copy2(src, destination)
     return destination
+
+
+store_published = store_root / 'published'
+if store_published.exists():
+    for artifact in sorted(store_published.iterdir()):
+        if not artifact.is_file():
+            continue
+        copied = copy_unique(artifact, published, prefix='published_original')
+        published_original_artifacts.append(str(copied))
+        bucket = _artifact_bucket(copied)
+        if bucket:
+            artifact_counts[bucket] += 1
+
+    structure_src = next(
+        (
+            candidate
+            for candidate in (
+                store_published / 'structure.cif',
+                store_published / 'structure.mmcif',
+                store_published / 'structure.pdb',
+            )
+            if candidate.exists()
+        ),
+        None,
+    )
+    confidence_src = store_published / 'confidence.json'
+    if structure_src is not None and confidence_src.exists():
+        viewer_ingest_design_name = 'boltz_cp_result_0'
+        structure_alias = published / f"{viewer_ingest_design_name}{structure_src.suffix.lower()}"
+        confidence_alias = published / 'confidence_boltz_cp_result_0.json'
+        shutil.copy2(structure_src, structure_alias)
+        shutil.copy2(confidence_src, confidence_alias)
+        structure_bucket = _artifact_bucket(structure_alias)
+        if structure_bucket:
+            artifact_counts[structure_bucket] += 1
+        artifact_counts['json'] += 1
 
 
 for child_index, raw_child_dir in enumerate(child_dirs, start=1):
@@ -925,6 +1000,9 @@ report['children_processed'] = len(child_dirs)
 report['artifacts'] = artifact_counts
 report['store_root'] = str(store_root)
 report['plan_store_path'] = os.environ['PLAN_STORE_PATH']
+report['published_original_artifacts'] = published_original_artifacts
+if viewer_ingest_design_name:
+    report['viewer_ingest_design_name'] = viewer_ingest_design_name
 Path('aggregation_report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
 PY
 

@@ -1,0 +1,877 @@
+{
+  "captured_at_utc": "2026-04-26T05:01:26.529699+00:00",
+  "job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "parent_api_completed",
+      "ok": true,
+      "detail": {
+        "status": "completed",
+        "error_message": null
+      }
+    },
+    {
+      "name": "queue_empty_after_run",
+      "ok": true,
+      "detail": {
+        "queued": 0,
+        "running": 0,
+        "paused": 0,
+        "total": 0
+      }
+    },
+    {
+      "name": "all_db_rows_completed",
+      "ok": true,
+      "detail": [
+        {
+          "id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "name": "boltz-cp-cuda-spill-watch-20260426-044147",
+          "status": "completed",
+          "queue_status": "completed",
+          "pinned_gpu": 0,
+          "assigned_gpu": null,
+          "created_at": "2026-04-26 04:49:59.929319",
+          "started_at": "2026-04-26 04:50:01.969993",
+          "completed_at": "2026-04-26 04:51:48.040279",
+          "output_dir": "/var/lib/biomodstack/bms_results/boltz-cp-cuda-spill-watch-20260426-044147_20260426_044959",
+          "error_message": null,
+          "batch_id": null,
+          "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "duration_s": 106.07
+        },
+        {
+          "id": "07df8e64-c70a-4a64-a4bb-bdcd1c20531d",
+          "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c00",
+          "status": "completed",
+          "queue_status": "completed",
+          "pinned_gpu": 0,
+          "assigned_gpu": null,
+          "created_at": "2026-04-26 04:50:15.350839",
+          "started_at": "2026-04-26 04:50:17.177954",
+          "completed_at": "2026-04-26 04:50:33.518435",
+          "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c00_20260426_045015",
+          "error_message": null,
+          "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "duration_s": 16.34
+        },
+        {
+          "id": "2e1fdbfe-9c75-47b3-a5b9-92599d9f474c",
+          "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c01",
+          "status": "completed",
+          "queue_status": "completed",
+          "pinned_gpu": 0,
+          "assigned_gpu": null,
+          "created_at": "2026-04-26 04:50:15.484102",
+          "started_at": "2026-04-26 04:50:35.322789",
+          "completed_at": "2026-04-26 04:50:51.538811",
+          "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c01_20260426_045015",
+          "error_message": null,
+          "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "duration_s": 16.216
+        },
+        {
+          "id": "9ed1c778-4183-48c4-b962-bc3158436c1a",
+          "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c00",
+          "status": "completed",
+          "queue_status": "completed",
+          "pinned_gpu": 0,
+          "assigned_gpu": null,
+          "created_at": "2026-04-26 04:50:15.681315",
+          "started_at": "2026-04-26 04:50:53.400822",
+          "completed_at": "2026-04-26 04:51:09.244676",
+          "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c00_20260426_045015",
+          "error_message": null,
+          "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "duration_s": 15.844
+        },
+        {
+          "id": "39de2442-1105-43f5-8521-d96b78b3241f",
+          "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c01",
+          "status": "completed",
+          "queue_status": "completed",
+          "pinned_gpu": 0,
+          "assigned_gpu": null,
+          "created_at": "2026-04-26 04:50:15.814222",
+          "started_at": "2026-04-26 04:51:11.587739",
+          "completed_at": "2026-04-26 04:51:27.513804",
+          "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c01_20260426_045015",
+          "error_message": null,
+          "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+          "duration_s": 15.926
+        }
+      ]
+    },
+    {
+      "name": "parent_and_four_children",
+      "ok": true,
+      "detail": {
+        "row_count": 5
+      }
+    },
+    {
+      "name": "logical_plan_2x2_four_bundles",
+      "ok": true,
+      "detail": {
+        "grid": {
+          "grid_shape": [
+            2,
+            2
+          ],
+          "name": "2x2"
+        },
+        "bundle_count": 4
+      }
+    },
+    {
+      "name": "backend_threaded_into_plan_manifest",
+      "ok": true,
+      "detail": "dram-context-spill-workhorse"
+    },
+    {
+      "name": "cuda_context_params_threaded_into_plan_manifest",
+      "ok": true,
+      "detail": {
+        "bcp_context_execution_mode": "cuda",
+        "bcp_context_state_path": "/mnt/BioModStack/inputs/boltz_cp_cuda_spill_watch_20260426_044147/real_pairformer_cuda_state.pt",
+        "bcp_context_layer_state_path": "/mnt/BioModStack/inputs/boltz_cp_cuda_spill_watch_20260426_044147/real_pairformer_cuda_layer.pt",
+        "bcp_context_tile_tokens": "2",
+        "bcp_context_key_tile_tokens": "2",
+        "bcp_context_query_tile_tokens": "2"
+      }
+    },
+    {
+      "name": "gpu_count_does_not_define_logical_geometry_for_this_run",
+      "ok": true,
+      "detail": {
+        "physical_launch_size_cp": 1,
+        "grid_shape": [
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "name": "aggregation_complete_no_failed_pending",
+      "ok": true,
+      "detail": {
+        "status": "complete",
+        "completed_bundle_count": 4,
+        "failed_bundle_count": 0,
+        "pending_bundle_count": 0
+      }
+    },
+    {
+      "name": "no_final_structure_publication_expected",
+      "ok": true,
+      "detail": {
+        "pdb": 0,
+        "cif": 0,
+        "json": 0,
+        "npz": 0,
+        "bundle_manifests": 4
+      }
+    },
+    {
+      "name": "store_root_is_ram_backed_dev_shm",
+      "ok": true,
+      "detail": "/dev/shm/boltz-large-protein-99b76d99-424d-4a0c-9bf8-3876969d5f43"
+    },
+    {
+      "name": "all_bundle_runtime_manifests_ok",
+      "ok": true,
+      "detail": [
+        {
+          "bundle_id": "bundle-r00-c00",
+          "ok": true,
+          "row_range": [
+            0,
+            3
+          ],
+          "col_range": [
+            0,
+            3
+          ],
+          "assigned_gpu": 0,
+          "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "executor": "dram-context-spill-workhorse",
+          "state_residency": "host_between_ops",
+          "uses_placeholder_state": false,
+          "full_state_allocated_in_vram": false,
+          "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "execution_mode": "cuda",
+          "device": "cuda:0",
+          "gpu_name": "NVIDIA GeForce RTX 5090",
+          "full_pair_state_bytes": 576,
+          "tile_tokens": 2,
+          "key_tile_tokens": 2,
+          "query_tile_tokens": 2,
+          "h2d_s": 0.0016126090195029974,
+          "compute_s": 0.3225754405139014,
+          "d2h_s": 0.0014003264950588346,
+          "operations": [
+            "triangle_multiplication_outgoing",
+            "triangle_multiplication_incoming",
+            "triangle_attention_starting",
+            "triangle_attention_ending",
+            "transition_z"
+          ],
+          "nested_backends": [
+            "projected-triangle-mult-spill-cuda-workhorse",
+            "transition-z-spill-cuda-workhorse",
+            "triangle-attention-spill-cuda-workhorse"
+          ],
+          "attention_flags": [
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            },
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            }
+          ],
+          "z_tile_bytes": 2082,
+          "z_tile_sha256": "463702494c98c4f1f7c26210de79166f9df8303cc703047d8dc85c07d5cd8839"
+        },
+        {
+          "bundle_id": "bundle-r00-c01",
+          "ok": true,
+          "row_range": [
+            0,
+            3
+          ],
+          "col_range": [
+            3,
+            6
+          ],
+          "assigned_gpu": 0,
+          "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "executor": "dram-context-spill-workhorse",
+          "state_residency": "host_between_ops",
+          "uses_placeholder_state": false,
+          "full_state_allocated_in_vram": false,
+          "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "execution_mode": "cuda",
+          "device": "cuda:0",
+          "gpu_name": "NVIDIA GeForce RTX 5090",
+          "full_pair_state_bytes": 576,
+          "tile_tokens": 2,
+          "key_tile_tokens": 2,
+          "query_tile_tokens": 2,
+          "h2d_s": 0.0016492689028382301,
+          "compute_s": 0.30863448150921613,
+          "d2h_s": 0.0015481668524444103,
+          "operations": [
+            "triangle_multiplication_outgoing",
+            "triangle_multiplication_incoming",
+            "triangle_attention_starting",
+            "triangle_attention_ending",
+            "transition_z"
+          ],
+          "nested_backends": [
+            "projected-triangle-mult-spill-cuda-workhorse",
+            "transition-z-spill-cuda-workhorse",
+            "triangle-attention-spill-cuda-workhorse"
+          ],
+          "attention_flags": [
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            },
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            }
+          ],
+          "z_tile_bytes": 2082,
+          "z_tile_sha256": "df7918d2432964931048a3b4b7e758beecc8562f86db5ac2e0a4d57feaa073bf"
+        },
+        {
+          "bundle_id": "bundle-r01-c00",
+          "ok": true,
+          "row_range": [
+            3,
+            6
+          ],
+          "col_range": [
+            0,
+            3
+          ],
+          "assigned_gpu": 0,
+          "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "executor": "dram-context-spill-workhorse",
+          "state_residency": "host_between_ops",
+          "uses_placeholder_state": false,
+          "full_state_allocated_in_vram": false,
+          "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "execution_mode": "cuda",
+          "device": "cuda:0",
+          "gpu_name": "NVIDIA GeForce RTX 5090",
+          "full_pair_state_bytes": 576,
+          "tile_tokens": 2,
+          "key_tile_tokens": 2,
+          "query_tile_tokens": 2,
+          "h2d_s": 0.0016175544587895274,
+          "compute_s": 0.3038668008521199,
+          "d2h_s": 0.0013693008804693818,
+          "operations": [
+            "triangle_multiplication_outgoing",
+            "triangle_multiplication_incoming",
+            "triangle_attention_starting",
+            "triangle_attention_ending",
+            "transition_z"
+          ],
+          "nested_backends": [
+            "projected-triangle-mult-spill-cuda-workhorse",
+            "transition-z-spill-cuda-workhorse",
+            "triangle-attention-spill-cuda-workhorse"
+          ],
+          "attention_flags": [
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            },
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            }
+          ],
+          "z_tile_bytes": 2082,
+          "z_tile_sha256": "c5c8c96a02381c4f6f028c178f52d8383d53d92a4289ab4f6eead3fe334eaee6"
+        },
+        {
+          "bundle_id": "bundle-r01-c01",
+          "ok": true,
+          "row_range": [
+            3,
+            6
+          ],
+          "col_range": [
+            3,
+            6
+          ],
+          "assigned_gpu": 0,
+          "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "executor": "dram-context-spill-workhorse",
+          "state_residency": "host_between_ops",
+          "uses_placeholder_state": false,
+          "full_state_allocated_in_vram": false,
+          "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+          "execution_mode": "cuda",
+          "device": "cuda:0",
+          "gpu_name": "NVIDIA GeForce RTX 5090",
+          "full_pair_state_bytes": 576,
+          "tile_tokens": 2,
+          "key_tile_tokens": 2,
+          "query_tile_tokens": 2,
+          "h2d_s": 0.0016057826578617096,
+          "compute_s": 0.2960420351009816,
+          "d2h_s": 0.0013840467436239123,
+          "operations": [
+            "triangle_multiplication_outgoing",
+            "triangle_multiplication_incoming",
+            "triangle_attention_starting",
+            "triangle_attention_ending",
+            "transition_z"
+          ],
+          "nested_backends": [
+            "projected-triangle-mult-spill-cuda-workhorse",
+            "transition-z-spill-cuda-workhorse",
+            "triangle-attention-spill-cuda-workhorse"
+          ],
+          "attention_flags": [
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            },
+            {
+              "online_softmax_state_persisted": true,
+              "full_attention_scores_materialized": false,
+              "full_pair_state_allocated_on_device": false
+            }
+          ],
+          "z_tile_bytes": 2082,
+          "z_tile_sha256": "98aad06e60d0a8bd7943f6ae7d6c626507f6e4f82414491867511651985207f0"
+        }
+      ]
+    },
+    {
+      "name": "all_bundle_ops_use_cuda_backends",
+      "ok": true,
+      "detail": [
+        [
+          "projected-triangle-mult-spill-cuda-workhorse",
+          "transition-z-spill-cuda-workhorse",
+          "triangle-attention-spill-cuda-workhorse"
+        ],
+        [
+          "projected-triangle-mult-spill-cuda-workhorse",
+          "transition-z-spill-cuda-workhorse",
+          "triangle-attention-spill-cuda-workhorse"
+        ],
+        [
+          "projected-triangle-mult-spill-cuda-workhorse",
+          "transition-z-spill-cuda-workhorse",
+          "triangle-attention-spill-cuda-workhorse"
+        ],
+        [
+          "projected-triangle-mult-spill-cuda-workhorse",
+          "transition-z-spill-cuda-workhorse",
+          "triangle-attention-spill-cuda-workhorse"
+        ]
+      ]
+    },
+    {
+      "name": "attention_persisted_online_softmax_without_full_scores",
+      "ok": true,
+      "detail": [
+        [
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          },
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          }
+        ],
+        [
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          },
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          }
+        ],
+        [
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          },
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          }
+        ],
+        [
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          },
+          {
+            "online_softmax_state_persisted": true,
+            "full_attention_scores_materialized": false,
+            "full_pair_state_allocated_on_device": false
+          }
+        ]
+      ]
+    }
+  ],
+  "api_parent_subset": {
+    "id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+    "name": "boltz-cp-cuda-spill-watch-20260426-044147",
+    "status": "completed",
+    "started_at": "2026-04-26T04:50:01.969993Z",
+    "completed_at": "2026-04-26T04:51:48.040279Z",
+    "output_dir": "/var/lib/biomodstack/bms_results/boltz-cp-cuda-spill-watch-20260426-044147_20260426_044959",
+    "error_message": null,
+    "current_stage": "Complete"
+  },
+  "queue_stats": {
+    "queued": 0,
+    "running": 0,
+    "paused": 0,
+    "total": 0
+  },
+  "db_rows": [
+    {
+      "id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "name": "boltz-cp-cuda-spill-watch-20260426-044147",
+      "status": "completed",
+      "queue_status": "completed",
+      "pinned_gpu": 0,
+      "assigned_gpu": null,
+      "created_at": "2026-04-26 04:49:59.929319",
+      "started_at": "2026-04-26 04:50:01.969993",
+      "completed_at": "2026-04-26 04:51:48.040279",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz-cp-cuda-spill-watch-20260426-044147_20260426_044959",
+      "error_message": null,
+      "batch_id": null,
+      "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "duration_s": 106.07
+    },
+    {
+      "id": "07df8e64-c70a-4a64-a4bb-bdcd1c20531d",
+      "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c00",
+      "status": "completed",
+      "queue_status": "completed",
+      "pinned_gpu": 0,
+      "assigned_gpu": null,
+      "created_at": "2026-04-26 04:50:15.350839",
+      "started_at": "2026-04-26 04:50:17.177954",
+      "completed_at": "2026-04-26 04:50:33.518435",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c00_20260426_045015",
+      "error_message": null,
+      "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "duration_s": 16.34
+    },
+    {
+      "id": "2e1fdbfe-9c75-47b3-a5b9-92599d9f474c",
+      "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c01",
+      "status": "completed",
+      "queue_status": "completed",
+      "pinned_gpu": 0,
+      "assigned_gpu": null,
+      "created_at": "2026-04-26 04:50:15.484102",
+      "started_at": "2026-04-26 04:50:35.322789",
+      "completed_at": "2026-04-26 04:50:51.538811",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r00-c01_20260426_045015",
+      "error_message": null,
+      "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "duration_s": 16.216
+    },
+    {
+      "id": "9ed1c778-4183-48c4-b962-bc3158436c1a",
+      "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c00",
+      "status": "completed",
+      "queue_status": "completed",
+      "pinned_gpu": 0,
+      "assigned_gpu": null,
+      "created_at": "2026-04-26 04:50:15.681315",
+      "started_at": "2026-04-26 04:50:53.400822",
+      "completed_at": "2026-04-26 04:51:09.244676",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c00_20260426_045015",
+      "error_message": null,
+      "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "duration_s": 15.844
+    },
+    {
+      "id": "39de2442-1105-43f5-8521-d96b78b3241f",
+      "name": "boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c01",
+      "status": "completed",
+      "queue_status": "completed",
+      "pinned_gpu": 0,
+      "assigned_gpu": null,
+      "created_at": "2026-04-26 04:50:15.814222",
+      "started_at": "2026-04-26 04:51:11.587739",
+      "completed_at": "2026-04-26 04:51:27.513804",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz_cp_99b76d99-424d-4a0c-9bf8-3876969d5f43_bundle-r01-c01_20260426_045015",
+      "error_message": null,
+      "batch_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "lineage_root_job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "duration_s": 15.926
+    }
+  ],
+  "plan_summary": {
+    "plan_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+    "shard_plan": {
+      "grid_shape": [
+        2,
+        2
+      ],
+      "name": "2x2"
+    },
+    "bundle_count": 4,
+    "input_metadata_subset": {
+      "bcp_backend": "dram-context-spill-workhorse",
+      "bcp_context_execution_mode": "cuda",
+      "bcp_context_state_path": "/mnt/BioModStack/inputs/boltz_cp_cuda_spill_watch_20260426_044147/real_pairformer_cuda_state.pt",
+      "bcp_context_layer_state_path": "/mnt/BioModStack/inputs/boltz_cp_cuda_spill_watch_20260426_044147/real_pairformer_cuda_layer.pt",
+      "bcp_context_tile_tokens": "2",
+      "bcp_context_key_tile_tokens": "2",
+      "bcp_context_query_tile_tokens": "2",
+      "physical_gpu_ids": [
+        "0"
+      ],
+      "physical_launch_size_cp": 1,
+      "sequence_length": 6,
+      "boltz_use_msa": false,
+      "repo_path": "/home/dalab/tmp/boltz-cp"
+    }
+  },
+  "aggregation_summary": {
+    "status": "complete",
+    "message": "complete",
+    "completed_bundle_count": 4,
+    "failed_bundle_count": 0,
+    "pending_bundle_count": 0,
+    "publication_status": "not_required",
+    "artifacts": {
+      "pdb": 0,
+      "cif": 0,
+      "json": 0,
+      "npz": 0,
+      "bundle_manifests": 4
+    },
+    "store_root": "/dev/shm/boltz-large-protein-99b76d99-424d-4a0c-9bf8-3876969d5f43"
+  },
+  "bundle_summaries": [
+    {
+      "bundle_id": "bundle-r00-c00",
+      "ok": true,
+      "row_range": [
+        0,
+        3
+      ],
+      "col_range": [
+        0,
+        3
+      ],
+      "assigned_gpu": 0,
+      "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "executor": "dram-context-spill-workhorse",
+      "state_residency": "host_between_ops",
+      "uses_placeholder_state": false,
+      "full_state_allocated_in_vram": false,
+      "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "execution_mode": "cuda",
+      "device": "cuda:0",
+      "gpu_name": "NVIDIA GeForce RTX 5090",
+      "full_pair_state_bytes": 576,
+      "tile_tokens": 2,
+      "key_tile_tokens": 2,
+      "query_tile_tokens": 2,
+      "h2d_s": 0.0016126090195029974,
+      "compute_s": 0.3225754405139014,
+      "d2h_s": 0.0014003264950588346,
+      "operations": [
+        "triangle_multiplication_outgoing",
+        "triangle_multiplication_incoming",
+        "triangle_attention_starting",
+        "triangle_attention_ending",
+        "transition_z"
+      ],
+      "nested_backends": [
+        "projected-triangle-mult-spill-cuda-workhorse",
+        "transition-z-spill-cuda-workhorse",
+        "triangle-attention-spill-cuda-workhorse"
+      ],
+      "attention_flags": [
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        },
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        }
+      ],
+      "z_tile_bytes": 2082,
+      "z_tile_sha256": "463702494c98c4f1f7c26210de79166f9df8303cc703047d8dc85c07d5cd8839"
+    },
+    {
+      "bundle_id": "bundle-r00-c01",
+      "ok": true,
+      "row_range": [
+        0,
+        3
+      ],
+      "col_range": [
+        3,
+        6
+      ],
+      "assigned_gpu": 0,
+      "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "executor": "dram-context-spill-workhorse",
+      "state_residency": "host_between_ops",
+      "uses_placeholder_state": false,
+      "full_state_allocated_in_vram": false,
+      "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "execution_mode": "cuda",
+      "device": "cuda:0",
+      "gpu_name": "NVIDIA GeForce RTX 5090",
+      "full_pair_state_bytes": 576,
+      "tile_tokens": 2,
+      "key_tile_tokens": 2,
+      "query_tile_tokens": 2,
+      "h2d_s": 0.0016492689028382301,
+      "compute_s": 0.30863448150921613,
+      "d2h_s": 0.0015481668524444103,
+      "operations": [
+        "triangle_multiplication_outgoing",
+        "triangle_multiplication_incoming",
+        "triangle_attention_starting",
+        "triangle_attention_ending",
+        "transition_z"
+      ],
+      "nested_backends": [
+        "projected-triangle-mult-spill-cuda-workhorse",
+        "transition-z-spill-cuda-workhorse",
+        "triangle-attention-spill-cuda-workhorse"
+      ],
+      "attention_flags": [
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        },
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        }
+      ],
+      "z_tile_bytes": 2082,
+      "z_tile_sha256": "df7918d2432964931048a3b4b7e758beecc8562f86db5ac2e0a4d57feaa073bf"
+    },
+    {
+      "bundle_id": "bundle-r01-c00",
+      "ok": true,
+      "row_range": [
+        3,
+        6
+      ],
+      "col_range": [
+        0,
+        3
+      ],
+      "assigned_gpu": 0,
+      "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "executor": "dram-context-spill-workhorse",
+      "state_residency": "host_between_ops",
+      "uses_placeholder_state": false,
+      "full_state_allocated_in_vram": false,
+      "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "execution_mode": "cuda",
+      "device": "cuda:0",
+      "gpu_name": "NVIDIA GeForce RTX 5090",
+      "full_pair_state_bytes": 576,
+      "tile_tokens": 2,
+      "key_tile_tokens": 2,
+      "query_tile_tokens": 2,
+      "h2d_s": 0.0016175544587895274,
+      "compute_s": 0.3038668008521199,
+      "d2h_s": 0.0013693008804693818,
+      "operations": [
+        "triangle_multiplication_outgoing",
+        "triangle_multiplication_incoming",
+        "triangle_attention_starting",
+        "triangle_attention_ending",
+        "transition_z"
+      ],
+      "nested_backends": [
+        "projected-triangle-mult-spill-cuda-workhorse",
+        "transition-z-spill-cuda-workhorse",
+        "triangle-attention-spill-cuda-workhorse"
+      ],
+      "attention_flags": [
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        },
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        }
+      ],
+      "z_tile_bytes": 2082,
+      "z_tile_sha256": "c5c8c96a02381c4f6f028c178f52d8383d53d92a4289ab4f6eead3fe334eaee6"
+    },
+    {
+      "bundle_id": "bundle-r01-c01",
+      "ok": true,
+      "row_range": [
+        3,
+        6
+      ],
+      "col_range": [
+        3,
+        6
+      ],
+      "assigned_gpu": 0,
+      "backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "executor": "dram-context-spill-workhorse",
+      "state_residency": "host_between_ops",
+      "uses_placeholder_state": false,
+      "full_state_allocated_in_vram": false,
+      "op_manifest_backend": "pairformer-noseq-layer-dram-spill-cuda-workhorse",
+      "execution_mode": "cuda",
+      "device": "cuda:0",
+      "gpu_name": "NVIDIA GeForce RTX 5090",
+      "full_pair_state_bytes": 576,
+      "tile_tokens": 2,
+      "key_tile_tokens": 2,
+      "query_tile_tokens": 2,
+      "h2d_s": 0.0016057826578617096,
+      "compute_s": 0.2960420351009816,
+      "d2h_s": 0.0013840467436239123,
+      "operations": [
+        "triangle_multiplication_outgoing",
+        "triangle_multiplication_incoming",
+        "triangle_attention_starting",
+        "triangle_attention_ending",
+        "transition_z"
+      ],
+      "nested_backends": [
+        "projected-triangle-mult-spill-cuda-workhorse",
+        "transition-z-spill-cuda-workhorse",
+        "triangle-attention-spill-cuda-workhorse"
+      ],
+      "attention_flags": [
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        },
+        {
+          "online_softmax_state_persisted": true,
+          "full_attention_scores_materialized": false,
+          "full_pair_state_allocated_on_device": false
+        }
+      ],
+      "z_tile_bytes": 2082,
+      "z_tile_sha256": "98aad06e60d0a8bd7943f6ae7d6c626507f6e4f82414491867511651985207f0"
+    }
+  ],
+  "process_proof": {
+    "parent_nextflow_log": "/mnt/BioModStack/bms_results/boltz-cp-cuda-spill-watch-20260426-044147_20260426_044959/nextflow.log",
+    "parent_workdirs": [
+      "a3/7ab3adff9e5b578ae095c963a57cbe",
+      "de/de3e13a7ff24c88de7dec3a98876cd",
+      "68/d1a107c4922709f60d4cc68654baf1",
+      "c3/e9a00dfb67700c60501fdbf0588311"
+    ],
+    "child_r00c00_workdir": "79/db81e723d75f19da4f7ea65e9c4b8f",
+    "child_command_assertions": {
+      "bcp_role_child": true,
+      "bcp_store_root_dev_shm": true,
+      "bcp_bundle_id_present": true,
+      "assigned_gpu_zero": true,
+      "runs_large_protein_run_bundle": true
+    }
+  },
+  "honesty_notes": [
+    "This proves BMS-visible coordinator/child launch, strict backend propagation, and real PairformerNoSeq CUDA workhorse bundle execution for a tiny n=6 fixture.",
+    "It does not prove full Boltz2 end-to-end production prediction, final CIF/PDB publication, production-scale memory behavior, or true concurrent multi-GPU CP.",
+    "The plan uses logical 2x2 bundles while physical_launch_size_cp remains 1 on cuda:0; this is deliberate single-GPU workhorse cadence, not multi-rank distributed CP."
+  ]
+}

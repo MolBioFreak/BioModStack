@@ -85,7 +85,7 @@ def infer_boltz_cp_shard_plan_id(size_cp: object, *, default: Optional[str] = BO
     return _BOLTZ_CP_SHARD_PLAN_ID_BY_SIZE_CP.get(parsed, default)
 
 
-def get_boltz_cp_shard_plan_catalog(max_physical_gpu_count: int = 4) -> Dict[str, Any]:
+def get_boltz_cp_shard_plan_catalog(max_physical_gpu_count: int = 1) -> Dict[str, Any]:
     capped_gpu_count = max(1, int(max_physical_gpu_count or 1))
     plans: List[Dict[str, Any]] = []
     for plan in BOLTZ_CP_SHARD_PLANS:
