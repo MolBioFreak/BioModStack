@@ -32,7 +32,7 @@ install_missing <- function(pkgs, repos = getOption("repos")) {
   if (length(missing) == 0) {
     return(invisible(TRUE))
   }
-  install.packages(missing, repos = repos, dependencies = TRUE, Ncpus = max(1, parallel::detectCores() - 1))
+  install.packages(missing, repos = repos, dependencies = c("Depends", "Imports", "LinkingTo"), Ncpus = max(1, parallel::detectCores() - 1))
   still_missing <- setdiff(pkgs, rownames(installed.packages()))
   if (length(still_missing) > 0) {
     stop("Failed to install R packages: ", paste(still_missing, collapse = ", "))
