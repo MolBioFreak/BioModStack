@@ -236,7 +236,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
     assert.equal(overrides.pinned_gpus, null);
     assert.equal(overrides.lock_gpus, false);
     assert.equal(overrides.bcp_shard_plan_id, '2x2');
-    assert.equal(overrides.bcp_gpu_ids, '0,1,2,3');
+    assert.equal(overrides.bcp_gpu_ids, null);
     assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_size_cp'), false);
     assert.equal(overrides.bcp_output_format, 'mmcif');
     assert.equal(overrides.bcp_write_full_pae, false);
