@@ -8,12 +8,17 @@ Status: active engineering pivot. SSD/NVMe is out of the active-state path for n
 
 The BioModStack large-protein/Fold-CP work should now focus on proving a DRAM→VRAM tiled worker runtime, not on trying to make native Fold-CP's equal square GPU mesh fit this mixed workstation by default.
 
+The first acceptable proof can be single-GPU out-of-core execution: the RTX 5090 is the main workhorse, while live pair/context state spills to and from DRAM through bounded tile windows. The rest of the logical context does not need to fit in VRAM at once. Multi-GPU heterogeneous scheduling remains important, but it is an extension of the same state-store/scheduler model, not a prerequisite for proving the core mechanism.
+
+Logical sharding is allowed to follow the math rather than the hardware. If correctness or memory geometry requires breaking the context into 4, 16, 64, or another explicit shard/tile count, that is acceptable. The key rule is that shard count describes the logical decomposition of global state, while worker count describes how many CUDA executors are currently chewing through that decomposition.
+
 Reasons:
 
 - Current Fold-CP is true synchronous context-parallel execution, but it assumes a fixed square mesh with equal-rank participation.
 - This workstation is heterogeneous: RTX 5090, 2x RTX 3090, RTX 5060 Ti.
 - Local topology has no NVLink and no usable CUDA P2P pairs.
 - NCCL probes showed same-node traffic using SHM transport rather than direct CUDA peer memory.
+- A single-GPU out-of-core tiled path is sufficient to prove the key missing property: live global model state can exceed VRAM while only the active window is staged through CUDA.
 - Therefore the project needs explicit state ownership and scheduling, not blind `torchrun size_cp` derivation.
 
 ## Target architecture
@@ -34,19 +39,46 @@ final assembly/publication after global state completion
 
 This is not independent mini-folding. The state being tiled is the live global pair/context state.
 
+## Architecture-preservation guardrails
+
+The DRAM workhorse path must preserve Fold-CP/Boltz runtime semantics. It must not become an ad hoc chunking system that merely processes independent fragments and stitches outputs together.
+
+Required constraints:
+
+- Use the existing context-parallel decomposition as the mathematical reference: pair/context state remains one live global state with explicit row/column tile ownership, phase ordering, barriers, and accumulation semantics.
+- Treat DRAM spillover as a memory-tier substitution for unavailable VRAM residency, not as a different inference algorithm.
+- A tile/window is an execution window over live state, not an independent prediction and not a post-hoc output slice.
+- Shard/tile geometry must preserve global pairformer dependencies. If an operation needs rows, columns, K/V blocks, bias/mask chunks, ring-style accumulation, or online-softmax state, those dependencies must be represented in the phase DAG and tile-store metadata.
+- The single-5090 path is allowed to serialize work that native Fold-CP would distribute, but it must serialize the same algebra with the same live-context dependencies.
+- Any fake-kernel proof is only a contract scaffold. Before claiming architectural fidelity, port one real Fold-CP operation using the same dependency structure and compare against the native/full reference.
+
+Failure modes to reject:
+
+- splitting the protein into independent mini-runs;
+- running serial Boltz once and slicing artifacts afterward;
+- updating tiles without the required row/column/global context dependencies;
+- hiding stale-state or phase-order violations behind scheduler metadata;
+- treating 4/16/etc. shards as output packaging rather than live-state decomposition.
+
 ## Non-goals for this tranche
 
 - Do not use SSD/NVMe as the active intermediary for every tile update.
 - Do not pretend output slicing after one serial prediction is distributed CP.
 - Do not depend on direct GPU↔GPU peer memory.
 - Do not start with ragged mathematical tile geometry. Use equal logical tiles first; express heterogeneity through dispatch cadence and per-GPU caps.
+- Do not equate shard count with GPU count. A 16-shard logical plan may run sequentially on one 5090, concurrently on several GPUs, or in some hybrid cadence; the math and memory plan choose shard geometry, not hardware enumeration.
 
 ## What must be shown
 
 A claim that DRAM intermediary works requires evidence at four levels:
 
+0. Single-GPU out-of-core viability
+   - a logical state larger than the active VRAM window can live in DRAM;
+   - one GPU can repeatedly stage tile windows, compute, and write back without ever requiring the full live state in VRAM;
+   - the proof does not depend on multiple GPUs, NCCL, or P2P.
+
 1. Transport feasibility
-   - multiple selected GPUs can stream pinned DRAM tiles into VRAM and back concurrently;
+   - selected GPUs can stream pinned DRAM tiles into VRAM and back;
    - measured per-GPU and aggregate bandwidth is recorded;
    - weak links/cards are visible, not hidden.
 
@@ -60,10 +92,12 @@ A claim that DRAM intermediary works requires evidence at four levels:
    - tiny full-state reference implementation exists;
    - tiled DRAM runtime produces the same result with one worker;
    - tiled DRAM runtime produces the same result with multiple workers;
-   - the same logical plan runs with different worker counts, only changing speed.
+   - the same logical plan runs with different worker counts, only changing speed;
+   - fake-kernel metadata proves phase ordering, tile ownership, and writeback lifecycle, but is not used as evidence that Boltz math is preserved.
 
 4. Real Fold-CP operation proof
    - port exactly one real operation first, preferably triangle multiplication before full attention;
+   - preserve the original operation's dependency structure rather than replacing it with independent chunks;
    - compare against tiny native/reference output within tolerance;
    - only after that attempt a larger pairformer slice.
 
@@ -180,24 +214,45 @@ This is only a first-pass assignment. Real scheduling should use measured bandwi
 
 ## Next implementation tranche
 
-### Phase 1: make the probe a real DRAM tile-store micro-runtime
+### Phase 1: make the probe a real single-GPU DRAM tile-store micro-runtime
+
+Start with one GPU, preferably torch ordinal 0 / RTX 5090, because this isolates the fundamental mechanism from multi-GPU scheduling noise. The success criterion is not speedup; it is that the live logical state is DRAM-resident and only active windows enter VRAM.
 
 Add:
 
-- DRAM tile root under tmpfs or anonymous shared memory.
+- DRAM tile root under tmpfs, anonymous shared memory, or pinned host buffers.
 - tile manifest: `tile_id`, `row_range`, `col_range`, `phase`, `version`, `dtype`, `shape`, `bytes`, `checksum`.
-- worker lease table.
+- one-GPU lease loop with explicit `load -> compute -> writeback -> release` lifecycle.
 - one deterministic fake update, e.g. `tile = alpha * tile + beta * row_bias + gamma * col_bias`.
 - reference full-state implementation for tiny N.
-- tests proving one-worker and multi-worker tiled outputs equal reference.
+- tests proving one-worker tiled outputs equal reference and that peak device allocation stays below full-state size.
+
+Avoid transfer-bound toy behavior by making lease granularity configurable:
+
+- support larger tile windows / batches per lease;
+- support multiple compute iterations while a tile/window is resident;
+- report compute time vs H2D/D2H time separately;
+- treat high transfer fraction as a scheduler failure signal, not as proof the architecture is invalid.
 
 Acceptance:
 
 ```text
-same logical plan + 1 worker == reference
+same logical plan + 1 GPU worker == reference
+state lives in DRAM between leases
+full logical state is never allocated in VRAM
+logical shard/tile count is independent of GPU count
+4-shard and 16-shard tiny plans both pass reference equivalence where memory geometry permits
+compute/H2D/D2H timing is reported per lease
+```
+
+### Phase 1b: extend the same runtime to multiple workers only after single-GPU correctness
+
+Acceptance:
+
+```text
 same logical plan + 2 workers == reference
 same logical plan + 4 workers == reference
-state leaves VRAM after each lease and survives in DRAM tile store
+GPU count changes cadence only, not logical tile geometry
 ```
 
 ### Phase 2: measure scheduling policy on this machine
@@ -235,16 +290,19 @@ Acceptance:
 - identify whether including the 5060 Ti helps or hurts for different tile sizes;
 - identify whether 3090s should receive fewer/larger/less frequent tile leases.
 
-### Phase 3: port one Fold-CP operation
+### Phase 3: port one Fold-CP operation without changing its dependency semantics
 
-Start with triangle multiplication because it is accumulation-friendly:
+Start with triangle multiplication because it is accumulation-friendly, but do not turn it into an unrelated chunk loop. The DRAM tile-store version must preserve the existing Fold-CP operation's row/column dependency pattern and accumulation semantics.
+
+Required:
 
 - native tiny reference using the inspected Fold-CP math pattern;
-- DRAM-tiled local implementation;
+- DRAM-tiled local implementation with explicit phase/dependency metadata;
 - compare within tolerance;
-- then run with multiple GPU workers.
+- prove the same logical operation can run sequentially on one workhorse GPU while preserving live-context dependencies;
+- then run with multiple GPU workers only after the one-workhorse version is correct.
 
-Only after this works should we port triangular attention with online softmax state.
+Only after this works should we port triangular attention with its K/V/bias/mask chunk dependencies and online softmax state.
 
 ### Phase 4: BioModStack scheduler integration
 
@@ -338,6 +396,57 @@ PCIe Gen5 x16 raw per direction: 63.02 GB/s; 85-90% practical: 53.56-56.71 GB/s
 ```
 
 Conclusion: the measured 3090 bandwidth is exactly what Gen4 x4 would predict. If the MCIO/riser path is expected to bifurcate as x8/x8, the platform is currently exposing the two 3090 downstream root ports as x4/x4 to Linux. Check BIOS PCIe bifurcation/slot settings, MCIO cable/riser wiring, and which motherboard lanes the splitter actually feeds. For runtime planning, treat the 3090s as Gen4 x4 devices until hardware/BIOS diagnostics prove otherwise.
+
+Important nuance: Gen4 x4 is not automatically a problem for using a RTX 3090. It is often enough for VRAM-resident training/inference, batched work, and workloads that move data once then reuse it heavily. It becomes a runtime concern specifically for this DRAM-backed active-state design if tiles are ping-ponged between DRAM and VRAM at high cadence. Therefore the scheduler should not exclude the 3090s; it should give them longer-residency, higher-compute-per-byte leases and avoid equal barrier cadence with faster-copy GPUs.
+
+- Do not hard-code 1x1/2x2/4x4 as hardware launch meanings. Treat them as logical grid presets only; internally they may correspond to 1, 4, 16, or more state tiles executed by one main workhorse GPU or by a later worker pool.
+
+## First executable context-spill micro-runtime
+
+After the 5090/main-workhorse pivot, the probe script now also contains a torch-free single-GPU context-spill simulation seam:
+
+```text
+fake_pair_state()
+fake_reference_pair_update()
+run_single_gpu_context_spill_simulation()
+```
+
+This is not real Boltz math and not a CUDA benchmark. It is the first executable contract test for the intended runtime shape:
+
+```text
+DRAM state -> load active tile/window -> compute -> writeback -> release -> next tile/window
+```
+
+Validated behavior:
+
+- 4 logical shards and 16 logical shards both match the same full-state reference on one worker.
+- manifest records `backend: single-gpu-dram-context-spill-sim`.
+- manifest records `state_residency: dram_between_leases`.
+- manifest records `full_state_allocated_in_vram: false`.
+- manifest records peak active window bytes separately from full logical state bytes.
+- lease lifecycle is explicit: `load`, `compute`, `writeback`, `release`.
+
+Verification:
+
+```bash
+cd /home/dalab/biomodstack/biomodstack
+python3 -m pytest scripts/test_dram_vram_tile_probe.py -q
+python3 -m py_compile scripts/dram_vram_tile_probe.py scripts/test_dram_vram_tile_probe.py
+```
+
+Result:
+
+```text
+6 passed
+```
+
+A sample 16-shard simulation summary was written to:
+
+```text
+/tmp/single_gpu_context_spill_sim_16shards.json
+```
+
+Important caveat: this is still a fake local kernel. The next required step is to make the same contract use real pinned host buffers and one real CUDA-resident work window on torch ordinal 0 / RTX 5090, with timing split into load/compute/writeback.
 
 ## Current project priority
 
