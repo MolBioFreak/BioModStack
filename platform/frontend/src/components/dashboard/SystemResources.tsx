@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchSystemStatus,
@@ -8,6 +8,13 @@ import {
     toggleGpuDisabled
 } from '../../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../../lib/api';
+import {
+    buildGpuCatalog,
+    formatGpuLabel,
+    getGpuMemoryTotalMb,
+    listGpuCatalogEntries,
+    type GpuCatalogLike,
+} from '../gpuCatalog';
 
 // --- Helper Components ---
 
@@ -405,22 +412,15 @@ function GpuPowerControlCard({
     );
 }
 
-// GPU Names for dropdown
-const GPU_NAMES: Record<number, string> = {
-    0: 'RTX 5090',
-    1: 'RTX 5060 Ti',
-    2: 'RTX 3090 #1',
-    3: 'RTX 3090 #2',
-};
-
 const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen', 'diffdock', 'rfdiffusion', 'unidock', 'msa_batch'];
 
 // Workflow Pinning Section Component
-function WorkflowPinningSection() {
+function WorkflowPinningSection({ gpuCatalog }: { gpuCatalog: GpuCatalogLike }) {
     const [workflowPins, setWorkflowPins] = useState<Record<string, number>>({});
     const [gpuLocks, setGpuLocks] = useState<Record<string, number>>({});
     const [expanded, setExpanded] = useState(false);
     const [saving, setSaving] = useState(false);
+    const gpuOptions = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
 
     // Fetch workflow pins and GPU locks
     useEffect(() => {
@@ -504,8 +504,10 @@ function WorkflowPinningSection() {
                                     className="bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded px-1.5 py-0.5 disabled:opacity-50"
                                 >
                                     <option value="">Auto</option>
-                                    {[0, 1, 2, 3].map(gpu => (
-                                        <option key={gpu} value={gpu}>{GPU_NAMES[gpu]}</option>
+                                    {gpuOptions.length === 0 ? (
+                                        <option value="" disabled>No live GPUs detected</option>
+                                    ) : gpuOptions.map(gpu => (
+                                        <option key={gpu.index} value={gpu.index}>{gpu.label}</option>
                                     ))}
                                 </select>
                             </div>
@@ -682,6 +684,9 @@ interface SchedulerConfig {
         emptiness_weight: number;
         max_launches_per_cycle: number;
         msa_concurrency_limit: number;
+        msa_preferred_gpu_ids?: number[];
+        msa_avoid_heavy_gpus?: boolean;
+        force_run_excluded_gpu_ids?: number[];
     };
     overrides: Record<string, {
         force_available: boolean;
@@ -708,14 +713,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [localMaxLaunchesPerCycle, setLocalMaxLaunchesPerCycle] = useState(3);
     const [expanded, setExpanded] = useState(false);
     const [debugExpanded, setDebugExpanded] = useState(false);
-
-    // GPU specs: name and max VRAM in MB
-    const GPU_SPECS: Record<number, { name: string; maxVramMb: number }> = {
-        0: { name: 'RTX 5090', maxVramMb: 32768 },      // 32GB
-        1: { name: 'RTX 5060 Ti', maxVramMb: 16384 },   // 16GB
-        2: { name: 'RTX 3090 #1', maxVramMb: 24576 },   // 24GB
-        3: { name: 'RTX 3090 #2', maxVramMb: 24576 },   // 24GB
-    };
+    const gpuCatalog = useMemo(() => buildGpuCatalog(gpus), [gpus]);
+    const liveGpuEntries = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
+    const getMaxVramMb = (gpuId: number): number => Math.max(getGpuMemoryTotalMb(gpuId, gpuCatalog) ?? 0, 1024);
 
     // Per-GPU local state for overrides (stores pending changes)
     const [localGpuOverrides, setLocalGpuOverrides] = useState<Record<string, {
@@ -739,31 +739,35 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 setLocalCapacityWeight(data.global?.capacity_weight ?? 3.0);
                 setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
                 setLocalMaxLaunchesPerCycle(data.global?.max_launches_per_cycle ?? 3);
-
-                // Initialize per-GPU local state from config
-                const gpuStates: typeof localGpuOverrides = {};
-                for (const gpuIdStr of Object.keys(data.overrides || {})) {
-                    const gpuIdx = parseInt(gpuIdStr);
-                    const override = data.overrides[gpuIdStr] || {};
-                    const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
-                    // Calculate vramLimit from threshold and safety margin
-                    const thresholdPct = override.threshold ?? (data.global?.target_vram_fill ?? 0.75);
-                    const safetyMb = override.vram_safety_margin_mb ?? 0;
-                    gpuStates[gpuIdStr] = {
-                        vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
-                        priorityTier: override.priority_tier ?? null,
-                        maxConcurrentJobs: override.max_concurrent_jobs ?? null,
-                    };
-                }
-                setLocalGpuOverrides(gpuStates);
             })
             .catch(console.error);
     }, []);
 
+    useEffect(() => {
+        if (!config) return;
+        // Initialize per-GPU local state from live GPU inventory.
+        // Stale overrides for GPUs not detected on this host are intentionally
+        // hidden instead of projecting this workstation's VRAM specs onto them.
+        const gpuStates: typeof localGpuOverrides = {};
+        for (const gpuEntry of liveGpuEntries) {
+            const gpuIdStr = String(gpuEntry.index);
+            const override = config.overrides[gpuIdStr] || {};
+            const maxVram = getMaxVramMb(gpuEntry.index);
+            const thresholdPct = override.threshold ?? (config.global?.target_vram_fill ?? 0.75);
+            const safetyMb = override.vram_safety_margin_mb ?? 0;
+            gpuStates[gpuIdStr] = {
+                vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
+                priorityTier: override.priority_tier ?? null,
+                maxConcurrentJobs: override.max_concurrent_jobs ?? null,
+            };
+        }
+        setLocalGpuOverrides(gpuStates);
+    }, [config, liveGpuEntries]);
+
     // Get or initialize local GPU override
     const getLocalGpuOverride = (gpuId: string) => {
-        const gpuIdx = parseInt(gpuId);
-        const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
+        const gpuIdx = parseInt(gpuId, 10);
+        const maxVram = getMaxVramMb(gpuIdx);
 
         if (localGpuOverrides[gpuId]) return localGpuOverrides[gpuId];
 
@@ -779,7 +783,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         const safetyMb = override.vram_safety_margin_mb ?? 0;
 
         return {
-            vramLimitMb: Math.round(maxVram * thresholdPct - safetyMb),
+            vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
             priorityTier: override.priority_tier ?? null,
             maxConcurrentJobs: (config?.overrides[gpuId] || {}).max_concurrent_jobs ?? null,
         };
@@ -801,8 +805,8 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         if (!config) return;
         const local = getLocalGpuOverride(gpuId);
         const existing = config.overrides[gpuId] || {};
-        const gpuIdx = parseInt(gpuId);
-        const maxVram = GPU_SPECS[gpuIdx]?.maxVramMb ?? 24576;
+        const gpuIdx = parseInt(gpuId, 10);
+        const maxVram = getMaxVramMb(gpuIdx);
 
         // Convert vramLimitMb back to threshold percentage
         const thresholdPct = local.vramLimitMb / maxVram;
@@ -837,8 +841,8 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
         for (const gpu of gpus) {
             const gpuId = String(gpu.index);
-            const maxVram = GPU_SPECS[gpu.index]?.maxVramMb ?? 24576;
-            const vramLimitMb = Math.round(maxVram * (percentage / 100));
+            const maxVram = getMaxVramMb(gpu.index);
+            const vramLimitMb = Math.max(1024, Math.round(maxVram * (percentage / 100)));
             const thresholdPct = percentage / 100;
             const existing = config.overrides[gpuId] || {};
 
@@ -898,6 +902,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     emptiness_weight: localEmptinessWeight,
                     max_launches_per_cycle: localMaxLaunchesPerCycle,
                     msa_concurrency_limit: config?.global?.msa_concurrency_limit ?? 1,
+                    msa_preferred_gpu_ids: config?.global?.msa_preferred_gpu_ids ?? [],
+                    msa_avoid_heavy_gpus: config?.global?.msa_avoid_heavy_gpus ?? false,
+                    force_run_excluded_gpu_ids: config?.global?.force_run_excluded_gpu_ids ?? [],
                 })
             });
             if (res.ok) {
@@ -1152,7 +1159,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     </div>
 
                     {/* Workflow GPU Pinning Section */}
-                    <WorkflowPinningSection />
+                    <WorkflowPinningSection gpuCatalog={gpuCatalog} />
 
                     {/* Concurrency Limits Section */}
                     <ConcurrencyLimitsSection />
@@ -1204,7 +1211,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                         </div>
 
                         <p className="text-xs text-slate-500 mt-3">
-                            <span className="text-emerald-400">↑ Capacity</span> = fill 5090 first, then 3090s, then 5060 Ti<br />
+                            <span className="text-emerald-400">↑ Capacity</span> = prefer GPUs with larger discovered VRAM<br />
                             <span className="text-amber-400">↑ Emptiness</span> = prefer idle GPUs over partially-full ones
                         </p>
                     </div>
@@ -1243,20 +1250,12 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                     const isDisabled = override.disabled ?? false;
                                     const memoryUsed = ((gpu.memory_used_mb / gpu.memory_total_mb) * 100).toFixed(0);
 
-                                    // GPU Name mapping
-                                    const gpuNames: Record<number, string> = {
-                                        0: 'RTX 5090',
-                                        1: 'RTX 5060 Ti',
-                                        2: 'RTX 3090 #1',
-                                        3: 'RTX 3090 #2',
-                                    };
-                                    const gpuName = gpuNames[gpu.index] || `GPU ${gpu.index}`;
+                                    const gpuName = formatGpuLabel(gpu.index, gpuCatalog);
 
                                     // Get local state for this GPU
                                     const localOverride = getLocalGpuOverride(gpuId);
 
-                                    // GPU specs for this GPU
-                                    const maxVram = GPU_SPECS[gpu.index]?.maxVramMb ?? 24576;
+                                    const maxVram = getMaxVramMb(gpu.index);
                                     const minVram = 1024; // 1GB minimum
 
                                     // Check if this GPU has unsaved changes
@@ -1559,6 +1558,9 @@ export function SystemResources() {
     const ram = systemData?.data.ram;
     const cpuHistory = systemData?.data.cpu_history ?? [];
     const ramHistory = systemData?.data.ram_history ?? [];
+    const totalGpuPowerDraw = gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0);
+    const totalGpuPowerCap = gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0);
+    const totalObservedPower = totalGpuPowerDraw + (cpu?.power_watts ?? 0);
 
     if (!cpu && !ram && gpus.length === 0) {
         return <div className="animate-pulse h-32 bg-slate-800 rounded-xl mb-8 opactiy-50" />;
@@ -1588,9 +1590,11 @@ export function SystemResources() {
                             {/* Total System Power (GPU + CPU) */}
                             <span
                                 className="text-sm text-slate-400 cursor-help"
-                                title={`GPU: ${gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0).toFixed(0)}W${cpu?.power_watts != null ? ` + CPU: ${cpu.power_watts.toFixed(0)}W` : ''}`}
+                                title={`GPU: ${totalGpuPowerDraw.toFixed(0)}W${cpu?.power_watts != null ? ` + CPU: ${cpu.power_watts.toFixed(0)}W` : ''}`}
                             >
-                                Total: {(gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0) + (cpu?.power_watts ?? 0)).toFixed(0)}W / {gpus.reduce((sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w), 0) + 350}W
+                                {cpu?.power_watts != null
+                                    ? `Total: ${totalObservedPower.toFixed(0)}W now / ${totalGpuPowerCap.toFixed(0)}W GPU cap`
+                                    : `GPU: ${totalGpuPowerDraw.toFixed(0)}W / ${totalGpuPowerCap.toFixed(0)}W cap`}
                             </span>
                         </div>
                     )}

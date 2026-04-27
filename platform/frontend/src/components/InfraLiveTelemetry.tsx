@@ -3,6 +3,7 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tansta
 import Plot from 'react-plotly.js';
 import type { Config, Data, Layout, PlotData } from 'plotly.js';
 import {
+    discoverHardware,
     fetchFanControl,
     fetchPowerControl,
     fetchSchedulerConfig,
@@ -347,12 +348,19 @@ function TotalPowerBar({
     const gpuDraw = payload.gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0);
     const cpuDraw = payload.cpu.power_watts ?? 0;
     const totalDraw = gpuDraw + cpuDraw;
-    const cpuCap = getCpuPowerScale(payload.cpu) ?? Math.max(200, Math.ceil(Math.max(cpuDraw, 150) / 25) * 25);
-    const totalCap = payload.gpus.reduce(
+    const totalGpuPowerCap = payload.gpus.reduce(
         (sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w),
-        cpuCap,
+        0,
     );
+    const cpuCap = getCpuPowerScale(payload.cpu) ?? 0;
+    const totalCap = totalGpuPowerCap + cpuCap;
     const fillPercent = Math.max(0, Math.min(100, toPercent(totalDraw, totalCap)));
+    const cpuPowerLabel = payload.cpu.power_watts != null
+        ? ` + CPU ${cpuDraw.toFixed(0)}W`
+        : ' + CPU unavailable';
+    const capLabel = payload.cpu.power_watts != null
+        ? `${totalCap.toFixed(0)}W cap`
+        : `GPU cap ${totalGpuPowerCap.toFixed(0)}W`;
 
     return (
         <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/88 shadow-2xl shadow-black/10 ${compact ? 'p-3' : 'p-4'}`}>
@@ -360,7 +368,7 @@ function TotalPowerBar({
                 <div>
                     <h2 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-sm' : 'text-base'}`}>Total Power Draw</h2>
                     <p className={`text-[var(--text-muted)] ${compact ? 'text-[11px]' : 'text-sm'}`}>
-                        GPU {gpuDraw.toFixed(0)}W{payload.cpu.power_watts != null ? ` + CPU ${cpuDraw.toFixed(0)}W` : ''} of {totalCap.toFixed(0)}W cap
+                        GPU {gpuDraw.toFixed(0)}W{cpuPowerLabel} of {capLabel}
                     </p>
                 </div>
                 <div className="text-right">
@@ -641,8 +649,7 @@ function readSharedTelemetryStatus(queryClient: ReturnType<typeof useQueryClient
 }
 
 function getCpuPowerScale(cpu: SystemStatus['cpu']): number | null {
-    if (/threadripper/i.test(cpu.name)) return 350;
-    if (cpu.power_watts != null) return Math.max(200, Math.ceil(cpu.power_watts / 25) * 25);
+    if (cpu.power_watts != null) return Math.max(1, Math.ceil(cpu.power_watts / 25) * 25);
     return null;
 }
 
@@ -1200,8 +1207,16 @@ function CpuPanel({
     gapBreakMs: number;
     redrawKey: string | number;
 }) {
-    const powerScale = getCpuPowerScale(current) ?? 350;
+    const observedCpuPowerMax = Math.max(
+        current.power_watts ?? 0,
+        ...samples.map((sample) => (typeof sample.cpuPower === 'number' ? sample.cpuPower : 0)),
+    );
+    const powerScale = getCpuPowerScale(current) ?? Math.max(1, Math.ceil(observedCpuPowerMax / 25) * 25);
     const tempColor = getTempBandColor(current.temperature);
+    const cpuPowerTelemetry = current.power_telemetry;
+    const cpuPowerSubtitle = cpuPowerTelemetry && !cpuPowerTelemetry.available
+        ? `CPU package power unavailable: ${cpuPowerTelemetry.message}`
+        : undefined;
     const cpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
     const cpuFreqTrace = buildGapAwareTraceData(
         samples,
@@ -1212,8 +1227,8 @@ function CpuPanel({
     const cpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.cpuPower ?? 0, powerScale),
-        (sample) => sample.cpuPower ?? 0,
+        (sample) => sample.cpuPower == null ? null : toPercent(sample.cpuPower, powerScale),
+        (sample) => sample.cpuPower == null ? null : sample.cpuPower,
     );
     const cpuTempTrace = buildGapAwareTraceData(
         samples,
@@ -1223,7 +1238,7 @@ function CpuPanel({
     );
 
     return (
-        <PanelFrame title={current.name} compact={compact}>
+        <PanelFrame title={current.name} subtitle={cpuPowerSubtitle} compact={compact}>
             <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 270 : 288)}
@@ -1632,6 +1647,28 @@ export function InfraLiveTelemetry({
         },
     });
 
+    const discoverMutation = useMutation({
+        mutationFn: async () => {
+            const discovery = await discoverHardware();
+            const system = await fetchSystemStatus();
+            return { discovery, system };
+        },
+        onSuccess: ({ discovery, system }) => {
+            queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, system);
+            queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, system);
+            queryClient.setQueryData(SHARED_POWER_CONTROL_QUERY_KEY, { data: discovery.data.power_control });
+            queryClient.setQueryData(SHARED_FAN_CONTROL_QUERY_KEY, { data: discovery.data.fan_control });
+            queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
+                lastUpdatedMs: Date.now(),
+                error: null,
+            });
+            queryClient.invalidateQueries({ queryKey: INFRA_LIVE_SHARED_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
+        },
+    });
+
     useEffect(() => {
         if (!payload) return;
         startTransition(() => {
@@ -1708,8 +1745,31 @@ export function InfraLiveTelemetry({
                         onChange={setWindowMinutes}
                         compact={compact}
                     />
+                    <div>
+                        <div
+                            className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}
+                            style={{ letterSpacing: '0.16em' }}
+                        >
+                            Discovery
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => discoverMutation.mutate()}
+                            disabled={discoverMutation.isPending}
+                            className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                            title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
+                        >
+                            {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
+                        </button>
+                    </div>
                 </div>
             </div>
+
+            {discoverMutation.isError && (
+                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+                    Hardware discovery failed: {discoverMutation.error instanceof Error ? discoverMutation.error.message : 'unknown error'}
+                </div>
+            )}
 
             {!payload && !sharedStatus?.error && (
                 <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
