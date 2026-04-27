@@ -807,7 +807,7 @@ if __name__ == "__main__":
                        help="MMseqs gpuserver policy override")
     parser.add_argument("--gpu-server-wait-timeout", type=int, default=None,
                        help="Seconds to wait for gpuserver handshake")
-    parser.add_argument("--gpu-server-db-load-mode", type=int, default=None, choices=[0, 1, 2, 3],
+    parser.add_argument("--gpu-server-db-load-mode", type=int, default=None, choices=range(4),
                        help="MMseqs db-load-mode for gpuserver-backed searches")
     parser.add_argument("--gpu-server-startup-wait", type=float, default=None,
                        help="Seconds to wait after starting gpuserver")
