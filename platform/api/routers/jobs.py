@@ -1103,9 +1103,32 @@ def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] =
     return boltz_cp_largest_square_divisor(value_count, requested_size_cp)
 
 
-@router.get("/api/jobs/boltz-cp/shard-plans")
+def _get_boltz_cp_catalog_physical_gpu_count() -> int:
+    """Return the discovered host GPU count for UI catalog previews without DALAB ordinal assumptions."""
+    for env_key in ("BMS_BOLTZ_CP_CATALOG_GPU_COUNT", "BMS_MAX_PHYSICAL_GPUS"):
+        raw_value = os.getenv(env_key)
+        if raw_value in (None, ""):
+            continue
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+
+    try:
+        from services.gpu_metadata import GPU_METADATA
+
+        discovered_count = len(GPU_METADATA)
+    except Exception as exc:
+        logger.debug("Could not discover GPU count for Boltz-CP shard-plan catalog: %s", exc)
+        discovered_count = 0
+    return max(1, discovered_count)
+
+
+@router.get("/boltz-cp/shard-plans")
 def list_boltz_cp_shard_plans() -> Dict[str, Any]:
-    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=4)
+    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=_get_boltz_cp_catalog_physical_gpu_count())
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1214,6 +1237,7 @@ def _normalize_boltz_cp_params_for_validation(
         "sampling_steps": "bcp_sampling_steps",
         "diffusion_samples": "bcp_diffusion_samples",
         "seed": "bcp_seed",
+        "backend": "bcp_backend",
     }
     for canonical_key, alias_key in alias_mappings.items():
         if canonical_key not in normalized and alias_key in normalized:
@@ -4327,6 +4351,8 @@ def _normalize_nanopore_modbase_for_validation(
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
+    model_id: Optional[str] = None,
+    mode: Optional[str] = None,
     limit: int = 500,
     offset: int = 0,
     include_children: bool = False,  # New param: show child jobs if True
@@ -4348,6 +4374,12 @@ async def list_jobs(
     
     if status:
         query = query.where(Job.status == status.value)
+
+    if model_id:
+        query = query.where(Job.model_id == model_id)
+
+    if mode:
+        query = query.where(Job.mode == mode)
     
     if q:
         query = query.where(Job.name.ilike(f"%{q}%"))
@@ -4377,6 +4409,10 @@ async def list_jobs(
         count_query = count_query.where(Job.parent_job_id == None)
     if status:
         count_query = count_query.where(Job.status == status.value)
+    if model_id:
+        count_query = count_query.where(Job.model_id == model_id)
+    if mode:
+        count_query = count_query.where(Job.mode == mode)
     if q:
         count_query = count_query.where(Job.name.ilike(f"%{q}%"))
     total = (await session.execute(count_query)).scalar()
