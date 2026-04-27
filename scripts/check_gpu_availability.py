@@ -7,7 +7,7 @@ Usage:
     python check_gpu_availability.py [--threshold 80]
     
 Returns:
-    Prints GPU ID (0, 1, 2, 3) or 'none' to stdout
+    Prints a discovered GPU ID or 'none' to stdout
 """
 import subprocess
 import sys
