@@ -190,6 +190,25 @@ def _maintenance_disabled_detail() -> str:
     )
 
 
+ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
+    "/status": True,
+    "/motion/reference/status": True,
+    "/motion/reference/mark_referenced": True,
+    "/motion/reference/mark_desynced": True,
+    "/liquid/status": True,
+    "/liquid/init": True,
+    "/liquid/tip": True,
+    "/liquid/aspirate": True,
+    "/liquid/dispense": True,
+    "/liquid/mix": True,
+    "/camera/stream_state": True,
+    "/vision/inspect": True,
+    "/vision/barcode/read": True,
+}
+
+BMS_PROXIED_ROUTES: Dict[str, bool] = dict(ROBOT_LOCAL_EXPECTED_ROUTES)
+
+
 def _runtime_status_payload(
     *,
     linkage_configured: bool,
@@ -457,6 +476,66 @@ async def get_status():
 async def reconnect_runtime():
     return await proxy_request("POST", "/reconnect")
 
+
+@router.get("/capabilities")
+async def bioxp_capabilities():
+    return {
+        "linkage_url": _GLOBAL_LINKAGE_URL,
+        "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
+        "recommended_url": _recommended_linkage_url(),
+        "robot_local_expected_routes": dict(sorted(ROBOT_LOCAL_EXPECTED_ROUTES.items())),
+        "bms_proxy_routes": dict(sorted(BMS_PROXIED_ROUTES.items())),
+        "notes": [
+            "BMS links to the robot-local BioXP runtime and exposes only the routes listed as proxied.",
+            "Route parity is a control-plane capability statement; hardware readiness still comes from runtime status/preflight responses.",
+        ],
+    }
+
+
+@router.get("/motion/reference/status")
+async def motion_reference_status(axes: str = "x,y,z,g,door"):
+    return await proxy_request("GET", "/motion/reference/status", params={"axes": axes}, timeout=20.0)
+
+
+@router.post("/motion/reference/mark_referenced")
+async def motion_reference_mark_referenced(request: Request):
+    return await proxy_request("POST", "/motion/reference/mark_referenced", await request.json(), timeout=30.0)
+
+
+@router.post("/motion/reference/mark_desynced")
+async def motion_reference_mark_desynced(request: Request):
+    return await proxy_request("POST", "/motion/reference/mark_desynced", await request.json(), timeout=30.0)
+
+
+@router.get("/liquid/status")
+async def liquid_status():
+    return await proxy_request("GET", "/liquid/status", timeout=20.0)
+
+
+@router.post("/liquid/init")
+async def liquid_init(request: Request):
+    return await proxy_request("POST", "/liquid/init", await request.json(), timeout=45.0)
+
+
+@router.post("/liquid/tip")
+async def liquid_tip(request: Request):
+    return await proxy_request("POST", "/liquid/tip", await request.json(), timeout=45.0)
+
+
+@router.post("/liquid/aspirate")
+async def liquid_aspirate(request: Request):
+    return await proxy_request("POST", "/liquid/aspirate", await request.json(), timeout=45.0)
+
+
+@router.post("/liquid/dispense")
+async def liquid_dispense(request: Request):
+    return await proxy_request("POST", "/liquid/dispense", await request.json(), timeout=45.0)
+
+
+@router.post("/liquid/mix")
+async def liquid_mix(request: Request):
+    return await proxy_request("POST", "/liquid/mix", await request.json(), timeout=120.0)
+
 @router.get("/motion/axis/{axis}/status")
 async def get_axis_status(axis: str):
     return await proxy_request("GET", f"/motion/axis/{axis}/status")
@@ -624,6 +703,21 @@ async def camera_reset(request: Request):
 @router.post("/camera/stop")
 async def camera_stop(request: Request):
     return await proxy_request("POST", "/camera/stop", await request.json(), timeout=20.0)
+
+
+@router.get("/camera/stream_state")
+async def camera_stream_state():
+    return await proxy_request("GET", "/camera/stream_state", timeout=20.0)
+
+
+@router.post("/vision/inspect")
+async def vision_inspect(request: Request):
+    return await proxy_request("POST", "/vision/inspect", await request.json(), timeout=45.0)
+
+
+@router.post("/vision/barcode/read")
+async def vision_barcode_read(request: Request):
+    return await proxy_request("POST", "/vision/barcode/read", await request.json(), timeout=45.0)
 
 @router.post("/protocol/compile")
 async def protocol_compile(request: Request):
