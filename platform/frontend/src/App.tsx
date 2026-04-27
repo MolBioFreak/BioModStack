@@ -9,6 +9,7 @@ import { MolBioToolkitV2 } from './components/MolBioToolkit/indexV2';
 import { NGSToolkit } from './components/NGSToolkit';
 import { BioXpCockpit } from './components/BioXpCockpit';
 import { InfraMonitorPage } from './components/InfraMonitorPage';
+import { AssayAnalytics } from './components/AssayAnalytics';
 
 function App() {
   return (
@@ -25,6 +26,8 @@ function App() {
           <Route path="/designer" element={<MolBioToolkitV2 />} />
           {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
           <Route path="/ngs" element={<NGSToolkit />} />
+          {/* Assay Analytics - qPCR, chromatography/Empower, DOE/statistics */}
+          <Route path="/assay" element={<AssayAnalytics />} />
           {/* Infra Monitor - native workstation telemetry surface */}
           <Route path="/infra" element={<InfraMonitorPage />} />
           {/* BioXP Control Surface - Hardware proxy node component */}

@@ -143,6 +143,7 @@ function ParamField({
     setShowFileBrowser,
     setActiveSequenceField,
     setShowSequenceManager,
+    setSequenceToSave,
     ligandPresets
 }: {
     param: any;
@@ -151,49 +152,109 @@ function ParamField({
     setShowFileBrowser: (name: string | null) => void;
     setActiveSequenceField: (name: string) => void;
     setShowSequenceManager: (show: boolean) => void;
+    setSequenceToSave?: (sequence: { sequence: string; name?: string } | null) => void;
     ligandPresets: any[];
 }) {
-    const isWide = param.type === 'file' || param.type === 'directory' || param.preset_type === 'pdb' || param.preset_type === 'ligand';
+    const isSequenceField = param.preset_type === 'sequence' || param.name === 'sequence' || param.type === 'text';
+    const isContigField = typeof param.name === 'string' && param.name.includes('contig');
+    const isPdbPresetField = param.preset_type === 'pdb';
+    const isPathField = param.type === 'file' || param.type === 'directory';
+    const isNumericField = param.type === 'integer' || param.type === 'number';
+    const isSliderField = param.ui_control === 'slider' && isNumericField && param.minimum !== undefined && param.maximum !== undefined;
+    const isWide = isSequenceField || isPathField || param.preset_type === 'ligand' || isSliderField;
+    const label = param.label || param.name;
+    const description = param.description || '';
+    const value = params[param.name] ?? param.default ?? (param.type === 'boolean' ? false : '');
+    const numericValue = (() => {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+        const fallback = Number(param.default ?? param.minimum ?? 0);
+        return Number.isFinite(fallback) ? fallback : 0;
+    })();
+    const numericStep = param.step ?? (param.type === 'integer' ? 1 : 0.01);
+    const pathPlaceholder = param.ui_placeholder || param.placeholder || (param.type === 'directory' ? '/path/to/directory' : '/path/to/file');
+    const updateNumeric = (raw: string) => {
+        const parsed = param.type === 'integer' ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
+        if (Number.isFinite(parsed)) {
+            updateParam(param.name, parsed);
+        } else {
+            updateParam(param.name, param.default ?? param.minimum ?? 0);
+        }
+    };
 
     return (
         <div className={isWide ? 'col-span-full' : ''}>
-            <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                {param.description}
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                {label}
                 {param.required && <span className="text-red-400 ml-1">*</span>}
             </label>
+            {description && <p className="text-xs text-slate-500 mb-2">{description}</p>}
 
             {param.type === 'boolean' ? (
-                <label className="flex items-center gap-3 cursor-pointer">
-                    <div className={`w-10 h-6 rounded-full p-1 transition-colors ${params[param.name] ? 'bg-blue-500' : 'bg-slate-700'}`}>
-                        <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${params[param.name] ? 'translate-x-4' : ''}`} />
-                    </div>
+                <label className="flex items-center gap-3 rounded-lg border border-slate-700/70 bg-slate-900/40 px-3 py-2.5 cursor-pointer hover:border-slate-500 transition-colors">
                     <input
                         type="checkbox"
-                        className="hidden"
-                        checked={params[param.name] || false}
+                        checked={Boolean(value)}
                         onChange={(e) => updateParam(param.name, e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
                     />
-                    <span className="text-sm text-slate-300">Enabled</span>
+                    <span className="text-sm text-slate-200">{Boolean(value) ? 'Enabled' : 'Disabled'}</span>
                 </label>
             ) : param.enum ? (
                 <select
-                    value={params[param.name] ?? param.default ?? ''}
+                    value={value ?? ''}
                     onChange={(e) => updateParam(param.name, e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                     {param.enum.map((opt: string) => (
-                        <option key={opt} value={opt}>{opt}</option>
+                        <option key={opt || '__empty'} value={opt}>{param.enum_labels?.[opt] || opt || 'Auto / none'}</option>
                     ))}
                 </select>
-            ) : param.preset_type === 'pdb' ? (
+            ) : isContigField ? (
+                <PresetSelector
+                    presetType="contig"
+                    value={value || ''}
+                    onChange={(val) => updateParam(param.name, val)}
+                    onBrowse={() => { }}
+                    placeholder={param.ui_placeholder || param.placeholder || "Select a contig preset..."}
+                />
+            ) : isSliderField ? (
+                <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-slate-200 font-medium">{numericValue}</span>
+                        <input
+                            type="number"
+                            value={numericValue}
+                            onChange={(e) => updateNumeric(e.target.value)}
+                            min={param.minimum}
+                            max={param.maximum}
+                            step={numericStep}
+                            className="w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white text-sm text-right"
+                        />
+                    </div>
+                    <input
+                        type="range"
+                        min={param.minimum}
+                        max={param.maximum}
+                        step={numericStep}
+                        value={numericValue}
+                        onChange={(e) => updateNumeric(e.target.value)}
+                        className="w-full accent-blue-500"
+                    />
+                    <div className="flex justify-between text-[11px] text-slate-500">
+                        <span>{param.minimum}</span>
+                        <span>{param.maximum}</span>
+                    </div>
+                </div>
+            ) : isPdbPresetField ? (
                 <StructureInput
-                    value={params[param.name] || ''}
+                    value={value || ''}
                     onChange={(v) => updateParam(param.name, v)}
                     onBrowse={() => setShowFileBrowser(param.name)}
-                    targetChain={params['target_chain'] || ''}
+                    targetChain={params['target_chain'] || params['chain_id'] || ''}
                     onTargetChainChange={(c) => updateParam('target_chain', c)}
                     enableMultiSelect={false}
-                    enableDirectory={false}
+                    enableDirectory={param.type === 'directory'}
                 />
             ) : param.preset_type === 'ligand' ? (
                 <div className="space-y-2">
@@ -211,40 +272,69 @@ function ParamField({
                     </select>
                     <input
                         type="text"
-                        value={params[param.name] || ''}
+                        value={value || ''}
                         onChange={(e) => updateParam(param.name, e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                         placeholder={param.ui_placeholder || "Or enter SMILES string..."}
                     />
                 </div>
-            ) : param.preset_type === 'sequence' ? (
+            ) : isSequenceField ? (
                 <div className="space-y-2">
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setActiveSequenceField(param.name);
-                            setShowSequenceManager(true);
-                        }}
-                        className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
-                    >
-                        Sequence Library
-                    </button>
+                    <div className="flex gap-2 items-center flex-wrap">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setSequenceToSave?.(null);
+                                setActiveSequenceField(param.name);
+                                setShowSequenceManager(true);
+                            }}
+                            className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
+                        >
+                            Sequence Library
+                        </button>
+                        <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
+                            {String(value || '').length} aa
+                        </span>
+                        {String(value || '').length > 0 && setSequenceToSave && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSequenceToSave({ sequence: String(value || ''), name: params['sequence_name'] || params['job_name'] || '' });
+                                    setActiveSequenceField(param.name);
+                                    setShowSequenceManager(true);
+                                }}
+                                className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
+                            >
+                                Save to Library
+                            </button>
+                        )}
+                        {String(value || '').length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => updateParam(param.name, '')}
+                                className="px-2 py-2 text-slate-500 hover:text-red-400 text-sm transition-colors"
+                                title="Clear sequence"
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
                     <textarea
-                        value={params[param.name] || ''}
+                        value={value || ''}
                         onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                        rows={4}
+                        rows={6}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder="Enter amino acid sequence..."
+                        placeholder={param.ui_placeholder || param.placeholder || 'Enter amino acid sequence...'}
                     />
                 </div>
-            ) : param.type === 'file' || param.type === 'directory' ? (
+            ) : isPathField ? (
                 <div className="flex gap-2">
                     <input
                         type="text"
-                        value={params[param.name] || ''}
+                        value={value || ''}
                         onChange={(e) => updateParam(param.name, e.target.value)}
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none"
-                        placeholder={param.type === 'file' ? '/path/to/file' : '/path/to/directory'}
+                        placeholder={pathPlaceholder}
                     />
                     <button
                         type="button"
@@ -256,13 +346,14 @@ function ParamField({
                 </div>
             ) : (
                 <input
-                    type={param.type === 'integer' || param.type === 'number' ? 'number' : 'text'}
-                    value={params[param.name] ?? param.default ?? ''}
-                    onChange={(e) => updateParam(param.name, param.type === 'integer' ? parseInt(e.target.value) : param.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
+                    type={isNumericField ? 'number' : 'text'}
+                    value={value ?? ''}
+                    onChange={(e) => isNumericField ? updateNumeric(e.target.value) : updateParam(param.name, e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder={param.ui_placeholder || ''}
+                    placeholder={param.ui_placeholder || param.placeholder || ''}
                     min={param.minimum}
                     max={param.maximum}
+                    step={numericStep}
                 />
             )}
         </div>
@@ -556,7 +647,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental'].includes(model.id));
     const selectedModel = models.find((m: any) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: any) => m.id === selectedModeId);
 
@@ -602,6 +693,7 @@ export function JobSubmission() {
         if (template.id === 'caliby_experimental') return 'CB';
         if (template.id === 'protein_hunter_experimental') return 'PH';
         if (template.id === 'boltz_cp_experimental') return 'CP';
+        if (template.id === 'confornets_experimental') return 'CN';
         return template.icon === 'target' ? 'TG'
             : template.icon === 'flask' ? 'RF'
                 : template.icon === 'dna' ? 'MU'
@@ -1153,105 +1245,17 @@ export function JobSubmission() {
                                     }
 
                                     return (
-                                        <div key={param.name} className={param.type === 'file' || param.type === 'directory' ? 'col-span-full' : ''}>
-                                            <label className="block text-sm font-medium text-slate-400 mb-1">
-                                                {param.label}
-                                                {param.required && <span className="text-red-400 ml-1">*</span>}
-                                            </label>
-                                            <p className="text-xs text-slate-500 mb-2">{param.description}</p>
-
-                                            {param.type === 'enum' ? (
-                                                <select
-                                                    value={params[param.name] || param.default || ''}
-                                                    onChange={(e) => updateParam(param.name, e.target.value)}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
-                                                >
-                                                    {param.enum.map((opt: string) => (
-                                                        <option key={opt} value={opt}>
-                                                            {param.enum_labels?.[opt] || opt}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            ) : (param.type === 'file' || param.type === 'directory') ? (
-                                                <PresetSelector
-                                                    presetType="pdb"
-                                                    value={params[param.name] || ''}
-                                                    onChange={(val) => updateParam(param.name, val)}
-                                                    onBrowse={() => setShowFileBrowser(param.name)}
-                                                    placeholder="Select a preset PDB or directory..."
-                                                    enableMultiSelect={true}
-                                                    enableDirectory={true}
-                                                />
-                                            ) : param.name.includes('contig') ? (
-                                                <PresetSelector
-                                                    presetType="contig"
-                                                    value={params[param.name] || param.default || ''}
-                                                    onChange={(val) => updateParam(param.name, val)}
-                                                    onBrowse={() => { }}
-                                                    placeholder="Select a contig preset..."
-                                                />
-                                            ) : (param.type === 'text' || param.name === 'sequence') && param.name !== 'sequence_name' ? (
-                                                /* Sequence Input with Action Buttons */
-                                                <div className="space-y-2">
-                                                    <div className="flex gap-2 items-center flex-wrap">
-                                                        {/* Manage Library Button */}
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => {
-                                                                setActiveSequenceField(param.name);
-                                                                setShowSequenceManager(true);
-                                                            }}
-                                                            className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700"
-                                                        >
-                                                            Sequence Library
-                                                        </button>
-                                                        {/* Character count */}
-                                                        <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
-                                                            {(params[param.name] || '').length} aa
-                                                        </span>
-                                                        {/* Save Sequence Button - only show if has content */}
-                                                        {params[param.name] && params[param.name].length > 0 && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    setSequenceToSave({ sequence: params[param.name], name: params['sequence_name'] || '' });
-                                                                    setActiveSequenceField(param.name);
-                                                                    setShowSequenceManager(true);
-                                                                }}
-                                                                className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
-                                                            >
-                                                                Save to Library
-                                                            </button>
-                                                        )}
-                                                        {/* Clear Button */}
-                                                        {params[param.name] && params[param.name].length > 0 && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => updateParam(param.name, '')}
-                                                                className="px-2 py-2 text-slate-500 hover:text-red-400 text-sm transition-colors"
-                                                                title="Clear sequence"
-                                                            >
-                                                                ✕
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <textarea
-                                                        value={params[param.name] || ''}
-                                                        onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                                                        placeholder={param.placeholder || 'Enter amino acid sequence (A-Z)...\n\nTip: Click "Sequence Library" to load a saved sequence or save your current one.'}
-                                                        rows={6}
-                                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                                                    />
-                                                </div>
-                                            ) : (
-                                                <input
-                                                    type={param.type === 'integer' || param.type === 'number' ? 'number' : 'text'}
-                                                    value={params[param.name] ?? param.default ?? ''}
-                                                    onChange={(e) => updateParam(param.name, param.type === 'integer' ? parseInt(e.target.value) : param.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
-                                                />
-                                            )}
-                                        </div>
+                                        <ParamField
+                                            key={param.name}
+                                            param={param}
+                                            params={params}
+                                            updateParam={updateParam}
+                                            setShowFileBrowser={setShowFileBrowser}
+                                            setActiveSequenceField={setActiveSequenceField}
+                                            setShowSequenceManager={setShowSequenceManager}
+                                            setSequenceToSave={setSequenceToSave}
+                                            ligandPresets={ligandPresets}
+                                        />
                                     );
                                 })}
                             </div>
@@ -1318,7 +1322,7 @@ export function JobSubmission() {
                                                 )}
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                     {groupedParams[groupName].map((param: any) => (
-                                                        <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} ligandPresets={ligandPresets} />
+                                                        <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} setSequenceToSave={setSequenceToSave} ligandPresets={ligandPresets} />
                                                     ))}
                                                 </div>
                                             </div>
@@ -1341,7 +1345,7 @@ export function JobSubmission() {
                                                 {showAdvanced && (
                                                     <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                                                         {groupedParams['Advanced'].map((param: any) => (
-                                                            <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} ligandPresets={ligandPresets} />
+                                                            <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} setSequenceToSave={setSequenceToSave} ligandPresets={ligandPresets} />
                                                         ))}
                                                     </div>
                                                 )}

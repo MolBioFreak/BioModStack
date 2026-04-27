@@ -223,6 +223,92 @@ export interface RuntimeStatus {
     inferred_via_proxy?: boolean;
 }
 
+export interface BioXpCapabilities {
+    linkage_url?: string | null;
+    linkage_configured?: boolean;
+    recommended_url?: string | null;
+    robot_local_expected_routes: Record<string, boolean>;
+    bms_proxy_routes: Record<string, boolean>;
+    notes?: string[];
+}
+
+export interface MotionReferenceStatus {
+    ok?: boolean;
+    axes?: string[];
+    rows?: Record<string, Record<string, any>>;
+    state_path?: string;
+    generated_at?: string;
+    error?: string | null;
+}
+
+export interface MotionReferenceMarkPayload {
+    axes?: AxisName[];
+    axis?: AxisName;
+    reason?: string;
+    operator?: string;
+    origin_position_steps?: number | null;
+    metadata?: Record<string, any>;
+}
+
+export interface LiquidLocation {
+    location_id: string;
+    well_id?: string | null;
+    plate_name?: string | null;
+    z_offset_steps?: number | null;
+}
+
+export interface LiquidCommandPayload {
+    volume_ul?: number;
+    cycles?: number;
+    pressure_profile?: string;
+    tip_action?: 'load' | 'eject' | string;
+    source?: LiquidLocation;
+    destination?: LiquidLocation;
+    dest?: LiquidLocation;
+    liquid_class?: string;
+    tip_id?: string | null;
+    air_gap_ul?: number | null;
+    blow_out?: boolean;
+    operator?: string;
+    metadata?: Record<string, any>;
+}
+
+export interface LiquidStatus {
+    ok?: boolean;
+    transport?: string;
+    channel?: string;
+    bitrate?: number;
+    available?: boolean;
+    initialized?: boolean;
+    software_initialized?: boolean;
+    tip_loaded?: boolean;
+    software_tip_loaded?: boolean;
+    pressure_profile?: string;
+    last_command?: string | null;
+    hardware_tip_status?: Record<string, any> | null;
+    hardware_pressure?: Record<string, any> | null;
+    hardware_truth_level?: string;
+    driver_result?: Record<string, any> | null;
+    preflight?: Record<string, any> | null;
+    error?: string | null;
+}
+
+export type LiquidCommandResponse = LiquidStatus & Record<string, any>;
+
+export interface CameraStreamState {
+    ok?: boolean;
+    active?: boolean;
+    busy?: boolean;
+    device?: string | null;
+    pid?: number | null;
+    stream?: Record<string, any> | null;
+    reset_provenance?: Record<string, any> | null;
+    error?: string | null;
+}
+
+export type VisionCommandPayload = Record<string, any>;
+export type VisionCommandResponse = Record<string, any>;
+
 export type DaemonStatus = RuntimeStatus;
 
 export interface ProtocolCompilePayload {
@@ -329,6 +415,120 @@ export const useBioXpStatus = (enabled = true, refetchIntervalMs: number | false
         refetchInterval: enabled ? refetchIntervalMs : false,
         retry: false,
     });
+
+export const useBioXpCapabilities = (enabled = true) =>
+    useQuery<BioXpCapabilities, Error>({
+        queryKey: ['bioxp', 'capabilities'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/capabilities');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? 15000 : false,
+        retry: false,
+    });
+
+export const useMotionReferenceStatus = (enabled = true, axes: AxisName[] = ['x', 'y', 'z', 'g', 'door'], refetchIntervalMs: number | false = 5000) =>
+    useQuery<MotionReferenceStatus, Error>({
+        queryKey: ['bioxp', 'motion', 'reference', axes.join(',')],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/reference/status', { params: { axes: axes.join(',') } });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useMarkMotionReferenced = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('motion', 'reference', 'mark-referenced'),
+        mutationFn: async (payload: MotionReferenceMarkPayload) => {
+            const res = await api.post('/api/bioxp/motion/reference/mark_referenced', payload);
+            return res.data as MotionReferenceStatus;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useMarkMotionDesynced = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: bioxpHardwareMutationKey('motion', 'reference', 'mark-desynced'),
+        mutationFn: async (payload: MotionReferenceMarkPayload) => {
+            const res = await api.post('/api/bioxp/motion/reference/mark_desynced', payload);
+            return res.data as MotionReferenceStatus;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useLiquidStatus = (enabled = true, refetchIntervalMs: number | false = 5000) =>
+    useQuery<LiquidStatus, Error>({
+        queryKey: ['bioxp', 'liquid', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/liquid/status');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+const useLiquidCommand = (command: 'init' | 'tip' | 'aspirate' | 'dispense' | 'mix') => {
+    const queryClient = useQueryClient();
+    return useMutation<LiquidCommandResponse, Error, LiquidCommandPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('liquid', command),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post(`/api/bioxp/liquid/${command}`, payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useLiquidInit = () => useLiquidCommand('init');
+export const useLiquidTip = () => useLiquidCommand('tip');
+export const useLiquidAspirate = () => useLiquidCommand('aspirate');
+export const useLiquidDispense = () => useLiquidCommand('dispense');
+export const useLiquidMix = () => useLiquidCommand('mix');
+
+export const useCameraStreamState = (enabled = true, refetchIntervalMs: number | false = 3000) =>
+    useQuery<CameraStreamState, Error>({
+        queryKey: ['bioxp', 'camera', 'stream-state'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/camera/stream_state');
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useVisionInspect = () => {
+    const queryClient = useQueryClient();
+    return useMutation<VisionCommandResponse, Error, VisionCommandPayload>({
+        mutationKey: bioxpHardwareMutationKey('vision', 'inspect'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/vision/inspect', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useVisionBarcodeRead = () => {
+    const queryClient = useQueryClient();
+    return useMutation<VisionCommandResponse, Error, VisionCommandPayload>({
+        mutationKey: bioxpHardwareMutationKey('vision', 'barcode-read'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/vision/barcode/read', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
 
 export const useReconnectRuntime = () => {
     const queryClient = useQueryClient();

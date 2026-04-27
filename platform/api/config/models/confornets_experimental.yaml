@@ -1,0 +1,233 @@
+id: confornets_experimental
+name: ConforNets Experimental
+version: "0.1.0"
+category: structure_prediction
+description: >
+  Experimental monomer-only ConforNets workflow for OpenFold3 latent conformer
+  diversity, reference-guided MSE steering, and transfer sampling. This wraps the
+  upstream scripts without broadening the scope to complexes, ligands, or nucleic
+  acids.
+container: confornets.sif
+
+ui_icon: sparkles
+ui_color: "#F97316"
+experimental: true
+
+inputs:
+  - sequence
+  - pdb
+  - cif
+outputs:
+  - cif
+  - json
+  - csv
+  - pt
+
+modes:
+  - id: design
+    name: Monomer Conformer Sampling
+    description: Run ConforNets diversity, MSE/reference-guided steering, or transfer mode for one protein chain
+    params:
+      - task
+      - sequence
+      - chain_id
+      - benchmark_name
+      - test_case_name
+      - reference_pdb_1
+      - reference_name_1
+      - reference_pdb_2
+      - reference_name_2
+      - checkpoint_path
+      - confornets_repo_path
+      - skip_msa
+      - num_runs
+      - k_confornets
+      - num_samples
+      - max_steps
+      - save_steps
+      - num_recycles
+      - num_diffusion_steps
+      - lr
+      - grad_clip
+      - compute_confidence
+      - save_full_confidence
+      - confornet_path
+      - mse_dir
+      - source_test_cases
+
+params:
+  - name: task
+    type: string
+    description: ConforNets upstream mode; diversity samples a monomer landscape, MSE steers toward references, transfer reuses a trained ConforNet.
+    required: true
+    default: diversity
+    enum:
+      - diversity
+      - mse
+      - transfer
+
+  - name: sequence
+    type: text
+    description: Single-chain protein sequence. No complexes, ligands, nucleic acids, or multi-chain ':' separators are accepted.
+    required: true
+    pattern: "^[A-Za-z]+$"
+    preset_type: sequence
+
+  - name: chain_id
+    type: string
+    description: Single chain ID to write into the OpenFold3 query JSON.
+    required: false
+    default: A
+
+  - name: benchmark_name
+    type: string
+    description: Internal ConforNets benchmark name created under the staged assets directory.
+    required: false
+    default: bms_confornets
+
+  - name: test_case_name
+    type: string
+    description: Internal ConforNets test case name for this monomer.
+    required: false
+    default: monomer_case
+
+  - name: reference_pdb_1
+    type: file
+    description: Optional first reference PDB/mmCIF for MSE steering or two-reference landscape inspection.
+    required: false
+    file_type: pdb
+    preset_type: pdb
+
+  - name: reference_name_1
+    type: string
+    description: Name assigned to the first reference state inside references.csv.
+    required: false
+    default: ref_a
+
+  - name: reference_pdb_2
+    type: file
+    description: Optional second reference PDB/mmCIF. Upstream ConforNets currently supports at most two reference states per test case.
+    required: false
+    file_type: pdb
+    preset_type: pdb
+
+  - name: reference_name_2
+    type: string
+    description: Name assigned to the second reference state inside references.csv.
+    required: false
+    default: ref_b
+
+  - name: checkpoint_path
+    type: file
+    description: OpenFold3-preview OF3p2 checkpoint path, e.g. of3-p2-155k.pt. OF3p1 checkpoints are intentionally not exposed here.
+    required: false
+    default: /weights/openfold3/of3-p2-155k.pt
+
+  - name: confornets_repo_path
+    type: directory
+    description: Path to the pinned upstream ConforNets checkout inside the runtime/container.
+    required: false
+    default: /opt/confornets
+
+  - name: skip_msa
+    type: boolean
+    description: Skip the upstream MSA step only when query_msa.json and batch/*.pt have already been staged.
+    required: false
+    default: false
+
+  - name: num_runs
+    type: integer
+    description: Independent upstream runs/seeds for diversity or MSE training.
+    required: false
+    default: 2
+    minimum: 1
+    maximum: 128
+
+  - name: k_confornets
+    type: integer
+    description: Number of ConforNets trained per diversity run. Diversity is pairwise and requires at least two ConforNets.
+    required: false
+    default: 2
+    minimum: 2
+    maximum: 16
+
+  - name: num_samples
+    type: integer
+    description: Samples per saved ConforNet/state. For diversity, total CIFs scale by num_runs × save_steps × k_confornets × num_samples.
+    required: false
+    default: 5
+    minimum: 1
+    maximum: 512
+
+  - name: max_steps
+    type: integer
+    description: Upstream ConforNets optimization steps. Diversity save_steps must be lower than this value.
+    required: false
+    default: 21
+    minimum: 1
+    maximum: 2000
+
+  - name: save_steps
+    type: string
+    description: Comma-separated diversity save steps, matching upstream --save-steps semantics.
+    required: false
+    default: "5,10,15,20"
+
+  - name: num_recycles
+    type: integer
+    description: OpenFold3 recycles passed through to upstream scripts.
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 16
+
+  - name: num_diffusion_steps
+    type: integer
+    description: Diffusion sampling steps for diversity mode.
+    required: false
+    default: 200
+    minimum: 1
+    maximum: 1000
+
+  - name: lr
+    type: float
+    description: Learning rate for ConforNets optimization.
+    required: false
+    default: 0.001
+    minimum: 0.000001
+    maximum: 1.0
+
+  - name: grad_clip
+    type: float
+    description: Diversity-mode gradient clipping value.
+    required: false
+    default: 10.0
+    minimum: 0.0
+    maximum: 1000.0
+
+  - name: compute_confidence
+    type: boolean
+    description: Request upstream pLDDT/gPDE/PTM confidence CSV outputs where supported.
+    required: false
+    default: false
+
+  - name: save_full_confidence
+    type: boolean
+    description: Also persist raw per-sample confidence tensors; implies confidence calculation upstream.
+    required: false
+    default: false
+
+  - name: confornet_path
+    type: file
+    description: "Transfer mode only: explicit trained confornet.pt to apply to this monomer query."
+    required: false
+
+  - name: mse_dir
+    type: directory
+    description: "Transfer mode only: root of prior MSE outputs for upstream auto-discovery of confornet.pt files."
+    required: false
+
+  - name: source_test_cases
+    type: string
+    description: "Transfer auto-discovery only: comma-separated source test cases to scan under mse_dir."
+    required: false

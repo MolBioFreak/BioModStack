@@ -34,6 +34,7 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         "msa_concurrency_limit": 1,
         "msa_preferred_gpu_ids": [],
         "msa_avoid_heavy_gpus": False,
+        "force_run_excluded_gpu_ids": [],
     },
     "overrides": {},
     "workflow_pins": {},

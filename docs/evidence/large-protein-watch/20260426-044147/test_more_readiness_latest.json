@@ -1,0 +1,220 @@
+{
+  "captured_at": "2026-04-26T17:26:24.742423+00:00",
+  "bms": {
+    "path": "/home/dalab/biomodstack/biomodstack",
+    "exists": true,
+    "top": {
+      "rc": 0,
+      "stdout": "/home/dalab/biomodstack/biomodstack\n",
+      "stderr": ""
+    },
+    "head": {
+      "rc": 0,
+      "stdout": "4beec66\n",
+      "stderr": ""
+    },
+    "branch": {
+      "rc": 0,
+      "stdout": "test\n",
+      "stderr": ""
+    },
+    "dirty_count": 71,
+    "dirty_sample": [
+      " M docs/plans/2026-04-24-dram-vram-tile-runtime-proof.md",
+      " M docs/plans/README.md",
+      " M main.nf",
+      " M modules/boltz_cp_experimental.nf",
+      " M modules/unidock.nf",
+      " M nextflow.config",
+      " M platform/api/config/models/boltz2.yaml",
+      " M platform/api/config/models/boltz_cp_experimental.yaml",
+      " M platform/api/config/templates/boltz_cp_experimental.yaml",
+      " M platform/api/config/templates/structure_prediction.yaml",
+      " M platform/api/routers/gpu.py",
+      " M platform/api/routers/jobs.py",
+      " M platform/api/services/boltz_cp_shard_plans.py",
+      " M platform/api/services/gpu_config.py",
+      " M platform/api/services/gpu_orchestrator.py",
+      " M platform/api/services/nextflow.py",
+      " M platform/api/tests/test_boltz_cp_experimental.py",
+      " M platform/api/tests/test_boltz_cp_experimental_workflow_contract.py",
+      " M platform/api/tests/test_core_runtime_workflow_guard.py",
+      " M platform/frontend/src/components/AntibodyDenovoTemplate.tsx",
+      " M platform/frontend/src/components/BoltzGenTemplate.tsx",
+      " M platform/frontend/src/components/JobQueuePanel.tsx",
+      " M platform/frontend/src/components/MutagenesisTemplate.tsx",
+      " M platform/frontend/src/components/NanoporeTemplate.tsx",
+      " M platform/frontend/src/components/StructurePredictionTemplate.tsx",
+      " M platform/frontend/src/components/StructureViewerPane.tsx",
+      " M platform/frontend/src/components/dashboard/StructureReorchestratePanel.tsx",
+      " M platform/frontend/src/components/dashboard/SystemResources.tsx",
+      " M platform/frontend/src/components/dashboard/reorchestrateStructureSettings.ts",
+      " M platform/frontend/src/components/jobQueueGpuDisplay.ts",
+      " M platform/frontend/src/components/structurePredictionUiState.ts",
+      " M platform/frontend/src/components/structureViewerLayout.ts",
+      " M platform/frontend/src/lib/api.ts",
+      " M platform/frontend/tests/jobQueueGpuDisplay.test.ts",
+      " M platform/frontend/tests/reorchestrateStructureSettings.test.ts",
+      " M platform/frontend/tests/structurePredictionUiState.test.ts",
+      " M platform/frontend/tests/structureViewerLayout.test.ts",
+      " M platform/frontend/tsconfig.tests.json",
+      " M scripts/batch_msa.py",
+      " M scripts/check_gpu_availability.py",
+      " M scripts/check_nvml_write.py",
+      " M scripts/dram_vram_tile_probe.py",
+      " M scripts/lib/local_msa/cli/args.py",
+      " M scripts/lib/local_msa/cli/run_single.py",
+      " M scripts/lib/local_msa/sharding.py",
+      " M scripts/lib/local_msa/types.py",
+      " M scripts/local_msa_runtime.py",
+      " M scripts/run_local_msa.py",
+      " M scripts/spawn_boltz_cp_children.py",
+      " M scripts/test_dram_vram_tile_probe.py"
+    ],
+    "diff_check": {
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "fold_cp_tmp": {
+    "path": "/home/dalab/tmp/boltz-cp",
+    "exists": true,
+    "top": {
+      "rc": 0,
+      "stdout": "/home/dalab/tmp/boltz-cp\n",
+      "stderr": ""
+    },
+    "head": {
+      "rc": 0,
+      "stdout": "f76f37a\n",
+      "stderr": ""
+    },
+    "branch": {
+      "rc": 0,
+      "stdout": "main\n",
+      "stderr": ""
+    },
+    "dirty_count": 12,
+    "dirty_sample": [
+      " M src/boltz/distributed/main.py",
+      " M src/boltz/distributed/manager.py",
+      " M src/boltz/distributed/model/models/boltz2.py",
+      " M src/boltz/distributed/utils.py",
+      " M src/boltz/model/layers/triangular_attention/primitives.py",
+      " M tests/distributed/test_manager.py",
+      "?? $TASK_ROOT/",
+      "?? docs/evidence/",
+      "?? docs/plans/",
+      "?? regression_tests/",
+      "?? src/boltz/distributed/large_protein/",
+      "?? uv.lock"
+    ],
+    "diff_check": {
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "last_bms_watch": {
+    "path": "/home/dalab/biomodstack/biomodstack/docs/evidence/large-protein-watch/20260426-044147/cuda_spill_watch_validation.json",
+    "status": "PASS",
+    "job_id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+    "failed_checks": [],
+    "check_count": 14,
+    "api_parent": {
+      "id": "99b76d99-424d-4a0c-9bf8-3876969d5f43",
+      "name": "boltz-cp-cuda-spill-watch-20260426-044147",
+      "status": "completed",
+      "started_at": "2026-04-26T04:50:01.969993Z",
+      "completed_at": "2026-04-26T04:51:48.040279Z",
+      "output_dir": "/var/lib/biomodstack/bms_results/boltz-cp-cuda-spill-watch-20260426-044147_20260426_044959",
+      "error_message": null,
+      "current_stage": "Complete"
+    },
+    "queue_stats": {
+      "queued": 0,
+      "running": 0,
+      "paused": 0,
+      "total": 0
+    },
+    "aggregation_summary": {
+      "status": "complete",
+      "message": "complete",
+      "completed_bundle_count": 4,
+      "failed_bundle_count": 0,
+      "pending_bundle_count": 0,
+      "publication_status": "not_required",
+      "artifacts": {
+        "pdb": 0,
+        "cif": 0,
+        "json": 0,
+        "npz": 0,
+        "bundle_manifests": 4
+      },
+      "store_root": "/dev/shm/boltz-large-protein-99b76d99-424d-4a0c-9bf8-3876969d5f43"
+    },
+    "bundle_count": 4,
+    "bundle_backends": [
+      "pairformer-noseq-layer-dram-spill-cuda-workhorse"
+    ],
+    "bundle_devices": [
+      "cuda:0"
+    ],
+    "honesty_notes": [
+      "This proves BMS-visible coordinator/child launch, strict backend propagation, and real PairformerNoSeq CUDA workhorse bundle execution for a tiny n=6 fixture.",
+      "It does not prove full Boltz2 end-to-end production prediction, final CIF/PDB publication, production-scale memory behavior, or true concurrent multi-GPU CP.",
+      "The plan uses logical 2x2 bundles while physical_launch_size_cp remains 1 on cuda:0; this is deliberate single-GPU workhorse cadence, not multi-rank distributed CP."
+    ]
+  },
+  "api": {
+    "health": {
+      "status": 200,
+      "body": {
+        "status": "healthy",
+        "service": "biomodstack-api"
+      }
+    },
+    "queue_stats": {
+      "status": 200,
+      "body": {
+        "queued": 0,
+        "running": 0,
+        "paused": 0,
+        "total": 0
+      }
+    }
+  },
+  "latest_bms_pytest_log": {
+    "path": "/home/dalab/biomodstack/biomodstack/docs/evidence/large-protein-watch/20260426-044147/pytest_bms_boltz_cp_wiring_20260426T050155Z.log",
+    "tail": "  /home/dalab/biomodstack/biomodstack/platform/api/routers/designs.py:171: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class DesignResponse(BaseModel):\n\nrouters/molbio_ops.py:81\n  /home/dalab/biomodstack/biomodstack/platform/api/routers/molbio_ops.py:81: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class MutationSchema(BaseModel):\n\nrouters/molbio_ops.py:114\n  /home/dalab/biomodstack/biomodstack/platform/api/routers/molbio_ops.py:114: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class NucleotideSequenceResponse(BaseModel):\n\nrouters/nucleotide_sequences.py:107\n  /home/dalab/biomodstack/biomodstack/platform/api/routers/nucleotide_sequences.py:107: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class NucleotideSequenceResponse(BaseModel):\n\nrouters/user_sequences.py:41\n  /home/dalab/biomodstack/biomodstack/platform/api/routers/user_sequences.py:41: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class UserSequenceResponse(BaseModel):\n\nrouters/user_templates.py:43\n  /home/dalab/biomodstack/biomodstack/platform/api/routers/user_templates.py:43: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/\n    class UserTemplateResponse(BaseModel):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n31 passed, 8 warnings in 30.36s"
+  },
+  "nvidia_smi_gpus": {
+    "rc": 0,
+    "stdout": "0, NVIDIA GeForce RTX 5090, 16, 32607, 0, 54\n1, NVIDIA GeForce RTX 5060 Ti, 880, 16311, 0, 47\n2, NVIDIA GeForce RTX 3090, 15, 24576, 0, 33\n3, NVIDIA GeForce RTX 3090, 15, 24576, 0, 32\n",
+    "stderr": ""
+  },
+  "nvidia_smi_apps": {
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "df": {
+    "rc": 0,
+    "stdout": "Filesystem      Size  Used Avail Use% Mounted on\ntmpfs            63G  184M   63G   1% /dev/shm\n/dev/nvme0n1    3.6T  2.3T  1.2T  66% /mnt/BioModStack\n/dev/nvme1n1p3  1.9T  1.5T  257G  86% /\n",
+    "stderr": ""
+  },
+  "mem": {
+    "rc": 0,
+    "stdout": "               total        used        free      shared  buff/cache   available\nMem:           125Gi        31Gi       7.1Gi       107Mi        86Gi        83Gi\nSwap:           19Gi        13Gi       6.9Gi\n",
+    "stderr": ""
+  },
+  "next_test_readiness": {
+    "bms_watch_validation_pass": true,
+    "api_alive": true,
+    "queue_empty": true,
+    "bms_diff_check_clean": true,
+    "fold_cp_tmp_exists": true,
+    "gpu_app_output_empty_or_known": ""
+  }
+}
