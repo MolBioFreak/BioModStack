@@ -98,11 +98,14 @@ Current capabilities include:
 
 Current operational caveats:
 
-- BMS currently proxies the subset of robot-local routes used by the cockpit; it
-  is not yet a full mirror of the robot-local BioXP API.
-- The robot-local runtime already exposes additional surfaces such as
-  `/motion/reference/status` and `/liquid/*` that are not yet available through
-  `/api/bioxp/*` in BMS.
+- BMS currently proxies the route families used by the cockpit and validation
+  for status, motion reference, liquid handling, camera stream state, vision,
+  and protocol execution; it is still a curated subset rather than a full mirror
+  of the robot-local BioXP API.
+- Historical notes that `/motion/reference/status` and `/liquid/*` were absent
+  from `/api/bioxp/*` are stale for current builds. Future capability notes
+  should be checked against live `/api/bioxp/capabilities` route parity before
+  being treated as current.
 - `/api/bioxp/status` and `/api/bioxp/daemon/status` can diverge transiently
   during reconnect/recovery windows; treat that as control-plane status drift,
   not as a standalone hardware verdict.

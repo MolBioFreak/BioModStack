@@ -23,16 +23,18 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Frontend README](../platform/frontend/README.md)
 - [Electron shell README](../platform/desktop-electron/README.md)
 - [Model Integrations](ai_guidance/Model_Integrations.md)
-- [Database Instructions](ai_guidance/Database_Instructions.md)
-- [Pathing and Centralization Rules](ai_guidance/Centralization_and_Standardization.md)
 
 ## Active plans
 
 - [Plans README](plans/README.md)
-- [Android APK thin-shell comparison](plans/2026-04-20-android-apk-thin-shell-comparison.md)
-- [Control plane / Electron / install-path upgrade](plans/2026-04-20-control-plane-electron-runtime-paths-upgrade.md)
-- [Core-runtime workflow-adapter cutover](plans/2026-04-20-core-runtime-workflow-adapter-cutover.md)
-- [Fold-CP large-protein sharding plan](plans/2026-04-20-fold-cp-large-protein-sharding-plan.md)
+- [MSA control-plane guardrails and regression checklist](plans/2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
+- [Local high-quality MSA target-DB sharding spec](plans/2026-04-23-local-msa-target-db-sharding-spec.md)
+- [DRAM→VRAM tiled runtime proof plan](plans/2026-04-24-dram-vram-tile-runtime-proof.md)
+- [Fold-CP DRAM context-spill workhorse implementation spec](plans/2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md)
+- [RepA local MSA root-cause and fix spec](plans/2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
+- [MolBio read-QC harmonization implementation plan](plans/2026-04-25-molbio-read-qc-harmonization-spec.md)
+- [Caliby finishing changes specification](plans/2026-04-27-caliby-finishing-changes-spec.md)
+- [GPU MMseqs EnvDB fix implementation plan](plans/2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
 
 ## Canonical doc roles
 
@@ -47,8 +49,8 @@ under `docs/plans/` and should not be mistaken for the product truth.
   canonical product contract.
 - `docs/plans/archive/*.md`:
   archived historical planning/spec material kept for auditability.
-- `docs/ai_guidance/*.md`:
-  implementation policies and contributor guidance.
+- `docs/ai_guidance/Model_Integrations.md`:
+  current model integration guidance. Older AI instruction docs are pruned once stale.
 
 ## Current scope
 
