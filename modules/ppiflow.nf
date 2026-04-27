@@ -1,3 +1,14 @@
+def paramValueOrDefault(params, String key, defaultValue) {
+    if (!params.containsKey(key) || params[key] == null) {
+        return defaultValue
+    }
+    def value = params[key]
+    if (value instanceof CharSequence && value.toString().trim() == '') {
+        return defaultValue
+    }
+    return value
+}
+
 process IdentifyAnchorResidues {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_anchors.json"
@@ -21,11 +32,12 @@ process IdentifyAnchorResidues {
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
-    def energyThreshold = params.maturation_anchor_threshold ?: -5.0
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
+    def energyThreshold = paramValueOrDefault(params, 'maturation_anchor_threshold', -5.0)
+    def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
     def enrichmentEnabled = params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true
     def requireAnchors = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
-    def rotamerShellDistance = params.ppiflow_rotamer_shell_distance ?: 20.0
+    def rotamerShellDistance = paramValueOrDefault(params, 'ppiflow_rotamer_shell_distance', paramValueOrDefault(params, 'ppiflow_rotamer_shell_cutoff', 20.0))
+    def relaxAntibodyBackboneShell = paramValueOrDefault(params, 'ppiflow_relax_antibody_backbone_shell', false)
     def regionMode = params.ppiflow_region_mode ?: 'selected_cdrs'
     def selectedLoopsSpec = params.ppiflow_selected_loops ?: ''
     def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
@@ -45,6 +57,9 @@ JSON
     enrichmentArgs=""
     if [ "${enrichmentEnabled}" = "true" ]; then
         enrichmentArgs="\${enrichmentArgs} --rotamer_enrichment"
+    fi
+    if [ "${relaxAntibodyBackboneShell}" = "true" ]; then
+        enrichmentArgs="\${enrichmentArgs} --relax_antibody_backbone_shell"
     fi
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/prepare_ppiflow_maturation.py" \\
@@ -87,6 +102,7 @@ process RunPartialFlow {
     label 'gpu'
     label 'PPIFlow'
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "ppiflow_mask_validation.json"
 
     input:
     tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)
@@ -102,9 +118,9 @@ process RunPartialFlow {
     def heavyChain = params.ppiflow_heavy_chain ?: (antibodyList ? antibodyList[0] : 'H')
     def lightChain = params.ppiflow_light_chain ?: (antibodyList.size() > 1 ? antibodyList[1] : '')
     def antigenChain = params.ppiflow_antigen_chain ?: (params.antigen_chains ? params.antigen_chains.toString().replace(',', '') : '')
-    def startT = params.ppiflow_start_t != null ? params.ppiflow_start_t : 0.8
-    def samplesPerTarget = params.ppiflow_samples_per_target ?: 1
-    def retryLimit = params.ppiflow_retry_limit ?: 10
+    def startT = paramValueOrDefault(params, 'ppiflow_start_t', 0.8)
+    def samplesPerTarget = paramValueOrDefault(params, 'ppiflow_samples_per_target', 1)
+    def retryLimit = paramValueOrDefault(params, 'ppiflow_retry_limit', 10)
     def configPath = params.ppiflow_config ?: "/app/ppiflow/configs/test_antibody.yaml"
     def defaultCheckpoint = frameworkType == 'nanobody' ? 'nanobody' : 'antibody'
     def checkpointName = params.ppiflow_checkpoint ?: defaultCheckpoint
@@ -125,6 +141,10 @@ process RunPartialFlow {
 
     fixedPositionsSpec=\$(tr -d '\\n' < fixed_positions.txt)
     cdrPositionsSpec=\$(tr -d '\\n' < "${ppiflow_positions}")
+    "\${PYTHON_BIN}" "${params.code_root}/scripts/validate_ppiflow_masks.py" \\
+        --fixed_positions "\${fixedPositionsSpec}" \\
+        --movable_positions "\${cdrPositionsSpec}" \\
+        --report_json ppiflow_mask_validation.json
     hotspotsSpec="${params.epitope_residues ?: ''}"
 
     heavyChain="${heavyChain}"
@@ -447,8 +467,8 @@ process RunMaturationFAMPNN {
 
     script:
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
-    def temperature = params.maturation_redesign_temp ?: (params.fampnn_temperature ?: 0.1)
-    def numSteps = params.maturation_redesign_steps ?: (params.fampnn_num_steps ?: 100)
+    def temperature = paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
+    def numSteps = paramValueOrDefault(params, 'maturation_redesign_steps', paramValueOrDefault(params, 'fampnn_num_steps', 100))
     def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
@@ -475,10 +495,10 @@ process RunMaturationFAMPNN {
         num_seqs_per_pdb=1 \\
         pdb_dir="./" \\
         presort_by_length=true \\
-        psce_threshold=${params.fampnn_psce_threshold ?: 0.3} \\
+        psce_threshold=${paramValueOrDefault(params, 'fampnn_psce_threshold', 0.3)} \\
         temperature=${temperature} \\
-        seq_only=${params.fampnn_seq_only ?: false} \\
-        repack_last=${params.fampnn_repack_last ?: true} \\
+        seq_only=${paramValueOrDefault(params, 'fampnn_seq_only', false)} \\
+        repack_last=${paramValueOrDefault(params, 'fampnn_repack_last', true)} \\
         timestep_schedule.num_steps=${numSteps} \\
         out_dir="fampnn_output" \\
         ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \\
@@ -523,8 +543,8 @@ process ScoreMaturationImprovement {
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
-    def objectiveMode = params.ppiflow_objective_mode ?: 'selected_interface'
+    def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
+    def objectiveMode = paramValueOrDefault(params, 'ppiflow_objective_mode', 'selected_interface')
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -562,8 +582,8 @@ process ScorePartialFlowImprovement {
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.antigen_chains ?: ''
-    def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 12.0
-    def objectiveMode = params.ppiflow_objective_mode ?: 'selected_interface'
+    def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
+    def objectiveMode = paramValueOrDefault(params, 'ppiflow_objective_mode', 'selected_interface')
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -599,11 +619,11 @@ process FilterByMaturation {
     path ("filter_reports/*_maturation_filter.json"), emit: filter_reports
 
     script:
-    def rawMinImprovement = params.containsKey('maturation_min_improvement') ? params.maturation_min_improvement : null
+    def rawMinImprovement = paramValueOrDefault(params, 'maturation_min_improvement', null)
     def minImprovement = rawMinImprovement != null ? rawMinImprovement as Double : null
-    def percentile = params.maturation_filter_percentile
-    def objectiveMode = (params.ppiflow_objective_mode ?: 'selected_interface').toString()
-    def rawObjectiveThreshold = params.containsKey('ppiflow_objective_threshold') ? params.ppiflow_objective_threshold : null
+    def percentile = paramValueOrDefault(params, 'maturation_filter_percentile', null)
+    def objectiveMode = paramValueOrDefault(params, 'ppiflow_objective_mode', 'selected_interface').toString()
+    def rawObjectiveThreshold = paramValueOrDefault(params, 'ppiflow_objective_threshold', null)
     def objectiveThreshold = rawObjectiveThreshold != null ? rawObjectiveThreshold as Double : null
     def objectiveThresholdActive = objectiveMode != 'selected_interface' && objectiveThreshold != null
     def filterDisabled = !objectiveThresholdActive && (minImprovement == null || minImprovement >= 0.0) && !(percentile != null && percentile > 0)

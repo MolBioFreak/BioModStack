@@ -1,14 +1,11 @@
-export const GPU_NAMES: Record<number, string> = {
-    0: 'RTX 5090',
-    1: 'RTX 5060 Ti',
-    2: 'RTX 3090 #1',
-    3: 'RTX 3090 #2',
-};
+import type { GpuCatalogLike } from './gpuCatalog.js';
+import { formatGpuLabel } from './gpuCatalog.js';
 
 export interface QueueGpuDisplayInput {
     displayGpuIds?: number[] | null;
     pinnedGpu?: number | null;
     assignedGpu?: number | null;
+    gpuCatalog?: GpuCatalogLike;
 }
 
 export interface QueueGpuDisplayState {
@@ -35,21 +32,23 @@ const normalizeGpuIds = (gpuIds?: number[] | null): number[] => {
     return resolved;
 };
 
-export const formatGpuName = (gpuId: number): string => GPU_NAMES[gpuId] || `GPU ${gpuId}`;
+export const formatGpuName = (gpuId: number, gpuCatalog?: GpuCatalogLike): string => formatGpuLabel(gpuId, gpuCatalog);
 
-export const formatGpuList = (gpuIds: number[] | null | undefined): string | null => {
+export const formatGpuList = (gpuIds: number[] | null | undefined, gpuCatalog?: GpuCatalogLike): string | null => {
     const normalized = normalizeGpuIds(gpuIds);
     if (normalized.length === 0) return null;
-    return normalized.map((gpuId) => formatGpuName(gpuId)).join(', ');
+    return normalized.map((gpuId) => formatGpuName(gpuId, gpuCatalog)).join(', ');
 };
 
 export const resolveQueueGpuDisplay = ({
     displayGpuIds,
     pinnedGpu,
     assignedGpu,
+    gpuCatalog,
 }: QueueGpuDisplayInput): QueueGpuDisplayState => {
-    const gpuIds = normalizeGpuIds(displayGpuIds).length > 0
-        ? normalizeGpuIds(displayGpuIds)
+    const normalizedDisplayGpuIds = normalizeGpuIds(displayGpuIds);
+    const gpuIds = normalizedDisplayGpuIds.length > 0
+        ? normalizedDisplayGpuIds
         : Number.isInteger(pinnedGpu)
             ? [Number(pinnedGpu)]
             : Number.isInteger(assignedGpu)
@@ -69,7 +68,7 @@ export const resolveQueueGpuDisplay = ({
     }
 
     if (gpuIds.length === 1) {
-        const label = formatGpuName(gpuIds[0]);
+        const label = formatGpuName(gpuIds[0], gpuCatalog);
         return {
             gpuIds,
             isMultiGpu: false,
@@ -80,7 +79,7 @@ export const resolveQueueGpuDisplay = ({
         };
     }
 
-    const detailText = formatGpuList(gpuIds);
+    const detailText = formatGpuList(gpuIds, gpuCatalog);
     return {
         gpuIds,
         isMultiGpu: true,

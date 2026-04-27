@@ -78,23 +78,23 @@ user_params:
       values: [boltz, both]
     
   - name: boltz_num_samples
-    label: "[Boltz-2] Number of Samples"
+    label: "[Boltz-2] Number of Candidate Structures"
     type: integer
     default: 1
     minimum: 1
     maximum: 32
-    description: Independent structure predictions to generate
+    description: "Final ranked candidate structures generated from the same input; model_0 is shown as the top-ranked result."
     condition:
       param: pred_method
       values: [boltz, both]
 
   - name: boltz_max_parallel_samples
-    label: "[Boltz-2] Max Parallel Samples"
+    label: "[Boltz-2] Denoiser Chunk Limit"
     type: integer
     default: 1
     minimum: 1
     maximum: 32
-    description: "Cap concurrent Boltz samples per job. Use 1 for safest VRAM behavior."
+    description: "Caps denoiser-forward chunk size for already-requested Boltz diffusion/FK particles; not a full one-at-a-time job guarantee."
     condition:
       param: pred_method
       values: [boltz, both]

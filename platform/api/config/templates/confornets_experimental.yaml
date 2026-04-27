@@ -1,0 +1,308 @@
+# ConforNets experimental workflow
+
+id: confornets_experimental
+name: ConforNets Experimental
+icon: sparkles
+color: "#F97316"
+experimental: true
+description: >
+  Experimental monomer-only ConforNets workflow for OpenFold3 latent conformer
+  diversity, MSE/reference-guided steering, and transfer sampling on one
+  single-chain protein.
+goal: >
+  Stage a single-chain monomer query into the upstream ConforNets asset layout,
+  run the pinned upstream diversity/MSE/transfer scripts, and normalize real CIF
+  conformers plus provenance into BioModStack artifacts for landscape viewing.
+status: >
+  Experimental alpha. The wrapper preserves upstream ConforNets semantics,
+  requires an OF3p2/OpenFold3-preview compatible checkpoint, and enforces the
+  current upstream two reference state limit per test case. Complexes, ligands,
+  nucleic acids, docking, and calibrated ensemble probabilities are out of scope.
+
+stages:
+  - name: Asset Compile
+    tool: BMS ConforNets Wrapper
+    description: Validate monomer-only input, stage query JSON, references.csv, and up to two reference structures in upstream asset layout.
+  - name: Upstream ConforNets Run
+    tool: ConforNets / OpenFold3
+    description: Run preprocess.py plus the selected upstream diversity, MSE, or transfer script against the staged OF3p2 assets.
+  - name: Artifact Normalize
+    tool: BMS Output Normalizer
+    description: Collect real generated CIF conformers, ConforNet state files, confidence CSVs, checksums, and provenance into stable BMS artifacts.
+
+preset_params:
+  template_model_id: confornets_experimental
+  template_mode_id: design
+  cn_task: diversity
+
+user_params:
+  - name: task
+    label: ConforNets Task
+    type: enum
+    required: true
+    default: diversity
+    description: Monomer-only upstream mode. Diversity samples a conformational landscape; MSE steers toward references; transfer reuses a trained ConforNet.
+    enum:
+      - diversity
+      - mse
+      - transfer
+    enum_labels:
+      diversity: Diversity sampling
+      mse: Reference-guided MSE steering
+      transfer: Transfer trained ConforNet
+
+  - name: sequence
+    label: Monomer Sequence
+    type: text
+    required: true
+    description: Single-chain protein sequence only; ':' multi-chain separators, complexes, ligands, DNA/RNA, and multimer cases are rejected.
+
+  - name: chain_id
+    label: Chain ID
+    type: enum
+    required: false
+    default: A
+    description: Single chain ID written into the OpenFold3 query JSON.
+    enum:
+      - A
+      - B
+      - C
+      - D
+    enum_labels:
+      A: Chain A (default monomer)
+      B: Chain B
+      C: Chain C
+      D: Chain D
+
+  - name: reference_pdb_1
+    label: Reference State 1
+    type: file
+    required: false
+    description: Optional PDB/mmCIF first reference state. Required for MSE steering.
+    condition:
+      param: task
+      values:
+        - mse
+
+  - name: reference_name_1
+    label: Reference 1 Name
+    type: enum
+    required: false
+    default: ref_a
+    description: Stable label for the first reference state in upstream references.csv.
+    enum:
+      - ref_a
+      - open_ref
+      - active_ref
+      - closed_ref
+    enum_labels:
+      ref_a: Reference A
+      open_ref: Open state
+      active_ref: Active state
+      closed_ref: Closed state
+    condition:
+      param: task
+      values:
+        - mse
+
+  - name: reference_pdb_2
+    label: Reference State 2
+    type: file
+    required: false
+    description: Optional second PDB/mmCIF reference state. Upstream ConforNets currently supports at most two reference states per test case.
+    condition:
+      param: task
+      values:
+        - mse
+
+  - name: reference_name_2
+    label: Reference 2 Name
+    type: enum
+    required: false
+    default: ref_b
+    description: Stable label for the second reference state; do not provide more than two references.
+    enum:
+      - ref_b
+      - closed_ref
+      - inactive_ref
+      - alternate_ref
+    enum_labels:
+      ref_b: Reference B
+      closed_ref: Closed state
+      inactive_ref: Inactive state
+      alternate_ref: Alternate state
+    condition:
+      param: task
+      values:
+        - mse
+
+  - name: confornet_path
+    label: Trained ConforNet
+    type: file
+    required: false
+    description: "Transfer mode: explicit trained confornet.pt to apply to this monomer."
+    condition:
+      param: task
+      values:
+        - transfer
+
+  - name: mse_dir
+    label: MSE Output Directory
+    type: directory
+    required: false
+    description: "Transfer mode: previous MSE output root for upstream confornet.pt auto-discovery."
+    condition:
+      param: task
+      values:
+        - transfer
+
+  - name: source_test_cases
+    label: Transfer Source Test Cases
+    type: enum
+    required: false
+    default: ""
+    description: "Transfer auto-discovery only; choose a prior BMS source test-case preset under mse_dir."
+    enum:
+      - ""
+      - monomer_case
+      - ref_a,ref_b
+      - open_ref,closed_ref
+    enum_labels:
+      "": Auto-discover under MSE output
+      monomer_case: BMS default monomer case
+      ref_a,ref_b: Two-reference case labels
+      open_ref,closed_ref: Open/closed reference labels
+    condition:
+      param: task
+      values:
+        - transfer
+
+  - name: checkpoint_path
+    label: OF3p2 Checkpoint
+    type: file
+    required: false
+    default: /weights/openfold3/of3-p2-155k.pt
+    description: OpenFold3-preview OF3p2 checkpoint path. OF3p1 checkpoints are not compatible with the current upstream path.
+
+  - name: confornets_repo_path
+    label: ConforNets Repo Path
+    type: directory
+    required: false
+    default: /opt/confornets
+    description: Pinned upstream ConforNets checkout inside the runtime or container.
+
+  - name: num_runs
+    label: Runs / Seeds
+    type: integer
+    required: false
+    default: 2
+    minimum: 1
+    maximum: 128
+    ui_control: slider
+    step: 1
+    description: Independent upstream runs/seeds for diversity or MSE training.
+
+  - name: k_confornets
+    label: ConforNets per Run
+    type: integer
+    required: false
+    default: 2
+    minimum: 2
+    maximum: 16
+    ui_control: slider
+    step: 1
+    description: Diversity-mode number of ConforNets to train per run. Minimum 2 because upstream diversity maximizes pairwise separation.
+    condition:
+      param: task
+      values:
+        - diversity
+
+  - name: num_samples
+    label: Samples per State
+    type: integer
+    required: false
+    default: 5
+    minimum: 1
+    maximum: 512
+    ui_control: slider
+    step: 1
+    description: Samples per saved ConforNet or transfer/MSE state.
+
+  - name: max_steps
+    label: Optimization Steps
+    type: integer
+    required: false
+    default: 21
+    minimum: 1
+    maximum: 2000
+    ui_control: slider
+    step: 1
+    description: Upstream ConforNets optimization steps.
+
+  - name: save_steps
+    label: Diversity Save Steps
+    type: enum
+    required: false
+    default: "5,10,15,20"
+    description: Preset diversity save steps; each value must be lower than max_steps.
+    enum:
+      - "5,10,15,20"
+      - "2,4,6,8"
+      - "10,20,30,40"
+      - "25,50,75,100"
+    enum_labels:
+      "5,10,15,20": Default short trajectory
+      "2,4,6,8": Very short smoke-test trajectory
+      "10,20,30,40": Medium trajectory; raise max_steps above 40
+      "25,50,75,100": Long trajectory; raise max_steps above 100
+    condition:
+      param: task
+      values:
+        - diversity
+
+  - name: num_recycles
+    label: OF3 Recycles
+    type: integer
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 16
+    ui_control: slider
+    step: 1
+    description: OpenFold3 recycles passed to upstream scripts.
+
+  - name: num_diffusion_steps
+    label: Diversity Diffusion Steps
+    type: integer
+    required: false
+    default: 200
+    minimum: 1
+    maximum: 1000
+    ui_control: slider
+    step: 1
+    description: Diversity-mode sampling diffusion steps.
+    condition:
+      param: task
+      values:
+        - diversity
+
+  - name: skip_msa
+    label: Skip MSA
+    type: boolean
+    required: false
+    default: false
+    description: Only enable when query_msa.json and batch/*.pt are already staged; otherwise upstream preprocessing must run MSA.
+
+  - name: compute_confidence
+    label: Compute Confidence
+    type: boolean
+    required: false
+    default: false
+    description: Request upstream pLDDT/gPDE/PTM confidence CSV outputs when supported.
+
+  - name: save_full_confidence
+    label: Save Full Confidence Tensors
+    type: boolean
+    required: false
+    default: false
+    description: Persist raw per-sample confidence tensors in addition to CSV summaries.

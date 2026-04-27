@@ -19,6 +19,7 @@ These are the plans still worth surfacing directly from the docs index:
 - [2026-04-20 Fold-CP large-protein sharding plan](2026-04-20-fold-cp-large-protein-sharding-plan.md)
 - [2026-04-22 MSA control-plane guardrails and regression checklist](2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
 - [2026-04-23 Local high-quality MSA target-DB sharding spec](2026-04-23-local-msa-target-db-sharding-spec.md)
+- [2026-04-24 RepA local MSA root-cause and fix spec](2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
 
 ## Archived plans
 

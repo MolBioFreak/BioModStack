@@ -5,6 +5,8 @@ import test from 'node:test';
 import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
+    BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
+    BOLTZ_NUM_SAMPLES_HELP_TEXT,
     buildBoltzCpSubmitParams,
     buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
@@ -330,4 +332,28 @@ test('target preview selections support multi-chain modal highlighting without d
             focus: false,
         },
     ]);
+});
+
+test('boltz sampling copy distinguishes final candidate count from denoiser chunking', () => {
+    assert.match(BOLTZ_NUM_SAMPLES_HELP_TEXT, /final ranked candidate/i);
+    assert.match(BOLTZ_NUM_SAMPLES_HELP_TEXT, /model_0/i);
+    assert.match(BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT, /denoiser-forward/i);
+    assert.doesNotMatch(BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT, /serial/i);
+    assert.doesNotMatch(BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT, /independent/i);
+});
+
+test('structure prediction launcher wires the corrected boltz sampling copy', () => {
+    const source = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+    assert.match(source, /BOLTZ_NUM_SAMPLES_HELP_TEXT/);
+    assert.match(source, /BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT/);
+    assert.doesNotMatch(source, /1 = serial/);
+});
+
+test('boltz potentials UI copy avoids blanket more-accurate wording on active launcher surfaces', () => {
+    const structureSource = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+    const mutagenesisSource = readFileSync('src/components/MutagenesisTemplate.tsx', 'utf8');
+    assert.match(structureSource, /physics\/FK steering potentials/);
+    assert.match(mutagenesisSource, /physics\/FK steering potentials/);
+    assert.doesNotMatch(structureSource, /More accurate but slower/);
+    assert.doesNotMatch(mutagenesisSource, /More accurate but slower/);
 });

@@ -1,0 +1,111 @@
+{
+  "timestamp_utc": "20260426-044147",
+  "purpose": "BMS-visible Boltz-CP strict large-protein launch wiring validation after route/path fixes",
+  "source_tests": [
+    {
+      "command": "uv run --directory platform/api python -m pytest tests/test_boltz_cp_experimental.py tests/test_boltz_cp_experimental_workflow_contract.py ../../scripts/test_spawn_boltz_cp_children.py -q",
+      "exit_code": 0,
+      "summary": "31 passed, 8 warnings in 30.75s"
+    },
+    {
+      "command": "nextflow lint workflows/boltz_cp_experimental.nf modules/boltz_cp_experimental.nf",
+      "exit_code": 0,
+      "summary": "2 files had no errors; existing implicit-closure deprecation warnings only"
+    },
+    {
+      "command": "git diff --check -- touched files",
+      "exit_code": 0,
+      "summary": "no whitespace errors"
+    },
+    {
+      "command": "uv run --directory platform/api python -m py_compile routers/jobs.py tests/test_boltz_cp_experimental.py tests/test_boltz_cp_experimental_workflow_contract.py ../../scripts/spawn_boltz_cp_children.py",
+      "exit_code": 0,
+      "summary": "compile ok"
+    }
+  ],
+  "deployment": {
+    "command": "docker compose -p biomodstack-core-runtime -f compose.core-runtime.yml build bms-api && docker compose -p biomodstack-core-runtime -f compose.core-runtime.yml up -d --no-deps bms-api",
+    "exit_code": 0,
+    "result": "biomodstack-api image rebuilt and container recreated/started"
+  },
+  "live_api_checks": {
+    "health": {
+      "url": "http://127.0.0.1:8000/api/health",
+      "status": 200,
+      "body": {
+        "status": "healthy",
+        "service": "biomodstack-api"
+      }
+    },
+    "documented_shard_plan_route": {
+      "url": "http://127.0.0.1:8000/api/jobs/boltz-cp/shard-plans",
+      "status": 200,
+      "body": {
+        "default_plan_id": "2x2",
+        "plans": [
+          {
+            "id": "1x1",
+            "label": "1\u00d71 (single logical shard)",
+            "topology": "1x1",
+            "logical_size_cp": 1,
+            "description": "No logical sharding; useful for fallback/debug runs.",
+            "physical_gpu_resolutions": [
+              {
+                "gpu_count": 1,
+                "launch_size_cp": 1
+              }
+            ]
+          },
+          {
+            "id": "2x2",
+            "label": "2\u00d72 (4 logical shards)",
+            "topology": "2x2",
+            "logical_size_cp": 4,
+            "description": "Defines a 2\u00d72 logical tile mesh. The selected logical plan does not change with GPU count.",
+            "physical_gpu_resolutions": [
+              {
+                "gpu_count": 1,
+                "launch_size_cp": 1
+              }
+            ]
+          },
+          {
+            "id": "4x4",
+            "label": "4\u00d74 (16 logical shards)",
+            "topology": "4x4",
+            "logical_size_cp": 16,
+            "description": "Defines a 4\u00d74 logical tile mesh. The selected logical plan does not change with GPU count.",
+            "physical_gpu_resolutions": [
+              {
+                "gpu_count": 1,
+                "launch_size_cp": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "old_double_prefixed_route": {
+      "url": "http://127.0.0.1:8000/api/jobs/api/jobs/boltz-cp/shard-plans",
+      "status": 404,
+      "body": {
+        "detail": "Not Found"
+      }
+    },
+    "openapi_has_documented_route": true,
+    "openapi_has_old_double_prefixed_route": false,
+    "openapi_status": 200,
+    "openapi_matching_paths": [
+      "/api/jobs/boltz-cp/shard-plans"
+    ]
+  },
+  "touched_files": [
+    "platform/api/routers/jobs.py",
+    "platform/api/tests/test_boltz_cp_experimental.py",
+    "platform/api/tests/test_boltz_cp_experimental_workflow_contract.py",
+    "modules/boltz_cp_experimental.nf",
+    "workflows/boltz_cp_experimental.nf",
+    "scripts/spawn_boltz_cp_children.py"
+  ],
+  "honesty_scope": "This proves BMS source tests plus live API route exposure and strict launch-path metadata threading. It does not prove a completed full Boltz2 distributed context-parallel prediction."
+}

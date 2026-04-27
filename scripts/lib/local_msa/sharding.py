@@ -177,8 +177,8 @@ def build_target_shard_plan(
         mode=normalized_mode,
         preset=normalized_preset,
         reason=(
-            f"{normalized_preset} EnvDB target search will run as {requested} shard worker(s) "
-            f"x {threads_per_worker} thread(s) within total thread budget {total_threads}"
+            f"{normalized_preset} EnvDB target search will use MMseqs native target splitting "
+            f"with split={requested} within total thread budget {total_threads}"
         ),
         shard_count=requested,
         total_threads=total_threads,
@@ -345,6 +345,26 @@ def _strip_option_with_value(args: Iterable[Any], option: str) -> list[str]:
     return cleaned
 
 
+def _strip_split_thread_overrides(args: Iterable[Any]) -> list[str]:
+    cleaned = [str(item) for item in args]
+    for option in ("--threads", "--split", "--split-mode"):
+        cleaned = _strip_option_with_value(cleaned, option)
+    return cleaned
+
+
+def _strip_search_execution_overrides(args: Iterable[Any]) -> list[str]:
+    cleaned = _strip_split_thread_overrides(args)
+    for option in (
+        "--gpu",
+        "--gpu-server",
+        "--gpu-server-wait-timeout",
+        "--prefilter-mode",
+        "--db-load-mode",
+    ):
+        cleaned = _strip_option_with_value(cleaned, option)
+    return cleaned
+
+
 def _prepare_search_params(
     base_search_params: Sequence[Any],
     *,
@@ -360,9 +380,52 @@ def _prepare_search_params(
     params[2] = str(shard_target_db)
     params[3] = str(shard_result_db)
     params[4] = str(shard_tmp_dir)
-    params = _strip_option_with_value(params, "--threads")
-    extras = _strip_option_with_value(extra_search_params or (), "--threads")
+    params = _strip_search_execution_overrides(params)
+    extras = _strip_split_thread_overrides(extra_search_params or ())
     return params + extras + ["--threads", str(max(1, int(threads_per_worker)))]
+
+
+def run_native_target_split_search(
+    *,
+    mmseqs_bin: str | os.PathLike[str] | Path,
+    base_search_params: Sequence[Any],
+    split_count: int,
+    total_threads: int,
+    env: dict[str, str],
+    run_mmseqs: MMseqsRunner,
+    extra_search_params: Sequence[Any] | None = None,
+    split_mode: int = 0,
+) -> None:
+    """Run one MMseqs search using its native target-DB splitting support.
+
+    This is the correctness-preserving high-quality path: MMseqs owns the split
+    search and any iterative/profile barriers inside the `search` macro. It avoids
+    the old BioModStack anti-pattern of launching independent `search` commands
+    per target shard and merging their result DBs after each shard has already run
+    its own local iterations.
+    """
+    if len(base_search_params) < 5 or str(base_search_params[0]) != "search":
+        raise ValueError("base_search_params must be an MMseqs search command beginning with 'search'")
+    split_count = max(1, int(split_count or 1))
+    if split_count <= 1:
+        raise ValueError("split_count must be greater than 1 for native target splitting")
+    total_threads = max(1, int(total_threads or 1))
+    params = _strip_search_execution_overrides(base_search_params)
+    extras = _strip_split_thread_overrides(extra_search_params or ())
+    run_mmseqs(
+        mmseqs_bin,
+        params
+        + extras
+        + [
+            "--split",
+            str(split_count),
+            "--split-mode",
+            str(int(split_mode)),
+            "--threads",
+            str(total_threads),
+        ],
+        env,
+    )
 
 
 def run_sharded_target_search(
