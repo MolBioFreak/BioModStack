@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--report_json", required=True, help="Output report JSON")
     parser.add_argument("--disable_filter", action="store_true",
                         help="Disable rejection and pass all matured structures through")
-    parser.add_argument("--objective_mode", default="selected_interface",
+    parser.add_argument("--objective_mode", default=None,
                         choices=["selected_interface", "loop_target", "loop_epitope", "balanced"],
                         help="Ranking objective used when interpreting score_json")
     parser.add_argument("--objective_threshold", type=float, default=None,
@@ -57,7 +57,13 @@ def main():
     with open(args.score_json, "r") as f:
         score_data = json.load(f)
 
-    objective_mode = (args.objective_mode or score_data.get("objective_mode") or "selected_interface").strip().lower()
+    score_objective_mode = (score_data.get("objective_mode") or "").strip().lower() if isinstance(score_data.get("objective_mode"), str) else None
+    requested_objective_mode = args.objective_mode.strip().lower() if args.objective_mode else None
+    if requested_objective_mode and score_objective_mode and requested_objective_mode != score_objective_mode:
+        raise SystemExit(
+            f"objective_mode mismatch: requested {requested_objective_mode}, score_json contains {score_objective_mode}"
+        )
+    objective_mode = (requested_objective_mode or score_objective_mode or "selected_interface").strip().lower()
     selection_metric = "selected_delta_interface_score"
     selection_value = score_data.get("selected_delta_interface_score")
     if selection_value is None:
@@ -94,6 +100,9 @@ def main():
         "selection_value": selection_value,
         "delta_interface_score": score_data.get("delta_interface_score"),
         "objective_mode": objective_mode,
+        "score_objective_mode": score_objective_mode,
+        "requested_objective_mode": requested_objective_mode,
+        "selection_direction": "lower_is_better",
         "objective_score": score_data.get("objective_score"),
         "threshold": threshold,
         "min_improvement": args.min_improvement,
