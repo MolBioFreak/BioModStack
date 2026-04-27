@@ -13,6 +13,7 @@ if str(LIB_DIR) not in sys.path:
 from local_msa.sharding import (  # noqa: E402
     build_target_shard_plan,
     ensure_target_shards,
+    run_native_target_split_search,
     run_sharded_target_search,
 )
 
@@ -196,3 +197,107 @@ def test_run_sharded_target_search_searches_each_shard_then_merges(tmp_path: Pat
     assert len(merge_calls) == 1
     assert merge_calls[0][2] == str(tmp_path / "merged_result")
     assert merge_calls[0][3:] == [str(tmp_path / f"tmp/shard_{idx}_result") for idx in range(4)]
+
+
+def test_run_native_target_split_search_uses_one_mmseqs_search_with_native_target_split(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_mmseqs(_mmseqs_bin, args, _env):
+        calls.append([str(part) for part in args])
+
+    run_native_target_split_search(
+        mmseqs_bin="mmseqs",
+        base_search_params=[
+            "search",
+            str(tmp_path / "qdb"),
+            str(tmp_path / "target"),
+            str(tmp_path / "res"),
+            str(tmp_path / "tmp"),
+            "--num-iterations",
+            "2",
+            "-a",
+            "--threads",
+            "999",
+            "--split",
+            "99",
+        ],
+        split_count=4,
+        total_threads=32,
+        env=os.environ.copy(),
+        run_mmseqs=fake_run_mmseqs,
+        extra_search_params=["--db-load-mode", "2", "--split-mode", "1"],
+    )
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call[:5] == [
+        "search",
+        str(tmp_path / "qdb"),
+        str(tmp_path / "target"),
+        str(tmp_path / "res"),
+        str(tmp_path / "tmp"),
+    ]
+    assert call.count("--split") == 1
+    assert call[call.index("--split") + 1] == "4"
+    assert call.count("--split-mode") == 1
+    assert call[call.index("--split-mode") + 1] == "0"
+    assert call.count("--threads") == 1
+    assert call[call.index("--threads") + 1] == "32"
+    assert "--db-load-mode" in call
+
+
+def test_run_native_target_split_search_can_append_gpu_controls(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_mmseqs(_mmseqs_bin, args, _env):
+        calls.append([str(part) for part in args])
+
+    run_native_target_split_search(
+        mmseqs_bin="mmseqs-gpu",
+        base_search_params=[
+            "search",
+            str(tmp_path / "qdb"),
+            str(tmp_path / "envdb"),
+            str(tmp_path / "res"),
+            str(tmp_path / "tmp_env"),
+            "--num-iterations",
+            "3",
+            "-a",
+            "--threads",
+            "999",
+            "--split",
+            "99",
+            "--gpu",
+            "0",
+            "--prefilter-mode",
+            "0",
+        ],
+        split_count=4,
+        total_threads=32,
+        env=os.environ.copy(),
+        run_mmseqs=fake_run_mmseqs,
+        extra_search_params=[
+            "--db-load-mode",
+            "2",
+            "--gpu",
+            "1",
+            "--prefilter-mode",
+            "1",
+        ],
+        split_mode=0,
+    )
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.count("--split") == 1
+    assert call[call.index("--split") + 1] == "4"
+    assert call.count("--split-mode") == 1
+    assert call[call.index("--split-mode") + 1] == "0"
+    assert call.count("--threads") == 1
+    assert call[call.index("--threads") + 1] == "32"
+    assert call.count("--gpu") == 1
+    assert call[call.index("--gpu") + 1] == "1"
+    assert call.count("--prefilter-mode") == 1
+    assert call[call.index("--prefilter-mode") + 1] == "1"
+    assert call.count("--db-load-mode") == 1
+    assert call[call.index("--db-load-mode") + 1] == "2"

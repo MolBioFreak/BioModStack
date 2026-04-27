@@ -61,7 +61,7 @@ Quality Presets:
         "--gpu-server-db-load-mode",
         type=int,
         default=DEFAULT_GPUSERVER_DB_LOAD_MODE,
-        choices=[0, 1, 2, 3],
+        choices=range(4),
         help=f"MMseqs db-load-mode for gpuserver-backed searches (default: {DEFAULT_GPUSERVER_DB_LOAD_MODE})",
     )
     parser.add_argument("--gpu-server-startup-wait", type=float, default=DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
