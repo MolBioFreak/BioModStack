@@ -129,3 +129,20 @@ def test_regression_endpoint_uses_statsmodels_engine() -> None:
     assert payload["n_obs"] == 5
     assert "aic" in payload
     assert "bic" in payload
+
+
+def test_chromatography_analysis_uses_mocca2_engine_for_peak_picking() -> None:
+    client = TestClient(bms_api_main.app)
+    time = [i / 10 for i in range(101)]
+    signal = [100 + 2 * t + 150 * __import__("math").exp(-((t - 3.0) ** 2) / 0.06) + 80 * __import__("math").exp(-((t - 7.0) ** 2) / 0.12) for t in time]
+    response = client.post(
+        "/api/assay-analytics/analysis/hplc/analyze",
+        json={"time": time, "signal": signal, "baseline_method": "mocca2_flatfit", "peak_prominence": 0.05},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis_engine"] == "MOCCA2"
+    assert payload["engine_package"] == "mocca2"
+    assert payload["baseline_method"] == "mocca2_flatfit"
+    assert payload["n_peaks"] >= 2
+    assert all(peak["peak_engine"] == "MOCCA2" for peak in payload["peaks"])
