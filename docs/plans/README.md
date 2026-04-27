@@ -1,41 +1,36 @@
 # BioModStack plans
 
-This directory is for active implementation plans and transition notes.
+This directory is for active implementation plans and transition notes only.
+Canonical product/runtime behavior belongs in `docs/*.md`; dated plans are not truth sources.
 
-Rules:
+## Active plan surface
 
-- canonical product/runtime behavior belongs in `docs/*.md`, not here
-- dated plan files are planning artifacts, not truth sources
-- once a plan is superseded or largely absorbed into canonical docs, move it out
-  of the active top-level plan surface
+These files are still useful as current rollout, guardrail, or follow-on implementation context:
 
-## Active plans
+- [MSA control-plane guardrails and regression checklist](2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
+- [Local high-quality MSA target-DB sharding spec](2026-04-23-local-msa-target-db-sharding-spec.md)
+- [DRAM→VRAM tiled runtime proof plan](2026-04-24-dram-vram-tile-runtime-proof.md)
+- [Fold-CP DRAM context-spill workhorse implementation spec](2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md)
+- [RepA local MSA root-cause and fix spec](2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
+- [MolBio read-QC harmonization implementation plan](2026-04-25-molbio-read-qc-harmonization-spec.md)
+- [Caliby finishing changes specification](2026-04-27-caliby-finishing-changes-spec.md)
+- [GPU MMseqs EnvDB fix implementation plan](2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
 
-These are the plans still worth surfacing directly from the docs index:
+## Archived plans and historical specs
 
-- [2026-04-20 Android APK thin-shell comparison](2026-04-20-android-apk-thin-shell-comparison.md)
-- [2026-04-20 control plane / Electron / install-path upgrade](2026-04-20-control-plane-electron-runtime-paths-upgrade.md)
-- [2026-04-20 core-runtime workflow-adapter cutover](2026-04-20-core-runtime-workflow-adapter-cutover.md)
-- [2026-04-20 Fold-CP large-protein sharding plan](2026-04-20-fold-cp-large-protein-sharding-plan.md)
-- [2026-04-22 MSA control-plane guardrails and regression checklist](2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
-- [2026-04-23 Local high-quality MSA target-DB sharding spec](2026-04-23-local-msa-target-db-sharding-spec.md)
-- [2026-04-24 RepA local MSA root-cause and fix spec](2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
+Superseded implementation tranches, older speculative specs, and one-off audit artifacts live under [archive/](archive/).
+Keep them for traceability, but do not treat them as current product contracts.
 
-## Archived plans
+Recent cleanup keeps this surface time-bounded:
 
-Older implementation/spec notes should live under [archive/](archive/) once they
-are no longer the active planning surface.
-
-Examples of what belongs in the archive bucket:
-
-- one-off implementation tranche notes
-- superseded containerization specs
-- earlier Electron-port sketches that are now reflected in canonical docs and
-  the live shell package
-- transition notes kept only for historical auditability
+- dated plans/specs from 2026-04-20 or earlier were removed from the tracked docs surface instead of being archived indefinitely
+- superseded 2026-04-21 Fold-CP and local-MSA tranche notes live under `archive/`
+- superseded 2026-04-23 Fold-CP reassessment/worker-pool notes live under `archive/`
+- the 2026-04-24 Fold-CP GPU communication fact note is historical evidence under `archive/`, not an active rollout plan
 
 ## How to use this folder
 
-1. read canonical docs first
-2. come here only if you need an active rollout or migration note
-3. archive old plans instead of letting them accumulate beside active ones
+1. Read the canonical docs first.
+2. Use this folder only for active rollout/spec/checklist material.
+3. Archive stale plans instead of leaving them beside active plans.
+4. When implementation makes a plan historical, move it to `archive/` and patch references in the same cleanup.
