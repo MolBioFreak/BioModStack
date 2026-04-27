@@ -36,8 +36,7 @@ process PrepUniDock {
     def ntpArg = ntp_type ? "--ntp_type '${ntp_type}'" : ''
     def boxCenterArg = box_center ? "--box_center '${box_center}'" : ''
     def flexArg = flexible_residues ? "--flexible_residues '${flexible_residues}'" : ''
-    // Limit box size to 30 to prevent SIGSEGV on current hardware/drivers
-    // Large boxes (e.g. 50) cause crashes on RTX 3090 and Blackwell
+    // Limit box size to 30 to reduce Uni-Dock SIGSEGV risk on sensitive GPU/driver combinations.
     def rawBoxSize = box_size ?: 25
     def boxSizeVal = (rawBoxSize.toString().toFloat() > 30.0 ? 30 : rawBoxSize).toInteger()
     """
@@ -91,11 +90,10 @@ process RunUniDock {
     """
     set -euo pipefail
     
-    # Force RTX 3090 (GPU 2) - Blackwell GPUs (RTX 50-series) currently crash
-    # due to missing kernel support in Uni-Dock. Will be updated when upstream adds support.
-    export CUDA_VISIBLE_DEVICES=2
-    
     echo "=== Uni-Dock GPU Docking ===" | tee unidock_${batch_id}.log
+    # GPU visibility is supplied by the Nextflow/apptainer profile. For hosts with
+    # Uni-Dock-specific adapter issues, set params.unidock_gpu_id or BMS_UNIDOCK_GPU_ID.
+    echo "CUDA_VISIBLE_DEVICES: \${CUDA_VISIBLE_DEVICES:-unset}" | tee -a unidock_${batch_id}.log
     echo "Batch ID: ${batch_id}" | tee -a unidock_${batch_id}.log
     echo "Receptor: ${receptor}" | tee -a unidock_${batch_id}.log
     echo "Flexible receptor: ${hasFlexReceptor ? flex_receptor : 'None'}" | tee -a unidock_${batch_id}.log
