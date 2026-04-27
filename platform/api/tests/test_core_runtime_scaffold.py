@@ -27,7 +27,7 @@ def test_core_runtime_scaffold_files_exist() -> None:
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 
-    assert set(compose["services"]) == {"bms-api", "bms-web"}
+    assert set(compose["services"]) == {"bms-api", "bms-cpu-power", "bms-web"}
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -38,12 +38,25 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
+    assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
     assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert "BIOXP_SERVER_URL" in api["environment"]
+
+    cpu_power = compose["services"]["bms-cpu-power"]
+    assert cpu_power["build"]["dockerfile"] == "docker/api.Dockerfile"
+    assert cpu_power["container_name"] == "biomodstack-cpu-power"
+    assert cpu_power["network_mode"] == "host"
+    assert cpu_power["user"] == "0:0"
+    assert cpu_power["environment"]["BMS_POWER_CAP_ROOT"] == "/host_sys/class/powercap"
+    assert cpu_power["environment"]["BMS_CPU_POWER_BIND_HOST"] == "127.0.0.1"
+    assert cpu_power["environment"]["BMS_CPU_POWER_PORT"] == "${BMS_CPU_POWER_PORT:-8797}"
+    assert cpu_power["command"] == ["python", "/app/platform/api/tools/cpu_power_collector.py"]
+    assert cpu_power["volumes"][0]["source"] == "/sys"
+    assert cpu_power["volumes"][0]["read_only"] is True
 
     web = compose["services"]["bms-web"]
     assert web["build"]["dockerfile"] == "docker/web.Dockerfile"
