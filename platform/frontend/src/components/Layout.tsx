@@ -5,6 +5,17 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+    buildUiDiagnosticsPayload,
+    resolveUiSurfaceLabel,
+    type UiDiagnosticsPayload,
+    type UiShellContext,
+} from '../runtime/uiDiagnostics';
+import {
+    buildRuntimeSwitchTargets,
+    type RuntimeMode,
+    type RuntimePortSettings,
+} from '../runtime/runtimeSwitch';
 import { ThemeSelector } from './ThemeSelector';
 import {
     InfraControlStateCollector,
@@ -22,6 +33,88 @@ import {
 
 interface LayoutProps {
     children: React.ReactNode;
+}
+
+declare global {
+    interface Window {
+        biomodstack?: {
+            getShellContext?: () => Promise<UiShellContext>;
+            switchRuntime?: (runtimeMode: RuntimeMode) => Promise<UiShellContext>;
+            startRuntimeTarget?: (target: 'dev' | 'prod' | 'both') => Promise<void>;
+        };
+        cordova?: unknown;
+        __BMS_ROUTER_BASENAME__?: string;
+    }
+}
+
+const API_HEALTH_ENDPOINT = '/api/health';
+const RUNTIME_PORTS_ENDPOINT = '/api/system/runtime-ports';
+const RUNTIME_START_TARGET_ENDPOINT = '/api/system/runtime/start-target';
+
+async function readApiHealth(): Promise<string> {
+    try {
+        const response = await fetch(API_HEALTH_ENDPOINT, { cache: 'no-store' });
+        if (!response.ok) {
+            return `unhealthy (${response.status})`;
+        }
+        const body = await response.json().catch(() => null) as { status?: unknown } | null;
+        return String(body?.status || 'healthy');
+    } catch (error) {
+        return `unreachable (${error instanceof Error ? error.message : String(error)})`;
+    }
+}
+
+async function readRuntimePortSettings(): Promise<RuntimePortSettings> {
+    const response = await fetch(RUNTIME_PORTS_ENDPOINT, { cache: 'no-store' });
+    if (!response.ok) {
+        throw new Error(`runtime ports unavailable (${response.status})`);
+    }
+    const body = await response.json().catch(() => ({})) as RuntimePortSettings;
+    return body;
+}
+
+async function startRuntimeTarget(target: 'dev' | 'prod' | 'both'): Promise<void> {
+    if (window.biomodstack?.startRuntimeTarget) {
+        await window.biomodstack.startRuntimeTarget(target);
+        return;
+    }
+    const response = await fetch(RUNTIME_START_TARGET_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+    });
+    if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: unknown } | null;
+        throw new Error(String(body?.detail || `runtime target start failed (${response.status})`));
+    }
+}
+
+async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
+    const shellContext = window.biomodstack?.getShellContext
+        ? await window.biomodstack.getShellContext().catch(() => null)
+        : null;
+    const apiHealth = await readApiHealth();
+    const routerBasename = shellContext?.routerBasename
+        ?? window.__BMS_ROUTER_BASENAME__
+        ?? import.meta.env.BASE_URL
+        ?? '/';
+    const surfaceLabel = resolveUiSurfaceLabel({
+        viteDev: Boolean(import.meta.env.DEV),
+        electronShell: Boolean(window.biomodstack?.getShellContext),
+        cordovaShell: Boolean(window.cordova),
+    });
+
+    return buildUiDiagnosticsPayload({
+        surfaceLabel,
+        origin: window.location.origin,
+        href: window.location.href,
+        routerBasename,
+        viteMode: import.meta.env.MODE || 'unknown',
+        viteBaseUrl: import.meta.env.BASE_URL || '/',
+        apiHealth,
+        shellContext,
+        userAgent: navigator.userAgent,
+    });
 }
 
 const SHOW_SYSTEM_ANALYTICS_TAB_KEY = 'show_system_analytics_tab';
@@ -69,6 +162,7 @@ export function Layout({ children }: LayoutProps) {
             >
                 <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
                     <div className="flex items-center justify-between h-16 min-w-0 gap-3">
+                        <DiagnosticsMenu />
                         {/* Logo / Brand */}
                         <Link to="/" className="flex items-center shrink-0">
                             <span
@@ -202,6 +296,186 @@ export function Layout({ children }: LayoutProps) {
             <main className="flex-1 overflow-auto">
                 {children}
             </main>
+        </div>
+    );
+}
+
+function DiagnosticsMenu() {
+    const [isOpen, setIsOpen] = useState(false);
+    const [diagnostics, setDiagnostics] = useState<UiDiagnosticsPayload | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [copyStatus, setCopyStatus] = useState<string | null>(null);
+    const [runtimeAction, setRuntimeAction] = useState<string | null>(null);
+    const [runtimeMessage, setRuntimeMessage] = useState<string | null>(null);
+
+    const refreshDiagnostics = async (): Promise<UiDiagnosticsPayload | null> => {
+        setLoading(true);
+        setCopyStatus(null);
+        try {
+            const payload = await collectUiDiagnosticsPayload();
+            setDiagnostics(payload);
+            return payload;
+        } catch (error) {
+            const fallback = buildUiDiagnosticsPayload({
+                surfaceLabel: 'Diagnostics unavailable',
+                origin: window.location.origin,
+                href: window.location.href,
+                routerBasename: window.__BMS_ROUTER_BASENAME__ ?? import.meta.env.BASE_URL ?? '/',
+                viteMode: import.meta.env.MODE || 'unknown',
+                viteBaseUrl: import.meta.env.BASE_URL || '/',
+                apiHealth: `diagnostics error (${error instanceof Error ? error.message : String(error)})`,
+            });
+            setDiagnostics(fallback);
+            return fallback;
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!isOpen || diagnostics || loading) {
+            return;
+        }
+        void refreshDiagnostics();
+    }, [isOpen]);
+
+    const handleCopyDiagnostics = async () => {
+        const payload = diagnostics ?? await refreshDiagnostics();
+        if (!payload) {
+            return;
+        }
+        await navigator.clipboard.writeText(payload.text);
+        setCopyStatus('Copied diagnostics');
+    };
+
+    const handleStartRuntimeTarget = async (target: 'dev' | 'prod' | 'both') => {
+        setRuntimeAction(`start-${target}`);
+        setRuntimeMessage(null);
+        try {
+            await startRuntimeTarget(target);
+            setRuntimeMessage(`Started runtime target: ${target}`);
+        } catch (error) {
+            setRuntimeMessage(`Runtime start failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            setRuntimeAction(null);
+        }
+    };
+
+    const handleSwitchRuntime = async (targetMode: RuntimeMode) => {
+        setRuntimeAction(`switch-${targetMode}`);
+        setRuntimeMessage(null);
+        try {
+            if (window.biomodstack?.switchRuntime) {
+                await window.biomodstack.switchRuntime(targetMode);
+                return;
+            }
+            const [ports, payload] = await Promise.all([
+                readRuntimePortSettings().catch(() => ({} as RuntimePortSettings)),
+                diagnostics ? Promise.resolve(diagnostics) : collectUiDiagnosticsPayload(),
+            ]);
+            const routerBasename = payload?.fields['Shell router basename']
+                ?? payload?.fields['Router basename']
+                ?? window.__BMS_ROUTER_BASENAME__
+                ?? import.meta.env.BASE_URL
+                ?? '/';
+            const targets = buildRuntimeSwitchTargets({
+                ports,
+                currentPathname: window.location.pathname,
+                currentSearch: window.location.search,
+                currentHash: window.location.hash,
+                currentRouterBasename: routerBasename,
+            });
+            window.location.assign(targetMode === 'dev' ? targets.dev.url : targets.stable.url);
+        } catch (error) {
+            setRuntimeMessage(`Runtime switch failed: ${error instanceof Error ? error.message : String(error)}`);
+            setRuntimeAction(null);
+        }
+    };
+
+    return (
+        <div className="relative shrink-0">
+            <button
+                onClick={() => {
+                    setIsOpen(!isOpen);
+                    setCopyStatus(null);
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-emerald-950/40 text-emerald-200 border-emerald-700/70 hover:border-emerald-400 hover:bg-emerald-900/50"
+                title="Diagnostics/About"
+            >
+                <span aria-hidden="true">ⓘ</span>
+                <span>Diagnostics/About</span>
+            </button>
+
+            {isOpen && (
+                <>
+                    <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setIsOpen(false)}
+                    />
+                    <div className="absolute left-0 top-full mt-2 w-[26rem] max-w-[calc(100vw-1rem)] bg-slate-900 border border-emerald-700/60 rounded-lg shadow-xl z-50 p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-2">
+                            <div>
+                                <p className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Diagnostics/About</p>
+                                <p className="text-[11px] text-slate-400">Surface, channel, shell, and API health summary</p>
+                            </div>
+                            <button
+                                onClick={() => void refreshDiagnostics()}
+                                disabled={loading}
+                                className="px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-800"
+                            >
+                                {loading ? 'Refreshing…' : 'Refresh'}
+                            </button>
+                        </div>
+
+                        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-[11px] leading-relaxed text-slate-200 border border-slate-800">
+                            {diagnostics?.text ?? (loading ? 'Collecting diagnostics…' : 'Open diagnostics to collect surface details.')}
+                        </pre>
+
+                        <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-3 space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-200">Runtime channel</p>
+                                    <p className="text-[11px] text-slate-400">Switch web/Electron surfaces by reloading onto the selected local channel.</p>
+                                </div>
+                                <button
+                                    onClick={() => void handleStartRuntimeTarget('both')}
+                                    disabled={runtimeAction !== null}
+                                    className="px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-800"
+                                >
+                                    {runtimeAction === 'start-both' ? 'Starting…' : 'Start Dev + Stable'}
+                                </button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    onClick={() => void handleSwitchRuntime('dev')}
+                                    disabled={runtimeAction !== null}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-sky-700 text-white hover:bg-sky-600 disabled:opacity-50"
+                                >
+                                    {runtimeAction === 'switch-dev' ? 'Switching…' : 'Switch to Vite dev'}
+                                </button>
+                                <button
+                                    onClick={() => void handleSwitchRuntime('container')}
+                                    disabled={runtimeAction !== null}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-700 text-white hover:bg-indigo-600 disabled:opacity-50"
+                                >
+                                    {runtimeAction === 'switch-container' ? 'Switching…' : 'Switch to stable /bms/'}
+                                </button>
+                            </div>
+                            {runtimeMessage && <p className="text-[11px] text-slate-300">{runtimeMessage}</p>}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                            <button
+                                onClick={() => void handleCopyDiagnostics()}
+                                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-700 text-white hover:bg-emerald-600"
+                            >
+                                Copy diagnostics
+                            </button>
+                            {copyStatus && <span className="text-[11px] text-emerald-300">{copyStatus}</span>}
+                        </div>
+                    </div>
+                </>
+            )}
         </div>
     );
 }
