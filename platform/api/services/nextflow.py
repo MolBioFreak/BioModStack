@@ -2906,6 +2906,7 @@ def build_nextflow_command(
             'grad_clip': 'cn_grad_clip',
             'compute_confidence': 'cn_compute_confidence',
             'save_full_confidence': 'cn_save_full_confidence',
+            'compute_evaluation': 'cn_compute_evaluation',
             'confornet_path': 'cn_confornet_path',
             'mse_dir': 'cn_mse_dir',
             'source_test_cases': 'cn_source_test_cases',
@@ -2932,8 +2933,9 @@ def build_nextflow_command(
         params.setdefault('cn_lr', 0.001)
         params.setdefault('cn_grad_clip', 10.0)
         params.setdefault('cn_skip_msa', False)
-        params.setdefault('cn_compute_confidence', False)
+        params.setdefault('cn_compute_confidence', True)
         params.setdefault('cn_save_full_confidence', False)
+        params.setdefault('cn_compute_evaluation', True)
         if 'cn_num_samples' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['cn_num_samples']
         if not params.get('rfd_mode'):
@@ -2946,11 +2948,18 @@ def build_nextflow_command(
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
+            'confidence_prediction': 'bcp_confidence_prediction',
             'recycling_steps': 'bcp_recycling_steps',
             'sampling_steps': 'bcp_sampling_steps',
             'diffusion_samples': 'bcp_diffusion_samples',
+            'max_msa_seqs': 'bcp_max_msa_seqs',
+            'max_parallel_samples': 'bcp_max_parallel_samples',
+            'precision': 'bcp_precision',
             'seed': 'bcp_seed',
             'backend': 'bcp_backend',
+            'triattn_backend': 'bcp_triattn_backend',
+            'context_store_mode': 'bcp_context_store_mode',
+            'context_store_root': 'bcp_context_store_root',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -2997,7 +3006,13 @@ def build_nextflow_command(
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
-        params.setdefault('bcp_backend', 'dram-context-spill-workhorse')
+        params.setdefault('bcp_confidence_prediction', False)
+        params.setdefault('bcp_max_msa_seqs', 128)
+        params.setdefault('bcp_max_parallel_samples', 1)
+        params.setdefault('bcp_precision', 'BF16')
+        params.setdefault('bcp_backend', 'true-distributed-context-parallel')
+        params.setdefault('bcp_triattn_backend', 'reference')
+        params.setdefault('bcp_context_store_mode', 'evidence-only')
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
