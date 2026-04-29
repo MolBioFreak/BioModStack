@@ -6,6 +6,7 @@ import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { runHypothesisTest } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
+import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 
 export function HypothesisTesting() {
     const [testType, setTestType] = useState('two_sample');
@@ -111,13 +112,9 @@ export function HypothesisTesting() {
                         />
                     </div>
 
-                    <button
-                        onClick={handleRunTest}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRunTest} disabled={loading} className="w-full">
                         {loading ? 'Running...' : 'Run Test'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>

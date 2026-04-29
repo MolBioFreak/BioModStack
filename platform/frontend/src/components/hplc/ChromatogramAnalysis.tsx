@@ -7,6 +7,15 @@ import Plot from 'react-plotly.js';
 import { runHplcAnalysis, runHplcCalibration } from '../../api/client';
 import { API_URL } from '../../api/config';
 import { useThemePlotlyLayout } from '../useThemeColors';
+import {
+    AssayEmptyState,
+    AssayErrorNotice,
+    AssayFieldLabel,
+    AssayInputCard,
+    AssayOutputCard,
+    AssayPanel,
+    AssayPrimaryButton,
+} from '../assay/AssayWorkbenchPrimitives';
 
 interface Peak {
     peak_id: number;
@@ -131,13 +140,9 @@ export function ChromatogramAnalysis() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleRunAnalysis}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRunAnalysis} disabled={loading} className="w-full">
                         {loading ? 'Analyzing...' : 'Analyze Chromatogram'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -312,13 +317,9 @@ export function CalibrationCurve() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Fitting...' : 'Fit Calibration Curve'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -399,118 +400,173 @@ export function HplcQuantification() {
 
     return (
         <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-text-primary">Sample Quantification</h3>
+            <div>
+                <h3 className="text-lg font-semibold text-[var(--text-primary)]">Sample Quantification</h3>
+                <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                    Quantify real unknown peak areas against explicit calibration standards; every sample row must carry a real identifier.
+                </p>
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="border border-border-primary p-4 bg-bg-secondary">
-                            <label className="block text-xs text-text-muted mb-1">Calibration Conc.</label>
-                            <textarea
-                                value={calConcText}
-                                onChange={(e) => setCalConcText(e.target.value)}
-                                rows={5}
-                                className="w-full bg-bg-tertiary text-text-primary border border-border-primary p-2 font-mono text-xs"
-                            />
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-6">
+                <AssayPanel className="p-4">
+                    <div className="space-y-5">
+                        <AssayInputCard
+                            title="Calibration standards"
+                            description="Paste matched concentration and peak-area values, one value per line. Keep row order aligned across both fields."
+                        >
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div>
+                                    <AssayFieldLabel
+                                        label="Calibration concentrations"
+                                        helper="One standard concentration per line."
+                                    />
+                                    <textarea
+                                        value={calConcText}
+                                        onChange={(e) => setCalConcText(e.target.value)}
+                                        rows={6}
+                                        className="mt-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 font-mono text-xs text-[var(--text-primary)]"
+                                    />
+                                </div>
+                                <div>
+                                    <AssayFieldLabel
+                                        label="Calibration peak areas"
+                                        helper="One integrated area per matching standard."
+                                    />
+                                    <textarea
+                                        value={calAreaText}
+                                        onChange={(e) => setCalAreaText(e.target.value)}
+                                        rows={6}
+                                        className="mt-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 font-mono text-xs text-[var(--text-primary)]"
+                                    />
+                                </div>
+                            </div>
+                        </AssayInputCard>
+
+                        <AssayInputCard
+                            title="Unknown samples"
+                            description="Paste sample peak areas and real sample identifiers in the same row order."
+                        >
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div>
+                                    <AssayFieldLabel
+                                        label="Sample peak areas"
+                                        helper="One unknown peak area per line."
+                                    />
+                                    <textarea
+                                        value={sampleAreaText}
+                                        onChange={(e) => setSampleAreaText(e.target.value)}
+                                        rows={6}
+                                        className="mt-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 font-mono text-xs text-[var(--text-primary)]"
+                                    />
+                                </div>
+                                <div>
+                                    <AssayFieldLabel
+                                        label="Sample IDs"
+                                        helper="One real sample identifier per line."
+                                    />
+                                    <textarea
+                                        value={sampleIdsText}
+                                        onChange={(e) => setSampleIdsText(e.target.value)}
+                                        rows={6}
+                                        className="mt-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 font-mono text-xs text-[var(--text-primary)]"
+                                    />
+                                </div>
+                            </div>
+                        </AssayInputCard>
+
+                        <AssayInputCard title="Output unit">
+                            <div className="max-w-xs">
+                                <AssayFieldLabel label="Unit" helper="Displayed with quantified concentrations." />
+                                <input
+                                    value={unit}
+                                    onChange={(e) => setUnit(e.target.value)}
+                                    className="mt-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                                />
+                            </div>
+                        </AssayInputCard>
+
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="text-xs leading-relaxed text-[var(--text-muted)]">
+                                The API contract remains /analysis/hplc/quantify; this panel only harmonizes BMS workbench layout.
+                            </div>
+                            <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full sm:w-auto">
+                                {loading ? 'Quantifying...' : 'Quantify Samples'}
+                            </AssayPrimaryButton>
                         </div>
-                        <div className="border border-border-primary p-4 bg-bg-secondary">
-                            <label className="block text-xs text-text-muted mb-1">Calibration Areas</label>
-                            <textarea
-                                value={calAreaText}
-                                onChange={(e) => setCalAreaText(e.target.value)}
-                                rows={5}
-                                className="w-full bg-bg-tertiary text-text-primary border border-border-primary p-2 font-mono text-xs"
-                            />
-                        </div>
+
+                        {error && <AssayErrorNotice message={error} />}
                     </div>
+                </AssayPanel>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="border border-border-primary p-4 bg-bg-secondary">
-                            <label className="block text-xs text-text-muted mb-1">Sample Areas</label>
-                            <textarea
-                                value={sampleAreaText}
-                                onChange={(e) => setSampleAreaText(e.target.value)}
-                                rows={5}
-                                className="w-full bg-bg-tertiary text-text-primary border border-border-primary p-2 font-mono text-xs"
-                            />
-                        </div>
-                        <div className="border border-border-primary p-4 bg-bg-secondary">
-                            <label className="block text-xs text-text-muted mb-1">Sample IDs</label>
-                            <textarea
-                                value={sampleIdsText}
-                                onChange={(e) => setSampleIdsText(e.target.value)}
-                                rows={5}
-                                className="w-full bg-bg-tertiary text-text-primary border border-border-primary p-2 font-mono text-xs"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="border border-border-primary p-4 bg-bg-secondary">
-                        <label className="block text-xs text-text-muted mb-1">Unit</label>
-                        <input
-                            value={unit}
-                            onChange={(e) => setUnit(e.target.value)}
-                            className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-sm"
-                        />
-                    </div>
-
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
-                        {loading ? 'Quantifying...' : 'Quantify Samples'}
-                    </button>
-
-                    {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
-                </div>
-
-                <div className="space-y-4">
+                <AssayOutputCard
+                    title="Quantification Results"
+                    description="Calibration fit metrics and quantified unknowns appear here after a successful run."
+                    className="min-h-[360px]"
+                >
                     {r && (
-                        <>
+                        <div className="space-y-4">
                             {r.curve_stats && (
-                                <div className="border border-border-primary p-4 bg-bg-secondary text-sm">
-                                    <h4 className="font-medium text-text-primary mb-2">Calibration Stats</h4>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        <div><span className="text-text-muted">Slope:</span> {r.curve_stats.slope.toFixed(2)}</div>
-                                        <div><span className="text-text-muted">Intercept:</span> {r.curve_stats.intercept.toFixed(2)}</div>
-                                        <div><span className="text-text-muted">R²:</span> {r.curve_stats.r_squared.toFixed(4)}</div>
+                                <div>
+                                    <h4 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">Calibration Stats</h4>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                        <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-sm">
+                                            <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">Slope</div>
+                                            <div className="mt-1 font-semibold text-[var(--text-primary)]">{r.curve_stats.slope.toFixed(2)}</div>
+                                        </div>
+                                        <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-sm">
+                                            <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">Intercept</div>
+                                            <div className="mt-1 font-semibold text-[var(--text-primary)]">{r.curve_stats.intercept.toFixed(2)}</div>
+                                        </div>
+                                        <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-sm">
+                                            <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">R²</div>
+                                            <div className="mt-1 font-semibold text-[var(--text-primary)]">{r.curve_stats.r_squared.toFixed(4)}</div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
                             {r.samples && (
-                                <div className="border border-border-primary p-4 bg-bg-secondary">
-                                    <h4 className="text-sm font-medium text-text-primary mb-2">Results</h4>
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-bg-tertiary">
-                                            <tr>
-                                                <th className="px-3 py-2 text-left">Sample</th>
-                                                <th className="px-3 py-2 text-left">Area</th>
-                                                <th className="px-3 py-2 text-left">Conc. ({unit})</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {r.samples.map((s, i) => (
-                                                <tr key={i} className="border-t border-border-primary">
-                                                    <td className="px-3 py-2 text-text-primary">{s.id}</td>
-                                                    <td className="px-3 py-2 text-text-secondary">{s.area.toFixed(0)}</td>
-                                                    <td className="px-3 py-2 text-text-secondary">{s.concentration.toFixed(2)}</td>
+                                <div>
+                                    <h4 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">Quantified Samples</h4>
+                                    <div className="overflow-x-auto rounded-lg border border-[var(--border-primary)]">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left">Sample</th>
+                                                    <th className="px-3 py-2 text-left">Area</th>
+                                                    <th className="px-3 py-2 text-left">Conc. ({unit})</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                            </thead>
+                                            <tbody>
+                                                {r.samples.map((s, i) => (
+                                                    <tr key={i} className="border-t border-[var(--border-primary)]">
+                                                        <td className="px-3 py-2 text-[var(--text-primary)]">{s.id}</td>
+                                                        <td className="px-3 py-2 text-[var(--text-secondary)]">{s.area.toFixed(0)}</td>
+                                                        <td className="px-3 py-2 text-[var(--text-secondary)]">{s.concentration.toFixed(2)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
                             )}
-                        </>
+                        </div>
                     )}
 
                     {!result && !loading && (
-                        <div className="border border-border-primary p-8 bg-bg-secondary text-center text-text-muted">
-                            Enter calibration and sample data to quantify
-                        </div>
+                        <AssayEmptyState
+                            title="No quantification run yet"
+                            description="Enter matched calibration concentrations/areas and sample IDs to quantify real samples."
+                        />
                     )}
-                </div>
+
+                    {loading && (
+                        <AssayEmptyState
+                            title="Quantifying samples"
+                            description="BMS is fitting the calibration series and applying it to the unknown peak areas."
+                        />
+                    )}
+                </AssayOutputCard>
             </div>
         </div>
     );

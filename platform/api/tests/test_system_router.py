@@ -93,3 +93,40 @@ def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
     assert response.status_code == 200
     assert saved_payloads == [{"data_root": "/srv/biomodstack"}]
     assert response.json() == snapshot
+
+
+def test_runtime_ports_endpoint_persists_dev_and_prod_ports(monkeypatch) -> None:
+    saved: list[tuple[int | None, int | None]] = []
+
+    monkeypatch.setattr(
+        system,
+        "save_runtime_port_settings",
+        lambda dev_web_host_port=None, prod_web_host_port=None: saved.append((dev_web_host_port, prod_web_host_port))
+        or {
+            "dev_web_host_port": dev_web_host_port,
+            "prod_web_host_port": prod_web_host_port,
+            "dev_url": f"http://127.0.0.1:{dev_web_host_port}/",
+            "prod_url": f"http://127.0.0.1:{prod_web_host_port}/bms/",
+        },
+        raising=False,
+    )
+
+    with build_client() as client:
+        response = client.put("/api/system/runtime-ports", json={"dev_web_host_port": 5179, "prod_web_host_port": 19090})
+
+    assert response.status_code == 200
+    assert saved == [(5179, 19090)]
+    assert response.json()["dev_url"] == "http://127.0.0.1:5179/"
+    assert response.json()["prod_url"] == "http://127.0.0.1:19090/bms/"
+
+
+def test_start_runtime_target_endpoint_invokes_service_layer(monkeypatch) -> None:
+    started: list[str] = []
+    monkeypatch.setattr(system, "start_runtime_target", lambda target=None: started.append(target or "missing"), raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start-target", params={"target": "both"})
+
+    assert response.status_code == 200
+    assert started == ["both"]
+    assert response.json()["target"] == "both"

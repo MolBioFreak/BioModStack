@@ -230,12 +230,15 @@ workflow {
     }
 
     if (params.rfd_mode == 'boltz_cp_experimental') {
+        def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')
         println("Running Boltz-CP Experimental Workflow")
-        println("* Input path: ${params.bcp_input_path}")
-        println("* GPU IDs: ${params.bcp_gpu_ids ?: params.gpu_id}")
-        println("* Context parallel size: ${params.bcp_size_cp ?: 4}")
-        println("* Input format: ${params.bcp_input_format ?: 'config_files'}")
-        println("* Sampling steps: ${params.bcp_sampling_steps ?: 200}")
+        println("* Input path: ${params.get('bcp_input_path', '')}")
+        println("* GPU IDs: ${params.get('bcp_gpu_ids', params.get('gpu_id', ''))}")
+        println("* Context parallel size: ${params.get('bcp_size_cp', 4)}")
+        println("* Backend: ${bcpBackend}")
+        println("* Data-plane: true-distributed-context-parallel launches torch.distributed DTensor CP prediction; shared-cache backends remain legacy serial full-prediction/output-tiling only")
+        println("* Input format: ${params.get('bcp_input_format', 'config_files')}")
+        println("* Sampling steps: ${params.get('bcp_sampling_steps', 200)}")
 
         BOLTZ_CP_EXPERIMENTAL()
         return null

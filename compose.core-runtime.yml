@@ -19,7 +19,7 @@ services:
       BMS_COLABFOLD_DB: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db
       BMS_MSA_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache
       BMS_SABDAB_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}
       BMS_CORE_RUNTIME_MODE: ${BMS_CORE_RUNTIME_MODE:-1}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
@@ -79,11 +79,13 @@ services:
     container_name: biomodstack-web
     restart: unless-stopped
     network_mode: host
+    environment:
+      BMS_WEB_HOST_PORT: ${BMS_WEB_HOST_PORT:-18080}
     depends_on:
       bms-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/bms/"]
+      test: ["CMD-SHELL", "wget -qO- \"http://127.0.0.1:${BMS_WEB_HOST_PORT:-18080}/bms/\""]
       interval: 30s
       timeout: 5s
       retries: 5

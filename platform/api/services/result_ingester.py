@@ -28,7 +28,7 @@ from antibody_pipeline_contract import (
     normalize_antibody_pipeline_contract_version,
 )
 from database import Design, Job
-from paths import get_data_root
+from paths import get_data_root, resolve_runtime_data_path
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
@@ -1034,12 +1034,24 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     params = _parse_job_params(job.params if job else None)
     model_id = str(job.model_id or "").strip().lower() if job else ""
     mode = str(job.mode or "").strip().lower() if job else ""
-    stage_family = str(params.get("stage_family") or params.get("ppiflow_stage_family") or "").strip().lower() or None
-    stage_mode = str(params.get("stage_mode") or params.get("ppiflow_stage_mode") or "").strip().lower() or None
+    stage_family = str(
+        params.get("stage_family")
+        or params.get("ppiflow_stage_family")
+        or getattr(job, "stage_family", None)
+        or ""
+    ).strip().lower() or None
+    stage_mode = str(
+        params.get("stage_mode")
+        or params.get("ppiflow_stage_mode")
+        or getattr(job, "stage_mode", None)
+        or ""
+    ).strip().lower() or None
     if not stage_family:
         if mode == "maturation_child":
             stage_family = "ppiflow"
             stage_mode = stage_mode or "maturation"
+        elif "confornets" in model_id or "confornets" in mode:
+            stage_family = "confornets"
         elif "caliby" in model_id:
             stage_family = "caliby"
         elif "protein_hunter" in model_id:
@@ -1557,7 +1569,8 @@ def _confornets_manifest_entries(ensemble_payload: Any) -> List[Dict[str, Any]]:
 
 def _confornets_entry_path(final_root: Path, entry: Dict[str, Any]) -> Optional[Path]:
     raw_path = str(
-        entry.get("path")
+        entry.get("relative_path")
+        or entry.get("path")
         or entry.get("conformer_path")
         or entry.get("structure_path")
         or entry.get("cif_path")
@@ -1578,6 +1591,366 @@ def _confornets_entry_path(final_root: Path, entry: Dict[str, Any]) -> Optional[
     return resolved if resolved.exists() and resolved.suffix.lower() in {".pdb", ".cif", ".mmcif"} else None
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+_CONFORNETS_CONFIDENCE_SCHEMA = "confornets.confidence_metrics.v1"
+
+_CONFORNETS_REPORTING_SEMANTICS: Dict[str, Any] = {
+    "schema_version": 1,
+    "sample_semantics": "independent_generated_conformer_sample",
+    "sample_semantics_note": "Each row is an independent generated monomer conformer sample; frame/sample indices are stable selectors, not a time-resolved trajectory.",
+    "reference_evaluation_semantics": "ordered_ca_kabsch_rmsd_to_staged_references",
+    "reference_evaluation_note": "Reference RMSD metrics are BMS post-hoc ordered Cα RMSD after Kabsch alignment to explicitly staged references; they are only meaningful when evaluation was enabled and references were provided.",
+    "pairwise_diversity_semantics": "post_hoc_pairwise_ca_rmsd_between_generated_samples",
+    "pairwise_diversity_note": "Pairwise diversity is computed after generation from final samples; it is not an upstream training objective trace and not a thermodynamic ensemble probability.",
+    "landscape_semantics": "post_hoc_sample_space_embedding",
+    "landscape_note": "Landscape coordinates are BMS post-hoc RMSD/MDS embedding coordinates when computed; they are not calibrated free energy, thermodynamics, or trajectory time.",
+    "confidence_semantics": "sample_scalar_confidence_with_optional_full_tensor",
+    "confidence_note": "Scalar pLDDT/gPDE/pTM values come from the optional ConforNets/OpenFold3 confidence path. Per-residue confidence requires a saved full confidence tensor artifact.",
+}
+
+
+def _summarize_confornets_training_loss(csv_path: Path) -> Optional[Dict[str, Any]]:
+    if not csv_path.exists():
+        return None
+
+    rows: List[tuple[Optional[float], float]] = []
+    try:
+        with open(csv_path, "r", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                loss = None
+                for loss_key in ("loss", "training_loss", "mse_loss", "val_loss"):
+                    loss = _coerce_float(row.get(loss_key))
+                    if loss is not None:
+                        break
+                if loss is None:
+                    continue
+
+                step = None
+                for step_key in ("step", "iteration", "epoch"):
+                    step = _coerce_float(row.get(step_key))
+                    if step is not None:
+                        break
+                rows.append((step, loss))
+    except Exception as exc:
+        print(f"[Ingester] Error parsing ConforNets training loss from {csv_path}: {exc}")
+        return None
+
+    if not rows:
+        return None
+
+    steps = [step for step, _loss in rows if step is not None]
+    losses = [loss for _step, loss in rows]
+    summary: Dict[str, Any] = {
+        "csv_path": str(csv_path),
+        "row_count": len(rows),
+        "first_loss": losses[0],
+        "final_loss": losses[-1],
+        "min_loss": min(losses),
+        "max_loss": max(losses),
+    }
+    if steps:
+        summary["first_step"] = steps[0]
+        summary["last_step"] = steps[-1]
+    return summary
+
+
+def _confornets_artifact_schema_version(artifact_manifest: Any) -> int:
+    if isinstance(artifact_manifest, dict):
+        try:
+            version = int(artifact_manifest.get("schema_version"))
+            if version > 0:
+                return version
+        except (TypeError, ValueError):
+            pass
+    return 1
+
+
+def _confornets_sidecar_path(
+    final_root: Path,
+    artifact_manifest: Any,
+    manifest_key: str,
+    default_relative_path: str,
+) -> Path:
+    raw_path = ""
+    if isinstance(artifact_manifest, dict):
+        raw_path = str(artifact_manifest.get(manifest_key) or "").strip()
+    candidate = Path(raw_path).expanduser() if raw_path else final_root / default_relative_path
+    if not candidate.is_absolute():
+        candidate = final_root / candidate
+    return candidate
+
+
+def _merge_confornets_metric_payload(existing: Any, incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    for key, value in incoming.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _confornets_summary_samples_by_id(summary_payload: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(summary_payload, dict):
+        return {}
+    raw_samples = summary_payload.get("samples") or []
+    if not isinstance(raw_samples, list):
+        return {}
+    samples_by_id: Dict[str, Dict[str, Any]] = {}
+    for idx, entry in enumerate(raw_samples):
+        if not isinstance(entry, dict):
+            continue
+        sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
+        frame_index = entry.get("frame_index", entry.get("sample_index"))
+        keys = {sample_id, Path(sample_id).stem if sample_id else "", str(idx), f"sample_{idx}"}
+        if frame_index is not None:
+            keys.add(str(frame_index))
+            keys.add(f"sample_{frame_index}")
+            try:
+                keys.add(f"cn_{int(frame_index):05d}_sample_{int(frame_index)}")
+            except (TypeError, ValueError):
+                pass
+        for key in keys:
+            if key:
+                samples_by_id[key] = entry
+    return samples_by_id
+
+
+def _confornets_entry_lookup_keys(
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+) -> List[str]:
+    keys: List[str] = [structure_path.stem]
+    for entry in (sample_entry, manifest_entry):
+        if not isinstance(entry, dict):
+            continue
+        for scalar_key in ("sample_id", "id", "name", "frame_index", "sample_index"):
+            value = entry.get(scalar_key)
+            if value not in (None, ""):
+                keys.append(str(value))
+                if scalar_key in {"frame_index", "sample_index"}:
+                    keys.append(f"sample_{value}")
+                    try:
+                        keys.append(f"cn_{int(value):05d}_sample_{int(value)}")
+                    except (TypeError, ValueError):
+                        pass
+        for path_key in ("relative_path", "conformer_path", "path", "file", "filename", "structure_path", "cif_path", "pdb_path"):
+            value = entry.get(path_key)
+            if value:
+                keys.append(Path(str(value)).stem)
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for key in keys:
+        normalized = str(key).strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
+    return ordered
+
+
+def _lookup_confornets_summary_entry(
+    summary_by_id: Dict[str, Dict[str, Any]],
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for key in _confornets_entry_lookup_keys(structure_path, manifest_entry, sample_entry):
+        if key in summary_by_id:
+            return summary_by_id[key]
+    return None
+
+
+def _confornets_sample_index(
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+) -> Optional[int]:
+    for entry in (sample_entry, manifest_entry):
+        if not isinstance(entry, dict):
+            continue
+        for key in ("sample_index", "frame_index", "index"):
+            value = entry.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    for candidate in (structure_path.stem,):
+        match = re.search(r"(?:sample|frame|cn)[_-]?(\d+)", candidate, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _strip_confornets_sample_list(summary_payload: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(summary_payload, dict):
+        return None
+    return {key: value for key, value in summary_payload.items() if key != "samples"}
+
+
+def _build_confornets_design_payload(
+    *,
+    final_root: Path,
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+    samples_json: Path,
+    landscape_json: Path,
+    provenance_json: Path,
+    ensemble_manifest_json: Path,
+    artifact_manifest_json: Path,
+    request_json: Path,
+    training_loss_csv: Path,
+    landscape_payload: Any,
+    provenance_payload: Any,
+    artifact_manifest_payload: Any,
+    request_payload: Any,
+    training_loss_summary: Optional[Dict[str, Any]],
+    confidence_entry: Optional[Dict[str, Any]],
+    evaluation_entry: Optional[Dict[str, Any]],
+    evaluation_summary: Optional[Dict[str, Any]],
+    artifact_schema_version: int,
+    job_context: Dict[str, Any],
+    job_params: Dict[str, Any],
+) -> Dict[str, Any]:
+    design_name = structure_path.stem
+    plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+    if isinstance(confidence_entry, dict):
+        computed_plddt = _coerce_float(confidence_entry.get("plddt"))
+        if computed_plddt is not None:
+            plddt = computed_plddt
+    confornets_provenance: Dict[str, Any] = {
+        **job_context.get("provenance", {}),
+        "artifact_group": "confornets",
+        "model_id": "confornets_experimental",
+        "structure_path": str(structure_path),
+        "final_root": str(final_root),
+    }
+    for key, path in {
+        "samples_json": samples_json,
+        "landscape_json": landscape_json,
+        "provenance_json": provenance_json,
+        "ensemble_manifest_json": ensemble_manifest_json,
+        "artifact_manifest_json": artifact_manifest_json,
+        "request_json": request_json,
+        "training_loss_csv": training_loss_csv,
+    }.items():
+        if path.exists():
+            confornets_provenance[key] = str(path)
+    if isinstance(provenance_payload, dict):
+        confornets_provenance["confornets_provenance"] = provenance_payload
+
+    confidence_metrics: Dict[str, Any] = {
+        "confornets_schema": _CONFORNETS_CONFIDENCE_SCHEMA,
+        "confornets_reporting": dict(_CONFORNETS_REPORTING_SEMANTICS),
+    }
+    normalized_sample_entry: Dict[str, Any] = dict(sample_entry) if isinstance(sample_entry, dict) else {}
+    sample_index = _confornets_sample_index(structure_path, manifest_entry, sample_entry)
+    if sample_index is not None:
+        normalized_sample_entry.setdefault("sample_index", sample_index)
+        normalized_sample_entry.setdefault("frame_index", sample_index)
+    if normalized_sample_entry:
+        confidence_metrics["confornets_sample"] = normalized_sample_entry
+    if isinstance(landscape_payload, dict):
+        confidence_metrics["confornets_landscape"] = landscape_payload
+    if isinstance(manifest_entry, dict):
+        confidence_metrics["confornets_ensemble"] = manifest_entry
+    if isinstance(artifact_manifest_payload, dict):
+        confidence_metrics["confornets_artifact_manifest"] = artifact_manifest_payload
+    if isinstance(request_payload, dict):
+        confidence_metrics["confornets_request"] = request_payload
+    if isinstance(training_loss_summary, dict):
+        confidence_metrics["confornets_training_loss_summary"] = training_loss_summary
+    if isinstance(confidence_entry, dict):
+        confidence_metrics["confornets_confidence"] = confidence_entry
+    if isinstance(evaluation_entry, dict):
+        reference_evaluation = {
+            key: value
+            for key, value in evaluation_entry.items()
+            if key not in {"pairwise_diversity", "landscape"}
+        }
+        if reference_evaluation:
+            confidence_metrics["confornets_reference_evaluation"] = reference_evaluation
+        if isinstance(evaluation_entry.get("pairwise_diversity"), dict):
+            confidence_metrics["confornets_pairwise_diversity"] = evaluation_entry["pairwise_diversity"]
+        if isinstance(evaluation_entry.get("landscape"), dict):
+            confidence_metrics["confornets_landscape_point"] = evaluation_entry["landscape"]
+    if isinstance(evaluation_summary, dict):
+        confidence_metrics["confornets_evaluation_summary"] = evaluation_summary
+    if job_params:
+        confidence_metrics["confornets_params"] = {
+            key: value for key, value in job_params.items() if str(key).startswith("cn_")
+        }
+
+    return {
+        "name": design_name,
+        "pdb_path": str(structure_path),
+        "json_path": str(samples_json) if samples_json.exists() else (str(ensemble_manifest_json) if ensemble_manifest_json.exists() else None),
+        "backbone_id": parse_backbone_id(design_name),
+        "artifact_group": "confornets",
+        "artifact_class": "conformer",
+        "artifact_schema_version": artifact_schema_version,
+        "stage_family": job_context.get("stage_family") or "confornets",
+        "stage_mode": job_context.get("stage_mode"),
+        "selected_loop_scope": job_context.get("selected_loop_scope"),
+        "provenance": confornets_provenance,
+        "plddt_overall": plddt,
+        "residue_plddt": residue_plddt,
+        "confidence_metrics": confidence_metrics or None,
+    }
+
+
+def _match_existing_confornets_design(
+    existing_designs: List[Design],
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+) -> Optional[Design]:
+    candidate_names = {structure_path.stem}
+    for entry in (manifest_entry, sample_entry):
+        if not isinstance(entry, dict):
+            continue
+        for key in ("relative_path", "conformer_path", "path", "file", "filename"):
+            raw_path = entry.get(key)
+            if raw_path:
+                candidate_names.add(Path(str(raw_path)).stem)
+
+    sample_id = ""
+    frame_index: Any = None
+    for entry in (sample_entry, manifest_entry):
+        if not isinstance(entry, dict):
+            continue
+        sample_id = sample_id or str(entry.get("sample_id") or entry.get("id") or "").strip()
+        if frame_index is None:
+            frame_index = entry.get("frame_index", entry.get("sample_index"))
+
+    for design in existing_designs:
+        if design.name in candidate_names or Path(str(design.pdb_path)).stem in candidate_names:
+            return design
+        raw_conf = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
+        existing_sample = raw_conf.get("confornets_sample") if isinstance(raw_conf.get("confornets_sample"), dict) else {}
+        if sample_id and str(existing_sample.get("sample_id") or existing_sample.get("id") or "").strip() == sample_id:
+            return design
+        if frame_index is not None and str(existing_sample.get("frame_index", existing_sample.get("sample_index"))) == str(frame_index):
+            return design
+    return None
+
+
 async def ingest_confornets_results(
     job_id: str,
     output_path: Path,
@@ -1590,25 +1963,39 @@ async def ingest_confornets_results(
         print(f"[Ingester] No final/confornets conformer directory found under {output_path}")
         return 0
 
-    existing = await session.execute(
-        select(Design).where(
-            Design.job_id == job_id,
-            Design.source_stage.is_(None),
-        ).limit(1)
-    )
-    if existing.scalar_one_or_none():
-        print(f"[Ingester] ConforNets designs already ingested for job {job_id}")
-        return 0
-
     samples_json = final_root / "samples.json"
     landscape_json = final_root / "landscape.json"
     provenance_json = final_root / "provenance.json"
     ensemble_manifest_json = final_root / "ensemble_manifest.json"
+    artifact_manifest_json = final_root / "artifact_manifest.json"
+    request_json = final_root / "request.json"
+    training_loss_csv = final_root / "confidence" / "training_loss.csv"
     samples_payload = _load_json_any(samples_json)
     landscape_payload = _load_json_any(landscape_json)
     provenance_payload = _load_json_any(provenance_json)
     ensemble_payload = _load_json_any(ensemble_manifest_json)
+    artifact_manifest_payload = _load_json_any(artifact_manifest_json)
+    request_payload = _load_json_any(request_json)
+    confidence_summary_json = _confornets_sidecar_path(
+        final_root,
+        artifact_manifest_payload,
+        "confidence_summary_json",
+        "confidence/confidence_summary.json",
+    )
+    evaluation_summary_json = _confornets_sidecar_path(
+        final_root,
+        artifact_manifest_payload,
+        "evaluation_summary_json",
+        "evaluation/evaluation_summary.json",
+    )
+    confidence_summary_payload = _load_json_any(confidence_summary_json)
+    evaluation_summary_payload = _load_json_any(evaluation_summary_json)
+    training_loss_summary = _summarize_confornets_training_loss(training_loss_csv)
+    artifact_schema_version = _confornets_artifact_schema_version(artifact_manifest_payload)
     samples_by_id = _confornets_samples_by_id(samples_payload)
+    confidence_by_id = _confornets_summary_samples_by_id(confidence_summary_payload)
+    evaluation_by_id = _confornets_summary_samples_by_id(evaluation_summary_payload)
+    evaluation_summary = _strip_confornets_sample_list(evaluation_summary_payload)
     manifest_entries = _confornets_manifest_entries(ensemble_payload)
 
     candidate_records: List[tuple[Path, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]] = []
@@ -1628,7 +2015,7 @@ async def ingest_confornets_results(
                 continue
             sample_entry = None
             for sample_id, entry in samples_by_id.items():
-                raw_sample_path = str(entry.get("conformer_path") or entry.get("path") or "")
+                raw_sample_path = str(entry.get("relative_path") or entry.get("conformer_path") or entry.get("path") or "")
                 if raw_sample_path and Path(raw_sample_path).name == structure_path.name:
                     sample_entry = entry
                     break
@@ -1644,68 +2031,97 @@ async def ingest_confornets_results(
 
     job_context = _job_stage_context(current_job)
     job_params = _parse_job_params(current_job.params) if current_job else {}
-    designs_created = 0
+    existing_result = await session.execute(
+        select(Design).where(
+            Design.job_id == job_id,
+            Design.source_stage.is_(None),
+        )
+    )
+    existing_designs = list(existing_result.scalars().all())
+    had_existing_designs = bool(existing_designs)
+    processed_count = 0
     for structure_path, manifest_entry, sample_entry in candidate_records:
-        design_name = structure_path.stem
-        plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-        confornets_provenance: Dict[str, Any] = {
-            **job_context.get("provenance", {}),
-            "artifact_group": "confornets",
-            "model_id": "confornets_experimental",
-            "structure_path": str(structure_path),
-            "final_root": str(final_root),
-        }
-        for key, path in {
-            "samples_json": samples_json,
-            "landscape_json": landscape_json,
-            "provenance_json": provenance_json,
-            "ensemble_manifest_json": ensemble_manifest_json,
-        }.items():
-            if path.exists():
-                confornets_provenance[key] = str(path)
-        if isinstance(provenance_payload, dict):
-            confornets_provenance["confornets_provenance"] = provenance_payload
-
-        confidence_metrics: Dict[str, Any] = {}
-        if isinstance(sample_entry, dict):
-            confidence_metrics["confornets_sample"] = sample_entry
-        if isinstance(landscape_payload, dict):
-            confidence_metrics["confornets_landscape"] = landscape_payload
-        if isinstance(manifest_entry, dict):
-            confidence_metrics["confornets_ensemble"] = manifest_entry
-        if job_params:
-            confidence_metrics["confornets_params"] = {
-                key: value for key, value in job_params.items() if str(key).startswith("cn_")
-            }
+        confidence_entry = _lookup_confornets_summary_entry(
+            confidence_by_id,
+            structure_path,
+            manifest_entry,
+            sample_entry,
+        )
+        evaluation_entry = _lookup_confornets_summary_entry(
+            evaluation_by_id,
+            structure_path,
+            manifest_entry,
+            sample_entry,
+        )
+        payload = _build_confornets_design_payload(
+            final_root=final_root,
+            structure_path=structure_path,
+            manifest_entry=manifest_entry,
+            sample_entry=sample_entry,
+            samples_json=samples_json,
+            landscape_json=landscape_json,
+            provenance_json=provenance_json,
+            ensemble_manifest_json=ensemble_manifest_json,
+            artifact_manifest_json=artifact_manifest_json,
+            request_json=request_json,
+            training_loss_csv=training_loss_csv,
+            landscape_payload=landscape_payload,
+            provenance_payload=provenance_payload,
+            artifact_manifest_payload=artifact_manifest_payload,
+            request_payload=request_payload,
+            training_loss_summary=training_loss_summary,
+            confidence_entry=confidence_entry,
+            evaluation_entry=evaluation_entry,
+            evaluation_summary=evaluation_summary,
+            artifact_schema_version=artifact_schema_version,
+            job_context=job_context,
+            job_params=job_params,
+        )
+        existing_design = _match_existing_confornets_design(existing_designs, structure_path, manifest_entry, sample_entry)
+        if existing_design is not None:
+            incoming_conf = payload.get("confidence_metrics")
+            existing_design.name = payload["name"]
+            existing_design.pdb_path = payload["pdb_path"]
+            existing_design.json_path = payload["json_path"]
+            existing_design.backbone_id = payload["backbone_id"]
+            existing_design.artifact_group = payload["artifact_group"]
+            existing_design.artifact_class = payload["artifact_class"]
+            existing_design.artifact_schema_version = payload["artifact_schema_version"]
+            existing_design.stage_family = payload["stage_family"]
+            existing_design.stage_mode = payload["stage_mode"]
+            existing_design.selected_loop_scope = payload["selected_loop_scope"]
+            existing_design.provenance = _merge_confornets_metric_payload(existing_design.provenance, payload["provenance"])
+            if payload.get("plddt_overall") is not None:
+                existing_design.plddt_overall = payload["plddt_overall"]
+            if payload.get("residue_plddt"):
+                existing_design.residue_plddt = payload["residue_plddt"]
+            existing_design.confidence_metrics = _merge_confornets_metric_payload(
+                existing_design.confidence_metrics,
+                incoming_conf if isinstance(incoming_conf, dict) else {},
+            )
+            processed_count += 1
+            continue
 
         design = Design(
             id=str(uuid.uuid4()),
             job_id=job_id,
-            name=design_name,
-            pdb_path=str(structure_path),
-            json_path=str(samples_json) if samples_json.exists() else (str(ensemble_manifest_json) if ensemble_manifest_json.exists() else None),
-            backbone_id=parse_backbone_id(design_name),
-            stage_family=job_context.get("stage_family") or "confornets",
-            stage_mode=job_context.get("stage_mode"),
-            selected_loop_scope=job_context.get("selected_loop_scope"),
-            provenance=confornets_provenance,
-            plddt_overall=plddt,
-            residue_plddt=residue_plddt,
-            confidence_metrics=confidence_metrics or None,
+            **payload,
             is_favorite=False,
             created_at=datetime.utcnow(),
         )
         session.add(design)
-        designs_created += 1
+        existing_designs.append(design)
+        processed_count += 1
 
     try:
         await session.commit()
-        print(f"[Ingester] Ingested {designs_created} final ConforNets conformers for job {job_id}")
+        action = "Updated" if had_existing_designs else "Ingested"
+        print(f"[Ingester] {action} {processed_count} final ConforNets conformers for job {job_id}")
     except Exception as exc:
         print(f"[Ingester] Error committing ConforNets designs: {exc}")
         await session.rollback()
         return 0
-    return designs_created
+    return processed_count
 
 
 async def ingest_job_results(
@@ -1729,7 +2145,9 @@ async def ingest_job_results(
     """
     # Resolve relative paths to absolute using data root
     output_path = Path(output_dir)
-    if not output_path.is_absolute():
+    if output_path.is_absolute():
+        output_path = resolve_runtime_data_path(output_path)
+    else:
         output_path = get_data_root() / output_dir
 
     if not output_path.exists():

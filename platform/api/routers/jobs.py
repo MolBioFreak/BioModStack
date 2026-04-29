@@ -1233,11 +1233,18 @@ def _normalize_boltz_cp_params_for_validation(
         "input_format": "bcp_input_format",
         "output_format": "bcp_output_format",
         "write_full_pae": "bcp_write_full_pae",
+        "confidence_prediction": "bcp_confidence_prediction",
         "recycling_steps": "bcp_recycling_steps",
         "sampling_steps": "bcp_sampling_steps",
         "diffusion_samples": "bcp_diffusion_samples",
+        "max_msa_seqs": "bcp_max_msa_seqs",
+        "max_parallel_samples": "bcp_max_parallel_samples",
+        "precision": "bcp_precision",
         "seed": "bcp_seed",
         "backend": "bcp_backend",
+        "triattn_backend": "bcp_triattn_backend",
+        "context_store_mode": "bcp_context_store_mode",
+        "context_store_root": "bcp_context_store_root",
     }
     for canonical_key, alias_key in alias_mappings.items():
         if canonical_key not in normalized and alias_key in normalized:

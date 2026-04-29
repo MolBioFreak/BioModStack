@@ -35,7 +35,12 @@ The live workstation/runtime model is:
 - optional Android thin-shell/update compatibility around the hosted `/bms/` UI
 
 That means container mode is real for the control plane and hosted web UI, but
-workflow execution still remains host-native through the workflow adapter.
+workflow execution still remains host-native through the workflow adapter. On a
+general Linux host, the expected baseline is dashboard/API/web availability with
+clear degraded-capability messages for missing workflow assets, GPU hardware,
+BioXP linkage, or adapter services. Full workflow readiness requires the
+host-native scientific runtime stack in addition to a healthy core container
+runtime.
 
 ## Frontend surfaces
 
@@ -70,9 +75,11 @@ The API does more than submit jobs. It currently:
   surface
 
 For BioXP specifically, the BMS proxy should be read as the current cockpit
-surface rather than a full mirror of every robot-local endpoint. Some live
-robot-local routes, including reference-state and liquid-handling surfaces,
-still exist only on the robot runtime today.
+surface rather than a full mirror of every robot-local endpoint. Current builds
+proxy the reference-state and liquid-handling route families through
+`/api/bioxp/*`; treat older notes claiming those surfaces are robot-only as
+stale, and verify new capability claims against live route parity because the
+robot runtime can still expose additional non-cockpit endpoints.
 
 ## Workflow families
 

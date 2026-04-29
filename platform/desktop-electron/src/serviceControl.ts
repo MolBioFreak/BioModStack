@@ -2,7 +2,8 @@ import { execFile, type ExecFileOptionsWithStringEncoding } from 'node:child_pro
 import path from 'node:path';
 
 export type ServiceRuntimeMode = 'dev' | 'container';
-export type ServiceManagerAction = 'status' | 'start' | 'stop' | 'restart' | 'restart-api';
+export type ServiceRuntimeTarget = 'dev' | 'prod' | 'both';
+export type ServiceManagerAction = 'status' | 'start' | 'start-target' | 'stop' | 'restart' | 'restart-api';
 export type ServiceStatusPayload = Record<string, unknown>;
 
 export type ServiceManagerInvocation = {
@@ -21,6 +22,7 @@ export type ServiceManagerRunResult = {
 export type ServiceControl = {
   getStatus: (runtimeMode?: ServiceRuntimeMode) => Promise<ServiceStatusPayload>;
   startAll: (runtimeMode?: ServiceRuntimeMode) => Promise<void>;
+  startRuntimeTarget: (target: ServiceRuntimeTarget) => Promise<void>;
   stopAll: (runtimeMode?: ServiceRuntimeMode) => Promise<void>;
   restartAll: (runtimeMode?: ServiceRuntimeMode) => Promise<void>;
   restartApi: (runtimeMode?: ServiceRuntimeMode) => Promise<void>;
@@ -36,6 +38,7 @@ type InvocationOptions = {
   projectRoot?: string;
   pythonCommand?: string;
   runtimeMode?: ServiceRuntimeMode;
+  target?: ServiceRuntimeTarget;
   json?: boolean;
 };
 
@@ -59,6 +62,9 @@ export function buildManageDesktopServicesInvocation(
 
   if (options.runtimeMode) {
     args.push('--runtime', options.runtimeMode);
+  }
+  if (options.target) {
+    args.push('--target', options.target);
   }
   if (options.json) {
     args.push('--json');
@@ -138,12 +144,18 @@ function parseStatusPayload(result: ServiceManagerRunResult): ServiceStatusPaylo
 export function createServiceControl(options: ServiceControlOptions = {}): ServiceControl {
   const run = options.run ?? defaultRun;
 
-  async function invoke(action: ServiceManagerAction, runtimeMode?: ServiceRuntimeMode, json?: boolean) {
+  async function invoke(
+    action: ServiceManagerAction,
+    runtimeMode?: ServiceRuntimeMode,
+    json?: boolean,
+    target?: ServiceRuntimeTarget,
+  ) {
     const invocation = buildManageDesktopServicesInvocation(action, {
       projectRoot: options.projectRoot,
       pythonCommand: options.pythonCommand,
       runtimeMode,
       json,
+      target,
     });
     return await run(invocation);
   }
@@ -151,6 +163,7 @@ export function createServiceControl(options: ServiceControlOptions = {}): Servi
   return {
     getStatus: async (runtimeMode) => parseStatusPayload(await invoke('status', runtimeMode, true)),
     startAll: async (runtimeMode) => assertSuccessfulResult('start', await invoke('start', runtimeMode)),
+    startRuntimeTarget: async (target) => assertSuccessfulResult('start-target', await invoke('start-target', undefined, false, target)),
     stopAll: async (runtimeMode) => assertSuccessfulResult('stop', await invoke('stop', runtimeMode)),
     restartAll: async (runtimeMode) => assertSuccessfulResult('restart', await invoke('restart', runtimeMode)),
     restartApi: async (runtimeMode) => assertSuccessfulResult('restart-api', await invoke('restart-api', runtimeMode)),

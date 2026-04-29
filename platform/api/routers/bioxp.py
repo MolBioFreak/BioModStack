@@ -195,6 +195,7 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/reference/status": True,
     "/motion/reference/mark_referenced": True,
     "/motion/reference/mark_desynced": True,
+    "/motion/axes/current": True,
     "/liquid/status": True,
     "/liquid/init": True,
     "/liquid/tip": True,
@@ -559,6 +560,10 @@ async def motion_power_enable():
 @router.post("/motion/power/diag")
 async def motion_power_diag():
     return await proxy_request("POST", "/motion/power/diag", timeout=55.0)
+
+@router.post("/motion/axes/current")
+async def motion_axes_current(request: Request):
+    return await proxy_request("POST", "/motion/axes/current", await request.json(), timeout=35.0)
 
 @router.post("/motion/arm/strict_startup")
 async def motion_arm_strict_startup(request: Request):

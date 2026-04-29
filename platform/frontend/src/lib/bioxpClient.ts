@@ -140,6 +140,21 @@ export interface MotionPowerStatus {
     latch_override?: Record<string, any> | null;
 }
 
+export type GantryAxisName = Extract<AxisName, 'x' | 'y' | 'z'>;
+
+export interface MotionAxisCurrentPayload {
+    axes?: GantryAxisName[];
+    run_current?: number;
+    standby_current?: number;
+}
+
+export interface MotionAxisCurrentResponse {
+    ok: boolean;
+    axes: Partial<Record<GantryAxisName, Record<string, any>>>;
+    current_param_bounds?: string;
+    motion_commanded?: boolean;
+}
+
 export interface CameraSnapshotResponse {
     ok: boolean;
     device: string | null;
@@ -671,6 +686,27 @@ export const useMotionPowerDiag = () => {
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useSetMotionAxesCurrent = () => {
+    const queryClient = useQueryClient();
+    return useMutation<MotionAxisCurrentResponse, Error, MotionAxisCurrentPayload | undefined>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'axes', 'current'),
+        mutationFn: async (payload = {}) => {
+            const runCurrent = payload.run_current ?? 31;
+            const res = await api.post('/api/bioxp/motion/axes/current', {
+                axes: payload.axes ?? ['x', 'y', 'z'],
+                run_current: runCurrent,
+                standby_current: payload.standby_current ?? runCurrent,
+            });
+            return res.data;
+        },
+        onSuccess: () => {
+            invalidateBioXp(queryClient);
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'motion', 'power', 'status'] });
+        }
     });
 };
 
