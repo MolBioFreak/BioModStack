@@ -23,7 +23,7 @@ test('qPCR raw import opens the standard-curve view when a parsed upload has cur
 test('qPCR raw import wires the parsed response through the initial-tab resolver', () => {
   const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
   assert.match(source, /resolveQpcrInitialTab/);
-  assert.match(source, /setActiveTab\(resolveQpcrInitialTab\(response\)\)/);
+  assert.match(source, /setPreferredReviewFocus\(resolveQpcrInitialTab\(response\)\)/);
 });
 
 test('qPCR standard-curve tab renders a larger QC-focused Plotly review surface', () => {
@@ -37,14 +37,33 @@ test('qPCR standard-curve tab renders a larger QC-focused Plotly review surface'
   assert.match(source, /Curve quality flags/);
 });
 
+test('qPCR raw import renders a unified review workbench so plate, plots, and result rows are visible together', () => {
+  const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
+
+  assert.match(source, /qPCR instrument review workbench/);
+  assert.match(source, /Always-visible amplification curves/);
+  assert.match(source, /Always-visible standard curve/);
+  assert.match(source, /Full parsed results/);
+  assert.match(source, /Right-side readable table/);
+  assert.match(source, /buildQpcrAssayReviewMetrics/);
+  assert.match(source, /Spike recovery/);
+  assert.match(source, /Replicate CV/);
+  assert.doesNotMatch(source, /activeTab === 'curves'/);
+  assert.doesNotMatch(source, /activeTab === 'table'/);
+  assert.doesNotMatch(source, /activeTab === 'stdcurve'/);
+  assert.doesNotMatch(source, /AssaySegmentedTabs/);
+});
+
 test('qPCR raw import uses the widened assay canvas and avoids clipping plate-map analytics beside the 96-well grid', () => {
   const assaySource = readFileSync(join(root, 'src/components/AssayAnalytics.tsx'), 'utf8');
   const rawImportSource = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
 
   assert.match(assaySource, /max-w-\[1840px\]/);
   assert.match(rawImportSource, /min-\[1500px\]:grid-cols-\[minmax\(280px,360px\)_minmax\(0,1fr\)\]/);
-  assert.match(rawImportSource, /min-\[1720px\]:grid-cols-\[minmax\(0,1fr\)_400px\]/);
-  assert.match(rawImportSource, /min-w-\[760px\]/);
+  assert.match(rawImportSource, /min-\[1650px\]:grid-cols-\[minmax\(520px,0\.74fr\)_minmax\(0,1fr\)_minmax\(360px,0\.86fr\)\]/);
+  assert.match(rawImportSource, /min-w-\[520px\]/);
+  assert.doesNotMatch(rawImportSource, /min-\[1720px\]:grid-cols-\[minmax\(0,1fr\)_400px\]/);
+  assert.doesNotMatch(rawImportSource, /min-w-\[760px\]/);
 });
 
 test('qPCR raw import warns that EDS curve-derived Cq/Ct values are not authoritative', () => {
