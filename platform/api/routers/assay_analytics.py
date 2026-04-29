@@ -1778,7 +1778,40 @@ def hplc_calibration_curve(request: HplcCalibrationRequest) -> Dict[str, Any]:
         fit = {"slope": slope, "intercept": intercept, "r_squared": 1 - ss_res / ss_tot if ss_tot else 1.0, "p_value": None, "std_err": None}
     else:
         fit = _linear_fit(x, y)
-    return _json_clean({**fit, "analyte_name": request.analyte_name, "unit": request.unit, "n_points": len(points), "points": [p.model_dump() for p in points]})
+    fit_x = sorted(x)
+    fit_y = [fit["slope"] * value + fit["intercept"] for value in fit_x]
+    return _json_clean(
+        {
+            **fit,
+            "analyte_name": request.analyte_name,
+            "unit": request.unit,
+            "n_points": len(points),
+            "points": [p.model_dump() for p in points],
+            "plotly_json": {
+                "data": [
+                    {
+                        "type": "scatter",
+                        "mode": "markers",
+                        "x": x,
+                        "y": y,
+                        "name": "Calibration standards",
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "x": fit_x,
+                        "y": fit_y,
+                        "name": "Linear fit",
+                    },
+                ],
+                "layout": {
+                    "title": f"HPLC Calibration - {request.analyte_name or 'Analyte'}",
+                    "xaxis": {"title": f"Concentration ({request.unit})"},
+                    "yaxis": {"title": "Peak area"},
+                },
+            },
+        }
+    )
 
 
 @router.post("/analysis/hplc/quantify")

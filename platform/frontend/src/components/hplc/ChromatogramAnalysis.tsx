@@ -28,7 +28,7 @@ interface Peak {
 
 export function ChromatogramAnalysis() {
     const [dataText, setDataText] = useState('');
-    const [baselineMethod, setBaselineMethod] = useState('snip');
+    const [baselineMethod, setBaselineMethod] = useState('mocca2_flatfit');
     const [prominence, setProminence] = useState(100);
     const [fitModel, setFitModel] = useState('skew_normal');
     const [result, setResult] = useState<Record<string, unknown> | null>(null);
@@ -106,8 +106,9 @@ export function ChromatogramAnalysis() {
                                 onChange={(e) => setBaselineMethod(e.target.value)}
                                 className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-sm"
                             >
-                                <option value="snip">SNIP (recommended)</option>
-                                <option value="als">ALS</option>
+                                <option value="mocca2_flatfit">MOCCA2 flatfit (recommended)</option>
+                                <option value="mocca2_arpls">MOCCA2 arPLS</option>
+                                <option value="mocca2_asls">MOCCA2 asLS</option>
                                 <option value="linear">Linear</option>
                                 <option value="none">None</option>
                             </select>
@@ -366,6 +367,8 @@ export function HplcQuantification() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
+    const plotlyLayout = useThemePlotlyLayout();
+
     const handleRun = useCallback(async () => {
         setLoading(true);
         setError('');
@@ -396,6 +399,7 @@ export function HplcQuantification() {
     const r = result as {
         samples?: { id: string; area: number; concentration: number }[];
         curve_stats?: { slope: number; intercept: number; r_squared: number };
+        plotly_json?: { data: Plotly.Data[]; layout: Partial<Plotly.Layout> };
     } | null;
 
     return (
@@ -485,10 +489,7 @@ export function HplcQuantification() {
                             </div>
                         </AssayInputCard>
 
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="text-xs leading-relaxed text-[var(--text-muted)]">
-                                The API contract remains /analysis/hplc/quantify; this panel only harmonizes BMS workbench layout.
-                            </div>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                             <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full sm:w-auto">
                                 {loading ? 'Quantifying...' : 'Quantify Samples'}
                             </AssayPrimaryButton>
@@ -505,6 +506,17 @@ export function HplcQuantification() {
                 >
                     {r && (
                         <div className="space-y-4">
+                            {r.plotly_json && (
+                                <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
+                                    <Plot
+                                        data={r.plotly_json.data}
+                                        layout={{ ...plotlyLayout, ...r.plotly_json.layout, autosize: true, height: 320 }}
+                                        useResizeHandler
+                                        style={{ width: '100%' }}
+                                    />
+                                </div>
+                            )}
+
                             {r.curve_stats && (
                                 <div>
                                     <h4 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">Calibration Stats</h4>
