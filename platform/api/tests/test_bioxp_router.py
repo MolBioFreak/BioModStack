@@ -37,33 +37,33 @@ async def test_set_linkage_normalizes_and_persists_url(monkeypatch: pytest.Monke
 
     def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
         assert host == 'robot'
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('bioxp-runtime.example.invalid', port or 0))]
 
     monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
 
     response = await bioxp.set_linkage(bioxp.LinkageRequest(url='robot:8123/'))
 
-    assert response['url'] == 'http://100.124.140.56:8123'
+    assert response['url'] == 'http://bioxp-runtime.example.invalid:8123'
     assert response['configured'] is True
-    assert state_path.read_text(encoding='utf-8') == 'http://100.124.140.56:8123'
+    assert state_path.read_text(encoding='utf-8') == 'http://bioxp-runtime.example.invalid:8123'
 
 
-def test_recommended_linkage_url_prefers_resolved_robot_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recommended_linkage_url_prefers_resolved_robot_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bioxp, 'ROBOT_SSH_HOST', 'robot')
     monkeypatch.setattr(bioxp, 'ROBOT_DAEMON_PORT', 8123)
     monkeypatch.delenv('BIOXP_SERVER_URL', raising=False)
 
     def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
         assert host == 'robot'
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('bioxp-runtime.example.invalid', port or 0))]
 
     monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
 
-    assert bioxp._recommended_linkage_url() == 'http://100.124.140.56:8123'
+    assert bioxp._recommended_linkage_url() == 'http://bioxp-runtime.example.invalid:8123'
 
 
 def test_recommended_linkage_url_prefers_explicit_bioxp_server_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('BIOXP_SERVER_URL', 'http://100.124.140.56:8123/')
+    monkeypatch.setenv('BIOXP_SERVER_URL', 'http://bioxp-runtime.example.invalid:8123/')
     monkeypatch.setattr(bioxp, 'ROBOT_SSH_HOST', 'robot')
     monkeypatch.setattr(bioxp, 'ROBOT_DAEMON_PORT', 8123)
 
@@ -72,7 +72,7 @@ def test_recommended_linkage_url_prefers_explicit_bioxp_server_url(monkeypatch: 
 
     monkeypatch.setattr(socket, 'getaddrinfo', failing_getaddrinfo)
 
-    assert bioxp._recommended_linkage_url() == 'http://100.124.140.56:8123'
+    assert bioxp._recommended_linkage_url() == 'http://bioxp-runtime.example.invalid:8123'
 
 
 def test_read_persisted_linkage_canonicalizes_robot_alias_and_rewrites_state(
@@ -85,12 +85,12 @@ def test_read_persisted_linkage_canonicalizes_robot_alias_and_rewrites_state(
 
     def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
         assert host == 'robot'
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('bioxp-runtime.example.invalid', port or 0))]
 
     monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
 
-    assert bioxp._read_persisted_linkage() == 'http://100.124.140.56:8123'
-    assert state_path.read_text(encoding='utf-8') == 'http://100.124.140.56:8123'
+    assert bioxp._read_persisted_linkage() == 'http://bioxp-runtime.example.invalid:8123'
+    assert state_path.read_text(encoding='utf-8') == 'http://bioxp-runtime.example.invalid:8123'
 
 
 @pytest.mark.asyncio
@@ -218,9 +218,11 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['linkage_url'] == 'http://robot:8123'
     assert response['bms_proxy_routes']['/liquid/status'] is True
     assert response['bms_proxy_routes']['/motion/reference/status'] is True
+    assert response['bms_proxy_routes']['/motion/axes/current'] is True
     assert response['bms_proxy_routes']['/camera/stream_state'] is True
     assert response['bms_proxy_routes']['/vision/inspect'] is True
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
+    assert response['robot_local_expected_routes']['/motion/axes/current'] is True
 
 
 @pytest.mark.asyncio
@@ -274,6 +276,7 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
     assert await bioxp.motion_reference_status('x,y,z,g,door') == {'ok': True, 'path': '/motion/reference/status', 'params': {'axes': 'x,y,z,g,door'}}
     assert await bioxp.motion_reference_mark_referenced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_referenced', 'params': None}
     assert await bioxp.motion_reference_mark_desynced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_desynced', 'params': None}
+    assert await bioxp.motion_axes_current(RequestStub()) == {'ok': True, 'path': '/motion/axes/current', 'params': None}
     assert await bioxp.camera_stream_state() == {'ok': True, 'path': '/camera/stream_state', 'params': None}
     assert await bioxp.vision_inspect(RequestStub()) == {'ok': True, 'path': '/vision/inspect', 'params': None}
     assert await bioxp.vision_barcode_read(RequestStub()) == {'ok': True, 'path': '/vision/barcode/read', 'params': None}
@@ -282,6 +285,7 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
         ('GET', '/motion/reference/status', None, {'axes': 'x,y,z,g,door'}, 20.0),
         ('POST', '/motion/reference/mark_referenced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
         ('POST', '/motion/reference/mark_desynced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
+        ('POST', '/motion/axes/current', {'axes': ['x'], 'reason': 'operator_verified'}, None, 35.0),
         ('GET', '/camera/stream_state', None, None, 20.0),
         ('POST', '/vision/inspect', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
         ('POST', '/vision/barcode/read', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
