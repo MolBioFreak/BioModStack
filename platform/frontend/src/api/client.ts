@@ -5,6 +5,26 @@
 
 import { API_URL, VLM_URL } from './config';
 
+const ASSAY_UPLOAD_TIMEOUT_MS = 300_000;
+
+async function throwAssayHttpError(response: Response, context: string): Promise<never> {
+    let detail = '';
+    try {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('application/json')) {
+            const payload = await response.json();
+            const rawDetail = payload?.detail ?? payload?.message ?? payload;
+            detail = typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail);
+        } else {
+            detail = await response.text();
+        }
+    } catch {
+        detail = '';
+    }
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`${context} failed (HTTP ${response.status})${suffix}`);
+}
+
 // ============================================================================
 // Health & Status
 // ============================================================================
@@ -315,7 +335,7 @@ export async function runHypothesisTest(
             body = { groups: [group1, group2 as number[]], alpha };
             break;
         default:
-            throw new Error(`Unknown test type: ${testType}`);
+            throw new Error(`Unsupported test type: ${testType}`);
     }
 
     const response = await fetch(endpoint, {
@@ -362,9 +382,9 @@ export async function uploadQpcrFile(file: File) {
     const response = await fetch(endpoint, {
         method: 'POST',
         body: formData,
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(ASSAY_UPLOAD_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) await throwAssayHttpError(response, 'qPCR instrument upload');
     return response.json();
 }
 
@@ -469,12 +489,6 @@ export async function getDataset(id: number) {
     return response.json();
 }
 
-export async function seedDatasets() {
-    const response = await fetch(`${API_URL}/datasets/seed`, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-}
-
 // ============================================================================
 // Empower HPLC Imports
 // ============================================================================
@@ -495,9 +509,9 @@ export async function importEmpowerFiles(files: File[], options: EmpowerImportOp
     const response = await fetch(`${API_URL}/analysis/hplc/empower/import`, {
         method: 'POST',
         body: formData,
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(ASSAY_UPLOAD_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) await throwAssayHttpError(response, 'Empower chromatography import');
     return response.json();
 }
 
