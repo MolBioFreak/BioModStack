@@ -138,3 +138,17 @@ test('keeps fold-cp prediction rows tagged as boltz-2 validation even when pSCE 
     assert.equal(inferDesignAnalysisLens(foldCpPredictionDesign), 'validation');
     assert.equal(getOutputSourceLabel(foldCpPredictionDesign), 'Boltz-2');
 });
+
+test('classifies ConforNets conformer rows as ConforNets instead of generic designs', () => {
+    const confornetsDesigns = [
+        { name: 'cn_00000_sample_0', artifact_group: 'confornets' },
+        { name: 'cn_00001_sample_1', provenance: { artifact_group: 'confornets' } },
+        { name: 'cn_00002_sample_2', provenance: { model_id: 'confornets_experimental' } },
+        { name: 'cn_00003_sample_3', confidence_metrics: { confornets_sample: { frame_index: 3 } } },
+    ];
+
+    for (const design of confornetsDesigns) {
+        assert.equal(inferDesignOutputSource(design), 'confornets');
+        assert.equal(getOutputSourceLabel(design), 'ConforNets');
+    }
+});
