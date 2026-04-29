@@ -10,6 +10,8 @@ process RunBoltzCPExperimental {
     label 'gpu'
 
     publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: 'true_cp_*'
+    publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: 'true_cp_context_store/**', saveAs: { filename -> filename.replace('true_cp_context_store/', 'true_cp_context_store/') }
     publishDir "${params.out_dir}/inputs/boltz_cp", mode: 'copy', pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
     publishDir "${params.out_dir}/processed/boltz_cp", mode: 'copy', pattern: 'cp_results/processed/**', saveAs: { filename -> filename.replace('cp_results/processed/', '') }
 
@@ -19,17 +21,58 @@ process RunBoltzCPExperimental {
     output:
     path 'cp_results', emit: results_dir, optional: true
     path 'cp_results/processed', emit: processed_dir, optional: true
+    path 'true_cp_launch_manifest.json', emit: launch_manifest, optional: true
+    path 'true_cp_failure_diagnostics.json', emit: failure_diagnostics, optional: true
+    path 'true_cp_rank_probe.jsonl', emit: rank_probe, optional: true
+    path 'true_cp_context_store', emit: context_store, optional: true
     path '*.log'
 
     script:
-    def gpuIds = (params.bcp_gpu_ids ?: params.gpu_id).toString().split(',').collect { it.trim() }.findAll { it }
+    def gpuIdsParam = params.get('bcp_gpu_ids', null)
+    if (gpuIdsParam == null || gpuIdsParam.toString().trim() == '') {
+        gpuIdsParam = params.get('gpu_id', '')
+    }
+    def gpuIdsValue = (gpuIdsParam == null ? '' : gpuIdsParam.toString())
+    def gpuIds = gpuIdsValue.split(',').collect { it.trim() }.findAll { it }
+    def gpuIdsRaw = shellQuote(gpuIds.join(','))
     def nproc = gpuIds ? gpuIds.size() : 1
-    def sizeCp = (params.bcp_size_cp ?: 4) as Integer
+    def sizeCp = params.get('bcp_size_cp', 4) as Integer
     def sizeDp = Math.max((int) (nproc / sizeCp), 1)
-    def inputFormat = (params.bcp_input_format ?: 'config_files').toString()
-    def outputFormat = (params.bcp_output_format ?: 'mmcif').toString()
-    def writeFullPaeFlag = (params.bcp_write_full_pae?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']) ? '--write_full_pae' : ''
-    def seedFlag = params.bcp_seed != null && params.bcp_seed.toString() != '' ? "--seed ${params.bcp_seed}" : ''
+    def inputFormat = params.get('bcp_input_format', 'config_files').toString()
+    def outputFormat = params.get('bcp_output_format', 'mmcif').toString()
+    def confidencePrediction = params.get('bcp_confidence_prediction', false).toString().toLowerCase() in ['true', '1', 'yes', 'y', 'on']
+    def quotedConfidencePrediction = shellQuote(confidencePrediction ? 'true' : 'false')
+    def maxMsaSeqsValue = (params.get('bcp_max_msa_seqs', '') ?: '').toString().trim()
+    def maxParallelSamplesValue = (params.get('bcp_max_parallel_samples', '1') ?: '1').toString().trim()
+    def precisionValue = (params.get('bcp_precision', 'BF16') ?: 'BF16').toString().trim()
+    // Default to the built-in reference backend because the deployed Boltz-CP runtime does not ship trifast.
+    // Callers can still opt into trifast/cueq explicitly when the container has those kernels installed.
+    def triattnBackendValue = (params.get('bcp_triattn_backend', 'reference') ?: 'reference').toString().trim()
+    def sdpaWithBiasBackendValue = (params.get('bcp_sdpa_with_bias_backend', 'torch_flex_attn') ?: 'torch_flex_attn').toString().trim()
+    def sdpaWithBiasShardwiseBackendValue = (params.get('bcp_sdpa_with_bias_shardwise_backend', 'torch_sdpa_efficient_attention') ?: 'torch_sdpa_efficient_attention').toString().trim()
+    def atomsPerWindowQueriesKeysValue = (params.get('bcp_atoms_per_window_queries_keys', '16 32') ?: '16 32').toString().trim()
+    def contextStoreModeValue = (params.get('bcp_context_store_mode', 'evidence-only') ?: 'evidence-only').toString().trim()
+    def contextStoreRootValue = (params.get('bcp_context_store_root', '') ?: '').toString().trim()
+    def maxMsaSeqs = shellQuote(maxMsaSeqsValue)
+    def maxParallelSamples = shellQuote(maxParallelSamplesValue)
+    def precision = shellQuote(precisionValue)
+    def triattnBackend = shellQuote(triattnBackendValue)
+    def sdpaWithBiasBackend = shellQuote(sdpaWithBiasBackendValue)
+    def sdpaWithBiasShardwiseBackend = shellQuote(sdpaWithBiasShardwiseBackendValue)
+    def atomsPerWindowQueriesKeys = shellQuote(atomsPerWindowQueriesKeysValue)
+    def contextStoreMode = shellQuote(contextStoreModeValue)
+    def contextStoreRoot = shellQuote(contextStoreRootValue)
+    def confidenceFlag = confidencePrediction ? '--confidence_prediction' : '--no_confidence_prediction'
+    def maxMsaSeqsFlag = maxMsaSeqsValue ? "--max_msa_seqs ${maxMsaSeqsValue}" : ''
+    def maxParallelSamplesFlag = maxParallelSamplesValue ? "--max_parallel_samples ${maxParallelSamplesValue}" : ''
+    def precisionFlag = precisionValue ? "--precision ${precisionValue}" : ''
+    def triattnBackendFlag = triattnBackendValue ? "--triattn_backend ${triattnBackendValue}" : ''
+    def sdpaWithBiasBackendFlag = sdpaWithBiasBackendValue ? "--sdpa_with_bias_backend ${sdpaWithBiasBackendValue}" : ''
+    def sdpaWithBiasShardwiseBackendFlag = sdpaWithBiasShardwiseBackendValue ? "--sdpa_with_bias_shardwise_backend ${sdpaWithBiasShardwiseBackendValue}" : ''
+    def atomsPerWindowQueriesKeysFlag = atomsPerWindowQueriesKeysValue ? "--atoms_per_window_queries_keys ${atomsPerWindowQueriesKeysValue}" : ''
+    def writeFullPaeFlag = (params.get('bcp_write_full_pae', false).toString().toLowerCase() in ['true', '1', 'yes', 'y', 'on']) ? '--write_full_pae' : ''
+    def seedValue = (params.get('bcp_seed', '') ?: '').toString().trim()
+    def seedFlag = seedValue ? "--seed ${seedValue}" : ''
     def useMsa = params.boltz_use_msa?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
     def msaProvider = (params.msa_provider ?: 'local').toString()
     def msaPreset = (params.msa_preset ?: 'fast').toString()
@@ -45,7 +88,8 @@ process RunBoltzCPExperimental {
     def msaForceRefresh = params.msa_force_refresh?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
     def msaCacheOnly = params.msa_cache_only?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
     def inputConfigPath = shellQuote(input_config.toString())
-    def repoPath = shellQuote(params.bcp_repo_path ?: '')
+    def repoPath = shellQuote(params.get('bcp_repo_path', ''))
+    def cachePath = shellQuote(params.get('bcp_cache_path', null) ?: params.get('boltz_models', '') ?: '')
     def quotedInputFormat = shellQuote(inputFormat)
     def quotedUseMsa = shellQuote(useMsa ? 'true' : 'false')
     def codeRoot = shellQuote(params.code_root ?: '')
@@ -73,19 +117,64 @@ process RunBoltzCPExperimental {
     def parentJobLiteral = shellQuote(params.containsKey('bcp_parent_job_id') ? params['bcp_parent_job_id'] : (params.containsKey('job_id') ? params['job_id'] : ''))
     def parentShardPlanLiteral = shellQuote(params.get('bcp_shard_plan_id', ''))
     def quotedOutputFormat = shellQuote(outputFormat)
+    def ncclIbDisable = params.get('bcp_nccl_ib_disable', 1)
+    def cudaAllocConf = params.get('bcp_cuda_alloc_conf', 'expandable_segments:True,max_split_size_mb:256')
+    def recyclingSteps = params.get('bcp_recycling_steps', 3)
+    def samplingSteps = params.get('bcp_sampling_steps', 200)
+    def diffusionSamples = params.get('bcp_diffusion_samples', 1)
     """
     set -euo pipefail
 
     TASK_ROOT="\$PWD"
     REPO_PATH=${repoPath}
+    BOLTZ_CACHE_DIR=${cachePath}
+    if [ -z "\$BOLTZ_CACHE_DIR" ]; then
+        BOLTZ_CACHE_DIR="\$TASK_ROOT/boltz_cache"
+    fi
+    if ! mkdir -p "\$BOLTZ_CACHE_DIR" 2> "\$TASK_ROOT/boltz_cache_mkdir.err"; then
+        echo "configured_boltz_cache_unavailable: \$BOLTZ_CACHE_DIR; falling back to mounted/container cache if available" >&2
+        cat "\$TASK_ROOT/boltz_cache_mkdir.err" >&2 || true
+        if [ -d "/boltzcache" ] && [ -w "/boltzcache" ]; then
+            echo "using_mounted_boltzcache_fallback: /boltzcache" >&2
+            BOLTZ_CACHE_DIR="/boltzcache"
+        else
+            BOLTZ_CACHE_DIR="\$TASK_ROOT/boltz_cache"
+            mkdir -p "\$BOLTZ_CACHE_DIR"
+        fi
+    fi
+    rm -f "\$TASK_ROOT/boltz_cache_mkdir.err"
+    export BOLTZ_CACHE_DIR
     BCP_ROLE=${quotedBcpRole}
     BCP_STORE_ROOT=${storeRootLiteral}
     BCP_ASSIGNED_GPU=${assignedGpuLiteral}
     BCP_BUNDLE_ID=${bundleIdLiteral}
+    GPU_IDS_RAW=${gpuIdsRaw}
     SIZE_CP=${sizeCp}
     NPROC=${nproc}
     SIZE_DP=${sizeDp}
     INPUT_FORMAT=${quotedInputFormat}
+    BCP_CONFIDENCE_PREDICTION=${quotedConfidencePrediction}
+    BCP_MAX_MSA_SEQS=${maxMsaSeqs}
+    BCP_MAX_PARALLEL_SAMPLES=${maxParallelSamples}
+    BCP_PRECISION=${precision}
+    BCP_TRIATTN_BACKEND=${triattnBackend}
+    BCP_SDPA_WITH_BIAS_BACKEND=${sdpaWithBiasBackend}
+    BCP_SDPA_WITH_BIAS_SHARDWISE_BACKEND=${sdpaWithBiasShardwiseBackend}
+    BCP_ATOMS_PER_WINDOW_QUERIES_KEYS=${atomsPerWindowQueriesKeys}
+    BCP_DATA_PLANE_SEMANTICS=torch.distributed_dtensor_context_parallel
+    BCP_CONTEXT_STORE_MODE=${contextStoreMode}
+    BCP_CONTEXT_STORE_ROOT=${contextStoreRoot}
+    if [ -z "\$BCP_CONTEXT_STORE_ROOT" ]; then
+        BCP_CONTEXT_STORE_ROOT="\$TASK_ROOT/true_cp_context_store"
+    fi
+    if [[ "\$BCP_CONTEXT_STORE_MODE" == rank-local-dram-spill* ]]; then
+        BCP_CONTEXT_STORE_SEMANTICS=torch.distributed_dtensor_pairformer_rank_local_dram_spill
+    else
+        BCP_CONTEXT_STORE_SEMANTICS=torch.distributed_dtensor_pairformer_context_store_evidence
+    fi
+    export BCP_CONFIDENCE_PREDICTION BCP_MAX_MSA_SEQS BCP_MAX_PARALLEL_SAMPLES BCP_PRECISION BCP_SAMPLING_STEPS
+    export BCP_TRIATTN_BACKEND BCP_SDPA_WITH_BIAS_BACKEND BCP_SDPA_WITH_BIAS_SHARDWISE_BACKEND
+    export BCP_ATOMS_PER_WINDOW_QUERIES_KEYS BCP_DATA_PLANE_SEMANTICS BCP_CONTEXT_STORE_MODE BCP_CONTEXT_STORE_ROOT BCP_CONTEXT_STORE_SEMANTICS
     USE_MSA=${quotedUseMsa}
     CODE_ROOT=${codeRoot}
     MSA_PROVIDER=${quotedMsaProvider}
@@ -108,6 +197,7 @@ process RunBoltzCPExperimental {
     MSA_MIN_COVERAGE=${quotedMsaMinCoverage}
     MSA_TAXON_LIST=${quotedMsaTaxonList}
     OUTPUT_FORMAT=${quotedOutputFormat}
+    BCP_SAMPLING_STEPS=${samplingSteps}
 
     if [ ! -d "\$REPO_PATH" ]; then
         echo "Boltz-CP repo not found: \$REPO_PATH" >&2
@@ -130,13 +220,20 @@ process RunBoltzCPExperimental {
     export NUMBA_CACHE_DIR="\$TASK_ROOT/tmp_cache/numba"
     export TRITON_CACHE_DIR="\$TASK_ROOT/tmp_cache/triton"
     export MPLCONFIGDIR="\$TASK_ROOT/tmp_cache/matplotlib"
-    export BOLTZ_CACHE=/boltzcache
+    export BOLTZ_CACHE="\$BOLTZ_CACHE_DIR"
     export PYTHONPATH="\$REPO_PATH/src\${PYTHONPATH:+:\$PYTHONPATH}"
     BOLTZ_PYTHON="\$REPO_PATH/.venv/bin/python"
     if [ ! -x "\$BOLTZ_PYTHON" ]; then
         BOLTZ_PYTHON=python3
     fi
     export BOLTZ_PYTHON
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    if [ -n "\$GPU_IDS_RAW" ]; then
+        export CUDA_VISIBLE_DEVICES="\$GPU_IDS_RAW"
+    fi
+    export NCCL_IB_DISABLE=${ncclIbDisable}
+    export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+    export PYTORCH_CUDA_ALLOC_CONF="${cudaAllocConf}"
 
     if [ "\$BCP_ROLE" = "child" ]; then
         if [ -z "\$BCP_STORE_ROOT" ]; then
@@ -271,6 +368,9 @@ def add_optional(cmd: list[str], flag: str, env_name: str) -> None:
         cmd.extend([flag, value])
 
 
+msa_by_sequence: dict[str, str] = {}
+
+
 def materialize_yaml(yaml_path: Path, name_prefix: str) -> None:
     payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
     sequences = payload.get("sequences") or []
@@ -280,12 +380,20 @@ def materialize_yaml(yaml_path: Path, name_prefix: str) -> None:
         protein = entry.get("protein")
         if not isinstance(protein, dict):
             continue
-        existing_msa = str(protein.get("msa") or "").strip()
-        if existing_msa and existing_msa.lower() != "empty":
-            continue
         sequence = str(protein.get("sequence") or "").strip()
         if not sequence:
             raise SystemExit(f"Boltz-CP protein entry {index} in {yaml_path} is missing a sequence")
+        existing_msa = str(protein.get("msa") or "").strip()
+        canonical_msa = msa_by_sequence.get(sequence)
+        if existing_msa and existing_msa.lower() != "empty":
+            if canonical_msa and canonical_msa != existing_msa:
+                protein["msa"] = canonical_msa
+            else:
+                msa_by_sequence.setdefault(sequence, existing_msa)
+            continue
+        if canonical_msa:
+            protein["msa"] = canonical_msa
+            continue
         component_id = protein.get("id")
         if isinstance(component_id, list) and component_id:
             chain_id = str(component_id[0]).strip() or f"chain{index}"
@@ -342,7 +450,9 @@ def materialize_yaml(yaml_path: Path, name_prefix: str) -> None:
         msa_path = msa_out_dir / f'{msa_name}.a3m'
         if not msa_path.exists():
             raise SystemExit(f'run_local_msa.py did not produce expected file {msa_path}')
-        protein["msa"] = str(msa_path.resolve())
+        canonical_msa = str(msa_path.resolve())
+        msa_by_sequence[sequence] = canonical_msa
+        protein["msa"] = canonical_msa
 
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -374,25 +484,288 @@ PY
 )"
         fi
 
+        echo "runtime-parameter-preflight: checking BCP_SAMPLING_STEPS=\$BCP_SAMPLING_STEPS"
+        export TASK_ROOT BCP_SAMPLING_STEPS BCP_DATA_PLANE_SEMANTICS
+        python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+raw_steps = os.environ.get("BCP_SAMPLING_STEPS", "")
+try:
+    sampling_steps = int(raw_steps)
+except (TypeError, ValueError):
+    sampling_steps = -1
+if sampling_steps < 2:
+    task_root = Path(os.environ["TASK_ROOT"])
+    payload = {
+        "status": "failed",
+        "stage": "runtime-parameter-preflight",
+        "error_type": "InvalidBoltzSamplingSteps",
+        "sampling_steps": raw_steps,
+        "minimum_sampling_steps": 2,
+        "error": f"Need at least 2 sampling steps, got {raw_steps}",
+        "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+        "is_true_distributed_context_parallel": True,
+        "recommendation": "Set bcp_sampling_steps to 2 or higher before launching true distributed CP.",
+    }
+    (task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"InvalidBoltzSamplingSteps: Need at least 2 sampling steps, got {raw_steps}", file=sys.stderr)
+    sys.exit(87)
+print(f"runtime-parameter-preflight: sampling_steps={sampling_steps} passed")
+PY
+
+        echo "triattn-backend-preflight: checking BCP_TRIATTN_BACKEND=\$BCP_TRIATTN_BACKEND"
+        export TASK_ROOT BCP_TRIATTN_BACKEND BCP_DATA_PLANE_SEMANTICS
+        set +e
+        "\$BOLTZ_PYTHON" - <<'PY'
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+backend = os.environ.get("BCP_TRIATTN_BACKEND", "reference").strip().lower() or "reference"
+supported_backends = {"reference", "trifast", "cueq"}
+if backend not in supported_backends:
+    task_root = Path(os.environ["TASK_ROOT"])
+    payload = {
+        "status": "failed",
+        "stage": "triattn-backend-preflight",
+        "error_type": "UnsupportedTriangleAttentionBackend",
+        "triattn_backend": backend,
+        "supported_backends": sorted(supported_backends),
+        "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+        "is_true_distributed_context_parallel": True,
+        "recommendation": "Use bcp_triattn_backend=reference, trifast, or cueq. Non-reference kernels still require their packages to be installed.",
+    }
+    (task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(
+        f"UnsupportedTriangleAttentionBackend: triattn_backend={backend!r} supported backends: {', '.join(sorted(supported_backends))}",
+        file=sys.stderr,
+    )
+    sys.exit(85)
+requirements = {
+    "trifast": ["trifast"],
+    "cueq": ["cuequivariance", "cuequivariance_torch"],
+}
+missing = [name for name in requirements.get(backend, []) if importlib.util.find_spec(name) is None]
+if missing:
+    task_root = Path(os.environ["TASK_ROOT"])
+    payload = {
+        "status": "failed",
+        "stage": "triattn-backend-preflight",
+        "error_type": "MissingTriangleAttentionBackend",
+        "triattn_backend": backend,
+        "missing_modules": missing,
+        "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+        "is_true_distributed_context_parallel": True,
+        "recommendation": "Use bcp_triattn_backend=reference or install the requested triangle-attention kernel package before launching true distributed CP.",
+    }
+    (task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(
+        f"MissingTriangleAttentionBackend: triattn_backend={backend!r} missing modules: {', '.join(missing)}",
+        file=sys.stderr,
+    )
+    sys.exit(86)
+print(f"triattn-backend-preflight: triattn_backend={backend!r} dependency check passed")
+PY
+        preflight_rc=\$?
+        set -e
+        if [ \$preflight_rc -ne 0 ]; then
+            exit \$preflight_rc
+        fi
+
+        export TASK_ROOT DATA_ARG REPO_PATH GPU_IDS_RAW SIZE_CP SIZE_DP NPROC INPUT_FORMAT OUTPUT_FORMAT
+        python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+context_store_mode = os.environ.get("BCP_CONTEXT_STORE_MODE", "").strip()
+context_store_spill_enabled = context_store_mode.startswith("rank-local-dram-spill")
+if context_store_mode == "rank-local-dram-spill-layer":
+    memory_reduction_scope = "rank_local_between_pairformer_layers_only"
+elif context_store_mode == "rank-local-dram-spill-op":
+    memory_reduction_scope = "rank_local_between_pairformer_operations_only"
+else:
+    memory_reduction_scope = None
+
+payload = {
+    "backend": "true-distributed-context-parallel",
+    "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+    "launcher": "torch.distributed.run",
+    "boltz_python": os.environ.get("BOLTZ_PYTHON", ""),
+    "repo_path": os.environ.get("REPO_PATH", ""),
+    "data_arg": os.environ.get("DATA_ARG", ""),
+    "task_root": os.environ.get("TASK_ROOT", ""),
+    "boltz_cache_dir": os.environ.get("BOLTZ_CACHE_DIR", ""),
+    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+    "gpu_ids_raw": os.environ.get("GPU_IDS_RAW", ""),
+    "nproc_per_node": os.environ.get("NPROC", ""),
+    "size_dp": os.environ.get("SIZE_DP", ""),
+    "size_cp": os.environ.get("SIZE_CP", ""),
+    "input_format": os.environ.get("INPUT_FORMAT", ""),
+    "output_format": os.environ.get("OUTPUT_FORMAT", ""),
+    "confidence_prediction": os.environ.get("BCP_CONFIDENCE_PREDICTION", ""),
+    "max_msa_seqs": os.environ.get("BCP_MAX_MSA_SEQS", ""),
+    "max_parallel_samples": os.environ.get("BCP_MAX_PARALLEL_SAMPLES", ""),
+    "precision": os.environ.get("BCP_PRECISION", ""),
+    "sampling_steps": os.environ.get("BCP_SAMPLING_STEPS", ""),
+    "triattn_backend": os.environ.get("BCP_TRIATTN_BACKEND", ""),
+    "context_store_mode": os.environ.get("BCP_CONTEXT_STORE_MODE", ""),
+    "context_store_root": os.environ.get("BCP_CONTEXT_STORE_ROOT", ""),
+    "context_store_semantics": os.environ.get("BCP_CONTEXT_STORE_SEMANTICS", ""),
+    "context_store_truth": {
+        "predictor_owned": True,
+        "evidence_source": "Boltz2Distributed/PairformerModule.forward",
+        "shared_cache_serial_prediction": False,
+        "output_tiling_only": False,
+        "streaming_spill_enabled": context_store_spill_enabled,
+        "memory_reduction_claimed": context_store_spill_enabled,
+        "memory_reduction_scope": memory_reduction_scope,
+        "limitations": {
+            "within_op_peak_not_reduced": context_store_spill_enabled,
+            "triangle_attention_not_tiled_by_this_mode": context_store_spill_enabled,
+            "triangle_multiplication_not_tiled_by_this_mode": context_store_spill_enabled,
+            "model_parameters_not_spilled": context_store_spill_enabled,
+            "msa_and_diffusion_state_not_spilled": context_store_spill_enabled,
+        },
+    },
+    "sdpa_with_bias_backend": os.environ.get("BCP_SDPA_WITH_BIAS_BACKEND", ""),
+    "sdpa_with_bias_shardwise_backend": os.environ.get("BCP_SDPA_WITH_BIAS_SHARDWISE_BACKEND", ""),
+    "atoms_per_window_queries_keys": os.environ.get("BCP_ATOMS_PER_WINDOW_QUERIES_KEYS", ""),
+    "rank_probe_path": str(Path(os.environ["TASK_ROOT"]) / "true_cp_rank_probe.jsonl"),
+}
+Path(os.environ["TASK_ROOT"]) .joinpath("true_cp_launch_manifest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+
+        cat > "\$TASK_ROOT/true_cp_rank_probe.py" <<'PY'
+import json
+import os
+import socket
+import sys
+
+payload = {
+    "rank": os.environ.get("RANK", ""),
+    "local_rank": os.environ.get("LOCAL_RANK", ""),
+    "world_size": os.environ.get("WORLD_SIZE", ""),
+    "local_world_size": os.environ.get("LOCAL_WORLD_SIZE", ""),
+    "master_addr": os.environ.get("MASTER_ADDR", ""),
+    "master_port": os.environ.get("MASTER_PORT", ""),
+    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+    "hostname": socket.gethostname(),
+}
+probe_path = os.environ["TRUE_CP_RANK_PROBE_PATH"]
+with open(probe_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload, sort_keys=True) + "\\n")
+print("true_cp_rank_probe: " + json.dumps(payload, sort_keys=True), flush=True)
+sys.exit(0)
+PY
+        TRUE_CP_RANK_PROBE_PATH="\$TASK_ROOT/true_cp_rank_probe.jsonl"
+        export TRUE_CP_RANK_PROBE_PATH
+        rm -f "\$TRUE_CP_RANK_PROBE_PATH"
+
         cd "\$REPO_PATH"
-        python3 -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
+        set +e
+        "\$BOLTZ_PYTHON" -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
+            "\$TASK_ROOT/true_cp_rank_probe.py" \
+            2>&1 | tee "\$TASK_ROOT/true_cp_rank_probe.log"
+        rank_probe_rc=\${PIPESTATUS[0]}
+        set -e
+        if [ \$rank_probe_rc -ne 0 ]; then
+            export TRUE_CP_RANK_PROBE_RC="\$rank_probe_rc"
+            python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+task_root = Path(os.environ["TASK_ROOT"])
+payload = {
+    "status": "failed",
+    "stage": "torch.distributed.run rank-probe",
+    "error_type": "TrueCPRankProbeFailed",
+    "exit_code": int(os.environ.get("TRUE_CP_RANK_PROBE_RC", "-1")),
+    "rank_probe_log_path": str(task_root / "true_cp_rank_probe.log"),
+    "rank_probe_path": str(task_root / "true_cp_rank_probe.jsonl"),
+    "launch_manifest_path": str(task_root / "true_cp_launch_manifest.json"),
+    "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+    "is_true_distributed_context_parallel": True,
+}
+(task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+            exit \$rank_probe_rc
+        fi
+
+        set +e
+        "\$BOLTZ_PYTHON" -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
             src/boltz/distributed/main.py predict "\$DATA_ARG" \
             --out_dir "\$TASK_ROOT" \
-            --cache /boltzcache \
+            --cache "\$BOLTZ_CACHE_DIR" \
             --size_dp \$SIZE_DP \
             --size_cp \$SIZE_CP \
             --input_format "\$INPUT_FORMAT" \
             --output_format "\$OUTPUT_FORMAT" \
-            --recycling_steps ${params.bcp_recycling_steps ?: 3} \
-            --sampling_steps ${params.bcp_sampling_steps ?: 200} \
-            --diffusion_samples ${params.bcp_diffusion_samples ?: 1} \
+            --context_store_root "\$BCP_CONTEXT_STORE_ROOT" \
+            --context_store_mode "\$BCP_CONTEXT_STORE_MODE" \
+            --recycling_steps ${recyclingSteps} \
+            --sampling_steps ${samplingSteps} \
+            --diffusion_samples ${diffusionSamples} \
+            ${maxParallelSamplesFlag} \
+            ${maxMsaSeqsFlag} \
+            ${precisionFlag} \
+            ${triattnBackendFlag} \
+            ${sdpaWithBiasBackendFlag} \
+            ${sdpaWithBiasShardwiseBackendFlag} \
+            ${atomsPerWindowQueriesKeysFlag} \
+            ${confidenceFlag} \
             ${writeFullPaeFlag} \
             ${seedFlag} \
             2>&1 | tee "\$TASK_ROOT/boltz_cp_experimental.log"
+        run_rc=\${PIPESTATUS[0]}
+        set -e
+        if [ \$run_rc -ne 0 ]; then
+            export TRUE_CP_RUN_RC="\$run_rc"
+            python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+task_root = Path(os.environ["TASK_ROOT"])
+payload = {
+    "status": "failed",
+    "stage": "torch.distributed.run predict",
+    "exit_code": int(os.environ.get("TRUE_CP_RUN_RC", "-1")),
+    "log_path": str(task_root / "boltz_cp_experimental.log"),
+    "launch_manifest_path": str(task_root / "true_cp_launch_manifest.json"),
+    "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+}
+(task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+            exit \$run_rc
+        fi
 
         result_dir="\$(find "\$TASK_ROOT" -maxdepth 1 -type d -name 'boltz_results_*' | head -n 1)"
         if [ -z "\$result_dir" ]; then
             echo "Boltz-CP run did not produce a boltz_results_* directory" >&2
+            python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+task_root = Path(os.environ["TASK_ROOT"])
+payload = {
+    "status": "failed",
+    "stage": "result-discovery",
+    "exit_code": 1,
+    "reason": "Boltz-CP run did not produce a boltz_results_* directory",
+    "log_path": str(task_root / "boltz_cp_experimental.log"),
+    "launch_manifest_path": str(task_root / "true_cp_launch_manifest.json"),
+    "data_plane_semantics": os.environ.get("BCP_DATA_PLANE_SEMANTICS", ""),
+}
+(task_root / "true_cp_failure_diagnostics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
             exit 1
         fi
         mv "\$result_dir" "\$TASK_ROOT/cp_results"
@@ -468,16 +841,20 @@ process BuildBoltzCPPlanManifest {
     path 'boltz_cp_plan_store.json', emit: plan_store
 
     script:
-    def shardPlanId = (params.bcp_shard_plan_id ?: '2x2').toString()
-    def inputFormat = (params.bcp_input_format ?: 'config_files').toString()
-    def outputFormat = (params.bcp_output_format ?: 'mmcif').toString()
-    def repoPath = shellQuote(params.bcp_repo_path ?: '')
+    def shardPlanId = params.get('bcp_shard_plan_id', '2x2').toString()
+    def inputFormat = params.get('bcp_input_format', 'config_files').toString()
+    def outputFormat = params.get('bcp_output_format', 'mmcif').toString()
+    def repoPath = shellQuote(params.get('bcp_repo_path', ''))
     def inputPath = shellQuote(input_config.toString())
-    def gpuIds = shellQuote(params.bcp_gpu_ids ?: params.gpu_id)
-    def backend = shellQuote(params.bcp_backend ?: 'dram-context-spill-workhorse')
-    def writeFullPae = shellQuote((params.bcp_write_full_pae?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']) ? 'true' : 'false')
-    def seed = shellQuote(params.bcp_seed ?: '')
-    def containerPath = shellQuote(params.bcp_container_path ?: '')
+    def planGpuIdsParam = params.get('bcp_gpu_ids', null)
+    if (planGpuIdsParam == null || planGpuIdsParam.toString().trim() == '') {
+        planGpuIdsParam = params.get('gpu_id', '')
+    }
+    def gpuIds = shellQuote(planGpuIdsParam == null ? '' : planGpuIdsParam.toString())
+    def backend = shellQuote(params.get('bcp_backend', 'true-distributed-context-parallel'))
+    def writeFullPae = shellQuote((params.get('bcp_write_full_pae', false).toString().toLowerCase() in ['true', '1', 'yes', 'y', 'on']) ? 'true' : 'false')
+    def seed = shellQuote(params.get('bcp_seed', '') ?: '')
+    def containerPath = shellQuote(params.get('bcp_container_path', ''))
     def codeRoot = shellQuote(params.code_root ?: '')
     def msaProvider = shellQuote(params.msa_provider ?: '')
     def msaPreset = shellQuote(params.msa_preset ?: '')
@@ -492,15 +869,19 @@ process BuildBoltzCPPlanManifest {
     def msaMinCoverage = shellQuote(params.msa_min_coverage ?: '')
     def msaTaxonList = shellQuote(params.msa_taxon_list ?: '')
     def defaultStoreRoot = new File((params.out_dir ?: '.').toString(), "run/boltz_cp_plan_store/${parent_job_id}").absolutePath
-    def storeRootPath = shellQuote((params.bcp_store_root ?: defaultStoreRoot).toString())
-    def configuredRamRootPath = shellQuote((params.bcp_configured_ram_root ?: '').toString())
-    def contextStoreManifestPath = shellQuote((params.bcp_context_store_manifest_path ?: '').toString())
-    def contextStatePath = shellQuote((params.bcp_context_state_path ?: '').toString())
-    def contextLayerStatePath = shellQuote((params.bcp_context_layer_state_path ?: '').toString())
-    def contextExecutionMode = shellQuote((params.bcp_context_execution_mode ?: 'cuda').toString())
-    def contextTileTokens = shellQuote((params.bcp_context_tile_tokens ?: '').toString())
-    def contextKeyTileTokens = shellQuote((params.bcp_context_key_tile_tokens ?: '').toString())
-    def contextQueryTileTokens = shellQuote((params.bcp_context_query_tile_tokens ?: '').toString())
+    def storeRootPath = shellQuote(params.get('bcp_store_root', defaultStoreRoot).toString())
+    def configuredRamRootPath = shellQuote(params.get('bcp_configured_ram_root', '').toString())
+    def contextStoreManifestPath = shellQuote(params.get('bcp_context_store_manifest_path', '').toString())
+    def contextStatePath = shellQuote(params.get('bcp_context_state_path', '').toString())
+    def contextLayerStatePath = shellQuote(params.get('bcp_context_layer_state_path', '').toString())
+    def contextExecutionMode = shellQuote(params.get('bcp_context_execution_mode', 'cuda').toString())
+    def contextTileTokens = shellQuote(params.get('bcp_context_tile_tokens', '').toString())
+    def contextKeyTileTokens = shellQuote(params.get('bcp_context_key_tile_tokens', '').toString())
+    def contextQueryTileTokens = shellQuote(params.get('bcp_context_query_tile_tokens', '').toString())
+    def physicalLaunchSizeCp = params.get('bcp_size_cp', 1)
+    def bcpRecyclingSteps = params.get('bcp_recycling_steps', 3)
+    def bcpSamplingSteps = params.get('bcp_sampling_steps', 200)
+    def bcpDiffusionSamples = params.get('bcp_diffusion_samples', 1)
     """
     set -euo pipefail
     TASK_ROOT="\$PWD"
@@ -526,10 +907,11 @@ process BuildBoltzCPPlanManifest {
     BCP_CONTEXT_TILE_TOKENS=${contextTileTokens}
     BCP_CONTEXT_KEY_TILE_TOKENS=${contextKeyTileTokens}
     BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}
-    PHYSICAL_LAUNCH_SIZE_CP=${params.bcp_size_cp ?: 1}
-    BCP_RECYCLING_STEPS=${params.bcp_recycling_steps ?: 3}
-    BCP_SAMPLING_STEPS=${params.bcp_sampling_steps ?: 200}
-    BCP_DIFFUSION_SAMPLES=${params.bcp_diffusion_samples ?: 1}
+    PHYSICAL_LAUNCH_SIZE_CP=${physicalLaunchSizeCp}
+
+    BCP_RECYCLING_STEPS=${bcpRecyclingSteps}
+    BCP_SAMPLING_STEPS=${bcpSamplingSteps}
+    BCP_DIFFUSION_SAMPLES=${bcpDiffusionSamples}
     BOLTZ_USE_MSA=${params.boltz_use_msa?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on'] ? 'true' : 'false'}
     MSA_PROVIDER=${msaProvider}
     MSA_PRESET=${msaPreset}
@@ -716,7 +1098,7 @@ PY
   "plan_id": "${parent_job_id}",
   "logical_size_cp": 4,
   "physical_launch_size_cp": 1,
-  "shard_plan": {"name": "${params.bcp_shard_plan_id ?: '2x2'}", "grid_shape": [2, 2]},
+  "shard_plan": {"name": "${params.get('bcp_shard_plan_id', '2x2')}", "grid_shape": [2, 2]},
   "input_metadata": {"job_id": "${parent_job_id}", "batch_name": "${batch_name}"},
   "physical_gpu_ids": ["0"],
   "bundles": [
@@ -830,7 +1212,7 @@ process FinalizeBoltzCPExperimentalChildren {
     path 'aggregation_report.json', emit: report
 
     script:
-    def repoPath = shellQuote(params.bcp_repo_path ?: '')
+    def repoPath = shellQuote(params.get('bcp_repo_path', ''))
     """
     set -euo pipefail
     TASK_ROOT="\$PWD"

@@ -31,6 +31,6 @@ test('app-path detection identifies designer routes correctly under both root an
 
 test('browser url joining preserves current app routes for dev and container frontends', () => {
     assert.equal(joinBrowserUrl('http://127.0.0.1:5173/', '/designer'), 'http://127.0.0.1:5173/designer');
-    assert.equal(joinBrowserUrl('http://127.0.0.1:5173/bms/', '/results'), 'http://127.0.0.1:5173/bms/results');
-    assert.equal(joinBrowserUrl('http://127.0.0.1:5173/bms/', '/'), 'http://127.0.0.1:5173/bms/');
+    assert.equal(joinBrowserUrl('http://127.0.0.1:18080/bms/', '/results'), 'http://127.0.0.1:18080/bms/results');
+    assert.equal(joinBrowserUrl('http://127.0.0.1:18080/bms/', '/'), 'http://127.0.0.1:18080/bms/');
 });

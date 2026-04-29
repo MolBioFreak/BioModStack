@@ -26,9 +26,9 @@ Reviewed checkouts:
 - BioModStack integration:
   - path: `/home/dalab/biomodstack/biomodstack`
 - Spec baseline:
-  - `docs/plans/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
+  - `docs/plans/archive/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
 - Prior reassessment:
-  - `docs/plans/2026-04-23-true-distributed-cp-reassessment.md`
+  - `docs/plans/archive/2026-04-23-true-distributed-cp-reassessment.md`
 
 Lightweight verification run:
 

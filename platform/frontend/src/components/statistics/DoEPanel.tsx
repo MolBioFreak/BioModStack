@@ -6,9 +6,27 @@ import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { generateDoeDesign, analyzeRsm } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
+import {
+    AssayPrimaryButton,
+    AssaySegmentedTabs,
+    type AssaySegmentedTabItem,
+} from '../assay/AssayWorkbenchPrimitives';
+
+type DoeModeTab = 'design' | 'rsm';
+type RsmPlotTab = 'contour' | 'surface';
+
+const doeModeTabs: Array<AssaySegmentedTabItem<DoeModeTab>> = [
+    { id: 'design', label: 'Generate Design' },
+    { id: 'rsm', label: 'RSM Analysis' },
+];
+
+const rsmPlotTabs: Array<AssaySegmentedTabItem<RsmPlotTab>> = [
+    { id: 'contour', label: 'Contour Plot' },
+    { id: 'surface', label: '3D Surface' },
+];
 
 export function DoEPanel() {
-    const [activeTab, setActiveTab] = useState<'design' | 'rsm'>('design');
+    const [activeTab, setActiveTab] = useState<DoeModeTab>('design');
 
     // Design Generation State
     const [designType, setDesignType] = useState('full_factorial');
@@ -24,7 +42,7 @@ export function DoEPanel() {
     const [rsmResult, setRsmResult] = useState<Record<string, unknown> | null>(null);
     const [rsmLoading, setRsmLoading] = useState(false);
     const [rsmError, setRsmError] = useState('');
-    const [rsmPlotTab, setRsmPlotTab] = useState<'contour' | 'surface'>('contour');
+    const [rsmPlotTab, setRsmPlotTab] = useState<RsmPlotTab>('contour');
 
     const plotlyLayout = useThemePlotlyLayout();
 
@@ -109,20 +127,12 @@ export function DoEPanel() {
             <h3 className="text-lg font-semibold text-text-primary">Design of Experiments</h3>
 
             {/* Tab Selector */}
-            <div className="flex gap-2 border-b border-border-primary">
-                <button
-                    onClick={() => setActiveTab('design')}
-                    className={`px-4 py-2 text-sm font-medium ${activeTab === 'design' ? 'border-b-2 border-accent-primary text-accent-primary' : 'text-text-secondary'}`}
-                >
-                    Generate Design
-                </button>
-                <button
-                    onClick={() => setActiveTab('rsm')}
-                    className={`px-4 py-2 text-sm font-medium ${activeTab === 'rsm' ? 'border-b-2 border-accent-primary text-accent-primary' : 'text-text-secondary'}`}
-                >
-                    RSM Analysis
-                </button>
-            </div>
+            <AssaySegmentedTabs
+                items={doeModeTabs}
+                activeId={activeTab}
+                onChange={setActiveTab}
+                ariaLabel="DOE workbench modes"
+            />
 
             {/* Design Generation Tab */}
             {activeTab === 'design' && (
@@ -167,13 +177,9 @@ export function DoEPanel() {
                             />
                         </div>
 
-                        <button
-                            onClick={handleGenerateDesign}
-                            disabled={designLoading}
-                            className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                        >
+                        <AssayPrimaryButton onClick={handleGenerateDesign} disabled={designLoading} className="w-full">
                             {designLoading ? 'Generating...' : 'Generate Design'}
-                        </button>
+                        </AssayPrimaryButton>
 
                         {designError && <div className="p-3 bg-error/20 border border-error text-error text-sm">{designError}</div>}
                     </div>
@@ -229,11 +235,11 @@ export function DoEPanel() {
                     <div className="space-y-4">
                         <div className="border border-border-primary p-4 bg-bg-secondary">
                             <label className="block text-xs text-text-muted mb-1">Design Matrix (CSV with header)</label>
+                            <p className="mb-2 text-xs text-text-muted">Paste a real DOE design matrix CSV with factor columns.</p>
                             <textarea
                                 value={rsmDesign}
                                 onChange={(e) => setRsmDesign(e.target.value)}
                                 rows={8}
-                                placeholder="Paste a real DOE design matrix CSV with factor columns"
                                 className="w-full bg-bg-tertiary text-text-primary border border-border-primary p-2 font-mono text-xs"
                             />
                         </div>
@@ -248,13 +254,9 @@ export function DoEPanel() {
                             />
                         </div>
 
-                        <button
-                            onClick={handleAnalyzeRsm}
-                            disabled={rsmLoading || !rsmDesign}
-                            className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                        >
+                        <AssayPrimaryButton onClick={handleAnalyzeRsm} disabled={rsmLoading || !rsmDesign} className="w-full">
                             {rsmLoading ? 'Analyzing...' : 'Analyze RSM'}
-                        </button>
+                        </AssayPrimaryButton>
 
                         {rsmError && <div className="p-3 bg-error/20 border border-error text-error text-sm">{rsmError}</div>}
                     </div>
@@ -282,20 +284,12 @@ export function DoEPanel() {
 
                                 {/* Plot Tabs */}
                                 <div className="border border-border-primary bg-bg-secondary">
-                                    <div className="flex border-b border-border-primary">
-                                        <button
-                                            onClick={() => setRsmPlotTab('contour')}
-                                            className={`px-4 py-2 text-sm ${rsmPlotTab === 'contour' ? 'bg-accent-primary text-white' : 'text-text-secondary'}`}
-                                        >
-                                            Contour Plot
-                                        </button>
-                                        <button
-                                            onClick={() => setRsmPlotTab('surface')}
-                                            className={`px-4 py-2 text-sm ${rsmPlotTab === 'surface' ? 'bg-accent-primary text-white' : 'text-text-secondary'}`}
-                                        >
-                                            3D Surface
-                                        </button>
-                                    </div>
+                                    <AssaySegmentedTabs
+                                        items={rsmPlotTabs}
+                                        activeId={rsmPlotTab}
+                                        onChange={setRsmPlotTab}
+                                        ariaLabel="RSM plot views"
+                                    />
 
                                     {rsmPlotTab === 'contour' && rr.contour_plot && (
                                         <Plot

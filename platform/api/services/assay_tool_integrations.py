@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 
 # Registry of the external packages Christian asked for after the assay tooling
-# survey.  This is deliberately separate from the in-house fallback math in the
+# survey.  This is deliberately separate from the in-house compatibility math in the
 # router so capabilities can distinguish real package/API integrations from BMS
 # compatibility glue.
 _TOOL_DEFINITIONS: List[Dict[str, Any]] = [

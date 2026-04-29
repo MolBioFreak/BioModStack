@@ -2,7 +2,8 @@
  * Empower 3 Import + SST Review
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Plot from 'react-plotly.js';
 import {
     exportEmpowerPlasmidTracking,
     exportEmpowerSstMaster,
@@ -10,6 +11,15 @@ import {
     listEmpowerSst,
     updateEmpowerInjection,
 } from '../../api/client';
+import {
+    clearAssaySnapshot,
+    EMPOWER_IMPORT_CACHE_KEY,
+    loadAssaySnapshot,
+    makeAssaySnapshot,
+    saveAssaySnapshot,
+} from '../assayPersistence';
+import { useThemePlotlyLayout } from '../useThemeColors';
+import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 
 interface EmpowerInjection {
     id?: number;
@@ -25,6 +35,10 @@ interface EmpowerInjection {
     primary_peak_percent?: number | null;
     primary_peak_rt?: number | null;
     primary_peak_resolution?: number | null;
+    sample_role?: string | null;
+    sample_role_source?: string | null;
+    peak_count?: number | null;
+    qc_flags?: string[];
     is_excluded?: boolean;
     note?: string | null;
     flag?: string | null;
@@ -43,51 +57,210 @@ interface SstSummary {
     resolution_rsd: number;
 }
 
+interface PlotlyPayload {
+    data: Plotly.Data[];
+    layout: Partial<Plotly.Layout>;
+}
+
+interface EmpowerSummary {
+    n_injections: number;
+    n_chromatograms: number;
+    total_peak_rows: number;
+    native_peak_rows: number;
+    sample_role_counts: Record<string, number>;
+    flag_counts: Record<string, number>;
+    flagged_injection_count: number;
+    primary_percent_mean?: number | null;
+    primary_percent_rsd?: number | null;
+    primary_rt_median?: number | null;
+    total_area_rsd?: number | null;
+    run_date_min?: string | null;
+    run_date_max?: string | null;
+    role_source_note?: string | null;
+}
+
+interface PeakTableRow {
+    injection_id?: number | null;
+    injection_number?: string | null;
+    sample_name?: string | null;
+    sample_role?: string | null;
+    peak_id?: number | null;
+    retention_time?: number | null;
+    area?: number | null;
+    area_percent?: number | null;
+    height?: number | null;
+    peak_source?: string | null;
+    is_primary_peak?: boolean;
+}
+
+interface PeakRegionSummary {
+    injection_id?: number | null;
+    sample_name?: string | null;
+    primary_area_percent?: number | null;
+    pre_primary_area_percent?: number | null;
+    post_primary_area_percent?: number | null;
+    peak_count?: number | null;
+}
+
+interface EmpowerImportPayload {
+    import_id?: number | null;
+    injections?: EmpowerInjection[];
+    sst_summary?: SstSummary[];
+    errors?: string[];
+    chromatogram_plotly_json?: PlotlyPayload | null;
+    qc_plotly_json?: PlotlyPayload | null;
+    composition_plotly_json?: PlotlyPayload | null;
+    empower_summary?: EmpowerSummary | null;
+    peak_table?: PeakTableRow[];
+    peak_region_summary?: PeakRegionSummary[];
+}
+
+const supportedEmpowerImportExtensions = new Set(['csv', 'txt', 'cdf', 'arw', 'zip']);
+const nativeEmpowerDatabaseExtensions = new Set(['raw', 'dat', 'mdb', 'accdb', 'db']);
+
+function extensionOf(file: File): string {
+    return file.name.toLowerCase().split('.').pop() ?? '';
+}
+
+function unsupportedNativeFiles(files: File[]): string[] {
+    return files.filter((file) => nativeEmpowerDatabaseExtensions.has(extensionOf(file))).map((file) => file.name);
+}
+
+function formatNumber(value: number | null | undefined, digits = 2): string {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? value.toLocaleString(undefined, { maximumFractionDigits: digits })
+        : '--';
+}
+
+function formatPercent(value: number | null | undefined, digits = 2): string {
+    return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(digits)}%` : '--';
+}
+
 export function EmpowerImport() {
     const [files, setFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [cacheNotice, setCacheNotice] = useState('');
     const [importId, setImportId] = useState<number | null>(null);
     const [injections, setInjections] = useState<EmpowerInjection[]>([]);
     const [sstSummary, setSstSummary] = useState<SstSummary[]>([]);
     const [errors, setErrors] = useState<string[]>([]);
+    const [chromatogramPlot, setChromatogramPlot] = useState<PlotlyPayload | null>(null);
+    const [qcPlot, setQcPlot] = useState<PlotlyPayload | null>(null);
+    const [compositionPlot, setCompositionPlot] = useState<PlotlyPayload | null>(null);
+    const [empowerSummary, setEmpowerSummary] = useState<EmpowerSummary | null>(null);
+    const [peakTable, setPeakTable] = useState<PeakTableRow[]>([]);
+    const [peakRegionSummary, setPeakRegionSummary] = useState<PeakRegionSummary[]>([]);
 
     const [peakProminence, setPeakProminence] = useState(100);
     const [baselineMethod, setBaselineMethod] = useState('snip');
+    const plotlyLayout = useThemePlotlyLayout();
 
     const totalInjections = useMemo(() => injections.length, [injections]);
+
+    const applyEmpowerPayload = useCallback((response: EmpowerImportPayload) => {
+        setImportId(response.import_id ?? null);
+        setInjections(response.injections ?? []);
+        setSstSummary(response.sst_summary ?? []);
+        setErrors(response.errors ?? []);
+        setChromatogramPlot(response.chromatogram_plotly_json ?? null);
+        setQcPlot(response.qc_plotly_json ?? null);
+        setCompositionPlot(response.composition_plotly_json ?? null);
+        setEmpowerSummary(response.empower_summary ?? null);
+        setPeakTable(response.peak_table ?? []);
+        setPeakRegionSummary(response.peak_region_summary ?? []);
+    }, []);
+
+    const resetEmpowerReview = useCallback(() => {
+        setImportId(null);
+        setInjections([]);
+        setSstSummary([]);
+        setErrors([]);
+        setChromatogramPlot(null);
+        setQcPlot(null);
+        setCompositionPlot(null);
+        setEmpowerSummary(null);
+        setPeakTable([]);
+        setPeakRegionSummary([]);
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        void loadAssaySnapshot<EmpowerImportPayload>(EMPOWER_IMPORT_CACHE_KEY)
+            .then((snapshot) => {
+                if (cancelled || !snapshot) return;
+                applyEmpowerPayload(snapshot.payload);
+                setCacheNotice(`Restored cached Empower import${snapshot.label ? `: ${snapshot.label}` : ''}`);
+            })
+            .catch(() => undefined);
+        return () => {
+            cancelled = true;
+        };
+    }, [applyEmpowerPayload]);
+
+    const handleClearCachedImport = useCallback(async () => {
+        await clearAssaySnapshot(EMPOWER_IMPORT_CACHE_KEY);
+        resetEmpowerReview();
+        setError('');
+        setCacheNotice('');
+    }, [resetEmpowerReview]);
 
     const handleFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
         const selected = event.target.files ? Array.from(event.target.files) : [];
         setFiles(selected);
+        const nativeFiles = unsupportedNativeFiles(selected);
+        if (nativeFiles.length) {
+            setError(
+                `Unsupported native Empower database/RAW files (${nativeFiles.join(', ')}). Upload Empower AIA .cdf, ARW chromatogram text, a ZIP containing .cdf/.arw, or CSV/ASCII injection/peak export.`,
+            );
+        } else if (selected.some((file) => !supportedEmpowerImportExtensions.has(extensionOf(file)))) {
+            setError('Select Empower AIA .cdf, ARW chromatogram text, ZIP containing .cdf/.arw, or CSV/ASCII exports with sample, sample type, injection, area, and retention-time columns.');
+        } else {
+            setError('');
+        }
     };
 
     const handleImport = useCallback(async () => {
         if (!files.length) {
-            setError('Select at least one .arw or .cdf file.');
+            setError('Select at least one Empower CSV/ASCII export (.csv or .txt).');
+            return;
+        }
+        const nativeFiles = unsupportedNativeFiles(files);
+        if (nativeFiles.length) {
+            setError(
+                `Unsupported native Empower database/RAW files (${nativeFiles.join(', ')}). Upload Empower AIA .cdf, ARW chromatogram text, a ZIP containing .cdf/.arw, or CSV/ASCII injection/peak export.`,
+            );
+            return;
+        }
+        const unsupported = files.filter((file) => !supportedEmpowerImportExtensions.has(extensionOf(file)));
+        if (unsupported.length) {
+            setError(`Unsupported Empower import file type: ${unsupported.map((file) => file.name).join(', ')}. Upload .cdf, .arw, .zip, .csv, or .txt exports.`);
             return;
         }
 
         setLoading(true);
         setError('');
-        setErrors([]);
+        setCacheNotice('');
+        resetEmpowerReview();
 
         try {
             const response = await importEmpowerFiles(files, {
                 persist: true,
                 baselineMethod,
                 peakProminence,
-            });
-            setImportId(response.import_id ?? null);
-            setInjections(response.injections ?? []);
-            setSstSummary(response.sst_summary ?? []);
-            setErrors(response.errors ?? []);
+            }) as EmpowerImportPayload;
+            applyEmpowerPayload(response);
+            const label = files.length === 1 ? files[0].name : `${files.length} Empower files`;
+            const snapshot = makeAssaySnapshot(response, label);
+            if (await saveAssaySnapshot(EMPOWER_IMPORT_CACHE_KEY, snapshot)) {
+                setCacheNotice(`Saved Empower import cache for ${snapshot.label ?? 'last import'}`);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Import failed');
         } finally {
             setLoading(false);
         }
-    }, [files, baselineMethod, peakProminence]);
+    }, [files, baselineMethod, peakProminence, applyEmpowerPayload, resetEmpowerReview]);
 
     const handleRefreshSst = useCallback(async () => {
         if (!importId) return;
@@ -125,26 +298,31 @@ export function EmpowerImport() {
         window.URL.revokeObjectURL(url);
     };
 
-    const sampleTypeOptions = ['SST', 'STANDARD', 'SAMPLE', 'BLANK', 'UNKNOWN'];
+    const sampleTypeOptions = ['UNSPECIFIED_BY_EXPORT', 'SST', 'STANDARD', 'SAMPLE', 'BLANK', 'CONTROL'];
 
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-lg font-semibold text-text-primary">Empower 3 Import + SST Review</h3>
-                <p className="text-text-secondary text-sm">Upload .arw or .cdf exports, review injections, and export SST/plasmid logs.</p>
+                <h3 className="text-lg font-semibold text-text-primary">Empower 3 Chromatogram Import + SST Review</h3>
+                <p className="text-text-secondary text-sm">
+                    Upload Empower AIA .cdf, ARW chromatogram text, ZIP batches, or CSV/ASCII exports; review real injection rows, chromatograms, peaks, SST summaries, and plasmid/SST tracking logs.
+                </p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="space-y-4">
                     <div className="border border-border-primary p-4 bg-bg-secondary space-y-3">
-                        <label className="block text-xs text-text-muted">Empower exports (.arw, .cdf)</label>
+                        <label className="block text-xs text-text-muted">Empower exports (.cdf, .arw, .zip, .csv, .txt)</label>
                         <input
                             type="file"
                             multiple
-                            accept=".arw,.cdf"
+                            accept=".cdf,.arw,.zip,.csv,.txt"
                             onChange={handleFiles}
                             className="block w-full text-xs text-text-secondary"
                         />
+                        <p className="text-xs text-text-muted">
+                            AIA .cdf provides raw chromatograms and native peak tables; paired .arw metadata is merged when present. For proprietary DB/RAW containers, export AIA .cdf/.arw or CSV/ASCII from Empower.
+                        </p>
                         {files.length > 0 && (
                             <div className="text-xs text-text-muted">{files.length} file(s) selected</div>
                         )}
@@ -179,13 +357,9 @@ export function EmpowerImport() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleImport}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
-                        {loading ? 'Importing...' : 'Import Empower Files'}
-                    </button>
+                    <AssayPrimaryButton onClick={handleImport} disabled={loading || !files.length} className="w-full">
+                        {loading ? 'Importing...' : 'Import Empower Data'}
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                     {errors.length > 0 && (
@@ -193,6 +367,23 @@ export function EmpowerImport() {
                             {errors.map((msg, idx) => (
                                 <div key={idx}>{msg}</div>
                             ))}
+                        </div>
+                    )}
+                    {(cacheNotice || totalInjections > 0) && (
+                        <div className="border border-accent-primary/40 bg-accent-primary/10 p-3 text-xs text-text-secondary">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="font-semibold text-text-primary">Review cache</div>
+                                    <div>{cacheNotice || 'Latest Empower import is cached in this browser after import.'}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleClearCachedImport}
+                                    className="border border-border-primary bg-bg-tertiary px-2 py-1 text-text-secondary hover:text-text-primary"
+                                >
+                                    Clear cached Empower import
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -221,7 +412,94 @@ export function EmpowerImport() {
                                 </button>
                             </div>
                         </div>
+                        {empowerSummary && (
+                            <div className="mt-4 space-y-3">
+                                <div className="grid gap-3 md:grid-cols-4">
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-text-muted">Chromatograms</div>
+                                        <div className="mt-1 text-lg font-semibold text-text-primary">{formatNumber(empowerSummary.n_chromatograms, 0)}</div>
+                                    </div>
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-text-muted">Native peaks</div>
+                                        <div className="mt-1 text-lg font-semibold text-text-primary">{formatNumber(empowerSummary.native_peak_rows, 0)}</div>
+                                    </div>
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-text-muted">Primary % mean</div>
+                                        <div className="mt-1 text-lg font-semibold text-text-primary">{formatPercent(empowerSummary.primary_percent_mean)}</div>
+                                    </div>
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-text-muted">Flagged injections</div>
+                                        <div className="mt-1 text-lg font-semibold text-text-primary">{formatNumber(empowerSummary.flagged_injection_count, 0)}</div>
+                                    </div>
+                                </div>
+                                <div className="grid gap-3 md:grid-cols-3 text-xs">
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="font-semibold text-text-primary">Batch precision</div>
+                                        <div className="mt-1 text-text-secondary">Primary %RSD: {formatPercent(empowerSummary.primary_percent_rsd)}</div>
+                                        <div className="text-text-secondary">Total area %RSD: {formatPercent(empowerSummary.total_area_rsd)}</div>
+                                    </div>
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="font-semibold text-text-primary">Retention timing</div>
+                                        <div className="mt-1 text-text-secondary">Median primary RT: {formatNumber(empowerSummary.primary_rt_median, 3)} min</div>
+                                        <div className="text-text-secondary">Run window: {empowerSummary.run_date_min ?? '--'} to {empowerSummary.run_date_max ?? '--'}</div>
+                                    </div>
+                                    <div className="border border-border-primary bg-bg-tertiary p-3">
+                                        <div className="font-semibold text-text-primary">Sample roles</div>
+                                        <div className="mt-1 flex flex-wrap gap-1">
+                                            {Object.entries(empowerSummary.sample_role_counts ?? {}).map(([role, count]) => (
+                                                <span key={role} className="rounded border border-border-primary px-2 py-1 text-text-secondary">{role}: {count}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                {Object.keys(empowerSummary.flag_counts ?? {}).length > 0 && (
+                                    <div className="border border-warning/50 bg-warning/10 p-3 text-xs text-warning">
+                                        <span className="font-semibold">QC flags: </span>
+                                        {Object.entries(empowerSummary.flag_counts).map(([flag, count]) => `${flag}: ${count}`).join(', ')}
+                                    </div>
+                                )}
+                                {empowerSummary.role_source_note && (
+                                    <p className="text-xs text-text-muted">{empowerSummary.role_source_note}</p>
+                                )}
+                            </div>
+                        )}
                     </div>
+
+                    {chromatogramPlot && chromatogramPlot.data.length > 0 && (
+                        <div className="border border-border-primary bg-bg-secondary p-4">
+                            <h4 className="text-sm font-medium text-text-primary mb-3">Chromatogram Overlay</h4>
+                            <Plot
+                                data={chromatogramPlot.data}
+                                layout={{ ...plotlyLayout, ...chromatogramPlot.layout, autosize: true, height: 420 }}
+                                useResizeHandler
+                                style={{ width: '100%' }}
+                            />
+                        </div>
+                    )}
+
+                    {qcPlot && qcPlot.data.length > 0 && (
+                        <div className="border border-border-primary bg-bg-secondary p-4">
+                            <h4 className="text-sm font-medium text-text-primary mb-3">Batch QC</h4>
+                            <Plot
+                                data={qcPlot.data}
+                                layout={{ ...plotlyLayout, ...qcPlot.layout, autosize: true, height: 360 }}
+                                useResizeHandler
+                                style={{ width: '100%' }}
+                            />
+                        </div>
+                    )}
+
+                    {compositionPlot && compositionPlot.data.length > 0 && (
+                        <div className="border border-border-primary bg-bg-secondary p-4">
+                            <h4 className="text-sm font-medium text-text-primary mb-3">Peak Composition</h4>
+                            <Plot
+                                data={compositionPlot.data}
+                                layout={{ ...plotlyLayout, ...compositionPlot.layout, autosize: true, height: 360 }}
+                                useResizeHandler
+                                style={{ width: '100%' }}
+                            />
+                        </div>
+                    )}
 
                     {sstSummary.length > 0 && (
                         <div className="border border-border-primary bg-bg-secondary p-4">
@@ -268,6 +546,76 @@ export function EmpowerImport() {
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    )}
+
+                    {peakRegionSummary.length > 0 && (
+                        <div className="border border-border-primary bg-bg-secondary p-4">
+                            <h4 className="text-sm font-medium text-text-primary mb-3">Isoform / Region Summary</h4>
+                            <div className="overflow-auto max-h-[320px]">
+                                <table className="w-full text-xs">
+                                    <thead className="bg-bg-tertiary">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Sample</th>
+                                            <th className="px-3 py-2 text-left">Primary %</th>
+                                            <th className="px-3 py-2 text-left">Pre-primary %</th>
+                                            <th className="px-3 py-2 text-left">Post-primary %</th>
+                                            <th className="px-3 py-2 text-left">Peak count</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {peakRegionSummary.map((row, idx) => (
+                                            <tr key={`${row.injection_id ?? idx}-${row.sample_name ?? 'sample'}`} className="border-t border-border-primary">
+                                                <td className="px-3 py-2 text-text-primary">{row.sample_name ?? '--'}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatPercent(row.primary_area_percent)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatPercent(row.pre_primary_area_percent)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatPercent(row.post_primary_area_percent)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatNumber(row.peak_count, 0)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {peakTable.length > 0 && (
+                        <div className="border border-border-primary bg-bg-secondary p-4">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                                <h4 className="text-sm font-medium text-text-primary">Flattened Peak Table</h4>
+                                <span className="text-xs text-text-muted">{formatNumber(peakTable.length, 0)} real Empower peak rows</span>
+                            </div>
+                            <div className="overflow-auto max-h-[420px]">
+                                <table className="w-full text-xs">
+                                    <thead className="bg-bg-tertiary">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Sample</th>
+                                            <th className="px-3 py-2 text-left">Role</th>
+                                            <th className="px-3 py-2 text-left">Peak</th>
+                                            <th className="px-3 py-2 text-left">RT</th>
+                                            <th className="px-3 py-2 text-left">Area</th>
+                                            <th className="px-3 py-2 text-left">Area %</th>
+                                            <th className="px-3 py-2 text-left">Source</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {peakTable.slice(0, 500).map((row, idx) => (
+                                            <tr key={`${row.injection_id ?? 'inj'}-${row.peak_id ?? idx}-${idx}`} className="border-t border-border-primary">
+                                                <td className="px-3 py-2 text-text-primary">{row.sample_name ?? '--'}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{row.sample_role ?? '--'}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{row.peak_id ?? '--'}{row.is_primary_peak ? ' ★' : ''}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatNumber(row.retention_time, 3)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatNumber(row.area, 2)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{formatPercent(row.area_percent)}</td>
+                                                <td className="px-3 py-2 text-text-secondary">{row.peak_source ?? '--'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {peakTable.length > 500 && (
+                                <p className="mt-2 text-xs text-text-muted">Showing first 500 peaks in-browser; exports/API retain the full table.</p>
+                            )}
                         </div>
                     )}
 
@@ -322,7 +670,7 @@ export function EmpowerImport() {
                                                 <td className="px-3 py-2">
                                                     <input
                                                         className="bg-bg-tertiary border border-border-primary px-2 py-1 text-xs w-20"
-                                                        value={inj.injection_number || ''}
+                                                        value={inj.injection_number ?? ''}
                                                         onChange={(e) => {
                                                             const next = [...injections];
                                                             next[idx] = { ...inj, injection_number: e.target.value };
@@ -345,7 +693,7 @@ export function EmpowerImport() {
                                                 <td className="px-3 py-2">
                                                     <input
                                                         className="bg-bg-tertiary border border-border-primary px-2 py-1 text-xs w-32"
-                                                        value={inj.note || ''}
+                                                        value={inj.note ?? ''}
                                                         onChange={(e) => {
                                                             const next = [...injections];
                                                             next[idx] = { ...inj, note: e.target.value };

@@ -196,7 +196,7 @@ Christian clarified the actual target after this reassessment: the mechanism of 
 
 A dedicated spec for that target now lives at:
 
-`docs/plans/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
+`docs/plans/archive/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
 
 We should split the work into two tracks instead of pretending the current `large-protein` path is already the distributed runtime.
 
@@ -327,7 +327,7 @@ The spec must define:
 - which parts of Boltz2 stay centralized initially
 
 Recommended file:
-- `docs/plans/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
+- `docs/plans/archive/2026-04-23-tiled-context-worker-pool-runtime-spec.md`
 
 ### Phase 4 — Implement a tiny fake-kernel tiled runtime testbed
 

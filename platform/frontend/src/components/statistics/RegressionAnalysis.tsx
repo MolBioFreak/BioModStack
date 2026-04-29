@@ -6,6 +6,18 @@ import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { runRegression } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
+import {
+    AssayPrimaryButton,
+    AssaySegmentedTabs,
+    type AssaySegmentedTabItem,
+} from '../assay/AssayWorkbenchPrimitives';
+
+type RegressionPlotTab = 'scatter' | 'diagnostics';
+
+const regressionPlotTabs: Array<AssaySegmentedTabItem<RegressionPlotTab>> = [
+    { id: 'scatter', label: 'Scatter Plot' },
+    { id: 'diagnostics', label: 'Diagnostics' },
+];
 
 export function RegressionAnalysis() {
     const [xText, setXText] = useState('');
@@ -13,7 +25,7 @@ export function RegressionAnalysis() {
     const [result, setResult] = useState<Record<string, unknown> | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [activeTab, setActiveTab] = useState<'scatter' | 'diagnostics'>('scatter');
+    const [activeTab, setActiveTab] = useState<RegressionPlotTab>('scatter');
 
     const plotlyLayout = useThemePlotlyLayout();
 
@@ -85,13 +97,9 @@ export function RegressionAnalysis() {
                         />
                     </div>
 
-                    <button
-                        onClick={handleRunAnalysis}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRunAnalysis} disabled={loading} className="w-full">
                         {loading ? 'Fitting...' : 'Fit Model'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -139,20 +147,12 @@ export function RegressionAnalysis() {
                             </div>
 
                             <div className="border border-border-primary bg-bg-secondary">
-                                <div className="flex border-b border-border-primary">
-                                    <button
-                                        onClick={() => setActiveTab('scatter')}
-                                        className={`px-4 py-2 text-sm ${activeTab === 'scatter' ? 'bg-accent-primary text-white' : 'text-text-secondary'}`}
-                                    >
-                                        Scatter Plot
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('diagnostics')}
-                                        className={`px-4 py-2 text-sm ${activeTab === 'diagnostics' ? 'bg-accent-primary text-white' : 'text-text-secondary'}`}
-                                    >
-                                        Diagnostics
-                                    </button>
-                                </div>
+                                <AssaySegmentedTabs
+                                    items={regressionPlotTabs}
+                                    activeId={activeTab}
+                                    onChange={setActiveTab}
+                                    ariaLabel="Regression plot views"
+                                />
 
                                 {activeTab === 'scatter' && r.scatter_plot && (
                                     <Plot
