@@ -4,15 +4,9 @@
 
 import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
-import { runControlChart, seedDatasets, getDatasets, getDataset } from '../../api/client';
+import { runControlChart } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
-
-interface Dataset {
-    id: number;
-    name: string;
-    data_points: number;
-    is_builtin?: boolean;
-}
+import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 
 export function ControlChart() {
     const [dataText, setDataText] = useState('');
@@ -20,9 +14,6 @@ export function ControlChart() {
     const [result, setResult] = useState<Record<string, unknown> | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [datasets, setDatasets] = useState<Dataset[]>([]);
-    const [seedStatus, setSeedStatus] = useState('');
-
     const plotlyLayout = useThemePlotlyLayout();
 
     const handleRunAnalysis = useCallback(async () => {
@@ -52,29 +43,6 @@ export function ControlChart() {
         }
     }, [dataText, subgroupSize]);
 
-    const handleSeedDatasets = async () => {
-        setSeedStatus('Seeding...');
-        try {
-            const response = await seedDatasets();
-            setSeedStatus(response.message || 'Done');
-            // Refresh dataset list
-            const ds = await getDatasets('spc');
-            setDatasets(ds);
-        } catch {
-            setSeedStatus('Error seeding');
-        }
-    };
-
-    const handleLoadDataset = async (id: number) => {
-        if (!id) return;
-        try {
-            const ds = await getDataset(id);
-            setDataText(ds.data.join('\n'));
-        } catch {
-            setError('Failed to load dataset');
-        }
-    };
-
     return (
         <div className="space-y-4">
             <h3 className="text-lg font-semibold text-text-primary">Control Chart Analysis</h3>
@@ -83,30 +51,7 @@ export function ControlChart() {
                 {/* Left - Input */}
                 <div className="space-y-4">
                     <div className="border border-border-primary p-4 bg-bg-secondary">
-                        <label className="block text-sm font-medium text-text-primary mb-2">Data Source</label>
-
-                        <div className="flex gap-2 mb-3">
-                            <button onClick={handleSeedDatasets} className="text-xs px-2 py-1 bg-bg-tertiary hover:bg-card-hover border border-border-primary text-text-primary">
-                                Seed Datasets
-                            </button>
-                            {seedStatus && <span className="text-xs text-text-muted">{seedStatus}</span>}
-                        </div>
-
-                        {datasets.length > 0 && (
-                            <select
-                                onChange={(e) => handleLoadDataset(parseInt(e.target.value))}
-                                className="w-full mb-3 bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-sm"
-                            >
-                                <option value="">-- Select Dataset --</option>
-                                {datasets.map(ds => (
-                                    <option key={ds.id} value={ds.id}>
-                                        {ds.is_builtin ? '[Built-in] ' : ''}{ds.name} ({ds.data_points} pts)
-                                    </option>
-                                ))}
-                            </select>
-                        )}
-
-                        <label className="block text-xs text-text-muted mb-1">Data (one value per line)</label>
+                        <label className="block text-xs text-text-muted mb-1">Paste real process data (one value per line)</label>
                         <textarea
                             value={dataText}
                             onChange={(e) => setDataText(e.target.value)}
@@ -129,13 +74,9 @@ export function ControlChart() {
                         />
                     </div>
 
-                    <button
-                        onClick={handleRunAnalysis}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRunAnalysis} disabled={loading} className="w-full">
                         {loading ? 'Analyzing...' : 'Create Control Chart'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -147,13 +88,13 @@ export function ControlChart() {
                             <div className="border border-border-primary p-4 bg-bg-secondary">
                                 <h4 className="text-sm font-medium text-text-primary mb-2">Analysis Results</h4>
                                 <pre className="text-xs text-text-secondary whitespace-pre-wrap">
-                                    {`[${(result as { chart_type?: string }).chart_type || 'Control'} Chart]
+                                    {`[${(result as { chart_type?: string }).chart_type ?? 'Control'} Chart]
 
-Center Line: ${((result as { center_line?: number }).center_line as number)?.toFixed(4) || 'N/A'}
-UCL: ${((result as { ucl?: number }).ucl as number)?.toFixed(4) || 'N/A'}
-LCL: ${((result as { lcl?: number }).lcl as number)?.toFixed(4) || 'N/A'}
+Center Line: ${((result as { center_line?: number }).center_line as number)?.toFixed(4) ?? 'N/A'}
+UCL: ${((result as { ucl?: number }).ucl as number)?.toFixed(4) ?? 'N/A'}
+LCL: ${((result as { lcl?: number }).lcl as number)?.toFixed(4) ?? 'N/A'}
 
-Violations: ${(result as { violation_count?: number }).violation_count || 0}`}
+Violations: ${(result as { violation_count?: number }).violation_count ?? 0}`}
                                 </pre>
                             </div>
 

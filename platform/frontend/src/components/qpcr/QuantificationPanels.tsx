@@ -6,6 +6,7 @@ import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { useThemePlotlyLayout } from '../useThemeColors';
 import { API_URL } from '../../api/config';
+import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
 
 export function StandardCurvePanel() {
     const [concText, setConcText] = useState('');
@@ -98,13 +99,9 @@ export function StandardCurvePanel() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Fitting...' : 'Fit Standard Curve'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -269,13 +266,9 @@ export function QuantificationPanel() {
                         />
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Quantifying...' : 'Quantify Samples'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -356,6 +349,7 @@ export function QuantificationPanel() {
 export function AnovaDunnettPanel() {
     const [groupsJson, setGroupsJson] = useState('');
     const [groupNames, setGroupNames] = useState('');
+    const [controlGroup, setControlGroup] = useState('');
     const [alpha, setAlpha] = useState(0.05);
     const [result, setResult] = useState<Record<string, unknown> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -367,12 +361,19 @@ export function AnovaDunnettPanel() {
         setResult(null);
 
         try {
+            const groups = JSON.parse(groupsJson);
+            const names = groupNames.split(',').map(n => n.trim()).filter(Boolean);
+            const selectedControl = controlGroup.trim();
+            if (!selectedControl) {
+                throw new Error('Control group name is required');
+            }
             const response = await fetch(`${API_URL}/analysis/qpcr/anova-dunnett`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    groups: JSON.parse(groupsJson),
-                    group_names: groupNames.split(',').map(n => n.trim()),
+                    groups,
+                    group_names: names,
+                    control_group: selectedControl,
                     alpha,
                 }),
                 signal: AbortSignal.timeout(30000),
@@ -385,7 +386,7 @@ export function AnovaDunnettPanel() {
         } finally {
             setLoading(false);
         }
-    }, [groupsJson, groupNames, alpha]);
+    }, [groupsJson, groupNames, controlGroup, alpha]);
 
     const r = result as {
         anova_f?: number;
@@ -403,7 +404,7 @@ export function AnovaDunnettPanel() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="space-y-4">
                     <div className="border border-border-primary p-4 bg-bg-secondary">
-                        <label className="block text-xs text-text-muted mb-1">Groups (JSON array of arrays, first is control)</label>
+                        <label className="block text-xs text-text-muted mb-1">Groups (JSON array of arrays)</label>
                         <textarea
                             value={groupsJson}
                             onChange={(e) => setGroupsJson(e.target.value)}
@@ -413,10 +414,19 @@ export function AnovaDunnettPanel() {
                     </div>
 
                     <div className="border border-border-primary p-4 bg-bg-secondary">
-                        <label className="block text-xs text-text-muted mb-1">Group Names (comma-separated)</label>
+                        <label className="block text-xs text-text-muted mb-1">Group Names (comma-separated; one per group)</label>
                         <input
                             value={groupNames}
                             onChange={(e) => setGroupNames(e.target.value)}
+                            className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-sm"
+                        />
+                    </div>
+
+                    <div className="border border-border-primary p-4 bg-bg-secondary">
+                        <label className="block text-xs text-text-muted mb-1">Control Group Name</label>
+                        <input
+                            value={controlGroup}
+                            onChange={(e) => setControlGroup(e.target.value)}
                             className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-sm"
                         />
                     </div>
@@ -434,13 +444,9 @@ export function AnovaDunnettPanel() {
                         />
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Running...' : 'Run ANOVA + Dunnett'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
