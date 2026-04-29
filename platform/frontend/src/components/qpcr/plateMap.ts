@@ -96,6 +96,27 @@ export interface QpcrSelectedWellAnalytics extends QpcrPlateWellSummary {
   spikeRecovery: QpcrSpikeRecoveryRow[];
 }
 
+export interface QpcrAssayReviewMetrics {
+  parsedRows: number;
+  populatedWells: number;
+  targetCount: number;
+  standardRows: number;
+  sampleRows: number;
+  ntcRows: number;
+  reviewRows: number;
+  replicateGroups: number;
+  replicateCvMean: number | null;
+  replicateCvMax: number | null;
+  replicateCvMeanLabel: string;
+  replicateCvMaxLabel: string;
+  spikeRecoveryCount: number;
+  spikeRecoveryMean: number | null;
+  spikeRecoveryMin: number | null;
+  spikeRecoveryMax: number | null;
+  spikeRecoveryMeanLabel: string;
+  spikeRecoveryRangeLabel: string;
+}
+
 export function normalizeQpcrWellPosition(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const raw = String(value).trim().toUpperCase();
@@ -165,6 +186,50 @@ export function buildSelectedQpcrWellAnalytics(
     quantities: (assaySummary?.quantities ?? []).filter((row) => matchesSelectedWell(row, normalizedPosition, entries)),
     replicateQc: (assaySummary?.replicate_qc ?? []).filter((row) => matchesReplicateQc(row, normalizedPosition, entries)),
     spikeRecovery: (assaySummary?.spike_recovery ?? []).filter((row) => matchesSelectedWell(row, normalizedPosition, entries)),
+  };
+}
+
+export function buildQpcrAssayReviewMetrics(
+  wells: QpcrWellEntry[],
+  assaySummary: QpcrAssaySummaryLike | null | undefined,
+): QpcrAssayReviewMetrics {
+  const plateMap = buildQpcrPlateMap(wells);
+  const taskText = (well: QpcrWellEntry) => (cleanText(well.task) ?? '').toUpperCase();
+  const standardRows = wells.filter((well) => taskText(well).includes('STANDARD')).length;
+  const ntcRows = wells.filter((well) => taskText(well).includes('NTC') || (cleanText(well.sample_name) ?? '').toUpperCase().includes('NTC')).length;
+  const reviewRows = wells.filter((well) => cleanText(well.ct_status)).length;
+  const sampleRows = Math.max(0, wells.length - standardRows - ntcRows);
+  const replicateCvValues = (assaySummary?.replicate_qc ?? [])
+    .map((row) => toFiniteNumber(row.ct_cv_percent))
+    .filter((value): value is number => value !== null);
+  const spikeRecoveryValues = (assaySummary?.spike_recovery ?? [])
+    .map((row) => toFiniteNumber(row.recovery_percent))
+    .filter((value): value is number => value !== null);
+  const replicateCvMean = finiteMean(replicateCvValues);
+  const replicateCvMax = replicateCvValues.length ? Math.max(...replicateCvValues) : null;
+  const spikeRecoveryMean = finiteMean(spikeRecoveryValues);
+  const spikeRecoveryMin = spikeRecoveryValues.length ? Math.min(...spikeRecoveryValues) : null;
+  const spikeRecoveryMax = spikeRecoveryValues.length ? Math.max(...spikeRecoveryValues) : null;
+
+  return {
+    parsedRows: wells.length,
+    populatedWells: plateMap.filter((well) => well.entries.length > 0).length,
+    targetCount: uniqueText(wells.map((well) => well.target_name)).length,
+    standardRows,
+    sampleRows,
+    ntcRows,
+    reviewRows,
+    replicateGroups: assaySummary?.replicate_qc?.length ?? 0,
+    replicateCvMean,
+    replicateCvMax,
+    replicateCvMeanLabel: formatPercentLabel(replicateCvMean),
+    replicateCvMaxLabel: formatPercentLabel(replicateCvMax),
+    spikeRecoveryCount: assaySummary?.spike_recovery?.length ?? 0,
+    spikeRecoveryMean,
+    spikeRecoveryMin,
+    spikeRecoveryMax,
+    spikeRecoveryMeanLabel: formatPercentLabel(spikeRecoveryMean),
+    spikeRecoveryRangeLabel: formatPercentRangeLabel(spikeRecoveryMin, spikeRecoveryMax),
   };
 }
 
@@ -271,6 +336,20 @@ function toFiniteNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function finiteMean(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function formatPercentLabel(value: number | null): string {
+  return value === null ? '--' : `${formatQpcrMetric(value, 2)}%`;
+}
+
+function formatPercentRangeLabel(min: number | null, max: number | null): string {
+  if (min === null || max === null) return '--';
+  return `${formatQpcrMetric(min, 2)}–${formatQpcrMetric(max, 2)}%`;
 }
 
 function compareQpcrEntries(a: QpcrWellEntry, b: QpcrWellEntry): number {
