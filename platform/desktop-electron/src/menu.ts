@@ -1,7 +1,7 @@
 import { Menu, type MenuItemConstructorOptions } from 'electron';
 
 import type { ServiceControl } from './serviceControl.js';
-import type { ShellContext } from './windowState.js';
+import type { ShellContext, ShellRuntimeMode } from './windowState.js';
 import { DEFAULT_ZOOM_FACTOR, ZOOM_PRESETS, formatZoomPercentage } from './zoom.js';
 
 type MenuDeps = {
@@ -14,6 +14,7 @@ type MenuDeps = {
   openFrontendLog?: () => Promise<void> | void;
   openCoreRuntimeLog?: () => Promise<void> | void;
   reloadShell?: () => void;
+  switchRuntime?: (runtimeMode: ShellRuntimeMode) => Promise<void> | void;
   hideShell?: () => void;
   quitShell?: () => void;
   showAbout?: () => void;
@@ -68,6 +69,10 @@ function buildServicesSubmenu(
       click: fireAndForget(() => serviceControl.startAll(context.runtimeMode)),
     },
     {
+      label: 'Start Dev + Stable Services',
+      click: fireAndForget(() => serviceControl.startRuntimeTarget('both')),
+    },
+    {
       label: 'Stop Services',
       click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode)),
     },
@@ -83,6 +88,29 @@ function buildServicesSubmenu(
     {
       label: 'Logs',
       submenu: buildLogsSubmenu(deps),
+    },
+  ];
+}
+
+function currentRuntimeChannelLabel(context: ShellContext): string {
+  return context.runtimeMode === 'dev' ? 'Current Channel: Vite dev' : 'Current Channel: Stable /bms/';
+}
+
+function buildRuntimeChannelSubmenu(context: ShellContext, deps: MenuDeps): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: currentRuntimeChannelLabel(context),
+      enabled: false,
+    },
+    {
+      label: 'Switch to Vite Dev',
+      enabled: context.runtimeMode !== 'dev',
+      click: fireAndForget(() => deps.switchRuntime?.('dev')),
+    },
+    {
+      label: 'Switch to Stable /bms/',
+      enabled: context.runtimeMode !== 'container',
+      click: fireAndForget(() => deps.switchRuntime?.('container')),
     },
   ];
 }
@@ -148,6 +176,11 @@ export function buildApplicationMenuTemplate(
     {
       label: 'View',
       submenu: [
+        {
+          label: 'Runtime Channel',
+          submenu: buildRuntimeChannelSubmenu(context, deps),
+        },
+        { type: 'separator' },
         {
           label: 'Reload Shell',
           accelerator: 'CommandOrControl+R',
