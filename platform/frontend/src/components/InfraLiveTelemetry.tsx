@@ -13,6 +13,7 @@ import {
     toggleGpuDisabled,
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
+import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 
 const MAX_WINDOW_RETENTION_MS = 60 * 60 * 1000;
 const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
@@ -352,7 +353,7 @@ function TotalPowerBar({
         (sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w),
         0,
     );
-    const cpuCap = getCpuPowerScale(payload.cpu) ?? 0;
+    const cpuCap = resolveCpuPowerScaleWatts(payload.cpu, []) ?? 0;
     const totalCap = totalGpuPowerCap + cpuCap;
     const fillPercent = Math.max(0, Math.min(100, toPercent(totalDraw, totalCap)));
     const cpuPowerLabel = payload.cpu.power_watts != null
@@ -646,11 +647,6 @@ function readSharedTelemetryStatus(queryClient: ReturnType<typeof useQueryClient
             error: null,
         }
     );
-}
-
-function getCpuPowerScale(cpu: SystemStatus['cpu']): number | null {
-    if (cpu.power_watts != null) return Math.max(1, Math.ceil(cpu.power_watts / 25) * 25);
-    return null;
 }
 
 function getTempBandColor(temp: number | null): string {
@@ -1207,27 +1203,28 @@ function CpuPanel({
     gapBreakMs: number;
     redrawKey: string | number;
 }) {
-    const observedCpuPowerMax = Math.max(
-        current.power_watts ?? 0,
-        ...samples.map((sample) => (typeof sample.cpuPower === 'number' ? sample.cpuPower : 0)),
-    );
-    const powerScale = getCpuPowerScale(current) ?? Math.max(1, Math.ceil(observedCpuPowerMax / 25) * 25);
+    const powerScale = resolveCpuPowerScaleWatts(current, samples);
+    const frequencyScale = resolveCpuFrequencyScaleMhz(current, samples);
     const tempColor = getTempBandColor(current.temperature);
     const cpuPowerTelemetry = current.power_telemetry;
+    const scaleSubtitle = [
+        powerScale != null ? `Power scale ${powerScale.toFixed(0)}W` : null,
+        `Freq scale ${(frequencyScale / 1000).toFixed(2)}GHz`,
+    ].filter(Boolean).join(' · ');
     const cpuPowerSubtitle = cpuPowerTelemetry && !cpuPowerTelemetry.available
         ? `CPU package power unavailable: ${cpuPowerTelemetry.message}`
-        : undefined;
+        : scaleSubtitle;
     const cpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
     const cpuFreqTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.cpuFreqMhz, Math.max(current.frequency_max_mhz, 1)),
+        (sample) => toPercent(sample.cpuFreqMhz, frequencyScale),
         (sample) => sample.cpuFreqMhz / 1000,
     );
     const cpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.cpuPower == null ? null : toPercent(sample.cpuPower, powerScale),
+        (sample) => sample.cpuPower == null || powerScale == null ? null : toPercent(sample.cpuPower, powerScale),
         (sample) => sample.cpuPower == null ? null : sample.cpuPower,
     );
     const cpuTempTrace = buildGapAwareTraceData(
