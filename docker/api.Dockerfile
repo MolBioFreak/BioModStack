@@ -30,6 +30,15 @@ RUN apt-get update \
         libxml2-dev \
         r-base \
         r-base-dev \
+        r-cran-coin \
+        r-cran-doparallel \
+        r-cran-dorng \
+        r-cran-emmeans \
+        r-cran-ggally \
+        r-cran-igraph \
+        r-cran-lme4 \
+        r-cran-matrixmodels \
+        r-cran-tidyverse \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.9.12
