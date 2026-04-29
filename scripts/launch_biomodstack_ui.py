@@ -117,7 +117,7 @@ def launch_electron_shell(descriptor: dict[str, object]) -> None:
     env = os.environ.copy()
     env["BMS_HOME"] = str(REPO_ROOT)
     env["BMS_RUNTIME_MODE"] = str(descriptor.get("runtime_mode") or "container")
-    env["BMS_FRONTEND_ORIGIN"] = str(descriptor.get("frontend_origin") or "http://127.0.0.1:5173")
+    env["BMS_FRONTEND_ORIGIN"] = str(descriptor.get("frontend_origin") or "http://127.0.0.1:18080")
     env["BMS_ROUTER_BASENAME"] = str(descriptor.get("router_basename") or "/bms/")
     pnpm_executable, env = resolve_pnpm_executable(env=env)
     subprocess.Popen([pnpm_executable, "start"], cwd=ELECTRON_SHELL_DIR, env=env, start_new_session=True)

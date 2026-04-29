@@ -26,7 +26,10 @@ from biomodstack_services import (
     restart_all,
     restart_api,
     runtime_descriptor,
+    runtime_port_settings,
+    save_runtime_port_settings,
     start_all,
+    start_runtime_target,
     stop_all,
 )
 from paths import get_db_path, get_results_dir, get_work_dir
@@ -72,11 +75,17 @@ class InstallProfilePayload(BaseModel):
     inputs_container_path: str | None = None
     db_container_path: str | None = None
     api_host_port: int | None = None
+    dev_web_host_port: int | None = None
     web_host_port: int | None = None
     cors_origins: list[str] | None = None
     workflow_adapter_url: str | None = None
     compose_project_name: str | None = None
     core_runtime_mode: bool | None = None
+
+
+class RuntimePortsPayload(BaseModel):
+    dev_web_host_port: int | None = None
+    prod_web_host_port: int | None = None
 
 
 def _require_local_admin(request: Request) -> None:
@@ -124,6 +133,17 @@ async def start_runtime(request: Request, runtime: str | None = None):
     return _run_runtime_action(request, runtime, start_all)
 
 
+@router.post("/runtime/start-target")
+async def start_runtime_target_route(request: Request, target: str | None = None):
+    _require_local_admin(request)
+    normalized_target = str(target or "prod").strip().lower()
+    try:
+        start_runtime_target(target=normalized_target)
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"target": normalized_target}
+
+
 @router.post("/runtime/stop")
 async def stop_runtime(request: Request, runtime: str | None = None):
     return _run_runtime_action(request, runtime, stop_all)
@@ -143,6 +163,27 @@ async def restart_runtime_api(request: Request, runtime: str | None = None):
 async def get_install_profile(request: Request):
     _require_local_admin(request)
     return _install_profile_response()
+
+
+@router.get("/runtime-ports")
+async def get_runtime_ports(request: Request):
+    _require_local_admin(request)
+    try:
+        return runtime_port_settings()
+    except ServiceManagerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/runtime-ports")
+async def put_runtime_ports(request: Request, payload: RuntimePortsPayload):
+    _require_local_admin(request)
+    try:
+        return save_runtime_port_settings(
+            dev_web_host_port=payload.dev_web_host_port,
+            prod_web_host_port=payload.prod_web_host_port,
+        )
+    except ServiceManagerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/install-profile")
