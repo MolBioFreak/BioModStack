@@ -226,17 +226,20 @@ test('ConforNets confidence cards surface scalar confidence, error, and landscap
             confidence_metrics: {
                 confornets_sample: {
                     frame_index: 0,
-                    confidence: {
-                        plddt: 76.3321,
-                        gpde: 0.8197,
-                        ptm: 0.611,
-                    },
-                    reference_evaluation: {
-                        min_reference_rmsd: 6.027059,
-                    },
-                    pairwise_diversity: {
-                        mean_pairwise_rmsd: 7.927423,
-                    },
+                },
+                confornets_confidence: {
+                    plddt: 76.3321,
+                    gpde: 0.8197,
+                    ptm: 0.611,
+                },
+                confornets_reference_evaluation: {
+                    min_reference_rmsd: 6.027059,
+                },
+                confornets_pairwise_diversity: {
+                    mean_pairwise_rmsd: 7.927423,
+                },
+                confornets_reporting: {
+                    sample_semantics: 'independent_generated_conformer_sample',
                 },
             },
         } as any,
@@ -246,8 +249,8 @@ test('ConforNets confidence cards surface scalar confidence, error, and landscap
         ['ConforNets pLDDT', 76.3321, 1],
         ['ConforNets gPDE', 0.8197, 3],
         ['ConforNets pTM', 0.611, 3],
-        ['Reference RMSD', 6.027059, 2],
-        ['Pairwise RMSD', 7.927423, 2],
+        ['Staged-reference Cα RMSD', 6.027059, 2],
+        ['Pairwise sample RMSD', 7.927423, 2],
     ]);
 });
 
