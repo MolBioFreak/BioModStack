@@ -1,4 +1,4 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'validation' | 'imported';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'confornets' | 'validation' | 'imported';
 export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
@@ -109,6 +109,29 @@ const isImportedDesign = (design: OutputSourceDesign): boolean => {
     );
 };
 
+const isConforNetsOutputDesign = (design: OutputSourceDesign): boolean => {
+    const metrics = asRecord(design.confidence_metrics);
+    const provenance = asRecord(design.provenance);
+    const name = String(design.name || '');
+    const path = String(design.pdb_path || '').toLowerCase();
+    const modelId = String(provenance?.model_id || '').toLowerCase();
+    const artifactGroup = String(design.artifact_group || '').toLowerCase();
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const provenanceArtifactGroup = String(provenance?.artifact_group || '').toLowerCase();
+    const provenanceStageFamily = String(provenance?.stage_family || '').toLowerCase();
+
+    return artifactGroup === 'confornets'
+        || stageFamily === 'confornets'
+        || provenanceArtifactGroup === 'confornets'
+        || provenanceStageFamily === 'confornets'
+        || modelId.includes('confornets')
+        || Boolean(asRecord(metrics?.confornets_sample))
+        || Boolean(asRecord(metrics?.confornets_ensemble))
+        || Boolean(asRecord(metrics?.confornets_artifact_manifest))
+        || /^cn_\d+_sample_\d+$/i.test(name)
+        || path.includes('/confornets/');
+};
+
 export const getValidationOutputLabel = (design: OutputSourceDesign): string => {
     const stageFamily = String(design.stage_family || '').toLowerCase();
     const provenance = asRecord(design.provenance);
@@ -194,6 +217,16 @@ export const inferJobOutputSource = (job: OutputSourceJob | null | undefined): O
     }
     if (stage === 'post_fampnn' || candidateDir.includes('fampnn')) return 'fampnn';
     if (stage === 'post_rfantibody' || candidateDir.includes('rfantibody')) return 'rfantibody';
+    if (
+        modelId.includes('confornets') ||
+        mode.includes('confornets') ||
+        stageFamily.includes('confornets') ||
+        stageMode.includes('confornets') ||
+        candidateDir.includes('confornets') ||
+        String(params.rfd_mode || '').toLowerCase().includes('confornets')
+    ) {
+        return 'confornets';
+    }
     return 'all';
 };
 
@@ -261,6 +294,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (isImportedDesign(design)) {
         return 'imported';
+    }
+
+    if (isConforNetsOutputDesign(design)) {
+        return 'confornets';
     }
 
     if (
@@ -428,6 +465,7 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
     if (source === 'fampnn') return 'fampnn';
     if (source === 'caliby') return 'caliby';
     if (source === 'ppiflow') return 'ppiflow';
+    if (source === 'confornets') return null;
     if (source === 'validation') return 'validation';
 
     return null;
@@ -584,6 +622,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     }
     if (source === 'boltzgen') return 'BoltzGen';
     if (source === 'ppiflow') return 'PPIFlow';
+    if (source === 'confornets') return 'ConforNets';
     if (source === 'fampnn') return 'FAMPNN';
     if (source === 'caliby') return 'Caliby';
     if (source === 'rfantibody') return 'RFantibody';
@@ -596,6 +635,7 @@ export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string =>
     if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
     if (source === 'caliby') return 'border-teal-500/40 bg-teal-500/10 text-teal-200';
     if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
+    if (source === 'confornets') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
     if (source === 'imported') return 'border-sky-500/40 bg-sky-500/10 text-sky-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
     return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
