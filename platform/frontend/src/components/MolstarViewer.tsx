@@ -13,6 +13,13 @@ interface Selection {
     focus?: boolean;
 }
 
+interface OverlayStructure {
+    id: string;
+    structureUrl: string;
+    format?: 'cif' | 'pdb';
+    label?: string;
+}
+
 interface Props {
     structureUrl?: string;
     format?: 'cif' | 'pdb';
@@ -24,6 +31,8 @@ interface Props {
     selections?: Selection[]; // Highlights
     /** Per-residue coloring (e.g., frustration maps). Key format: "A45" or "A:45". */
     residueColors?: Map<string, { r: number; g: number; b: number }>;
+    /** Additional structures loaded into the same Mol* scene after the primary structure. */
+    overlayStructures?: OverlayStructure[];
 }
 
 const parseResidueColorKey = (key: string): { chainId: string; residueNumber: number } | null => {
@@ -60,6 +69,28 @@ const buildResidueColorSignature = (residueColors?: Map<string, { r: number; g: 
     );
 };
 
+const toAbsoluteStructureUrl = (structureUrl?: string): string | null => {
+    if (!structureUrl) return null;
+    if (structureUrl.startsWith('/')) {
+        return `${window.location.origin}${structureUrl}`;
+    }
+    return structureUrl;
+};
+
+const toMolstarLoadFormat = (format: 'cif' | 'pdb' | undefined): string => (
+    format === 'cif' || !format ? 'mmcif' : format
+);
+
+const buildOverlayStructureSignature = (overlayStructures?: OverlayStructure[]): string => {
+    if (!overlayStructures || overlayStructures.length === 0) return '';
+    return JSON.stringify(overlayStructures.map((structure) => ({
+        id: structure.id,
+        structureUrl: structure.structureUrl,
+        format: structure.format ?? 'cif',
+        label: structure.label ?? '',
+    })));
+};
+
 export default function MolstarViewer({
     structureUrl,
     format = 'pdb',
@@ -69,22 +100,29 @@ export default function MolstarViewer({
     backgroundColor = '#0f172a',
     label,
     selections,
-    residueColors
+    residueColors,
+    overlayStructures,
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
     const lastAppliedSelectionSignatureRef = useRef<string>('');
     const lastAppliedResidueColorSignatureRef = useRef<string>('');
+    const lastAppliedOverlaySignatureRef = useRef<string>('');
 
     // Build absolute URL
-    const absoluteUrl = useMemo(() => {
-        if (!structureUrl) return null;
-        if (structureUrl.startsWith('/')) {
-            return `${window.location.origin}${structureUrl}`;
-        }
-        return structureUrl;
-    }, [structureUrl]);
+    const absoluteUrl = useMemo(() => toAbsoluteStructureUrl(structureUrl), [structureUrl]);
+    const absoluteOverlayStructures = useMemo(() => (
+        overlayStructures
+            ?.map((structure) => ({
+                ...structure,
+                absoluteUrl: toAbsoluteStructureUrl(structure.structureUrl),
+                format: structure.format ?? 'cif',
+            }))
+            .filter((structure): structure is OverlayStructure & { absoluteUrl: string; format: 'cif' | 'pdb' } => Boolean(structure.absoluteUrl))
+        ?? []
+    ), [overlayStructures]);
+    const overlayStructureSignature = useMemo(() => buildOverlayStructureSignature(overlayStructures), [overlayStructures]);
     const selectionSignature = useMemo(() => buildSelectionSignature(selections), [selections]);
     const residueColorSignature = useMemo(() => buildResidueColorSignature(residueColors), [residueColors]);
     const interactionTouchAction = useMemo(() => {
@@ -105,7 +143,8 @@ export default function MolstarViewer({
     useEffect(() => {
         lastAppliedSelectionSignatureRef.current = '';
         lastAppliedResidueColorSignatureRef.current = '';
-    }, [absoluteUrl]);
+        lastAppliedOverlaySignatureRef.current = '';
+    }, [absoluteUrl, overlayStructureSignature]);
 
     useEffect(() => {
         if (!isScriptLoaded || interactionTouchAction !== 'none') {
@@ -171,6 +210,64 @@ export default function MolstarViewer({
             }
         };
     }, [absoluteUrl, interactionTouchAction, isScriptLoaded]);
+
+    useEffect(() => {
+        if (!isScriptLoaded || !absoluteUrl || absoluteOverlayStructures.length === 0 || !overlayStructureSignature) {
+            return;
+        }
+        if (lastAppliedOverlaySignatureRef.current === overlayStructureSignature) {
+            return;
+        }
+
+        let cancelled = false;
+        const overlayLoadOptions = { fullLoad: false };
+
+        const waitForPrimaryStructure = async (): Promise<any | null> => {
+            for (let i = 0; i < 60; i += 1) {
+                const viewer = viewerRef.current as any;
+                const viewerInstance = viewer?.viewerInstance;
+                const hasPrimaryStructure = typeof viewerInstance?.load === 'function'
+                    && (viewerInstance.structureRefMap?.size ?? 0) > 0;
+                if (hasPrimaryStructure) {
+                    return viewerInstance;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            return null;
+        };
+
+        const applyOverlayStructures = async () => {
+            const viewerInstance = await waitForPrimaryStructure();
+            if (!viewerInstance || cancelled) return;
+
+            for (const structure of absoluteOverlayStructures) {
+                if (cancelled) return;
+                try {
+                    await viewerInstance.load(
+                        {
+                            url: structure.absoluteUrl,
+                            format: toMolstarLoadFormat(structure.format),
+                            isBinary: false,
+                            progressMessage: `Overlaying ${structure.label ?? structure.id} ...`,
+                            id: `overlay:${structure.id}`,
+                        },
+                        overlayLoadOptions.fullLoad,
+                    );
+                } catch (err) {
+                    console.error('Failed to load overlay structure:', structure, err);
+                }
+            }
+            if (!cancelled) {
+                lastAppliedOverlaySignatureRef.current = overlayStructureSignature;
+            }
+        };
+
+        applyOverlayStructures();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [absoluteOverlayStructures, absoluteUrl, isScriptLoaded, overlayStructureSignature]);
 
     // Apply selections after viewer loads
     const applySelections = useCallback(async () => {

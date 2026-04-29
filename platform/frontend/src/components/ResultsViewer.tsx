@@ -459,7 +459,7 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
 
 const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => inferJobOutputSource(job);
 
-const OUTPUT_SOURCE_FILTER_ORDER: OutputSourceFilter[] = ['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'imported', 'validation'];
+const OUTPUT_SOURCE_FILTER_ORDER: OutputSourceFilter[] = ['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'confornets', 'imported', 'validation'];
 const SCOPED_OUTPUT_SOURCE_FILTERS = OUTPUT_SOURCE_FILTER_ORDER.filter(
     (source): source is Exclude<OutputSourceFilter, 'all'> => source !== 'all',
 );
@@ -470,6 +470,7 @@ const OUTPUT_SOURCE_BUTTON_LABELS: Array<[OutputSourceFilter, string]> = [
     ['fampnn', 'FAMPNN'],
     ['caliby', 'Caliby'],
     ['ppiflow', 'PPIFlow'],
+    ['confornets', 'ConforNets'],
     ['imported', 'Imported'],
     ['validation', 'Validation'],
 ];
@@ -480,7 +481,7 @@ const isScopedOutputSourceFilter = (value: string): value is Exclude<OutputSourc
 );
 
 const isAnalysisLensOutputSource = (value: OutputSourceFilter): value is OutputSourceAnalysisLens => (
-    value !== 'all' && value !== 'imported'
+    value !== 'all' && value !== 'imported' && value !== 'confornets'
 );
 
 const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
@@ -3210,7 +3211,7 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], imported: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
             if (source === 'all') grouped.all.push(design);
