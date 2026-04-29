@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { Menu, type MenuItemConstructorOptions, Tray, nativeImage } from 'electron';
 
 import type { ServiceControl } from './serviceControl.js';
-import type { ShellContext } from './windowState.js';
+import type { ShellContext, ShellRuntimeMode } from './windowState.js';
 
 type TrayDeps = {
   showWindow?: () => void;
@@ -14,6 +14,7 @@ type TrayDeps = {
   openApiLog?: () => Promise<void> | void;
   openFrontendLog?: () => Promise<void> | void;
   openCoreRuntimeLog?: () => Promise<void> | void;
+  switchRuntime?: (runtimeMode: ShellRuntimeMode) => Promise<void> | void;
   quitShell?: () => void;
   iconPath?: string;
 };
@@ -60,6 +61,10 @@ function buildServicesSubmenu(
       click: fireAndForget(() => serviceControl.startAll(context.runtimeMode)),
     },
     {
+      label: 'Start Dev + Stable Services',
+      click: fireAndForget(() => serviceControl.startRuntimeTarget('both')),
+    },
+    {
       label: 'Stop Services',
       click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode)),
     },
@@ -70,6 +75,29 @@ function buildServicesSubmenu(
     {
       label: 'Restart API',
       click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode)),
+    },
+  ];
+}
+
+function currentRuntimeChannelLabel(context: ShellContext): string {
+  return context.runtimeMode === 'dev' ? 'Current Channel: Vite dev' : 'Current Channel: Stable /bms/';
+}
+
+function buildRuntimeChannelSubmenu(context: ShellContext, deps: TrayDeps): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: currentRuntimeChannelLabel(context),
+      enabled: false,
+    },
+    {
+      label: 'Switch to Vite Dev',
+      enabled: context.runtimeMode !== 'dev',
+      click: fireAndForget(() => deps.switchRuntime?.('dev')),
+    },
+    {
+      label: 'Switch to Stable /bms/',
+      enabled: context.runtimeMode !== 'container',
+      click: fireAndForget(() => deps.switchRuntime?.('container')),
     },
   ];
 }
@@ -107,6 +135,10 @@ export function buildTrayMenuTemplate(
     {
       label: 'Services',
       submenu: buildServicesSubmenu(context, serviceControl),
+    },
+    {
+      label: 'Runtime Channel',
+      submenu: buildRuntimeChannelSubmenu(context, deps),
     },
     { type: 'separator' },
     {

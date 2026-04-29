@@ -24,7 +24,21 @@ test('service control builds status invocations against the existing desktop man
   ]);
 });
 
-test('service control maps start stop restart and status calls onto the manager cli contract', async () => {
+test('service control builds explicit runtime target start invocations', () => {
+  const invocation = buildManageDesktopServicesInvocation('start-target', {
+    projectRoot: '/work/biomodstack',
+    target: 'both',
+  });
+
+  assert.deepEqual(invocation.args, [
+    '/work/biomodstack/scripts/manage_desktop_services.py',
+    'start-target',
+    '--target',
+    'both',
+  ]);
+});
+
+test('service control maps start stop restart target and status calls onto the manager cli contract', async () => {
   const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
   const control = createServiceControl({
     projectRoot: '/work/biomodstack',
@@ -32,7 +46,7 @@ test('service control maps start stop restart and status calls onto the manager 
       calls.push(invocation);
       if (invocation.args[1] === 'status') {
         return {
-          stdout: JSON.stringify({ runtime_mode: 'container', browser_url: 'http://127.0.0.1:5173/bms/' }),
+          stdout: JSON.stringify({ runtime_mode: 'container', browser_url: 'http://127.0.0.1:18080/bms/' }),
           stderr: '',
           exitCode: 0,
         };
@@ -43,17 +57,19 @@ test('service control maps start stop restart and status calls onto the manager 
 
   const status = await control.getStatus('container');
   await control.startAll('dev');
+  await control.startRuntimeTarget('both');
   await control.stopAll('container');
   await control.restartAll('container');
   await control.restartApi('dev');
 
   assert.equal(status.runtime_mode, 'container');
-  assert.equal(status.browser_url, 'http://127.0.0.1:5173/bms/');
+  assert.equal(status.browser_url, 'http://127.0.0.1:18080/bms/');
   assert.deepEqual(
     calls.map((call) => call.args.slice(1)),
     [
       ['status', '--runtime', 'container', '--json'],
       ['start', '--runtime', 'dev'],
+      ['start-target', '--target', 'both'],
       ['stop', '--runtime', 'container'],
       ['restart', '--runtime', 'container'],
       ['restart-api', '--runtime', 'dev'],
