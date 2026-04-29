@@ -134,6 +134,44 @@ MSA_PRESETS = {
 }
 
 
+def describe_target_split_semantics(search_report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Describe what a recorded MMseqs search report proves about target splitting.
+
+    Stage reports are intentionally argv-level evidence. For GPU MMseqs search,
+    upstream/local probes showed `--split` can be accepted by the top-level
+    `search` command while the internal GPU `ungappedprefilter` child command is
+    not proven to receive split controls. Keep that caveat machine-readable so
+    quality reports do not overclaim true internal GPU target splitting.
+    """
+    if not search_report or not search_report.get("split_count"):
+        return {
+            "requested": False,
+            "scope": "not_requested",
+            "internal_child_split_proven": None,
+            "caveat": None,
+        }
+
+    uses_gpu = bool(search_report.get("uses_gpu_flag") or search_report.get("uses_gpu_server"))
+    caveat = (
+        "Stage report proves only the top-level MMseqs search argv contained "
+        "--split/--split-mode. Verify verbose child commands, runtime telemetry, "
+        "or output-equivalence before treating this as effective internal target splitting."
+    )
+    if uses_gpu:
+        caveat = (
+            "GPU MMseqs search accepted/logged top-level --split/--split-mode, "
+            "but current upstream/local evidence does not prove those controls propagate "
+            "to the internal GPU ungappedprefilter child path."
+        )
+
+    return {
+        "requested": True,
+        "scope": "top_level_mmseqs_search_argv",
+        "internal_child_split_proven": False if uses_gpu else None,
+        "caveat": caveat,
+    }
+
+
 def _mmseqs_prefix_status(prefix: str | Path) -> Dict[str, Any]:
     prefix = Path(prefix)
     dbtype = Path(str(prefix) + ".dbtype")
@@ -3916,6 +3954,7 @@ def run_colabfold_msa_workflow(
                 envdb_backend = envdb_acceleration_backend_hint or "not_run"
             if envdb_acceleration_backend_hint and not envdb_effective_gpu:
                 envdb_backend = envdb_acceleration_backend_hint
+            envdb_split_semantics = describe_target_split_semantics(last_envdb_search_report)
             envdb_acceleration = {
                 "backend": envdb_backend,
                 "requested_gpu": bool(gpu_mmseqs_requested),
@@ -3925,6 +3964,7 @@ def run_colabfold_msa_workflow(
                 "split_count": last_envdb_search_report.get("split_count") if last_envdb_search_report else None,
                 "split_mode": last_envdb_search_report.get("split_mode") if last_envdb_search_report else None,
                 "threads": last_envdb_search_report.get("threads") if last_envdb_search_report else None,
+                "split_semantics": envdb_split_semantics,
                 "fallback_from_gpu": bool(envdb_acceleration_fallback_reason),
                 "fallback_reason": envdb_acceleration_fallback_reason,
             }
@@ -3988,6 +4028,8 @@ def run_colabfold_msa_workflow(
                     "total_threads": target_shard_plan.total_threads if target_shard_plan else num_threads,
                     "fallback_allowed": bool(target_shard_plan.fallback_allowed) if target_shard_plan else False,
                     "implementation": "mmseqs_native_search_split" if target_sharded_env_search else "unsharded",
+                    "implementation_scope": envdb_split_semantics["scope"] if target_sharded_env_search else "unsharded",
+                    "internal_split_proven": envdb_split_semantics["internal_child_split_proven"] if target_sharded_env_search else None,
                     "native_split_mode": 0 if target_sharded_env_search else None,
                     "manifest_path": str(target_shard_materialization.manifest_path) if target_shard_materialization else None,
                     "reused_manifest": bool(target_shard_materialization.reused) if target_shard_materialization else None,

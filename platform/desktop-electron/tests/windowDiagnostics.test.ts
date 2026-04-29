@@ -23,10 +23,10 @@ type VoidHandler = () => void;
 function createShellContext(): ShellContext {
   return {
     runtimeMode: 'container',
-    frontendOrigin: 'http://127.0.0.1:5173',
+    frontendOrigin: 'http://127.0.0.1:18080',
     routerBasename: '/bms/',
-    windowUrl: 'http://127.0.0.1:5173/bms/',
-    browserUrl: 'http://127.0.0.1:5173/bms/',
+    windowUrl: 'http://127.0.0.1:18080/bms/',
+    browserUrl: 'http://127.0.0.1:18080/bms/',
   };
 }
 
@@ -92,9 +92,9 @@ function createWindowStub() {
 test('buildShellFailureDataUrl renders actionable diagnostics for window-load failures', () => {
   const dataUrl = buildShellFailureDataUrl({
     kind: 'did-fail-load',
-    windowUrl: 'http://127.0.0.1:5173/bms/',
-    browserUrl: 'http://127.0.0.1:5173/bms/',
-    validatedURL: 'http://127.0.0.1:5173/bms/',
+    windowUrl: 'http://127.0.0.1:18080/bms/',
+    browserUrl: 'http://127.0.0.1:18080/bms/',
+    validatedURL: 'http://127.0.0.1:18080/bms/',
     errorCode: -102,
     errorDescription: 'ERR_CONNECTION_REFUSED',
   });
@@ -106,7 +106,7 @@ test('buildShellFailureDataUrl renders actionable diagnostics for window-load fa
   assert.match(html, /did-fail-load/);
   assert.match(html, /ERR_CONNECTION_REFUSED/);
   assert.match(html, /-102/);
-  assert.match(html, /http:\/\/127\.0\.0\.1:5173\/bms\//);
+  assert.match(html, /http:\/\/127\.0\.0\.1:18080\/bms\//);
 });
 
 test('attachWindowDiagnostics shows a visible fallback page for main-frame load failures', async () => {
@@ -123,7 +123,7 @@ test('attachWindowDiagnostics shows a visible fallback page for main-frame load 
     },
   });
 
-  windowStub.emitDidFailLoad(-102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:5173/bms/');
+  windowStub.emitDidFailLoad(-102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:18080/bms/');
   await Promise.resolve();
 
   assert.equal(windowStub.loadedUrls.length, 1);
