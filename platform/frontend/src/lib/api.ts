@@ -2171,11 +2171,34 @@ export interface PlotlyMetricPoint {
     metrics: Record<string, number>;
 }
 
+export interface PlotlyMetricMetadata {
+    label: string;
+    description?: string | null;
+    unit?: string | null;
+    source?: string | null;
+    semantics?: string | null;
+    higher_is_better?: boolean | null;
+    color?: string | null;
+}
+
+export interface PlotlyChartSuggestion {
+    id: string;
+    label: string;
+    type: string;
+    xAxis?: string | null;
+    yAxis?: string | null;
+    zAxis?: string | null;
+    colorBy?: string | null;
+    description?: string | null;
+}
+
 export interface PlotlyMetricsResponse {
     job_id: string;
     metric_keys: string[];
     points: PlotlyMetricPoint[];
     total: number;
+    metric_metadata?: Record<string, PlotlyMetricMetadata>;
+    chart_suggestions?: PlotlyChartSuggestion[];
 }
 
 export const fetchContactMap = (designId: string, maxSize: number = 400) =>
