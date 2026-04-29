@@ -11,7 +11,6 @@ cran_packages <- c(
   "qpcR",
   "chipPCR",
   "qPCRtools",
-  "RQdeltaCT",
   "DoE.base",
   "FrF2",
   "rsm",
@@ -24,23 +23,61 @@ cran_packages <- c(
 )
 
 runiverse_packages <- c("tidyqpcr")
+rqdeltact_packages <- c("RQdeltaCT")
 bioconductor_packages <- c("HTqPCR")
 
-install_missing <- function(pkgs, repos = getOption("repos")) {
+# Debian bookworm's r-base ships Matrix 1.5.x, but current MatrixModels/lme4
+# dependency chains require Matrix >= 1.6.0.  Matrix 1.6-5 is the last known-good
+# CRAN archive release that still supports R 4.2, so pin it before installing
+# the DOE/statistics R stack.
+ensure_matrix_for_r42 <- function() {
   installed <- rownames(installed.packages())
-  missing <- setdiff(pkgs, installed)
-  if (length(missing) == 0) {
-    return(invisible(TRUE))
+  needs_matrix <- !("Matrix" %in% installed) || utils::packageVersion("Matrix") < "1.6.0"
+  if (needs_matrix) {
+    install.packages(
+      "https://cran.r-project.org/src/contrib/Archive/Matrix/Matrix_1.6-5.tar.gz",
+      repos = NULL,
+      type = "source",
+      dependencies = c("Depends", "Imports", "LinkingTo"),
+      Ncpus = max(1, parallel::detectCores() - 1)
+    )
   }
-  install.packages(missing, repos = repos, dependencies = c("Depends", "Imports", "LinkingTo"), Ncpus = max(1, parallel::detectCores() - 1))
-  still_missing <- setdiff(pkgs, rownames(installed.packages()))
-  if (length(still_missing) > 0) {
-    stop("Failed to install R packages: ", paste(still_missing, collapse = ", "))
+}
+
+ensure_matrix_for_r42()
+
+install_missing <- function(pkgs, repos = getOption("repos")) {
+  for (pkg in pkgs) {
+    if (pkg %in% rownames(installed.packages())) {
+      next
+    }
+    message("Installing R assay package: ", pkg)
+    install.packages(pkg, repos = repos, dependencies = c("Depends", "Imports", "LinkingTo"), Ncpus = max(1, parallel::detectCores() - 1))
+    if (!(pkg %in% rownames(installed.packages()))) {
+      stop("Failed to install R package: ", pkg)
+    }
   }
   invisible(TRUE)
 }
 
 install_missing(cran_packages)
+
+ensure_ggally_for_r42 <- function() {
+  installed <- rownames(installed.packages())
+  if (!("GGally" %in% installed)) {
+    install.packages(
+      "https://cran.r-project.org/src/contrib/Archive/GGally/GGally_2.1.2.tar.gz",
+      repos = NULL,
+      type = "source"
+    )
+  }
+  if (!("GGally" %in% rownames(installed.packages()))) {
+    stop("Failed to install archived GGally 2.1.2 required by RQdeltaCT on R 4.2")
+  }
+}
+
+ensure_ggally_for_r42()
+install_missing(rqdeltact_packages)
 install_missing(runiverse_packages)
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
@@ -52,4 +89,4 @@ if (length(missing_bioc) > 0) {
   stop("Failed to install Bioconductor packages: ", paste(missing_bioc, collapse = ", "))
 }
 
-message("Installed BMS assay R packages: ", paste(c(cran_packages, runiverse_packages, bioconductor_packages), collapse = ", "))
+message("Installed BMS assay R packages: ", paste(c(cran_packages, rqdeltact_packages, runiverse_packages, bioconductor_packages), collapse = ", "))
