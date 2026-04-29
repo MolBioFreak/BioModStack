@@ -1601,6 +1601,23 @@ def _coerce_float(value: Any) -> Optional[float]:
     return numeric if math.isfinite(numeric) else None
 
 
+_CONFORNETS_CONFIDENCE_SCHEMA = "confornets.confidence_metrics.v1"
+
+_CONFORNETS_REPORTING_SEMANTICS: Dict[str, Any] = {
+    "schema_version": 1,
+    "sample_semantics": "independent_generated_conformer_sample",
+    "sample_semantics_note": "Each row is an independent generated monomer conformer sample; frame/sample indices are stable selectors, not a time-resolved trajectory.",
+    "reference_evaluation_semantics": "ordered_ca_kabsch_rmsd_to_staged_references",
+    "reference_evaluation_note": "Reference RMSD metrics are BMS post-hoc ordered Cα RMSD after Kabsch alignment to explicitly staged references; they are only meaningful when evaluation was enabled and references were provided.",
+    "pairwise_diversity_semantics": "post_hoc_pairwise_ca_rmsd_between_generated_samples",
+    "pairwise_diversity_note": "Pairwise diversity is computed after generation from final samples; it is not an upstream training objective trace and not a thermodynamic ensemble probability.",
+    "landscape_semantics": "post_hoc_sample_space_embedding",
+    "landscape_note": "Landscape coordinates are BMS post-hoc RMSD/MDS embedding coordinates when computed; they are not calibrated free energy, thermodynamics, or trajectory time.",
+    "confidence_semantics": "sample_scalar_confidence_with_optional_full_tensor",
+    "confidence_note": "Scalar pLDDT/gPDE/pTM values come from the optional ConforNets/OpenFold3 confidence path. Per-residue confidence requires a saved full confidence tensor artifact.",
+}
+
+
 def _summarize_confornets_training_loss(csv_path: Path) -> Optional[Dict[str, Any]]:
     if not csv_path.exists():
         return None
@@ -1754,6 +1771,32 @@ def _lookup_confornets_summary_entry(
     return None
 
 
+def _confornets_sample_index(
+    structure_path: Path,
+    manifest_entry: Optional[Dict[str, Any]],
+    sample_entry: Optional[Dict[str, Any]],
+) -> Optional[int]:
+    for entry in (sample_entry, manifest_entry):
+        if not isinstance(entry, dict):
+            continue
+        for key in ("sample_index", "frame_index", "index"):
+            value = entry.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    for candidate in (structure_path.stem,):
+        match = re.search(r"(?:sample|frame|cn)[_-]?(\d+)", candidate, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
 def _strip_confornets_sample_list(summary_payload: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(summary_payload, dict):
         return None
@@ -1812,9 +1855,17 @@ def _build_confornets_design_payload(
     if isinstance(provenance_payload, dict):
         confornets_provenance["confornets_provenance"] = provenance_payload
 
-    confidence_metrics: Dict[str, Any] = {}
-    if isinstance(sample_entry, dict):
-        confidence_metrics["confornets_sample"] = sample_entry
+    confidence_metrics: Dict[str, Any] = {
+        "confornets_schema": _CONFORNETS_CONFIDENCE_SCHEMA,
+        "confornets_reporting": dict(_CONFORNETS_REPORTING_SEMANTICS),
+    }
+    normalized_sample_entry: Dict[str, Any] = dict(sample_entry) if isinstance(sample_entry, dict) else {}
+    sample_index = _confornets_sample_index(structure_path, manifest_entry, sample_entry)
+    if sample_index is not None:
+        normalized_sample_entry.setdefault("sample_index", sample_index)
+        normalized_sample_entry.setdefault("frame_index", sample_index)
+    if normalized_sample_entry:
+        confidence_metrics["confornets_sample"] = normalized_sample_entry
     if isinstance(landscape_payload, dict):
         confidence_metrics["confornets_landscape"] = landscape_payload
     if isinstance(manifest_entry, dict):
