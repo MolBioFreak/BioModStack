@@ -506,6 +506,20 @@ export async function getDataset(id: number) {
     return response.json();
 }
 
+export async function listAnalyticalDatasets(assayType?: string, limit = 50) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (assayType) params.set('assay_type', assayType);
+    const response = await fetch(`${API_URL}/datasets?${params.toString()}`, { signal: AbortSignal.timeout(30000) });
+    if (!response.ok) await throwAssayHttpError(response, 'analytical dataset list');
+    return response.json();
+}
+
+export async function loadAnalyticalDataset(datasetId: string) {
+    const response = await fetch(`${API_URL}/datasets/${encodeURIComponent(datasetId)}`, { signal: AbortSignal.timeout(30000) });
+    if (!response.ok) await throwAssayHttpError(response, 'analytical dataset load');
+    return response.json();
+}
+
 // ============================================================================
 // Empower HPLC Imports
 // ============================================================================
