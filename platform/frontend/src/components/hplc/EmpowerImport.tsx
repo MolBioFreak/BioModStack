@@ -8,7 +8,9 @@ import {
     exportEmpowerPlasmidTracking,
     exportEmpowerSstMaster,
     importEmpowerFiles,
+    listAnalyticalDatasets,
     listEmpowerSst,
+    loadAnalyticalDataset,
     updateEmpowerInjection,
 } from '../../api/client';
 import {
@@ -102,6 +104,26 @@ interface PeakRegionSummary {
     peak_count?: number | null;
 }
 
+interface AnalyticalDatasetSummary {
+    dataset_id: string;
+    dataset_label?: string | null;
+    created_at?: string | null;
+    metadata?: Record<string, unknown>;
+}
+
+interface AnalyticalDatasetDetail {
+    dataset_id: string;
+    dataset_label?: string | null;
+    primary_import_id?: string | null;
+    analysis_runs?: Array<{
+        analysis_kind?: string;
+        result_summary?: Record<string, unknown>;
+        plotly_json?: Record<string, PlotlyPayload | null | undefined>;
+    }>;
+    chromatography_injections?: Array<Record<string, unknown>>;
+    peak_table?: PeakTableRow[];
+}
+
 interface EmpowerImportPayload {
     import_id?: number | null;
     injections?: EmpowerInjection[];
@@ -151,6 +173,9 @@ export function EmpowerImport() {
     const [empowerSummary, setEmpowerSummary] = useState<EmpowerSummary | null>(null);
     const [peakTable, setPeakTable] = useState<PeakTableRow[]>([]);
     const [peakRegionSummary, setPeakRegionSummary] = useState<PeakRegionSummary[]>([]);
+    const [persistedDatasets, setPersistedDatasets] = useState<AnalyticalDatasetSummary[]>([]);
+    const [selectedDatasetId, setSelectedDatasetId] = useState('');
+    const [loadingDataset, setLoadingDataset] = useState(false);
 
     const [peakProminence, setPeakProminence] = useState(100);
     const [baselineMethod, setBaselineMethod] = useState('snip');
@@ -183,6 +208,56 @@ export function EmpowerImport() {
         setPeakTable([]);
         setPeakRegionSummary([]);
     }, []);
+
+    const refreshPersistedDatasets = useCallback(async () => {
+        const datasets = await listAnalyticalDatasets('chromatography', 25) as AnalyticalDatasetSummary[];
+        setPersistedDatasets(datasets);
+        if (!selectedDatasetId && datasets.length > 0) {
+            setSelectedDatasetId(datasets[0].dataset_id);
+        }
+    }, [selectedDatasetId]);
+
+    const handleLoadPersistedDataset = useCallback(async () => {
+        if (!selectedDatasetId) return;
+        setLoadingDataset(true);
+        setError('');
+        try {
+            const detail = await loadAnalyticalDataset(selectedDatasetId) as AnalyticalDatasetDetail;
+            const reviewRun = (detail.analysis_runs ?? []).find((run) => run.analysis_kind === 'empower_import_review') ?? detail.analysis_runs?.[0];
+            const resultSummary = reviewRun?.result_summary ?? {};
+            const plotly = reviewRun?.plotly_json ?? {};
+            setImportId(null);
+            setInjections((detail.chromatography_injections ?? []).map((row) => ({
+                sample_name: String(row.sample_name ?? row.sample_id ?? row.injection_name ?? 'unknown'),
+                sample_type: String(row.sample_type ?? 'UNSPECIFIED_BY_EXPORT'),
+                injection_number: row.injection_index == null ? String(row.injection_name ?? '') : String(row.injection_index),
+                method_name: row.method == null ? null : String(row.method),
+                total_area: null,
+                primary_peak_area: typeof row.primary_peak_area === 'number' ? row.primary_peak_area : null,
+                primary_peak_percent: typeof row.primary_peak_percent === 'number' ? row.primary_peak_percent : null,
+                primary_peak_rt: typeof row.primary_peak_rt === 'number' ? row.primary_peak_rt : null,
+                sample_role: row.sample_type == null ? null : String(row.sample_type),
+                peak_count: typeof row.peak_count === 'number' ? row.peak_count : null,
+                qc_flags: [],
+            })));
+            setSstSummary((resultSummary.sst_summary as SstSummary[]) ?? []);
+            setChromatogramPlot((plotly.chromatogram_plotly_json as PlotlyPayload | null | undefined) ?? null);
+            setQcPlot((plotly.qc_plotly_json as PlotlyPayload | null | undefined) ?? null);
+            setCompositionPlot((plotly.composition_plotly_json as PlotlyPayload | null | undefined) ?? null);
+            setEmpowerSummary((resultSummary.empower_summary as EmpowerSummary | null | undefined) ?? null);
+            setPeakTable(detail.peak_table ?? []);
+            setPeakRegionSummary((resultSummary.peak_region_summary as PeakRegionSummary[]) ?? []);
+            setCacheNotice(`Loaded persisted Empower dataset${detail.dataset_label ? `: ${detail.dataset_label}` : ''}`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to load persisted Empower dataset');
+        } finally {
+            setLoadingDataset(false);
+        }
+    }, [selectedDatasetId]);
+
+    useEffect(() => {
+        void refreshPersistedDatasets().catch(() => undefined);
+    }, [refreshPersistedDatasets]);
 
     useEffect(() => {
         let cancelled = false;
@@ -360,6 +435,40 @@ export function EmpowerImport() {
                     <AssayPrimaryButton onClick={handleImport} disabled={loading || !files.length} className="w-full">
                         {loading ? 'Importing...' : 'Import Empower Data'}
                     </AssayPrimaryButton>
+
+                    <div className="border border-border-primary p-4 bg-bg-secondary space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-medium text-text-primary">Persisted Empower imports</h4>
+                            <button
+                                type="button"
+                                onClick={() => void refreshPersistedDatasets()}
+                                className="border border-border-primary bg-bg-tertiary px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+                        <select
+                            value={selectedDatasetId}
+                            onChange={(event) => setSelectedDatasetId(event.target.value)}
+                            className="w-full bg-bg-tertiary text-text-primary border border-border-primary px-2 py-1 text-xs"
+                        >
+                            <option value="">{persistedDatasets.length ? 'Select persisted dataset' : 'No persisted chromatography datasets yet'}</option>
+                            {persistedDatasets.map((dataset) => (
+                                <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                                    {(dataset.dataset_label ?? dataset.dataset_id).slice(0, 90)}{dataset.created_at ? ` · ${new Date(dataset.created_at).toLocaleDateString()}` : ''}
+                                </option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => void handleLoadPersistedDataset()}
+                            disabled={!selectedDatasetId || loadingDataset}
+                            className="w-full border border-accent-primary bg-accent-primary/10 px-3 py-2 text-xs text-accent-primary hover:bg-accent-primary/20 disabled:opacity-50"
+                        >
+                            {loadingDataset ? 'Loading persisted dataset...' : 'Load selected persisted import + plots'}
+                        </button>
+                        <p className="text-xs text-text-muted">Reloads durable Empower review plots from the analytical store, not only the browser cache.</p>
+                    </div>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                     {errors.length > 0 && (
