@@ -18,6 +18,7 @@ from scipy import stats
 from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 from services.assay_tool_integrations import assay_tool_registry, tools_by_category
+from services.assay_analytical_store import analytical_store_status
 
 router = APIRouter()
 
@@ -3110,6 +3111,11 @@ def external_tools() -> Dict[str, Any]:
     return _json_clean({"tools": assay_tool_registry(), "by_category": tools_by_category()})
 
 
+@router.get("/analytical-store/status")
+def analytical_store() -> Dict[str, Any]:
+    return _json_clean(analytical_store_status())
+
+
 @router.get("/capabilities")
 def capabilities() -> Dict[str, Any]:
     tools = assay_tool_registry()
@@ -3119,6 +3125,7 @@ def capabilities() -> Dict[str, Any]:
             "surfaces": ["qPCR QuantStudio/StepOnePlus", "Waters/Empower chromatography", "plasmid DNA isoform analysis", "JMP-like DOE/statistics", "Plotly visualization"],
             "source_of_truth": "BMS API /api/assay-analytics",
             "not_used": "legacy standalone parser service",
+            "analytical_store": analytical_store_status(),
             "external_tools": tools,
             "external_tools_by_category": tools_by_category(),
         }

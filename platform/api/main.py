@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
+from services.assay_analytical_store import init_analytical_store
 from routers import analyses, analytics, assay_analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from services.analysis_worker import AnalysisWorker
@@ -36,6 +37,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize database
     await init_db()
+
+    if os.getenv("BMS_ANALYTICAL_INIT_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        await init_analytical_store()
+        logger.info("[STARTUP] Assay analytical PostgreSQL store initialized")
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():

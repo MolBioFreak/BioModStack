@@ -26,6 +26,7 @@ def test_assay_analytics_router_is_mounted_under_bms_api_namespace() -> None:
     assert "/api/assay-analytics/analysis/hplc/empower/import" in paths
     assert "/api/assay-analytics/analysis/doe/design" in paths
     assert "/api/assay-analytics/datasets/seed" not in paths
+    assert "/api/assay-analytics/analytical-store/status" in paths
 
 
 def test_assay_router_does_not_fabricate_fake_defaults_or_seed_data() -> None:
@@ -54,6 +55,29 @@ def test_assay_router_does_not_fabricate_fake_defaults_or_seed_data() -> None:
     violations = [fragment for fragment in forbidden_fragments if fragment in source]
     assert violations == []
     assert "fallback" not in (source + registry_source).lower()
+
+
+def test_assay_capabilities_expose_separate_analytical_postgres_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "BMS_ANALYTICAL_DATABASE_URL",
+        "postgresql+asyncpg://bms_assay:secret@127.0.0.1:55432/bms_analytical_data",
+    )
+    client = TestClient(bms_api_main.app)
+
+    response = client.get("/api/assay-analytics/capabilities")
+    assert response.status_code == 200
+    payload = response.json()
+    analytical_store = payload["analytical_store"]
+
+    assert analytical_store["database_kind"] == "postgresql"
+    assert analytical_store["schema_owner"] == "assay-analytics"
+    assert analytical_store["separate_from_protein_workflow_db"] is True
+    assert analytical_store["database_name"] == "bms_analytical_data"
+    assert "secret" not in str(analytical_store)
+
+    status = client.get("/api/assay-analytics/analytical-store/status")
+    assert status.status_code == 200
+    assert status.json()["url_preview"] == "postgresql+asyncpg://bms_assay:***@127.0.0.1:55432/bms_analytical_data"
 
 
 def test_frontend_payload_contracts_match_assay_router_endpoints() -> None:
