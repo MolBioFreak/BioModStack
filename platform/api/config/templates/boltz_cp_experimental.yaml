@@ -39,6 +39,7 @@ preset_params:
   bcp_backend: true-distributed-context-parallel
   bcp_triattn_backend: reference
   bcp_context_store_mode: evidence-only
+  bcp_context_query_tile_tokens: 512
   bcp_shard_plan_id: 2x2
   bcp_input_format: config_files
   bcp_output_format: mmcif

@@ -99,10 +99,14 @@ def test_true_backend_context_store_is_predictor_owned_not_plan_runtime() -> Non
 
     assert "--context_store_root \"\\$BCP_CONTEXT_STORE_ROOT\"" in run_block
     assert "--context_store_mode \"\\$BCP_CONTEXT_STORE_MODE\"" in run_block
+    assert "triangle_query_tile_flag=(--context_store_triangle_attention_query_tile_tokens \"\\$BCP_CONTEXT_QUERY_TILE_TOKENS\")" in run_block
+    assert '"\\${triangle_query_tile_flag[@]}"' in run_block
     assert "BCP_CONTEXT_STORE_MODE=${contextStoreMode}" in run_block
     assert "BCP_CONTEXT_STORE_ROOT=${contextStoreRoot}" in run_block
+    assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in run_block
     assert "--context_store_root" not in plan_block
     assert "--context_store_mode" not in plan_block
+    assert "--context_store_triangle_attention_query_tile_tokens" not in plan_block
 
 
 def test_true_backend_launch_manifest_reports_rank_local_dram_spill_truth_dynamically() -> None:
@@ -113,6 +117,8 @@ def test_true_backend_launch_manifest_reports_rank_local_dram_spill_truth_dynami
 
     assert 'context_store_mode = os.environ.get("BCP_CONTEXT_STORE_MODE", "").strip()' in run_block
     assert 'context_store_spill_enabled = context_store_mode.startswith("rank-local-dram-spill")' in run_block
+    assert 'context_triangle_query_tile_enabled = bool(os.environ.get("BCP_CONTEXT_QUERY_TILE_TOKENS", "").strip())' in run_block
     assert '"streaming_spill_enabled": context_store_spill_enabled' in run_block
-    assert '"memory_reduction_claimed": context_store_spill_enabled' in run_block
-    assert '"within_op_peak_not_reduced": context_store_spill_enabled' in run_block
+    assert '"within_operation_memory_reduction_claimed": context_triangle_query_tile_enabled' in run_block
+    assert '"memory_reduction_claimed": context_store_spill_enabled or context_triangle_query_tile_enabled' in run_block
+    assert '"within_op_peak_not_reduced": context_store_spill_enabled and not context_triangle_query_tile_enabled' in run_block

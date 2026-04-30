@@ -21,6 +21,8 @@ from scipy.signal import find_peaks, peak_widths, savgol_filter
 from services.assay_tool_integrations import assay_tool_registry, tools_by_category
 from services.assay_analytical_store import (
     analytical_store_status,
+    list_analytical_datasets,
+    load_analytical_dataset,
     list_qpcr_imports,
     load_qpcr_import,
     persist_qpcr_import_response,
@@ -1623,6 +1625,19 @@ async def qpcr_imports(limit: int = Query(50, ge=1, le=200)) -> List[Dict[str, A
     return _json_clean(await list_qpcr_imports(limit=limit))
 
 
+@router.get("/datasets")
+async def assay_datasets(assay_type: Optional[str] = None, limit: int = Query(100, ge=1, le=500)) -> List[Dict[str, Any]]:
+    return _json_clean(await list_analytical_datasets(assay_type=assay_type, limit=limit))
+
+
+@router.get("/datasets/{dataset_id}")
+async def assay_dataset_detail(dataset_id: str) -> Dict[str, Any]:
+    payload = await load_analytical_dataset(dataset_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Analytical dataset not found")
+    return _json_clean(payload)
+
+
 @router.get("/analysis/qpcr/imports/{analytical_import_id}")
 async def qpcr_import_detail(analytical_import_id: str) -> Dict[str, Any]:
     payload = await load_qpcr_import(analytical_import_id)
@@ -2311,8 +2326,17 @@ def _empower_injection_from_cdf(payload: bytes, filename: str) -> Dict[str, Any]
             parsed_comment = _empower_parse_comment(comment)
             raw_time = _netcdf_array(dataset, "raw_data_retention").astype(float)
             signal = _netcdf_array(dataset, "ordinate_values").astype(float)
-            if raw_time.size == 0 or signal.size == 0:
-                raise HTTPException(status_code=400, detail=f"{filename}: AIA CDF did not contain raw_data_retention and ordinate_values arrays")
+            if signal.size == 0:
+                raise HTTPException(status_code=400, detail=f"{filename}: AIA CDF did not contain ordinate_values signal array")
+            if raw_time.size == 0:
+                sampling_interval = _valid_chrom_float(_netcdf_array(dataset, "actual_sampling_interval").reshape(-1)[0] if _netcdf_array(dataset, "actual_sampling_interval").size else None)
+                delay_time = _valid_chrom_float(_netcdf_array(dataset, "actual_delay_time").reshape(-1)[0] if _netcdf_array(dataset, "actual_delay_time").size else 0.0)
+                run_time = _valid_chrom_float(_netcdf_array(dataset, "actual_run_time_length").reshape(-1)[0] if _netcdf_array(dataset, "actual_run_time_length").size else None)
+                if sampling_interval is None or sampling_interval <= 0:
+                    if run_time is None or run_time <= 0 or signal.size < 2:
+                        raise HTTPException(status_code=400, detail=f"{filename}: AIA CDF omitted raw_data_retention and lacks usable sampling interval/run time metadata")
+                    sampling_interval = run_time / float(max(signal.size - 1, 1))
+                raw_time = (delay_time or 0.0) + np.arange(signal.size, dtype=float) * sampling_interval
             n = min(raw_time.size, signal.size)
             raw_time = raw_time[:n]
             signal = signal[:n]
@@ -2578,8 +2602,33 @@ async def empower_import(
                 "content_type": file.content_type,
                 "size_bytes": len(payload),
                 "sha256": hashlib.sha256(payload).hexdigest(),
+                "content_bytes": payload,
+                "original_relative_path": file.filename or f"upload_{file_idx}.{extension or 'dat'}",
             }
         )
+        source_file_record = source_files[-1]
+        if extension == "zip":
+            try:
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    archive_members = []
+                    for member in sorted(archive.namelist()):
+                        if member.endswith("/"):
+                            continue
+                        member_ext = _upload_extension(member)
+                        if member_ext not in {"cdf", "arw"}:
+                            continue
+                        archive_members.append(
+                            {
+                                "member_name": member,
+                                "extension": member_ext,
+                                "member_role": "empower_aia_cdf" if member_ext == "cdf" else "empower_arw_metadata",
+                                "content_bytes": archive.read(member),
+                            }
+                        )
+                    if archive_members:
+                        source_file_record["archive_members"] = archive_members
+            except zipfile.BadZipFile:
+                pass
         if extension in _EMPOWER_NATIVE_DATABASE_EXTENSIONS:
             errors.append(
                 f"{file.filename}: Native Empower database/RAW files are not currently parsed by BMS for extension .{extension}; upload Empower AIA .cdf, ARW chromatogram text, ZIP containing .cdf/.arw, or CSV/ASCII injection/peak export"
