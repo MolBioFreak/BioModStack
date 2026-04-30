@@ -74,6 +74,39 @@ test('runtime switch context reloads the requested channel while preserving the 
   assert.equal(stableSwitch.windowUrl, 'http://127.0.0.1:18080/bms/designer/oligos');
 });
 
+test('runtime switching ignores the currently active shell origin and basename env', () => {
+  const previousRuntimeMode = process.env.BMS_RUNTIME_MODE;
+  const previousActiveOrigin = process.env.BMS_ACTIVE_FRONTEND_ORIGIN;
+  const previousFrontendOrigin = process.env.BMS_FRONTEND_ORIGIN;
+  const previousRouterBasename = process.env.BMS_ROUTER_BASENAME;
+  process.env.BMS_RUNTIME_MODE = 'container';
+  process.env.BMS_ACTIVE_FRONTEND_ORIGIN = 'http://127.0.0.1:18080';
+  process.env.BMS_FRONTEND_ORIGIN = 'http://127.0.0.1:18080';
+  process.env.BMS_ROUTER_BASENAME = '/bms/';
+  try {
+    const stableContext = resolveShellContext({ runtimeMode: 'container' });
+    const devSwitch = resolveRuntimeSwitchContext({
+      currentContext: stableContext,
+      currentUrl: 'http://127.0.0.1:18080/bms/assay',
+      targetRuntimeMode: 'dev',
+    });
+
+    assert.equal(devSwitch.runtimeMode, 'dev');
+    assert.equal(devSwitch.frontendOrigin, 'http://127.0.0.1:5173');
+    assert.equal(devSwitch.routerBasename, '/');
+    assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/assay');
+  } finally {
+    if (previousRuntimeMode === undefined) delete process.env.BMS_RUNTIME_MODE;
+    else process.env.BMS_RUNTIME_MODE = previousRuntimeMode;
+    if (previousActiveOrigin === undefined) delete process.env.BMS_ACTIVE_FRONTEND_ORIGIN;
+    else process.env.BMS_ACTIVE_FRONTEND_ORIGIN = previousActiveOrigin;
+    if (previousFrontendOrigin === undefined) delete process.env.BMS_FRONTEND_ORIGIN;
+    else process.env.BMS_FRONTEND_ORIGIN = previousFrontendOrigin;
+    if (previousRouterBasename === undefined) delete process.env.BMS_ROUTER_BASENAME;
+    else process.env.BMS_ROUTER_BASENAME = previousRouterBasename;
+  }
+});
+
 test('browser window options keep the renderer hardened, persistent, and expose only the audited preload api', () => {
   const options = buildBrowserWindowOptions('/tmp/biomodstack-preload.js');
 

@@ -167,8 +167,16 @@ export type RuntimeSwitchContextOptions = {
   targetRuntimeMode: ShellRuntimeMode;
 };
 
+function resolveRuntimeSwitchBaseContext(runtimeMode: ShellRuntimeMode): ShellContext {
+  return resolveShellContext({
+    runtimeMode,
+    frontendOrigin: defaultFrontendOrigin(runtimeMode),
+    routerBasename: runtimeMode === 'dev' ? '/' : '/bms/',
+  });
+}
+
 export function resolveRuntimeSwitchContext(options: RuntimeSwitchContextOptions): ShellContext {
-  const nextContext = resolveShellContext({ runtimeMode: options.targetRuntimeMode });
+  const nextContext = resolveRuntimeSwitchBaseContext(options.targetRuntimeMode);
   try {
     const currentUrl = new URL(options.currentUrl);
     const appPath = getCurrentAppPath(currentUrl.pathname, options.currentContext.routerBasename);

@@ -53,7 +53,8 @@ def test_template_registry_loads_boltz_cp_experimental() -> None:
     assert template.preset_params["template_model_id"] == "boltz_cp_experimental"
     assert template.preset_params["template_mode_id"] == "design"
     assert template.preset_params["structure_launch_variant"] == "boltz_cp_experimental"
-    assert template.preset_params["bcp_repo_path"] == "/home/dalab/tmp/boltz-cp"
+    assert template.preset_params["bcp_context_store_mode"] == "evidence-only"
+    assert template.preset_params["bcp_context_query_tile_tokens"] == 512
     assert template.preset_params["bcp_shard_plan_id"] == "2x2"
     assert template.preset_params["bcp_backend"] == "true-distributed-context-parallel"
     assert template.preset_params["bcp_triattn_backend"] == "reference"
@@ -223,6 +224,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "triattn_backend": "reference",
             "context_store_mode": "off",
             "context_store_root": "/tmp/predictor-owned-cp-store",
+            "context_query_tile_tokens": 256,
         },
         "/tmp/out",
         job_id="job-bcp-1",
@@ -247,9 +249,28 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_triattn_backend reference" in joined
     assert "--bcp_context_store_mode off" in joined
     assert "--bcp_context_store_root /tmp/predictor-owned-cp-store" in joined
+    assert "--bcp_context_query_tile_tokens 256" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
     assert "--input_path /tmp/complex_input.yaml" not in joined
     assert "--gpu_ids 0,1,2,3" not in joined
+
+
+def test_build_nextflow_command_defaults_boltz_cp_query_tiling_to_reference_triangle_attention() -> None:
+    cmd = build_nextflow_command(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "input_path": "/tmp/complex_input.yaml",
+            "shard_plan_id": "2x2",
+        },
+        "/tmp/out",
+        job_id="job-bcp-query-tiling-default",
+    )
+
+    joined = " ".join(cmd)
+
+    assert "--bcp_triattn_backend reference" in joined
+    assert "--bcp_context_query_tile_tokens 512" in joined
 
 
 def test_build_nextflow_command_defaults_boltz_cp_gpu_bridge_to_scheduler_gpu_not_local_four_gpu_rig(tmp_path: Path) -> None:
@@ -733,6 +754,21 @@ def test_boltz_cp_plan_manifest_exports_context_tile_params_without_truncation_a
     assert "BCP_CONTEXT_TILE_TOKENS=${contextTileTokens}" in module_text
     assert "BCP_CONTEXT_KEY_TILE_TOKENS=${contextKeyTileTokens}" in module_text
     assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in module_text
+
+
+def test_boltz_cp_true_distributed_predict_threads_triangle_attention_query_tiling_flag() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+    run_start = module_text.index("process RunBoltzCPExperimental {")
+    plan_start = module_text.index("process BuildBoltzCPPlanManifest {")
+    run_block = module_text[run_start:plan_start]
+
+    assert "def contextQueryTileTokensValue = (params.get('bcp_context_query_tile_tokens', '512') ?: '').toString().trim()" in run_block
+    assert "def contextQueryTileTokens = shellQuote(contextQueryTileTokensValue)" in run_block
+    assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in run_block
+    assert "context_triangle_query_tile_enabled = bool(os.environ.get(\"BCP_CONTEXT_QUERY_TILE_TOKENS\", \"\").strip())" in run_block
+    assert '"triangle_attention_query_tile_tokens": os.environ.get("BCP_CONTEXT_QUERY_TILE_TOKENS", "").strip()' in run_block
+    assert 'triangle_query_tile_flag=(--context_store_triangle_attention_query_tile_tokens "\\$BCP_CONTEXT_QUERY_TILE_TOKENS")' in run_block
+    assert '"\\${triangle_query_tile_flag[@]}"' in run_block
 
 
 def test_boltz_cp_true_distributed_cache_defaults_to_writable_boltz_models_with_task_local_fallback() -> None:
