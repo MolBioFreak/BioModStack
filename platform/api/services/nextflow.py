@@ -2960,6 +2960,7 @@ def build_nextflow_command(
             'triattn_backend': 'bcp_triattn_backend',
             'context_store_mode': 'bcp_context_store_mode',
             'context_store_root': 'bcp_context_store_root',
+            'context_query_tile_tokens': 'bcp_context_query_tile_tokens',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -3013,6 +3014,7 @@ def build_nextflow_command(
         params.setdefault('bcp_backend', 'true-distributed-context-parallel')
         params.setdefault('bcp_triattn_backend', 'reference')
         params.setdefault('bcp_context_store_mode', 'evidence-only')
+        params.setdefault('bcp_context_query_tile_tokens', 512)
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
