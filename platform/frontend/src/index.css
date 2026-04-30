@@ -436,11 +436,9 @@ body {
 }
 
 /* ============================================
-   GLOBAL SQUARED EDGES - No rounded corners
+   BORDER RADIUS UTILITIES
+   Keep Tailwind/BMS rounded workbench surfaces intact.
    ============================================ */
-* {
-  border-radius: 0 !important;
-}
 
 /* Exceptions for circular elements that should stay round */
 .rounded-full {
