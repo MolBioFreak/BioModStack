@@ -3,7 +3,7 @@
  */
 
 import { Link, useLocation } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     buildUiDiagnosticsPayload,
@@ -127,12 +127,154 @@ function readShowSystemAnalyticsTab(): boolean {
     }
 }
 
+interface DragScrollRailProps extends React.HTMLAttributes<HTMLDivElement> {
+    children: React.ReactNode;
+    contentClassName: string;
+}
+
+function useHorizontalDragScroll() {
+    const viewportRef = useRef<HTMLDivElement | null>(null);
+    const dragStateRef = useRef({
+        pointerId: null as number | null,
+        startX: 0,
+        scrollLeft: 0,
+        moved: false,
+    });
+    const suppressClickUntilRef = useRef(0);
+    const cleanupRef = useRef<(() => void) | null>(null);
+
+    useEffect(() => {
+        return () => {
+            cleanupRef.current?.();
+            cleanupRef.current = null;
+        };
+    }, []);
+
+    const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('[data-bms-drag-scroll-ignore="true"]')) {
+            return;
+        }
+
+        const viewport = viewportRef.current;
+        if (!viewport || viewport.scrollWidth <= viewport.clientWidth + 4) {
+            return;
+        }
+
+        cleanupRef.current?.();
+
+        dragStateRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            scrollLeft: viewport.scrollLeft,
+            moved: false,
+        };
+
+        const handlePointerMove = (moveEvent: PointerEvent) => {
+            const state = dragStateRef.current;
+            if (state.pointerId !== moveEvent.pointerId) {
+                return;
+            }
+
+            const deltaX = moveEvent.clientX - state.startX;
+            if (!state.moved && Math.abs(deltaX) > 6) {
+                state.moved = true;
+            }
+            if (!state.moved) {
+                return;
+            }
+
+            suppressClickUntilRef.current = Date.now() + 100;
+            viewport.scrollLeft = state.scrollLeft - deltaX;
+            moveEvent.preventDefault();
+        };
+
+        const cleanup = () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerEnd);
+            window.removeEventListener('pointercancel', handlePointerEnd);
+            cleanupRef.current = null;
+            dragStateRef.current = {
+                pointerId: null,
+                startX: 0,
+                scrollLeft: 0,
+                moved: false,
+            };
+        };
+
+        const handlePointerEnd = (endEvent: PointerEvent) => {
+            const state = dragStateRef.current;
+            if (state.pointerId !== endEvent.pointerId) {
+                return;
+            }
+            if (state.moved) {
+                suppressClickUntilRef.current = Date.now() + 100;
+            }
+            cleanup();
+        };
+
+        cleanupRef.current = cleanup;
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerEnd);
+        window.addEventListener('pointercancel', handlePointerEnd);
+    };
+
+    const handleClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+        if (Date.now() < suppressClickUntilRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    };
+
+    return {
+        viewportRef,
+        handlePointerDown,
+        handleClickCapture,
+    };
+}
+
+function DragScrollRail({
+    children,
+    className,
+    contentClassName,
+    style,
+    ...props
+}: DragScrollRailProps) {
+    const { viewportRef, handlePointerDown, handleClickCapture } = useHorizontalDragScroll();
+
+    return (
+        <div
+            {...props}
+            ref={viewportRef}
+            onPointerDown={handlePointerDown}
+            onClickCapture={handleClickCapture}
+            className={className}
+            style={{ touchAction: 'pan-x', ...style }}
+        >
+            <div className={contentClassName}>
+                {children}
+            </div>
+        </div>
+    );
+}
+
+const TOPBAR_NAV_ITEM_CLASSNAME = 'shrink-0 whitespace-nowrap rounded-lg px-[clamp(0.65rem,0.45rem+0.5vw,0.9rem)] py-2 text-[clamp(0.68rem,0.58rem+0.24vw,0.8125rem)] font-medium transition-all';
+
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
     const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
 
     const isActive = (path: string) => location.pathname === path;
     const showSystemMenus = location.pathname !== '/ngs';
+
+    useEffect(() => {
+        const activeTab = document.querySelector<HTMLElement>('[data-bms-primary-nav-active="true"]');
+        activeTab?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }, [location.pathname, showSystemAnalyticsTab]);
 
     const handleSetShowSystemAnalyticsTab = (enabled: boolean) => {
         setShowSystemAnalyticsTab(enabled);
@@ -160,119 +302,135 @@ export function Layout({ children }: LayoutProps) {
                     borderColor: 'var(--border-primary)'
                 }}
             >
-                <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
-                    <div className="flex items-center justify-between h-16 min-w-0 gap-3">
-                        <DiagnosticsMenu />
-                        {/* Logo / Brand */}
-                        <Link to="/" className="flex items-center shrink-0">
-                            <span
-                                className="text-lg font-bold whitespace-nowrap"
-                                style={{
-                                    color: 'var(--accent-primary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">BMS</span>
-                                <span className="hidden 2xl:inline">BioModStack</span>
-                            </span>
-                        </Link>
+                <div className="w-full px-2 sm:px-3 lg:px-4">
+                    <div className="flex min-w-0 items-center gap-2 py-2 sm:gap-3">
+                        <div className="flex items-center gap-2 shrink-0" data-bms-topbar-left="true">
+                            <DiagnosticsMenu />
+                            {/* Logo / Brand */}
+                            <Link to="/" className="flex items-center shrink-0">
+                                <span
+                                    className="font-bold whitespace-nowrap text-[clamp(1rem,0.92rem+0.35vw,1.2rem)]"
+                                    style={{
+                                        color: 'var(--accent-primary)'
+                                    }}
+                                >
+                                    <span className="inline md:hidden">BMS</span>
+                                    <span className="hidden md:inline">BioModStack</span>
+                                </span>
+                            </Link>
+                        </div>
 
                         {/* Navigation Links */}
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1 ml-2">
-                            <Link
-                                to="/"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Home</span>
-                                <span className="hidden 2xl:inline">Dashboard</span>
-                            </Link>
-                            <Link
-                                to="/submit"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Launcher</span>
-                                <span className="hidden 2xl:inline">Job Launcher</span>
-                            </Link>
-                            <Link
-                                to="/designs"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
-                                style={{
-                                    backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                <span className="inline 2xl:hidden">Viewer</span>
-                                <span className="hidden 2xl:inline">Data Viewer</span>
-                            </Link>
-                            <Link
-                                to="/designer"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
-                                    color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
-                                }}
-                                title="Molecular Biology Toolkit"
-                            >
-                                <span className="inline 2xl:hidden">Mol Bio Toolkit</span>
-                                <span className="hidden 2xl:inline">Molecular Biology Toolkit</span>
-                            </Link>
-                            <Link
-                                to="/ngs"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
-                                }}
-                                title="NGS Data Visualization Toolkit"
-                            >
-                                <span className="inline 2xl:hidden">NGS Toolkit</span>
-                                <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
-                            </Link>
-                            <Link
-                                to="/assay"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                                title="Assay Analytics"
-                            >
-                                <span className="inline 2xl:hidden">Assay</span>
-                                <span className="hidden 2xl:inline">Assay Analytics</span>
-                            </Link>
-                            {showSystemAnalyticsTab && (
+                        <DragScrollRail
+                            className="min-w-0 flex-1 max-w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                            contentClassName="flex w-max items-center gap-1.5 pr-1"
+                            data-bms-primary-nav-rail="true"
+                        >
+                            <>
                                 <Link
-                                    to="/infra"
-                                    className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                    to="/"
+                                    data-bms-primary-nav-active={isActive('/') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{
-                                        backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                     }}
-                                    title="System Analytics"
                                 >
-                                    <span>System Analytics</span>
+                                    Dashboard
                                 </Link>
-                            )}
-                            <Link
-                                to="/bioxp"
-                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
-                                style={{
-                                    backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
-                                    color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
-                                }}
-                                title="BioXP Control Surface"
-                            >
-                                <span className="hidden 2xl:inline">BioXP Control Surface</span>
-                                <span className="inline 2xl:hidden">BioXP Cockpit</span>
-                            </Link>
+                                <Link
+                                    to="/submit"
+                                    data-bms-primary-nav-active={isActive('/submit') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    Job Launcher
+                                </Link>
+                                <Link
+                                    to="/designs"
+                                    data-bms-primary-nav-active={isActive('/designs') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    Data Viewer
+                                </Link>
+                                <Link
+                                    to="/designer"
+                                    data-bms-primary-nav-active={isActive('/designer') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
+                                        color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
+                                    }}
+                                    title="Molecular Biology Toolkit"
+                                >
+                                    Mol Bio Toolkit
+                                </Link>
+                                <Link
+                                    to="/ngs"
+                                    data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="NGS Data Visualization Toolkit"
+                                >
+                                    NGS Toolkit
+                                </Link>
+                                <Link
+                                    to="/assay"
+                                    data-bms-primary-nav-active={isActive('/assay') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="Assay Analytics"
+                                >
+                                    Assay Analytics
+                                </Link>
+                                {showSystemAnalyticsTab && (
+                                    <Link
+                                        to="/infra"
+                                        data-bms-primary-nav-active={isActive('/infra') ? 'true' : undefined}
+                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                        style={{
+                                            backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                            color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        }}
+                                        title="System Analytics"
+                                    >
+                                        System Analytics
+                                    </Link>
+                                )}
+                                <Link
+                                    to="/bioxp"
+                                    data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
+                                        color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
+                                    }}
+                                    title="BioXP Control Surface"
+                                >
+                                    BioXP Cockpit
+                                </Link>
+                            </>
+                        </DragScrollRail>
 
+                        <DragScrollRail
+                            className="max-w-[42vw] shrink-0 overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none sm:max-w-[48vw] lg:max-w-[32rem] xl:max-w-full [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                            contentClassName="flex w-max items-center gap-1.5 pr-1"
+                            data-bms-topbar-utilities="true"
+                        >
+                            <>
                             {/* Theme Selector */}
                             <ThemeSelector />
 
@@ -287,7 +445,8 @@ export function Layout({ children }: LayoutProps) {
                                 showSystemAnalyticsTab={showSystemAnalyticsTab}
                                 onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
                             />
-                        </div>
+                            </>
+                        </DragScrollRail>
                     </div>
                 </div>
             </nav>
@@ -410,9 +569,13 @@ function DiagnosticsMenu() {
                 <>
                     <div
                         className="fixed inset-0 z-40"
+                        data-bms-drag-scroll-ignore="true"
                         onClick={() => setIsOpen(false)}
                     />
-                    <div className="absolute left-0 top-full mt-2 w-[26rem] max-w-[calc(100vw-1rem)] bg-slate-900 border border-emerald-700/60 rounded-lg shadow-xl z-50 p-3 space-y-3">
+                    <div
+                        className="absolute left-0 top-full mt-2 w-[26rem] max-w-[calc(100vw-1rem)] bg-slate-900 border border-emerald-700/60 rounded-lg shadow-xl z-50 p-3 space-y-3"
+                        data-bms-drag-scroll-ignore="true"
+                    >
                         <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-2">
                             <div>
                                 <p className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Diagnostics/About</p>
@@ -529,11 +692,15 @@ function DebugMenu({
                     {/* Backdrop */}
                     <div
                         className="fixed inset-0 z-40"
+                        data-bms-drag-scroll-ignore="true"
                         onClick={() => setIsOpen(false)}
                     />
 
                     {/* Dropdown */}
-                    <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2">
+                    <div
+                        className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2"
+                        data-bms-drag-scroll-ignore="true"
+                    >
                         <div className="px-3 py-2 border-b border-slate-700">
                             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Navigation</p>
                         </div>
@@ -962,8 +1129,11 @@ function PowerControlMenu() {
 
             {isOpen && (
                 <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-[1060px] max-w-[96vw] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3">
+                    <div className="fixed inset-0 z-40" data-bms-drag-scroll-ignore="true" onClick={() => setIsOpen(false)} />
+                    <div
+                        className="absolute right-0 top-full mt-2 w-[1060px] max-w-[96vw] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3"
+                        data-bms-drag-scroll-ignore="true"
+                    >
                         <div className="flex items-center justify-between border-b border-slate-700 pb-2">
                             <div>
                                 <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">GPU Hardware Controls</p>
@@ -1390,9 +1560,12 @@ function MSAServerSettingsMenu() {
 
             {isOpen && (
                 <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+                    <div className="fixed inset-0 z-40" data-bms-drag-scroll-ignore="true" onClick={() => setIsOpen(false)} />
 
-                    <div className="absolute right-0 top-full mt-2 w-[460px] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3">
+                    <div
+                        className="absolute right-0 top-full mt-2 w-[460px] max-w-[calc(100vw-1rem)] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3"
+                        data-bms-drag-scroll-ignore="true"
+                    >
                         <div className="flex items-center justify-between border-b border-slate-700 pb-2">
                             <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">MSA Server Settings</p>
                             <button
