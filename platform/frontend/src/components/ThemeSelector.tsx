@@ -16,7 +16,7 @@ export function ThemeSelector() {
     };
 
     return (
-        <div className="relative">
+        <div className="relative shrink-0">
             {/* Trigger Button */}
             <button
                 onClick={() => setIsOpen(!isOpen)}
@@ -44,12 +44,16 @@ export function ThemeSelector() {
                 <>
                     {/* Backdrop */}
                     <div
+                        data-bms-drag-scroll-ignore="true"
                         className="fixed inset-0 z-40"
                         onClick={() => setIsOpen(false)}
                     />
 
                     {/* Dropdown */}
-                    <div className="absolute right-0 top-full mt-2 w-56 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl shadow-2xl z-50 py-2 overflow-hidden">
+                    <div
+                        className="absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-1rem)] bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl shadow-2xl z-50 py-2 overflow-hidden"
+                        data-bms-drag-scroll-ignore="true"
+                    >
                         <div className="px-3 py-2 border-b border-[var(--border-primary)]">
                             <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-2">
                                 Quick Mode

@@ -44,6 +44,17 @@ test('assay analytics defines a shared BMS workbench primitive layer', () => {
   );
 });
 
+test('global CSS does not override BMS rounded workbench surfaces', () => {
+  const css = source('src/index.css');
+
+  assert.doesNotMatch(
+    css,
+    /\*\s*\{[^}]*border-radius\s*:\s*0(?:px)?\s*!important[^}]*\}/s,
+    'Global CSS must not force every BMS panel/card/button to square corners',
+  );
+  assert.match(css, /rounded-full\s*\{[^}]*9999px\s*!important/s, 'Circular badges and controls should keep their explicit round exception');
+});
+
 test('top-level assay page uses the shared shell/header/tabs instead of a bespoke hero', () => {
   const assay = source('src/components/AssayAnalytics.tsx');
   assert.match(assay, /AssayPageShell/);
@@ -137,4 +148,25 @@ test('HPLC sample quantification is grouped as a BMS input/result workbench', ()
   assert.match(chromatogram, /grid-cols-1 xl:grid-cols-\[minmax\(0,0\.95fr\)_minmax\(0,1\.05fr\)\]/);
   assert.doesNotMatch(chromatogram, /Calibration Conc\./);
   assert.match(chromatogram, /fetch\(`\$\{API_URL\}\/analysis\/hplc\/quantify`/);
+});
+
+test('HPLC quantification renders the backend calibration plot instead of exposing implementation copy', () => {
+  const chromatogram = source('src/components/hplc/ChromatogramAnalysis.tsx');
+  const quantification = chromatogram.slice(chromatogram.indexOf('export function HplcQuantification'));
+
+  assert.match(quantification, /plotly_json\?: \{ data: Plotly\.Data\[\]; layout: Partial<Plotly\.Layout> \}/);
+  assert.match(quantification, /r\.plotly_json && \(/);
+  assert.match(quantification, /<Plot/);
+  assert.doesNotMatch(quantification, /API contract remains/);
+});
+
+test('HPLC chromatogram baseline selector labels only methods implemented by the backend', () => {
+  const chromatogram = source('src/components/hplc/ChromatogramAnalysis.tsx');
+
+  assert.match(chromatogram, /useState\('mocca2_flatfit'\)/);
+  assert.match(chromatogram, /<option value="mocca2_flatfit">MOCCA2 flatfit/);
+  assert.match(chromatogram, /<option value="mocca2_arpls">MOCCA2 arPLS/);
+  assert.match(chromatogram, /<option value="mocca2_asls">MOCCA2 asLS/);
+  assert.doesNotMatch(chromatogram, /SNIP/);
+  assert.doesNotMatch(chromatogram, /value="snip"/);
 });

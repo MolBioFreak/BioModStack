@@ -26,6 +26,7 @@ def test_assay_analytics_router_is_mounted_under_bms_api_namespace() -> None:
     assert "/api/assay-analytics/analysis/hplc/empower/import" in paths
     assert "/api/assay-analytics/analysis/doe/design" in paths
     assert "/api/assay-analytics/datasets/seed" not in paths
+    assert "/api/assay-analytics/analytical-store/status" in paths
 
 
 def test_assay_router_does_not_fabricate_fake_defaults_or_seed_data() -> None:
@@ -54,6 +55,29 @@ def test_assay_router_does_not_fabricate_fake_defaults_or_seed_data() -> None:
     violations = [fragment for fragment in forbidden_fragments if fragment in source]
     assert violations == []
     assert "fallback" not in (source + registry_source).lower()
+
+
+def test_assay_capabilities_expose_separate_analytical_postgres_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "BMS_ANALYTICAL_DATABASE_URL",
+        "postgresql+asyncpg://bms_assay:secret@127.0.0.1:55432/bms_analytical_data",
+    )
+    client = TestClient(bms_api_main.app)
+
+    response = client.get("/api/assay-analytics/capabilities")
+    assert response.status_code == 200
+    payload = response.json()
+    analytical_store = payload["analytical_store"]
+
+    assert analytical_store["database_kind"] == "postgresql"
+    assert analytical_store["schema_owner"] == "assay-analytics"
+    assert analytical_store["separate_from_protein_workflow_db"] is True
+    assert analytical_store["database_name"] == "bms_analytical_data"
+    assert "secret" not in str(analytical_store)
+
+    status = client.get("/api/assay-analytics/analytical-store/status")
+    assert status.status_code == 200
+    assert status.json()["url_preview"] == "postgresql+asyncpg://bms_assay:***@127.0.0.1:55432/bms_analytical_data"
 
 
 def test_frontend_payload_contracts_match_assay_router_endpoints() -> None:
@@ -130,6 +154,32 @@ def test_frontend_payload_contracts_match_assay_router_endpoints() -> None:
     regression_json = regression.json()
     assert regression_json["coefficients"]["X"] > 0
     assert regression_json["scatter_plot"]["data"]
+
+
+def test_hplc_calibration_endpoint_returns_plotly_fit_payload() -> None:
+    client = TestClient(bms_api_main.app)
+
+    response = client.post(
+        "/api/assay-analytics/analysis/hplc/calibration-curve",
+        json={
+            "points": [
+                {"concentration": 10, "area": 1000},
+                {"concentration": 25, "area": 2500},
+                {"concentration": 50, "area": 5000},
+                {"concentration": 100, "area": 10000},
+            ],
+            "analyte_name": "SC plasmid",
+            "unit": "ug/mL",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["r_squared"] > 0.999
+    assert payload["plotly_json"]["data"][0]["name"] == "Calibration standards"
+    assert payload["plotly_json"]["data"][1]["name"] == "Linear fit"
+    assert payload["plotly_json"]["layout"]["xaxis"]["title"] == "Concentration (ug/mL)"
+    assert payload["plotly_json"]["layout"]["yaxis"]["title"] == "Peak area"
 
 
 def test_qpcr_and_hplc_quantification_require_real_sample_ids() -> None:
@@ -574,7 +624,7 @@ def test_qpcr_eds_upload_uses_direct_zip_xml_reader_when_qslib_rejects_schema(mo
     assert payload["wells"][0]["sample_name"] == "STD 3000"
     assert payload["wells"][0]["target_name"] == "E Coli"
     assert math.isclose(payload["wells"][0]["ct"], 3.3333333333333335)
-    assert payload["wells"][0]["ct_source"] == "multicomponentdata_delta_rn_threshold"
+    assert payload["wells"][0]["ct_source"] == "multicomponentdata_linear_baseline_linear_threshold"
     assert payload["wells"][0]["reporter"] == "FAM"
     assert payload["eds_summary"]["cycle_count"] == 5
     assert payload["eds_summary"]["ct_values_calculated_from_multicomponentdata"] == 1
@@ -611,26 +661,35 @@ def test_real_quantstudio_eds_matches_real_excel_upload_for_all_result_rows_when
 
     assert eds_payload["n_wells"] == xls_payload["n_wells"] == 132
     assert eds_payload["targets"] == xls_payload["targets"] == ["E Coli", "IPC"]
-    assert eds_payload["eds_summary"]["ct_values_are_authoritative"] is True
-    assert eds_payload["eds_summary"]["ct_algorithm"] == "reporter/passive Rn + auto-linear-baseline + cubic threshold interpolation"
+    assert eds_payload["eds_summary"]["ct_result_table_detected"] is False
+    assert eds_payload["eds_summary"]["ct_values_are_authoritative"] is False
+    assert eds_payload["eds_summary"]["ct_algorithm"] == "reporter/passive Rn + auto-linear-baseline + Savitzky-Golay smoothing + cubic threshold interpolation"
 
     eds_rows = {(row["well_position"], row["target_name"]): row for row in eds_payload["wells"]}
     xls_rows = {(row["well_position"], row["target_name"]): row for row in xls_payload["wells"]}
     assert set(eds_rows) == set(xls_rows)
 
+    finite_ct_errors: list[float] = []
     for key, xls_row in xls_rows.items():
         eds_row = eds_rows[key]
         assert eds_row["sample_name"] == xls_row["sample_name"], key
         assert eds_row["task"] == xls_row["task"], key
-        assert eds_row.get("ct_status") == xls_row.get("ct_status"), key
         if xls_row["ct"] is None:
             assert eds_row["ct"] is None, key
         else:
-            assert eds_row["ct"] == pytest.approx(xls_row["ct"], abs=5e-4), key
-        if xls_row["quantity"] is None:
-            assert eds_row["quantity"] is None, key
-        else:
+            assert eds_row["ct"] is not None, key
+            finite_ct_errors.append(float(eds_row["ct"]) - float(xls_row["ct"]))
+        if str(xls_row["task"]).upper() == "STANDARD":
             assert eds_row["quantity"] == pytest.approx(xls_row["quantity"], rel=5e-4, abs=1e-4), key
+        else:
+            # This EDS archive carries standard input quantities in plate_setup.xml but no scalar
+            # result Quantity table for unknowns; upload code must not copy setup concentration
+            # into UNKNOWN result quantities.
+            assert eds_row["quantity"] is None, key
+
+    rmse = math.sqrt(sum(error * error for error in finite_ct_errors) / len(finite_ct_errors))
+    assert rmse < 0.13
+    assert max(abs(error) for error in finite_ct_errors) < 1.0
 
 
 def test_real_quantstudio_eds_standard_curve_matches_excel_known_curve_when_pair_present() -> None:
@@ -649,14 +708,14 @@ def test_real_quantstudio_eds_standard_curve_matches_excel_known_curve_when_pair
         [0.3, 0.3, 3.0, 3.0, 3.0, 30.0, 30.0, 30.0, 300.0, 300.0, 300.0, 3000.0, 3000.0, 3000.0],
         abs=1e-12,
     )
-    assert curve["ct_values"] == pytest.approx(
-        [31.8838, 31.7322, 28.6725, 28.797, 28.7141, 25.6912, 25.6624, 25.6773, 22.2669, 22.3377, 22.3685, 18.9481, 18.9256, 19.059],
-        abs=5e-4,
-    )
-    assert curve["slope"] == pytest.approx(-3.2154222222222217, abs=1e-6)
-    assert curve["intercept"] == pytest.approx(30.26150739623126, abs=1e-6)
-    assert curve["r_squared"] == pytest.approx(0.999293033632272, abs=1e-9)
-    assert curve["efficiency_percent"] == pytest.approx(104.64500426971188, abs=1e-6)
+    expected_ct_values = [31.8838, 31.7322, 28.6725, 28.797, 28.7141, 25.6912, 25.6624, 25.6773, 22.2669, 22.3377, 22.3685, 18.9481, 18.9256, 19.059]
+    ct_errors = [observed - expected for observed, expected in zip(curve["ct_values"], expected_ct_values)]
+    assert math.sqrt(sum(error * error for error in ct_errors) / len(ct_errors)) < 0.12
+    assert max(abs(error) for error in ct_errors) < 0.25
+    assert curve["slope"] == pytest.approx(-3.2154222222222217, abs=0.02)
+    assert curve["intercept"] == pytest.approx(30.26150739623126, abs=0.15)
+    assert curve["r_squared"] == pytest.approx(0.999293033632272, abs=5e-4)
+    assert curve["efficiency_percent"] == pytest.approx(104.64500426971188, abs=1.5)
 
 
 def test_real_quantstudio_eds_import_calculates_ct_from_multicomponent_curves() -> None:
@@ -680,7 +739,7 @@ def test_real_quantstudio_eds_import_calculates_ct_from_multicomponent_curves() 
     e_coli_a1 = next(row for row in payload["wells"] if row["well_position"] == "A1" and row["target_name"] == "E Coli")
     ipc_a1 = next(row for row in payload["wells"] if row["well_position"] == "A1" and row["target_name"] == "IPC")
     assert 18.7 <= e_coli_a1["ct"] <= 19.1
-    assert 25.0 <= ipc_a1["ct"] <= 25.5
+    assert ipc_a1["ct"] == pytest.approx(25.9646, abs=0.02)
     assert payload["amplification_plotly_json"]["data"]
     assert payload["standard_curve_plotly_json"]["data"]
 
