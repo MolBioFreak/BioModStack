@@ -216,6 +216,10 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     response = await bioxp.bioxp_capabilities()
 
     assert response['linkage_url'] == 'http://robot:8123'
+    assert response['robot_hardware_assumption'] == 'functional_under_oem'
+    assert response['truth_source'] == 'robot_local_oem_compat_layer'
+    assert response['bms_role'] == 'thin_operator_surface'
+    assert response['bms_proxy_routes']['/oem-compat/capabilities/test-prep'] is True
     assert response['bms_proxy_routes']['/liquid/status'] is True
     assert response['bms_proxy_routes']['/motion/reference/status'] is True
     assert response['bms_proxy_routes']['/motion/axes/current'] is True
@@ -223,6 +227,20 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['bms_proxy_routes']['/vision/inspect'] is True
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
     assert response['robot_local_expected_routes']['/motion/axes/current'] is True
+
+
+@pytest.mark.asyncio
+async def test_bioxp_oem_test_prep_capabilities_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'schema_version': 'bioxp.oem_compat.capability_matrix.v1'}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    assert await bioxp.bioxp_oem_test_prep_capabilities() == {'schema_version': 'bioxp.oem_compat.capability_matrix.v1'}
+    assert calls == [('GET', '/oem-compat/capabilities/test-prep', None, None, 20.0)]
 
 
 @pytest.mark.asyncio
