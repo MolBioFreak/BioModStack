@@ -192,6 +192,7 @@ def _maintenance_disabled_detail() -> str:
 
 ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/status": True,
+    "/oem-compat/capabilities/test-prep": True,
     "/motion/reference/status": True,
     "/motion/reference/mark_referenced": True,
     "/motion/reference/mark_desynced": True,
@@ -484,13 +485,22 @@ async def bioxp_capabilities():
         "linkage_url": _GLOBAL_LINKAGE_URL,
         "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
         "recommended_url": _recommended_linkage_url(),
+        "robot_hardware_assumption": "functional_under_oem",
+        "truth_source": "robot_local_oem_compat_layer",
+        "bms_role": "thin_operator_surface",
         "robot_local_expected_routes": dict(sorted(ROBOT_LOCAL_EXPECTED_ROUTES.items())),
         "bms_proxy_routes": dict(sorted(BMS_PROXIED_ROUTES.items())),
         "notes": [
             "BMS links to the robot-local BioXP runtime and exposes only the routes listed as proxied.",
             "Route parity is a control-plane capability statement; hardware readiness still comes from runtime status/preflight responses.",
+            "The robot is treated as functional under OEM control; BMS should not present unresolved Linux parity work as a bad-component verdict.",
         ],
     }
+
+
+@router.get("/capabilities/oem-test-prep")
+async def bioxp_oem_test_prep_capabilities():
+    return await proxy_request("GET", "/oem-compat/capabilities/test-prep", timeout=20.0)
 
 
 @router.get("/motion/reference/status")
