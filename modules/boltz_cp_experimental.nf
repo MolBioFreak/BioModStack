@@ -53,8 +53,16 @@ process RunBoltzCPExperimental {
     def atomsPerWindowQueriesKeysValue = (params.get('bcp_atoms_per_window_queries_keys', '16 32') ?: '16 32').toString().trim()
     def contextStoreModeValue = (params.get('bcp_context_store_mode', 'evidence-only') ?: 'evidence-only').toString().trim()
     def contextStoreRootValue = (params.get('bcp_context_store_root', '') ?: '').toString().trim()
-    def contextQueryTileTokensValue = (params.get('bcp_context_query_tile_tokens', '512') ?: '').toString().trim()
+    def contextQueryTileTokensValue = (params.get('bcp_context_store_triangle_attention_query_tile_tokens', params.get('bcp_context_query_tile_tokens', '512')) ?: '').toString().trim()
+    def contextLogicalSizeCpValue = (params.get('bcp_context_store_logical_size_cp', '') ?: '').toString().trim()
+    def contextPairTileTokensValue = (params.get('bcp_context_store_pair_tile_tokens', '') ?: '').toString().trim()
+    def contextKeyTileTokensValue = (params.get('bcp_context_store_key_tile_tokens', '') ?: '').toString().trim()
+    def contextStoreEventLevelValue = (params.get('bcp_context_store_event_level', 'perf-summary') ?: 'perf-summary').toString().trim()
     def contextQueryTileTokens = shellQuote(contextQueryTileTokensValue)
+    def contextLogicalSizeCp = shellQuote(contextLogicalSizeCpValue)
+    def contextPairTileTokens = shellQuote(contextPairTileTokensValue)
+    def contextKeyTileTokens = shellQuote(contextKeyTileTokensValue)
+    def contextStoreEventLevel = shellQuote(contextStoreEventLevelValue)
     def maxMsaSeqs = shellQuote(maxMsaSeqsValue)
     def maxParallelSamples = shellQuote(maxParallelSamplesValue)
     def precision = shellQuote(precisionValue)
@@ -167,10 +175,19 @@ process RunBoltzCPExperimental {
     BCP_CONTEXT_STORE_MODE=${contextStoreMode}
     BCP_CONTEXT_STORE_ROOT=${contextStoreRoot}
     BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}
+    BCP_CONTEXT_STORE_LOGICAL_SIZE_CP=${contextLogicalSizeCp}
+    BCP_CONTEXT_STORE_PAIR_TILE_TOKENS=${contextPairTileTokens}
+    BCP_CONTEXT_STORE_KEY_TILE_TOKENS=${contextKeyTileTokens}
+    BCP_CONTEXT_STORE_EVENT_LEVEL=${contextStoreEventLevel}
+    if [ -z "\$BCP_CONTEXT_STORE_EVENT_LEVEL" ]; then
+        BCP_CONTEXT_STORE_EVENT_LEVEL=perf-summary
+    fi
     if [ -z "\$BCP_CONTEXT_STORE_ROOT" ]; then
         BCP_CONTEXT_STORE_ROOT="\$TASK_ROOT/true_cp_context_store"
     fi
-    if [[ "\$BCP_CONTEXT_STORE_MODE" == rank-local-dram-spill* ]] && [ -n "\$BCP_CONTEXT_QUERY_TILE_TOKENS" ]; then
+    if [[ "\$BCP_CONTEXT_STORE_MODE" == virtual-dram-stream-attention ]]; then
+        BCP_CONTEXT_STORE_SEMANTICS=torch.distributed_dtensor_pairformer_virtual_dram_stream_attention_and_projected_triangle_multiplication
+    elif [[ "\$BCP_CONTEXT_STORE_MODE" == rank-local-dram-spill* ]] && [ -n "\$BCP_CONTEXT_QUERY_TILE_TOKENS" ]; then
         BCP_CONTEXT_STORE_SEMANTICS=torch.distributed_dtensor_pairformer_rank_local_dram_spill_and_reference_triangle_attention_query_tiling
     elif [[ "\$BCP_CONTEXT_STORE_MODE" == rank-local-dram-spill* ]]; then
         BCP_CONTEXT_STORE_SEMANTICS=torch.distributed_dtensor_pairformer_rank_local_dram_spill
@@ -182,6 +199,7 @@ process RunBoltzCPExperimental {
     export BCP_CONFIDENCE_PREDICTION BCP_MAX_MSA_SEQS BCP_MAX_PARALLEL_SAMPLES BCP_PRECISION BCP_SAMPLING_STEPS
     export BCP_TRIATTN_BACKEND BCP_SDPA_WITH_BIAS_BACKEND BCP_SDPA_WITH_BIAS_SHARDWISE_BACKEND
     export BCP_ATOMS_PER_WINDOW_QUERIES_KEYS BCP_DATA_PLANE_SEMANTICS BCP_CONTEXT_STORE_MODE BCP_CONTEXT_STORE_ROOT BCP_CONTEXT_STORE_SEMANTICS BCP_CONTEXT_QUERY_TILE_TOKENS
+    export BCP_CONTEXT_STORE_LOGICAL_SIZE_CP BCP_CONTEXT_STORE_PAIR_TILE_TOKENS BCP_CONTEXT_STORE_KEY_TILE_TOKENS BCP_CONTEXT_STORE_EVENT_LEVEL
     USE_MSA=${quotedUseMsa}
     CODE_ROOT=${codeRoot}
     MSA_PROVIDER=${quotedMsaProvider}
@@ -592,8 +610,11 @@ from pathlib import Path
 
 context_store_mode = os.environ.get("BCP_CONTEXT_STORE_MODE", "").strip()
 context_store_spill_enabled = context_store_mode.startswith("rank-local-dram-spill")
+context_virtual_streaming_enabled = context_store_mode == "virtual-dram-stream-attention"
 context_triangle_query_tile_enabled = bool(os.environ.get("BCP_CONTEXT_QUERY_TILE_TOKENS", "").strip())
-if context_store_mode == "rank-local-dram-spill-layer":
+if context_virtual_streaming_enabled:
+    memory_reduction_scope = "rank_local_virtual_dram_streaming_for_triangle_attention_and_projected_triangle_multiplication"
+elif context_store_mode == "rank-local-dram-spill-layer":
     memory_reduction_scope = "rank_local_between_pairformer_layers_only"
 elif context_store_mode == "rank-local-dram-spill-op":
     memory_reduction_scope = "rank_local_between_pairformer_operations_only"
@@ -628,19 +649,24 @@ payload = {
     "context_store_root": os.environ.get("BCP_CONTEXT_STORE_ROOT", ""),
     "context_store_semantics": os.environ.get("BCP_CONTEXT_STORE_SEMANTICS", ""),
     "triangle_attention_query_tile_tokens": os.environ.get("BCP_CONTEXT_QUERY_TILE_TOKENS", "").strip(),
+    "context_store_logical_size_cp": os.environ.get("BCP_CONTEXT_STORE_LOGICAL_SIZE_CP", "").strip(),
+    "context_store_pair_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_PAIR_TILE_TOKENS", "").strip(),
+    "context_store_key_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_KEY_TILE_TOKENS", "").strip(),
+    "context_store_event_level": os.environ.get("BCP_CONTEXT_STORE_EVENT_LEVEL", "").strip(),
     "context_store_truth": {
         "predictor_owned": True,
         "evidence_source": "Boltz2Distributed/PairformerModule.forward",
         "shared_cache_serial_prediction": False,
         "output_tiling_only": False,
         "streaming_spill_enabled": context_store_spill_enabled,
-        "within_operation_memory_reduction_claimed": context_triangle_query_tile_enabled,
-        "memory_reduction_claimed": context_store_spill_enabled or context_triangle_query_tile_enabled,
+        "virtual_streaming_enabled": context_virtual_streaming_enabled,
+        "within_operation_memory_reduction_claimed": context_virtual_streaming_enabled or context_triangle_query_tile_enabled,
+        "memory_reduction_claimed": context_virtual_streaming_enabled or context_store_spill_enabled or context_triangle_query_tile_enabled,
         "memory_reduction_scope": memory_reduction_scope,
         "limitations": {
-            "within_op_peak_not_reduced": context_store_spill_enabled and not context_triangle_query_tile_enabled,
-            "triangle_attention_not_tiled_by_this_mode": context_store_spill_enabled and not context_triangle_query_tile_enabled,
-            "triangle_multiplication_not_tiled_by_this_mode": context_store_spill_enabled,
+            "within_op_peak_not_reduced": context_store_spill_enabled and not context_triangle_query_tile_enabled and not context_virtual_streaming_enabled,
+            "triangle_attention_not_tiled_by_this_mode": context_store_spill_enabled and not context_triangle_query_tile_enabled and not context_virtual_streaming_enabled,
+            "triangle_multiplication_not_tiled_by_this_mode": context_store_spill_enabled and not context_virtual_streaming_enabled,
             "model_parameters_not_spilled": context_store_spill_enabled,
             "msa_and_diffusion_state_not_spilled": context_store_spill_enabled,
         },
@@ -714,6 +740,18 @@ PY
         if [ -n "\$BCP_CONTEXT_QUERY_TILE_TOKENS" ]; then
             triangle_query_tile_flag=(--context_store_triangle_attention_query_tile_tokens "\$BCP_CONTEXT_QUERY_TILE_TOKENS")
         fi
+        context_logical_size_cp_flag=()
+        if [ -n "\$BCP_CONTEXT_STORE_LOGICAL_SIZE_CP" ]; then
+            context_logical_size_cp_flag=(--context_store_logical_size_cp "\$BCP_CONTEXT_STORE_LOGICAL_SIZE_CP")
+        fi
+        context_pair_tile_tokens_flag=()
+        if [ -n "\$BCP_CONTEXT_STORE_PAIR_TILE_TOKENS" ]; then
+            context_pair_tile_tokens_flag=(--context_store_pair_tile_tokens "\$BCP_CONTEXT_STORE_PAIR_TILE_TOKENS")
+        fi
+        context_key_tile_tokens_flag=()
+        if [ -n "\$BCP_CONTEXT_STORE_KEY_TILE_TOKENS" ]; then
+            context_key_tile_tokens_flag=(--context_store_key_tile_tokens "\$BCP_CONTEXT_STORE_KEY_TILE_TOKENS")
+        fi
 
         set +e
         "\$BOLTZ_PYTHON" -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
@@ -726,7 +764,11 @@ PY
             --output_format "\$OUTPUT_FORMAT" \
             --context_store_root "\$BCP_CONTEXT_STORE_ROOT" \
             --context_store_mode "\$BCP_CONTEXT_STORE_MODE" \
+            --context_store_event_level "\$BCP_CONTEXT_STORE_EVENT_LEVEL" \
             "\${triangle_query_tile_flag[@]}" \
+            "\${context_logical_size_cp_flag[@]}" \
+            "\${context_pair_tile_tokens_flag[@]}" \
+            "\${context_key_tile_tokens_flag[@]}" \
             --recycling_steps ${recyclingSteps} \
             --sampling_steps ${samplingSteps} \
             --diffusion_samples ${diffusionSamples} \
