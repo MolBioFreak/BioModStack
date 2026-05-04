@@ -39,6 +39,9 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert any(param.name == "triattn_backend" for param in model.params)
     assert any(param.name == "context_store_mode" for param in model.params)
     assert any(param.name == "context_store_root" for param in model.params)
+    assert any(param.name == "context_store_logical_size_cp" for param in model.params)
+    assert any(param.name == "context_store_pair_tile_tokens" for param in model.params)
+    assert any(param.name == "context_store_key_tile_tokens" for param in model.params)
     assert not any(param.name == "size_cp" for param in model.params)
 
 
@@ -145,10 +148,10 @@ def test_boltz_cp_model_rejects_single_sampling_step_before_runtime() -> None:
     assert "sampling_steps must be >= 2.0" in errors
 
 
-def test_boltz_cp_model_accepts_rank_local_dram_spill_context_store_modes() -> None:
+def test_boltz_cp_model_accepts_dram_spill_and_virtual_streaming_context_store_modes() -> None:
     registry = ModelRegistry()
 
-    for mode in ("rank-local-dram-spill-layer", "rank-local-dram-spill-op"):
+    for mode in ("rank-local-dram-spill-layer", "rank-local-dram-spill-op", "virtual-dram-stream-attention"):
         errors = registry.validate_job_params(
             "boltz_cp_experimental",
             "design",
@@ -225,6 +228,9 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "context_store_mode": "off",
             "context_store_root": "/tmp/predictor-owned-cp-store",
             "context_query_tile_tokens": 256,
+            "context_store_logical_size_cp": 16,
+            "context_store_pair_tile_tokens": 128,
+            "context_store_key_tile_tokens": 64,
         },
         "/tmp/out",
         job_id="job-bcp-1",
@@ -250,6 +256,9 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_context_store_mode off" in joined
     assert "--bcp_context_store_root /tmp/predictor-owned-cp-store" in joined
     assert "--bcp_context_query_tile_tokens 256" in joined
+    assert "--bcp_context_store_logical_size_cp 16" in joined
+    assert "--bcp_context_store_pair_tile_tokens 128" in joined
+    assert "--bcp_context_store_key_tile_tokens 64" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
     assert "--input_path /tmp/complex_input.yaml" not in joined
     assert "--gpu_ids 0,1,2,3" not in joined
@@ -762,7 +771,7 @@ def test_boltz_cp_true_distributed_predict_threads_triangle_attention_query_tili
     plan_start = module_text.index("process BuildBoltzCPPlanManifest {")
     run_block = module_text[run_start:plan_start]
 
-    assert "def contextQueryTileTokensValue = (params.get('bcp_context_query_tile_tokens', '512') ?: '').toString().trim()" in run_block
+    assert "def contextQueryTileTokensValue = (params.get('bcp_context_store_triangle_attention_query_tile_tokens', params.get('bcp_context_query_tile_tokens', '512')) ?: '').toString().trim()" in run_block
     assert "def contextQueryTileTokens = shellQuote(contextQueryTileTokensValue)" in run_block
     assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in run_block
     assert "context_triangle_query_tile_enabled = bool(os.environ.get(\"BCP_CONTEXT_QUERY_TILE_TOKENS\", \"\").strip())" in run_block

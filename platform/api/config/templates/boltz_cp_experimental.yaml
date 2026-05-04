@@ -17,8 +17,9 @@ status: >
   Experimental alpha. true-distributed-context-parallel is the default data-plane
   backend. Legacy shared-cache publication remains opt-in and should not be read
   as native distributed CP. Host-RAM spill modes are predictor-owned rank-local
-  Pairformer z offload at layer/op boundaries only; they do not reduce within-op
-  triangle-attention or outer-product scratch peaks.
+  Pairformer z offload at layer/op boundaries only. virtual-dram-stream-attention is
+  an experimental true data-plane DRAM streaming bridge for fused outer-product-mean
+  projection plus triangle attention/projected triangle multiplication windows.
 
 stages:
   - name: Input Intake

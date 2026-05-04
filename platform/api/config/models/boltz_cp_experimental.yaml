@@ -36,6 +36,9 @@ modes:
       - context_store_mode
       - context_store_root
       - context_query_tile_tokens
+      - context_store_logical_size_cp
+      - context_store_pair_tile_tokens
+      - context_store_key_tile_tokens
       - input_format
       - output_format
       - write_full_pae
@@ -103,13 +106,17 @@ params:
       rank-local-dram-spill-layer and rank-local-dram-spill-op are compute-affecting
       true data-plane modes that copy the rank-local Pairformer z shard to host
       RAM between layer or operation boundaries respectively; they do not reduce
-      within-operation scratch peaks. Set off to disable the evidence/spill hook.
+      within-operation scratch peaks. virtual-dram-stream-attention is the experimental
+      true data-plane DRAM streaming bridge for triangle attention and projected
+      triangle multiplication; it requires logical/tile knobs and remains fail-closed.
+      Set off to disable the evidence/spill hook.
     required: false
     default: evidence-only
     enum:
       - evidence-only
       - rank-local-dram-spill-layer
       - rank-local-dram-spill-op
+      - virtual-dram-stream-attention
       - "off"
 
   - name: context_store_root
@@ -129,6 +136,24 @@ params:
       control-plane cache.
     required: false
     default: 512
+    minimum: 1
+
+  - name: context_store_logical_size_cp
+    type: integer
+    description: Logical virtual CP shard count for virtual-dram-stream-attention; e.g. 16 for a 4x4 logical grid on CP4 physical ranks.
+    required: false
+    minimum: 1
+
+  - name: context_store_pair_tile_tokens
+    type: integer
+    description: Pair-axis tile token count for virtual DRAM-streamed Pairformer state blocks.
+    required: false
+    minimum: 1
+
+  - name: context_store_key_tile_tokens
+    type: integer
+    description: Key-axis tile token count for virtual DRAM-streamed triangle attention blocks.
+    required: false
     minimum: 1
 
   - name: input_format
