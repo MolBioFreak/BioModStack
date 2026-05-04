@@ -2097,8 +2097,16 @@ export const BioXpCockpit = () => {
                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Quick Motion</div>
                 <div className="text-[10px] text-content-muted">Guarded jog controls for live calibration inside the viewer. Hold an arrow to keep nudging while limits and runtime guardrails stay active.</div>
             </div>
-            <CameraHoldJogPad enabled={isConnected} />
-            <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+            {showCommissioningControls ? (
+                <>
+                    <CameraHoldJogPad enabled={isConnected} />
+                    <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+                </>
+            ) : (
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
+                    Camera-overlaid jog controls are commissioning-only. Use the live image for observation unless the supervised commissioning toggle is open.
+                </div>
+            )}
         </div>
     );
     const motionPowerPanel = (
@@ -2160,103 +2168,112 @@ export const BioXpCockpit = () => {
                 </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-                <button
-                    onClick={() => {
-                        if (motionPowerApiMissing) {
-                            prepareInterlock.mutate(undefined, {
-                                onSuccess: (data) => recordMotionInfraAction('enable_legacy', { ...data, legacy_fallback: true }),
-                                onError: (error) => recordMotionInfraError('enable_legacy', error),
-                            });
-                            return;
-                        }
-                        motionPowerEnable.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('enable', data),
-                            onError: (error) => recordMotionInfraError('enable', error),
-                        });
-                    }}
-                    disabled={motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending)}
-                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
-                </button>
-                <button
-                    onClick={() =>
-                        motionArmStrictStartup.mutate(
-                            { run_homing: false },
-                            {
-                                onSuccess: (data) => recordMotionInfraAction('arm_motion', data),
-                                onError: (error) => recordMotionInfraError('arm_motion', error),
-                            },
-                        )
-                    }
-                    disabled={motionArmStrictStartup.isPending || motionPowerApiMissing}
-                    className="px-4 py-2 bg-success/20 hover:bg-success/30 text-success text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motion'}
-                </button>
-                <button
-                    onClick={() =>
-                        prepareInterlock.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('interlock', data),
-                            onError: (error) => recordMotionInfraError('interlock', error),
-                        })
-                    }
-                    disabled={prepareInterlock.isPending}
-                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Interlock'}
-                </button>
-                <button
-                    onClick={() =>
-                        clearLock.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('clear_lock', data),
-                            onError: (error) => recordMotionInfraError('clear_lock', error),
-                        })
-                    }
-                    disabled={clearLock.isPending}
-                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
-                </button>
-                <button
-                    onClick={() =>
-                        motionPowerDiag.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('diag', data),
-                            onError: (error) => recordMotionInfraError('diag', error),
-                        })
-                    }
-                    disabled={motionPowerDiag.isPending || motionPowerApiMissing}
-                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
-                </button>
-                <div className="flex items-center gap-2">
-                    <input
-                        type="number"
-                        min={1}
-                        max={5}
-                        value={motionHardResetRounds}
-                        onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
-                        className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
-                    />
-                    <button
-                        onClick={() =>
-                            motionHardReset.mutate(
-                                { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
-                                {
-                                    onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
-                                    onError: (error) => recordMotionInfraError('hard_reset', error),
-                                },
-                            )
-                        }
-                        disabled={motionHardReset.isPending || motionPowerApiMissing}
-                        className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
-                    >
-                        {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
-                    </button>
+            {showCommissioningControls ? (
+                <div className="space-y-3 rounded-lg border border-warning/20 bg-warning/5 p-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">Commissioning motor power actions</div>
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            onClick={() => {
+                                if (motionPowerApiMissing) {
+                                    prepareInterlock.mutate(undefined, {
+                                        onSuccess: (data) => recordMotionInfraAction('enable_legacy', { ...data, legacy_fallback: true }),
+                                        onError: (error) => recordMotionInfraError('enable_legacy', error),
+                                    });
+                                    return;
+                                }
+                                motionPowerEnable.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('enable', data),
+                                    onError: (error) => recordMotionInfraError('enable', error),
+                                });
+                            }}
+                            disabled={motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending)}
+                            className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                motionArmStrictStartup.mutate(
+                                    { run_homing: false },
+                                    {
+                                        onSuccess: (data) => recordMotionInfraAction('arm_motion', data),
+                                        onError: (error) => recordMotionInfraError('arm_motion', error),
+                                    },
+                                )
+                            }
+                            disabled={motionArmStrictStartup.isPending || motionPowerApiMissing}
+                            className="px-4 py-2 bg-success/20 hover:bg-success/30 text-success text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motion'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                prepareInterlock.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('interlock', data),
+                                    onError: (error) => recordMotionInfraError('interlock', error),
+                                })
+                            }
+                            disabled={prepareInterlock.isPending}
+                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Interlock'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                clearLock.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('clear_lock', data),
+                                    onError: (error) => recordMotionInfraError('clear_lock', error),
+                                })
+                            }
+                            disabled={clearLock.isPending}
+                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                motionPowerDiag.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('diag', data),
+                                    onError: (error) => recordMotionInfraError('diag', error),
+                                })
+                            }
+                            disabled={motionPowerDiag.isPending || motionPowerApiMissing}
+                            className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
+                        </button>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="number"
+                                min={1}
+                                max={5}
+                                value={motionHardResetRounds}
+                                onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
+                                className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
+                            />
+                            <button
+                                onClick={() =>
+                                    motionHardReset.mutate(
+                                        { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
+                                        {
+                                            onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
+                                            onError: (error) => recordMotionInfraError('hard_reset', error),
+                                        },
+                                    )
+                                }
+                                disabled={motionHardReset.isPending || motionPowerApiMissing}
+                                className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
+                            >
+                                {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
+                    Actuating power, interlock, lock-clear, and reset buttons are hidden from the default operator surface. Open Commissioning Tools only with the operator at the instrument.
+                </div>
+            )}
 
             {latestMotionInfraSummary && (
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] font-mono text-content-muted break-words">
@@ -2391,21 +2408,8 @@ export const BioXpCockpit = () => {
                                 >
                                     {reconnectRuntime.isPending ? 'RECONNECTING...' : 'Reconnect USB Runtime'}
                                 </button>
-                                <button
-                                    onClick={() => prepareInterlock.mutate()}
-                                    disabled={!isConnected || prepareInterlock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Motion Interlock'}
-                                </button>
-                                <button
-                                    onClick={() => clearLock.mutate()}
-                                    disabled={!isConnected || clearLock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
-                                </button>
                             </div>
+                            <div className="text-[11px] text-content-muted">Motion interlock and lock-clear actions are commissioning-only and are not exposed on this default linkage/status tab.</div>
                             {(reconnectRuntime.isError || prepareInterlock.isError || clearLock.isError) && (
                                 <div className="text-xs text-error">
                                     {getErrorMessage(reconnectRuntime.error) || getErrorMessage(prepareInterlock.error) || getErrorMessage(clearLock.error)}
@@ -2418,22 +2422,29 @@ export const BioXpCockpit = () => {
                             title="Latch & Deck IO"
                             subtitle="Motion prep depends on the latch and deck IO states exposed by the BioXP runtime."
                         >
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => latchLock.mutate()}
-                                    disabled={!isConnected || latchLock.isPending}
-                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
-                                >
-                                    {latchLock.isPending ? 'LOCKING...' : 'Lock'}
-                                </button>
-                                <button
-                                    onClick={() => latchUnlock.mutate()}
-                                    disabled={!isConnected || latchUnlock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {latchUnlock.isPending ? 'UNLOCKING...' : 'Unlock'}
-                                </button>
-                            </div>
+                            {showCommissioningControls ? (
+                                <div className="space-y-2 rounded-lg border border-warning/20 bg-warning/5 p-3">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">Commissioning latch actions</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={() => latchLock.mutate()}
+                                            disabled={!isConnected || latchLock.isPending}
+                                            className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                                        >
+                                            {latchLock.isPending ? 'LOCKING...' : 'Lock'}
+                                        </button>
+                                        <button
+                                            onClick={() => latchUnlock.mutate()}
+                                            disabled={!isConnected || latchUnlock.isPending}
+                                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                        >
+                                            {latchUnlock.isPending ? 'UNLOCKING...' : 'Unlock'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-[11px] text-content-muted">Latch state is readback-only by default; lock/unlock controls require Commissioning Tools.</div>
+                            )}
                             {(latchLock.isError || latchUnlock.isError || latchStatus.isError) && (
                                 <div className="text-xs text-error">
                                     {getErrorMessage(latchLock.error) || getErrorMessage(latchUnlock.error) || getErrorMessage(latchStatus.error)}
