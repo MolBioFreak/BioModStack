@@ -117,8 +117,39 @@ def test_true_backend_launch_manifest_reports_rank_local_dram_spill_truth_dynami
 
     assert 'context_store_mode = os.environ.get("BCP_CONTEXT_STORE_MODE", "").strip()' in run_block
     assert 'context_store_spill_enabled = context_store_mode.startswith("rank-local-dram-spill")' in run_block
+    assert 'context_virtual_streaming_enabled = context_store_mode == "virtual-dram-stream-attention"' in run_block
     assert 'context_triangle_query_tile_enabled = bool(os.environ.get("BCP_CONTEXT_QUERY_TILE_TOKENS", "").strip())' in run_block
     assert '"streaming_spill_enabled": context_store_spill_enabled' in run_block
-    assert '"within_operation_memory_reduction_claimed": context_triangle_query_tile_enabled' in run_block
-    assert '"memory_reduction_claimed": context_store_spill_enabled or context_triangle_query_tile_enabled' in run_block
-    assert '"within_op_peak_not_reduced": context_store_spill_enabled and not context_triangle_query_tile_enabled' in run_block
+    assert '"virtual_streaming_enabled": context_virtual_streaming_enabled' in run_block
+    assert '"within_operation_memory_reduction_claimed": context_virtual_streaming_enabled or context_triangle_query_tile_enabled' in run_block
+    assert '"memory_reduction_claimed": context_virtual_streaming_enabled or context_store_spill_enabled or context_triangle_query_tile_enabled' in run_block
+    assert '"within_op_peak_not_reduced": context_store_spill_enabled and not context_triangle_query_tile_enabled and not context_virtual_streaming_enabled' in run_block
+
+
+def test_true_backend_threads_virtual_dram_streaming_cli_flags() -> None:
+    text = MODULE_PATH.read_text(encoding="utf-8")
+    run_start = text.index("process RunBoltzCPExperimental {")
+    plan_start = text.index("process BuildBoltzCPPlanManifest {")
+    run_block = text[run_start:plan_start]
+
+    assert "def contextLogicalSizeCpValue = (params.get('bcp_context_store_logical_size_cp', '') ?: '').toString().trim()" in run_block
+    assert "def contextPairTileTokensValue = (params.get('bcp_context_store_pair_tile_tokens', '') ?: '').toString().trim()" in run_block
+    assert "def contextKeyTileTokensValue = (params.get('bcp_context_store_key_tile_tokens', '') ?: '').toString().trim()" in run_block
+    assert "def contextQueryTileTokensValue = (params.get('bcp_context_store_triangle_attention_query_tile_tokens', params.get('bcp_context_query_tile_tokens', '512')) ?: '').toString().trim()" in run_block
+    assert "def contextStoreEventLevelValue = (params.get('bcp_context_store_event_level', 'perf-summary') ?: 'perf-summary').toString().trim()" in run_block
+    assert "BCP_CONTEXT_STORE_LOGICAL_SIZE_CP=${contextLogicalSizeCp}" in run_block
+    assert "BCP_CONTEXT_STORE_PAIR_TILE_TOKENS=${contextPairTileTokens}" in run_block
+    assert "BCP_CONTEXT_STORE_KEY_TILE_TOKENS=${contextKeyTileTokens}" in run_block
+    assert "BCP_CONTEXT_STORE_EVENT_LEVEL=${contextStoreEventLevel}" in run_block
+    assert 'context_logical_size_cp_flag=(--context_store_logical_size_cp "\$BCP_CONTEXT_STORE_LOGICAL_SIZE_CP")' in run_block
+    assert 'context_pair_tile_tokens_flag=(--context_store_pair_tile_tokens "\$BCP_CONTEXT_STORE_PAIR_TILE_TOKENS")' in run_block
+    assert 'context_key_tile_tokens_flag=(--context_store_key_tile_tokens "\$BCP_CONTEXT_STORE_KEY_TILE_TOKENS")' in run_block
+    assert '"\${context_logical_size_cp_flag[@]}"' in run_block
+    assert '"\${context_pair_tile_tokens_flag[@]}"' in run_block
+    assert '"\${context_key_tile_tokens_flag[@]}"' in run_block
+    assert '--context_store_event_level "\$BCP_CONTEXT_STORE_EVENT_LEVEL"' in run_block
+    assert '"context_store_logical_size_cp": os.environ.get("BCP_CONTEXT_STORE_LOGICAL_SIZE_CP", "").strip()' in run_block
+    assert '"context_store_pair_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_PAIR_TILE_TOKENS", "").strip()' in run_block
+    assert '"context_store_key_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_KEY_TILE_TOKENS", "").strip()' in run_block
+    assert '"context_store_event_level": os.environ.get("BCP_CONTEXT_STORE_EVENT_LEVEL", "").strip()' in run_block
+    assert "--context_store_logical_size_cp" not in text[text.index("process BuildBoltzCPPlanManifest {"):text.index("process SpawnBoltzCPChildren {")]
