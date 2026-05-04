@@ -1338,7 +1338,7 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
 };
 
 export const BioXpCockpit = () => {
-    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'controls' | 'camera'>('connection');
+    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'manual' | 'controls' | 'camera'>('connection');
     const [linkageInput, setLinkageInput] = useState('');
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -2309,6 +2309,7 @@ export const BioXpCockpit = () => {
                 {([
                     { key: 'connection', label: 'Linkage & Status' },
                     { key: 'operator', label: 'Protocol Operator' },
+                    { key: 'manual', label: 'Manual Movement' },
                     { key: 'controls', label: 'OEM Controls & Thermals' },
                     { key: 'camera', label: 'Camera Feed' },
                 ] as const).map((tab) => (
@@ -2534,6 +2535,50 @@ export const BioXpCockpit = () => {
                 />
             )}
 
+
+            {activeTab === 'manual' && (
+                !isConnected ? (
+                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
+                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
+                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Manual movement buttons stay disabled until BMS is linked to the robot-local BioXP API.</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <div className="space-y-6">
+                            <SectionCard
+                                title="API Manual Movement"
+                                subtitle="Supervised movement buttons execute through the new BMS → robot-local BioXP API proxy. These are not legacy daemon/process controls."
+                            >
+                                <div className="text-[11px] font-mono text-content-muted">
+                                    Safety profile: speed 100, acc 50 unless the robot preset reports a safer axis profile; abort if speed is nonzero with no position delta for 2s.
+                                    {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
+                                </div>
+                                <div className="mt-3 space-y-4">
+                                    <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                </div>
+                            </SectionCard>
+                        </div>
+                        <div className="space-y-6">
+                            {motionPowerPanel}
+                            {referencePanel}
+                            <SectionCard
+                                title="Thermal Door Manual Movement"
+                                subtitle="Door-axis motion is still separated from normal X/Y/Z/gripper movement because it interacts with the thermal subsystem."
+                            >
+                                {showCommissioningControls ? (
+                                    <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                ) : (
+                                    <div className="text-xs text-content-muted">Open Commissioning Tools before moving the thermal door axis directly. Thermal door context/readback remains available on the OEM Controls & Thermals tab.</div>
+                                )}
+                            </SectionCard>
+                        </div>
+                    </div>
+                )
+            )}
+
             {activeTab === 'controls' && (
                 !isConnected ? (
                     <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
@@ -2550,7 +2595,7 @@ export const BioXpCockpit = () => {
                             {visionPanel}
                             <SectionCard
                                 title="Commissioning Tools"
-                                subtitle="Raw axis and direct pipette controls are removed from the default operator path. Open only for supervised bring-up at the instrument."
+                                subtitle="Power/interlock recovery, direct pipette, camera-jog, latch, and thermal-door controls require supervised commissioning. Manual X/Y/Z/gripper moves live on the API Manual Movement tab."
                             >
                                 <button
                                     type="button"
@@ -2562,17 +2607,11 @@ export const BioXpCockpit = () => {
                                 {showCommissioningControls ? (
                                     <div className="space-y-4 border border-warning/20 rounded-lg p-3 bg-warning/5">
                                         <div className="text-[11px] font-mono text-content-muted">
-                                            Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
-                                            {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
+                                            Normal X/Y/Z/gripper movement lives on the Manual Movement tab and executes through the new BMS API proxy. This gate is for raw recovery, direct pipette, latch, power/interlock, camera-jog, and thermal-door commissioning actions.
                                         </div>
-                                        <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                        <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                        <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                        <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                        <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-content-muted">Default live testing should use OEM startup/runtime/readback plus protocol execution. Thermal Door remains available as readback and thermal-system context; direct door motion is commissioning-only.</div>
+                                    <div className="text-xs text-content-muted">Default live testing can use Linkage, Protocol Operator, and API Manual Movement. Thermal Door remains available as readback and thermal-system context; direct door motion is commissioning-only.</div>
                                 )}
                             </SectionCard>
                         </div>
