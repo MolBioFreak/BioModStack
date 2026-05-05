@@ -26,6 +26,7 @@ from services.job_control import (
     cancel_job_lineage,
     force_launch_job as force_launch_job_service,
 )
+from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
 import logging
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,49 @@ def _resolve_display_gpu_ids(job: Job) -> Optional[List[int]]:
         return [assigned_gpu]
 
     return None
+
+
+def _valid_queue_gpu_indices() -> List[int]:
+    """Return GPU indices that queue mutating endpoints may target.
+
+    In core-runtime deployments the API container may not have nvidia-smi even
+    though host GPU telemetry is available through the workflow adapter.  Do not
+    validate force-launch/pin requests against the API container's local, empty
+    HARDWARE_LIMITS table in that mode; ask the same live adapter-backed GPU
+    status path used by the UI/orchestrator.
+    """
+    if HARDWARE_LIMITS:
+        return sorted(int(idx) for idx in HARDWARE_LIMITS.keys())
+
+    if workflow_adapter_enabled():
+        try:
+            payload = request_via_workflow_adapter("GET", "/api/gpu/status")
+        except (WorkflowAdapterRequestError, RuntimeError) as exc:
+            logger.warning("[QUEUE] Failed to resolve GPU indices via workflow adapter: %s", exc)
+        else:
+            gpus = payload.get("gpus") if isinstance(payload, dict) else None
+            indices: List[int] = []
+            if isinstance(gpus, list):
+                for gpu in gpus:
+                    if not isinstance(gpu, dict):
+                        continue
+                    try:
+                        index = int(gpu.get("index"))
+                    except (TypeError, ValueError):
+                        continue
+                    if index >= 0:
+                        indices.append(index)
+            if indices:
+                return sorted(set(indices))
+
+    return []
+
+
+def _validate_queue_gpu_index(gpu_id: int) -> None:
+    valid_indices = _valid_queue_gpu_indices()
+    if gpu_id not in valid_indices:
+        valid = ",".join(str(idx) for idx in valid_indices)
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index (valid: {valid})")
 
 
 def _parse_pid(raw_pid: Optional[str]) -> Optional[int]:
@@ -579,10 +623,10 @@ async def pin_job_to_gpu(
     if job.queue_status not in ['queued', 'paused']:
         raise HTTPException(status_code=400, detail="Can only pin queued or paused jobs")
     
-    # Validate GPU index
-    if request.gpu_id is not None and request.gpu_id not in HARDWARE_LIMITS:
-        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index (valid: {valid})")
+    # Validate GPU index against live/proxied GPU status, not only the API
+    # container's local nvidia-smi view.
+    if request.gpu_id is not None:
+        _validate_queue_gpu_index(request.gpu_id)
     
     job.pinned_gpu = request.gpu_id
     await session.commit()
@@ -741,10 +785,9 @@ async def force_launch_job(
     the orchestrator's bin-packing algorithm. Use when you know there's
     enough VRAM and want to manually control job placement.
     """
-    # Validate GPU index
-    if request.gpu_id not in HARDWARE_LIMITS:
-        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index (valid: {valid})")
+    # Validate GPU index against live/proxied GPU status, not only the API
+    # container's local nvidia-smi view.
+    _validate_queue_gpu_index(request.gpu_id)
 
     try:
         job = await force_launch_job_service(

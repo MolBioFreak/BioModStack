@@ -42,6 +42,7 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert any(param.name == "context_store_logical_size_cp" for param in model.params)
     assert any(param.name == "context_store_pair_tile_tokens" for param in model.params)
     assert any(param.name == "context_store_key_tile_tokens" for param in model.params)
+    assert any(param.name == "context_store_projection_cache_byte_budget" for param in model.params)
     assert not any(param.name == "size_cp" for param in model.params)
 
 
@@ -58,6 +59,7 @@ def test_template_registry_loads_boltz_cp_experimental() -> None:
     assert template.preset_params["structure_launch_variant"] == "boltz_cp_experimental"
     assert template.preset_params["bcp_context_store_mode"] == "evidence-only"
     assert template.preset_params["bcp_context_query_tile_tokens"] == 512
+    assert template.preset_params["bcp_context_store_projection_cache_byte_budget"] == 0
     assert template.preset_params["bcp_shard_plan_id"] == "2x2"
     assert template.preset_params["bcp_backend"] == "true-distributed-context-parallel"
     assert template.preset_params["bcp_triattn_backend"] == "reference"
@@ -231,6 +233,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "context_store_logical_size_cp": 16,
             "context_store_pair_tile_tokens": 128,
             "context_store_key_tile_tokens": 64,
+            "context_store_projection_cache_byte_budget": 1048576,
         },
         "/tmp/out",
         job_id="job-bcp-1",
@@ -259,6 +262,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_context_store_logical_size_cp 16" in joined
     assert "--bcp_context_store_pair_tile_tokens 128" in joined
     assert "--bcp_context_store_key_tile_tokens 64" in joined
+    assert "--bcp_context_store_projection_cache_byte_budget 1048576" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
     assert "--input_path /tmp/complex_input.yaml" not in joined
     assert "--gpu_ids 0,1,2,3" not in joined

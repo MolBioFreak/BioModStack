@@ -307,12 +307,14 @@ def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, s
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
         return [
+            {"id": "api", "label": "API backend log", "path": "docker:biomodstack-api", "fallback_path": str(API_LOG)},
+            {"id": "frontend", "label": "Frontend/web log", "path": "docker:biomodstack-web", "fallback_path": str(FRONTEND_LOG)},
             {"id": "workflow-adapter", "label": "Workflow adapter log", "path": str(WORKFLOW_ADAPTER_LOG)},
-            {"id": "runtime", "label": "Core runtime log", "path": str(CORE_RUNTIME_LOG)},
+            {"id": "core-runtime", "label": "Container runtime log", "path": str(CORE_RUNTIME_LOG)},
         ]
     return [
-        {"id": "api", "label": "API log", "path": str(API_LOG)},
-        {"id": "frontend", "label": "Frontend log", "path": str(FRONTEND_LOG)},
+        {"id": "api", "label": "API backend log", "path": str(API_LOG)},
+        {"id": "frontend", "label": "Frontend/web log", "path": str(FRONTEND_LOG)},
     ]
 
 
@@ -595,6 +597,7 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     API_LOG.touch(exist_ok=True)
     FRONTEND_LOG.touch(exist_ok=True)
+    WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     CORE_RUNTIME_LOG.touch(exist_ok=True)
     install_user_units(project_root=project_root, runtime_mode=runtime_mode)
     daemon_reload(project_root=project_root)
@@ -892,7 +895,7 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
 
     if mode == DEV_RUNTIME_MODE:
         services_to_start: list[str] = []
-        if not url_is_ready(API_HEALTH_URL):
+        if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(API_HEALTH_URL):
             cleanup_legacy_listener("api", root)
             services_to_start.append(API_SERVICE)
         if not service_is_active(FRONTEND_SERVICE, project_root=root):

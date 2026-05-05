@@ -39,9 +39,11 @@ from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     API_SERVICE,
+    CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
     DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     FRONTEND_SERVICE,
+    WORKFLOW_ADAPTER_LOG as WORKFLOW_ADAPTER_LOG_PATH,
     build_launch_ui_command,
     operator_frontend_url,
     operator_runtime_mode,
@@ -60,6 +62,30 @@ DB_PATH = get_db_path()
 RESULTS_DIR = get_results_dir()
 API_LOG = API_LOG_PATH
 FRONTEND_LOG = FRONTEND_LOG_PATH
+WORKFLOW_ADAPTER_LOG = WORKFLOW_ADAPTER_LOG_PATH
+CORE_RUNTIME_LOG = CORE_RUNTIME_LOG_PATH
+LOG_PATHS = {
+    "api": API_LOG,
+    "frontend": FRONTEND_LOG,
+    "workflow-adapter": WORKFLOW_ADAPTER_LOG,
+    "core-runtime": CORE_RUNTIME_LOG,
+}
+LOG_LABELS = {
+    "api": "API Backend Log",
+    "frontend": "Frontend/Web Log",
+    "workflow-adapter": "Workflow Adapter Log",
+    "core-runtime": "Container Runtime Log",
+}
+LOG_HELP_TEXT = {
+    "api": "FastAPI/backend app output. In stable container mode this tails docker logs for biomodstack-api; in dev mode it falls back to api.log.",
+    "frontend": "Web UI output. In stable container mode this tails docker logs for biomodstack-web; in dev mode it falls back to frontend.log/Vite output.",
+    "workflow-adapter": "Advanced: host-side bridge for workflow/GPU/Nextflow operations that containers should not own directly.",
+    "core-runtime": "Advanced: docker compose lifecycle log for starting/stopping the stable container stack, not the API request log.",
+}
+CONTAINER_LOG_SOURCES = {
+    "api": ("biomodstack-api", API_LOG),
+    "frontend": ("biomodstack-web", FRONTEND_LOG),
+}
 ICON_PATH = PROJECT_ROOT / "platform" / "assets" / "icons" / "biomodstack_tray.png"
 CONFIG_PATH = Path.home() / ".config" / "biomodstack" / "panel_config.json"
 AUTOSTART_PATH = Path.home() / ".config" / "autostart" / "biomodstack-panel.desktop"
@@ -189,6 +215,39 @@ def read_log_tail(log_path: Path, lines: int = 30) -> str:
         return result.stdout or "(empty)"
     except Exception as e:
         return f"Error reading log: {e}"
+
+
+def read_container_log_tail(container_name: str, fallback_path: Path, lines: int = 30) -> str:
+    """Tail a stable-runtime docker container log, falling back to the dev log file."""
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--tail", str(lines), container_name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        result = None
+        docker_error = "docker command not available; showing file log fallback."
+    except Exception as exc:
+        result = None
+        docker_error = f"docker log read failed: {exc}; showing file log fallback."
+    else:
+        if result.returncode == 0:
+            output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+            return output or f"({container_name} log empty)"
+        docker_error = (result.stderr or result.stdout or f"docker logs exited {result.returncode}").strip()
+
+    fallback = read_log_tail(fallback_path, lines)
+    return f"[{container_name}] {docker_error}\n\n--- fallback: {fallback_path} ---\n{fallback}"
+
+
+def read_named_log_tail(log_type: str, lines: int = 30) -> str:
+    if log_type in CONTAINER_LOG_SOURCES:
+        container_name, fallback_path = CONTAINER_LOG_SOURCES[log_type]
+        return read_container_log_tail(container_name, fallback_path, lines)
+    log_path = LOG_PATHS.get(log_type, CORE_RUNTIME_LOG)
+    return read_log_tail(log_path, lines)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS
@@ -540,14 +599,26 @@ class BioModStackPanel(Adw.Application):
         selector_box.set_halign(Gtk.Align.START)
         selector_box.set_margin_bottom(8)
         
-        self.btn_api_log = Gtk.ToggleButton(label="API Log")
+        self.btn_api_log = Gtk.ToggleButton(label=LOG_LABELS["api"])
+        self.btn_api_log.set_tooltip_text(LOG_HELP_TEXT["api"])
         self.btn_api_log.set_active(True)
         self.btn_api_log.connect("toggled", self._on_log_toggle, "api")
         selector_box.append(self.btn_api_log)
         
-        self.btn_frontend_log = Gtk.ToggleButton(label="Frontend Log")
+        self.btn_frontend_log = Gtk.ToggleButton(label=LOG_LABELS["frontend"])
+        self.btn_frontend_log.set_tooltip_text(LOG_HELP_TEXT["frontend"])
         self.btn_frontend_log.connect("toggled", self._on_log_toggle, "frontend")
         selector_box.append(self.btn_frontend_log)
+
+        self.btn_workflow_adapter_log = Gtk.ToggleButton(label=LOG_LABELS["workflow-adapter"])
+        self.btn_workflow_adapter_log.set_tooltip_text(LOG_HELP_TEXT["workflow-adapter"])
+        self.btn_workflow_adapter_log.connect("toggled", self._on_log_toggle, "workflow-adapter")
+        selector_box.append(self.btn_workflow_adapter_log)
+
+        self.btn_core_runtime_log = Gtk.ToggleButton(label=LOG_LABELS["core-runtime"])
+        self.btn_core_runtime_log.set_tooltip_text(LOG_HELP_TEXT["core-runtime"])
+        self.btn_core_runtime_log.connect("toggled", self._on_log_toggle, "core-runtime")
+        selector_box.append(self.btn_core_runtime_log)
         
         btn_refresh = Gtk.Button(label="↻")
         btn_refresh.set_tooltip_text("Refresh log")
@@ -561,6 +632,14 @@ class BioModStackPanel(Adw.Application):
         row_selector = Adw.ActionRow()
         row_selector.set_child(selector_box)
         group.add(row_selector)
+
+        self.log_help_label = Gtk.Label(label=LOG_HELP_TEXT[self.current_log])
+        self.log_help_label.set_wrap(True)
+        self.log_help_label.set_xalign(0)
+        self.log_help_label.add_css_class("dim-label")
+        row_help = Adw.ActionRow()
+        row_help.set_child(self.log_help_label)
+        group.add(row_help)
         
         # Log view
         self.log_view = Gtk.TextView()
@@ -590,16 +669,20 @@ class BioModStackPanel(Adw.Application):
     def _on_log_toggle(self, button, log_type):
         if button.get_active():
             self.current_log = log_type
-            # Deselect other button
-            if log_type == "api":
-                self.btn_frontend_log.set_active(False)
-            else:
-                self.btn_api_log.set_active(False)
+            for candidate_type, candidate_button in (
+                ("api", self.btn_api_log),
+                ("frontend", self.btn_frontend_log),
+                ("workflow-adapter", self.btn_workflow_adapter_log),
+                ("core-runtime", self.btn_core_runtime_log),
+            ):
+                if candidate_type != log_type:
+                    candidate_button.set_active(False)
             self._refresh_log()
     
     def _refresh_log(self):
-        log_path = API_LOG if self.current_log == "api" else FRONTEND_LOG
-        content = read_log_tail(log_path, self.config.get("log_lines", 30))
+        if hasattr(self, "log_help_label"):
+            self.log_help_label.set_text(LOG_HELP_TEXT.get(self.current_log, ""))
+        content = read_named_log_tail(self.current_log, self.config.get("log_lines", 30))
         buffer = self.log_view.get_buffer()
         buffer.set_text(content)
         # Scroll to bottom
@@ -612,7 +695,7 @@ class BioModStackPanel(Adw.Application):
         return False
     
     def _open_log_external(self, button):
-        log_path = API_LOG if self.current_log == "api" else FRONTEND_LOG
+        log_path = LOG_PATHS.get(self.current_log, CORE_RUNTIME_LOG)
         if log_path.exists():
             subprocess.Popen(["xdg-open", str(log_path)])
         else:
