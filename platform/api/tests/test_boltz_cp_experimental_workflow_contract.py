@@ -136,20 +136,25 @@ def test_true_backend_threads_virtual_dram_streaming_cli_flags() -> None:
     assert "def contextPairTileTokensValue = (params.get('bcp_context_store_pair_tile_tokens', '') ?: '').toString().trim()" in run_block
     assert "def contextKeyTileTokensValue = (params.get('bcp_context_store_key_tile_tokens', '') ?: '').toString().trim()" in run_block
     assert "def contextQueryTileTokensValue = (params.get('bcp_context_store_triangle_attention_query_tile_tokens', params.get('bcp_context_query_tile_tokens', '512')) ?: '').toString().trim()" in run_block
+    assert "def contextProjectionCacheByteBudgetValue = (params.get('bcp_context_store_projection_cache_byte_budget', params.get('bcp_projection_cache_byte_budget', '0')) ?: '0').toString().trim()" in run_block
     assert "def contextStoreEventLevelValue = (params.get('bcp_context_store_event_level', 'perf-summary') ?: 'perf-summary').toString().trim()" in run_block
     assert "BCP_CONTEXT_STORE_LOGICAL_SIZE_CP=${contextLogicalSizeCp}" in run_block
     assert "BCP_CONTEXT_STORE_PAIR_TILE_TOKENS=${contextPairTileTokens}" in run_block
     assert "BCP_CONTEXT_STORE_KEY_TILE_TOKENS=${contextKeyTileTokens}" in run_block
+    assert "BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET=${contextProjectionCacheByteBudget}" in run_block
     assert "BCP_CONTEXT_STORE_EVENT_LEVEL=${contextStoreEventLevel}" in run_block
     assert 'context_logical_size_cp_flag=(--context_store_logical_size_cp "\$BCP_CONTEXT_STORE_LOGICAL_SIZE_CP")' in run_block
     assert 'context_pair_tile_tokens_flag=(--context_store_pair_tile_tokens "\$BCP_CONTEXT_STORE_PAIR_TILE_TOKENS")' in run_block
     assert 'context_key_tile_tokens_flag=(--context_store_key_tile_tokens "\$BCP_CONTEXT_STORE_KEY_TILE_TOKENS")' in run_block
+    assert 'context_projection_cache_flag=(--context_store_projection_cache_byte_budget "\$BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET")' in run_block
     assert '"\${context_logical_size_cp_flag[@]}"' in run_block
     assert '"\${context_pair_tile_tokens_flag[@]}"' in run_block
     assert '"\${context_key_tile_tokens_flag[@]}"' in run_block
+    assert '"\${context_projection_cache_flag[@]}"' in run_block
     assert '--context_store_event_level "\$BCP_CONTEXT_STORE_EVENT_LEVEL"' in run_block
     assert '"context_store_logical_size_cp": os.environ.get("BCP_CONTEXT_STORE_LOGICAL_SIZE_CP", "").strip()' in run_block
     assert '"context_store_pair_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_PAIR_TILE_TOKENS", "").strip()' in run_block
     assert '"context_store_key_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_KEY_TILE_TOKENS", "").strip()' in run_block
+    assert '"context_store_projection_cache_byte_budget": os.environ.get("BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET", "").strip()' in run_block
     assert '"context_store_event_level": os.environ.get("BCP_CONTEXT_STORE_EVENT_LEVEL", "").strip()' in run_block
     assert "--context_store_logical_size_cp" not in text[text.index("process BuildBoltzCPPlanManifest {"):text.index("process SpawnBoltzCPChildren {")]

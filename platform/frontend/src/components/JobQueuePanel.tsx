@@ -17,6 +17,7 @@ import {
 } from '../lib/api';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
+import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
 
 // Model display names and icons
 // Model display names removed - using text badges instead
@@ -476,7 +477,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     };
 
     return (
-        <div className={`bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden ${className}`.trim()}>
+        <div className={`${BMS_PANEL_OVERFLOW} ${className}`.trim()}>
             {/* Header */}
             <div
                 className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/20"

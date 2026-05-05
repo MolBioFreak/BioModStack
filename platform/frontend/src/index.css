@@ -14,10 +14,25 @@
   --color-surface-secondary: var(--bg-secondary);
   --color-surface-tertiary: var(--bg-tertiary);
 
+  /* Legacy semantic aliases still used across older BMS panels.
+     Keep these mapped so `bg-bg-secondary`, `text-text-primary`,
+     and `border-border-primary` compile instead of silently losing
+     their theme-aware surfaces/borders. */
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-card-bg: var(--card-bg);
+  --color-card-hover: var(--card-hover);
+  --color-border-primary: var(--border-primary);
+  --color-border-secondary: var(--border-secondary);
+
   /* Semantic text colors */
   --color-content: var(--text-primary);
   --color-content-secondary: var(--text-secondary);
   --color-content-muted: var(--text-muted);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
 
   /* Status colors */
   --color-success: var(--success);
