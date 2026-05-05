@@ -22,11 +22,15 @@ import {
     buildQpcrChannelAnalytics,
     buildQpcrDilutionWorksheetRows,
     buildQpcrPlateMap,
+    buildQpcrReplicateGroupAnalytics,
     buildQpcrTargetOptions,
     buildSelectedQpcrWellAnalytics,
     formatQpcrMetric,
+    makeQpcrManualReplicateGroupFromSelection,
+    toggleQpcrWellSelection,
     type QpcrAssaySummaryLike,
     type QpcrDilutionWorksheetInput,
+    type QpcrManualReplicateGroupInput,
     type QpcrPlateStatus,
     type QpcrPlateWellSummary,
     type QpcrWellEntry,
@@ -172,6 +176,9 @@ export function RawDataImport() {
     const [preferredReviewFocus, setPreferredReviewFocus] = useState<QpcrRawImportTab>('heatmap');
     const [selectedPlateTarget, setSelectedPlateTarget] = useState<string>(PLATE_TARGET_ALL);
     const [selectedWellPosition, setSelectedWellPosition] = useState('A1');
+    const [selectedWellPositions, setSelectedWellPositions] = useState<string[]>(['A1']);
+    const [manualReplicateGroups, setManualReplicateGroups] = useState<QpcrManualReplicateGroupInput[]>([]);
+    const [replicateGroupLabel, setReplicateGroupLabel] = useState('Triplicate 1');
     const [dilutionInputs, setDilutionInputs] = useState<Record<string, QpcrDilutionWorksheetInput>>({});
 
     const plotlyLayout = useThemePlotlyLayout();
@@ -199,6 +206,9 @@ export function RawDataImport() {
         setPreferredReviewFocus('heatmap');
         setSelectedPlateTarget(PLATE_TARGET_ALL);
         setSelectedWellPosition('A1');
+        setSelectedWellPositions(['A1']);
+        setManualReplicateGroups([]);
+        setReplicateGroupLabel('Triplicate 1');
         setDilutionInputs({});
     }, []);
 
@@ -220,6 +230,8 @@ export function RawDataImport() {
             const snapshot = makeAssaySnapshot(payload, label);
             setResult(payload);
             setDilutionInputs({});
+            setManualReplicateGroups([]);
+            setReplicateGroupLabel('Triplicate 1');
             setPreferredReviewFocus(resolveQpcrInitialTab(response));
             if (await saveAssaySnapshot(QPCR_RAW_IMPORT_CACHE_KEY, snapshot)) {
                 setCacheNotice(`Saved qPCR import cache for ${snapshot.label ?? 'last upload'}`);
@@ -257,6 +269,16 @@ export function RawDataImport() {
         () => buildSelectedQpcrWellAnalytics(selectedWellPosition, r?.wells ?? [], r?.assay_summary, activePlateTarget),
         [activePlateTarget, r?.assay_summary, r?.wells, selectedWellPosition],
     );
+    const manualReplicateAnalytics = useMemo(
+        () => buildQpcrReplicateGroupAnalytics(r?.wells ?? [], manualReplicateGroups, { targetName: activePlateTarget, assaySummary: r?.assay_summary }),
+        [activePlateTarget, manualReplicateGroups, r?.assay_summary, r?.wells],
+    );
+    const selectedManualReplicateAnalytics = useMemo(() => {
+        const group = makeQpcrManualReplicateGroupFromSelection('__selected__', 'Selected wells', selectedWellPositions, activePlateTarget);
+        return group ? buildQpcrReplicateGroupAnalytics(r?.wells ?? [], [group], { targetName: activePlateTarget, assaySummary: r?.assay_summary })[0] : null;
+    }, [activePlateTarget, r?.assay_summary, r?.wells, selectedWellPositions]);
+    const selectedWellSet = useMemo(() => new Set(selectedWellPositions), [selectedWellPositions]);
+    const selectedWellLabel = selectedWellPositions.join(', ');
     const assayReviewMetrics = useMemo(
         () => buildQpcrAssayReviewMetrics(r?.wells ?? [], r?.assay_summary),
         [r?.assay_summary, r?.wells],
@@ -284,19 +306,45 @@ export function RawDataImport() {
         if (!r?.wells?.length) {
             setSelectedPlateTarget(PLATE_TARGET_ALL);
             setSelectedWellPosition('A1');
+            setSelectedWellPositions(['A1']);
             return;
         }
         const firstPopulatedWell = buildQpcrPlateMap(r.wells).find((well) => well.entries.length > 0);
+        const nextPosition = firstPopulatedWell?.position ?? 'A1';
         setSelectedPlateTarget(PLATE_TARGET_ALL);
-        setSelectedWellPosition(firstPopulatedWell?.position ?? 'A1');
+        setSelectedWellPosition(nextPosition);
+        setSelectedWellPositions([nextPosition]);
     }, [r?.wells]);
 
     const handlePlateTargetChange = useCallback((target: string) => {
         setSelectedPlateTarget(target);
         const nextTarget = target === PLATE_TARGET_ALL ? undefined : target;
         const firstPopulatedWell = buildQpcrPlateMap(r?.wells ?? [], { targetName: nextTarget }).find((well) => well.entries.length > 0);
-        setSelectedWellPosition(firstPopulatedWell?.position ?? 'A1');
+        const nextPosition = firstPopulatedWell?.position ?? 'A1';
+        setSelectedWellPosition(nextPosition);
+        setSelectedWellPositions([nextPosition]);
     }, [r?.wells]);
+
+    const handlePlateWellClick = useCallback((position: string, additive: boolean) => {
+        setSelectedWellPosition(position);
+        setSelectedWellPositions((current) => toggleQpcrWellSelection(current, position, additive));
+    }, []);
+
+    const handleCreateManualReplicateGroup = useCallback(() => {
+        const group = makeQpcrManualReplicateGroupFromSelection(
+            `manual-${Date.now()}`,
+            replicateGroupLabel || `Triplicate ${manualReplicateGroups.length + 1}`,
+            selectedWellPositions,
+            activePlateTarget,
+        );
+        if (!group) return;
+        setManualReplicateGroups((current) => [...current, group]);
+        setReplicateGroupLabel(`Triplicate ${manualReplicateGroups.length + 2}`);
+    }, [activePlateTarget, manualReplicateGroups.length, replicateGroupLabel, selectedWellPositions]);
+
+    const handleRemoveManualReplicateGroup = useCallback((id: string) => {
+        setManualReplicateGroups((current) => current.filter((group) => group.id !== id));
+    }, []);
 
     const handleDilutionInputChange = useCallback((key: string, field: keyof QpcrDilutionWorksheetInput, value: string) => {
         setDilutionInputs((current) => ({
@@ -473,7 +521,7 @@ export function RawDataImport() {
                                         <div>
                                             <div className="text-base font-semibold text-text-primary">96-well Plate Map</div>
                                             <div className="text-xs text-text-muted">
-                                                Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible with no horizontal slider. Click a well to inspect labels, target rows, Cq/Ct, standards, replicate QC, and spike/recovery analytics.
+                                                Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible with no horizontal slider. Click a well to inspect labels; Ctrl/Shift-click wells to build manual triplicate groups and compute selected-well mean/SD/CV/recovery analytics.
                                             </div>
                                         </div>
                                         {plateTargetOptions.length > 0 && (
@@ -513,16 +561,17 @@ export function RawDataImport() {
                                                         const position = `${row}${column}`;
                                                         const well = plateMapByPosition.get(position);
                                                         if (!well) return null;
-                                                        const selected = selectedWellAnalytics.position === position;
+                                                        const primarySelected = selectedWellAnalytics.position === position;
+                                                        const multiSelected = selectedWellSet.has(position);
                                                         return (
                                                             <button
                                                                 key={position}
                                                                 type="button"
                                                                 aria-label={`Select well ${position}: ${well.sampleLabel}, ${well.targetLabel}, ${well.taskLabel}, Cq ${well.ctMeanLabel}`}
-                                                                aria-pressed={selected}
+                                                                aria-pressed={multiSelected}
                                                                 title={`${position} | ${well.sampleLabel} | ${well.targetLabel} | ${well.taskLabel} | Cq ${well.ctMeanLabel}`}
-                                                                onClick={() => setSelectedWellPosition(position)}
-                                                                className={`${plateWellClassName(well, selected)} justify-self-center`}
+                                                                onClick={(event) => handlePlateWellClick(position, event.ctrlKey || event.metaKey || event.shiftKey)}
+                                                                className={`${plateWellClassName(well, primarySelected || multiSelected)} ${multiSelected && !primarySelected ? 'ring-2 ring-accent-secondary' : ''} justify-self-center`}
                                                                 style={plateWellStyle(well, ctMin, ctMax)}
                                                             >
                                                                 <span className="max-w-full truncate text-[8px] font-black leading-none tracking-tight min-[1850px]:text-[9px]">{position}</span>
@@ -584,6 +633,60 @@ export function RawDataImport() {
                                             <div><span className="text-text-muted">Target:</span> {selectedWellAnalytics.targetLabel}</div>
                                             <div><span className="text-text-muted">Task:</span> {selectedWellAnalytics.taskLabel}</div>
                                             <div><span className="text-text-muted">Cq min/max:</span> {selectedWellAnalytics.ctSummary.minLabel} / {selectedWellAnalytics.ctSummary.maxLabel}</div>
+                                        </div>
+
+                                        <div className="mt-4 border border-border-primary bg-bg-tertiary p-3 text-xs" data-qpcr-manual-triplicate-workbench="true">
+                                            <div className="flex flex-wrap items-start justify-between gap-2">
+                                                <div>
+                                                    <div className="font-semibold text-text-primary">Selected wells / manual triplicate analytics</div>
+                                                    <div className="mt-1 text-text-muted">Selected: {selectedWellLabel || 'none'} · Ctrl/Shift-click plate wells to add/remove.</div>
+                                                </div>
+                                                <span className="rounded-full border border-border-primary bg-bg-secondary px-2 py-1 text-text-secondary">n={selectedManualReplicateAnalytics?.n ?? 0}</span>
+                                            </div>
+                                            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                                <div><span className="text-text-muted">Mean Cq</span><div className="font-semibold text-text-primary">{selectedManualReplicateAnalytics?.ctMeanLabel ?? '--'}</div></div>
+                                                <div><span className="text-text-muted">SD</span><div className="font-semibold text-text-primary">{selectedManualReplicateAnalytics?.ctSdLabel ?? '--'}</div></div>
+                                                <div><span className="text-text-muted">CV</span><div className="font-semibold text-text-primary">{selectedManualReplicateAnalytics?.ctCvPercentLabel ?? '--'}</div></div>
+                                                <div><span className="text-text-muted">Recovery</span><div className="font-semibold text-text-primary">{selectedManualReplicateAnalytics?.recoveryPercentLabel ?? '--'}</div></div>
+                                            </div>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                <input
+                                                    value={replicateGroupLabel}
+                                                    onChange={(event) => setReplicateGroupLabel(event.target.value)}
+                                                    className="min-w-0 flex-1 border border-border-primary bg-bg-secondary px-2 py-1 text-text-primary"
+                                                    placeholder="Triplicate label"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={handleCreateManualReplicateGroup}
+                                                    disabled={selectedWellPositions.length < 2}
+                                                    className="border border-accent-primary bg-accent-primary/20 px-3 py-1 font-semibold text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    Save selected wells as triplicate group
+                                                </button>
+                                            </div>
+                                            {manualReplicateAnalytics.length > 0 && (
+                                                <div className="mt-3 space-y-2">
+                                                    {manualReplicateAnalytics.map((group) => (
+                                                        <div key={group.id} className="border border-border-primary bg-bg-secondary p-2">
+                                                            <div className="flex items-start justify-between gap-2">
+                                                                <div>
+                                                                    <div className="font-semibold text-text-primary">{group.label} · {group.targetName}</div>
+                                                                    <div className="text-text-muted">{group.wellPositions.join(', ')} · {group.sampleLabel} · {group.taskLabel} · {group.status}</div>
+                                                                </div>
+                                                                <button type="button" onClick={() => handleRemoveManualReplicateGroup(group.id)} className="text-text-muted hover:text-error">Remove</button>
+                                                            </div>
+                                                            <div className="mt-2 grid grid-cols-2 gap-2 text-text-secondary sm:grid-cols-5">
+                                                                <div>n <span className="font-semibold text-text-primary">{group.n}</span></div>
+                                                                <div>mean <span className="font-semibold text-text-primary">{group.ctMeanLabel}</span></div>
+                                                                <div>SD <span className="font-semibold text-text-primary">{group.ctSdLabel}</span></div>
+                                                                <div>CV <span className="font-semibold text-text-primary">{group.ctCvPercentLabel}</span></div>
+                                                                <div>qty CV <span className="font-semibold text-text-primary">{group.quantityCvPercentLabel}</span></div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
 
                                         {selectedWellAnalytics.entries.length > 0 ? (

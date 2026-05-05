@@ -303,8 +303,8 @@ export function Layout({ children }: LayoutProps) {
                 }}
             >
                 <div className="w-full px-2 sm:px-3 lg:px-4">
-                    <div className="flex min-w-0 items-center gap-2 py-2 sm:gap-3">
-                        <div className="flex items-center gap-2 shrink-0" data-bms-topbar-left="true">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2 py-2 sm:gap-3 2xl:flex-nowrap">
+                        <div className="order-1 flex items-center gap-2 shrink-0" data-bms-topbar-left="true">
                             <DiagnosticsMenu />
                             {/* Logo / Brand */}
                             <Link to="/" className="flex items-center shrink-0">
@@ -322,7 +322,7 @@ export function Layout({ children }: LayoutProps) {
 
                         {/* Navigation Links */}
                         <DragScrollRail
-                            className="min-w-0 flex-1 max-w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                            className="order-3 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden 2xl:order-2 2xl:w-auto 2xl:flex-1 2xl:max-w-full"
                             contentClassName="flex w-max items-center gap-1.5 pr-1"
                             data-bms-primary-nav-rail="true"
                         >
@@ -418,19 +418,17 @@ export function Layout({ children }: LayoutProps) {
                                         backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
                                         color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
                                     }}
-                                    title="BioXP Control Surface"
+                                    title="BioXP Handler Controls"
                                 >
-                                    BioXP Cockpit
+                                    BioXP Handler
                                 </Link>
                             </>
                         </DragScrollRail>
 
-                        <DragScrollRail
-                            className="max-w-[42vw] shrink-0 overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none sm:max-w-[48vw] lg:max-w-[32rem] xl:max-w-full [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                            contentClassName="flex w-max items-center gap-1.5 pr-1"
+                        <div
+                            className="order-2 ml-auto flex max-w-[calc(100vw-1rem)] shrink-0 flex-wrap items-center justify-end gap-1.5 overflow-visible 2xl:order-3 2xl:max-w-full"
                             data-bms-topbar-utilities="true"
                         >
-                            <>
                             {/* Theme Selector */}
                             <ThemeSelector />
 
@@ -445,8 +443,7 @@ export function Layout({ children }: LayoutProps) {
                                 showSystemAnalyticsTab={showSystemAnalyticsTab}
                                 onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
                             />
-                            </>
-                        </DragScrollRail>
+                        </div>
                     </div>
                 </div>
             </nav>
@@ -1131,7 +1128,7 @@ function PowerControlMenu() {
                 <>
                     <div className="fixed inset-0 z-40" data-bms-drag-scroll-ignore="true" onClick={() => setIsOpen(false)} />
                     <div
-                        className="absolute right-0 top-full mt-2 w-[1060px] max-w-[96vw] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3"
+                        className="fixed right-2 top-12 w-[min(1060px,calc(100vw-1rem))] max-h-[calc(100vh-4rem)] overflow-y-auto bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3"
                         data-bms-drag-scroll-ignore="true"
                     >
                         <div className="flex items-center justify-between border-b border-slate-700 pb-2">

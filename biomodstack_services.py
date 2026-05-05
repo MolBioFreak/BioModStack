@@ -440,7 +440,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Wants=network-online.target docker.service {WORKFLOW_ADAPTER_SERVICE}
 
             [Service]
-            Type=simple
+            Type=oneshot
+            RemainAfterExit=yes
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
             ExecStart={core_runner}

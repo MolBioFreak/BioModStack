@@ -12,6 +12,7 @@ import {
     BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
+    DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
@@ -247,6 +248,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         String(initialValues?.output_format ?? initialValues?.bcp_output_format ?? 'mmcif').toLowerCase() === 'pdb' ? 'pdb' : 'mmcif'
     );
     const [bcpWriteFullPae, setBcpWriteFullPae] = useState(Boolean(initialValues?.write_full_pae ?? initialValues?.bcp_write_full_pae ?? false));
+    const [bcpContextQueryTileTokens, setBcpContextQueryTileTokens] = useState<number>(
+        Number.parseInt(String(initialValues?.context_query_tile_tokens ?? initialValues?.bcp_context_query_tile_tokens ?? DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS), 10)
+        || DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS
+    );
     const [bcpSeed, setBcpSeed] = useState(initialBoltzCpSeed != null ? String(initialBoltzCpSeed) : '');
 
     // Error handling
@@ -634,6 +639,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
+                contextQueryTileTokens: bcpContextQueryTileTokens,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
             }));
@@ -968,6 +974,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
+                contextQueryTileTokens: bcpContextQueryTileTokens,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
             }));
@@ -1820,7 +1827,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                         })}
                                     </p>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                     <div>
                                         <label className="text-xs text-slate-400 block mb-1">Output Format</label>
                                         <select
@@ -1831,6 +1838,17 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             <option value="mmcif">mmCIF</option>
                                             <option value="pdb">PDB</option>
                                         </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 block mb-1">Triangle attention query tile tokens</label>
+                                        <input
+                                            type="number"
+                                            value={bcpContextQueryTileTokens}
+                                            onChange={(e) => setBcpContextQueryTileTokens(Math.max(1, parseInt(e.target.value, 10) || DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS))}
+                                            min={1}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                        />
+                                        <p className="mt-1 text-[11px] leading-snug text-slate-500">Reference triangle-attention query tiling inside the true distributed Pairformer path; not output tiling.</p>
                                     </div>
                                     <div>
                                         <label className="text-xs text-slate-400 block mb-1">Seed</label>
