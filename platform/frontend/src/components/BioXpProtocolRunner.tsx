@@ -178,6 +178,7 @@ export const BioXpProtocolRunner = ({
     const [xmlPath, setXmlPath] = useState(DEFAULT_REMOTE_XML_PATH);
     const [nativeDocumentText, setNativeDocumentText] = useState(DEFAULT_NATIVE_PROTOCOL);
     const [dryRun, setDryRun] = useState(true);
+    const [liveExecutionArmed, setLiveExecutionArmed] = useState(false);
     const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
     const [reviewNote, setReviewNote] = useState('');
 
@@ -213,7 +214,7 @@ export const BioXpProtocolRunner = ({
         }
     }, [jobRows, selectedJobId]);
 
-    const submitDisabled = !linkageConfigured || !payloadState.payload || executeProtocol.isPending;
+    const submitDisabled = !linkageConfigured || !payloadState.payload || executeProtocol.isPending || (!dryRun && !liveExecutionArmed);
     const compileDisabled = !linkageConfigured || !payloadState.payload || compileProtocol.isPending;
 
     const handleCompile = () => {
@@ -341,21 +342,44 @@ export const BioXpProtocolRunner = ({
                         </div>
                     )}
 
-                    <label className="flex items-center gap-2 text-xs text-content-muted">
-                        <input
-                            type="checkbox"
-                            checked={dryRun}
-                            onChange={(event) => setDryRun(event.target.checked)}
-                            className="rounded border-border-primary"
-                        />
-                        Dry run only (recommended unless you are intentionally exercising a live protocol path)
-                    </label>
+                    <div className="space-y-2 rounded-lg border border-border-primary bg-surface/70 p-3">
+                        <label className="flex items-center gap-2 text-xs text-content-muted">
+                            <input
+                                type="checkbox"
+                                checked={dryRun}
+                                onChange={(event) => {
+                                    setDryRun(event.target.checked);
+                                    if (event.target.checked) {
+                                        setLiveExecutionArmed(false);
+                                    }
+                                }}
+                                className="rounded border-border-primary"
+                            />
+                            Dry run only — default protocol execution mode for offline review and bundle validation
+                        </label>
+                        {!dryRun ? (
+                            <label className="flex items-start gap-2 rounded border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
+                                <input
+                                    type="checkbox"
+                                    checked={liveExecutionArmed}
+                                    onChange={(event) => setLiveExecutionArmed(event.target.checked)}
+                                    className="mt-0.5 rounded border-warning/40"
+                                />
+                                <span>
+                                    Arm live protocol execution. Operator must be at the instrument, robot linkage must be green, and Handler Controls should show valid OEM runtime, liquid, range, and reference readbacks.
+                                </span>
+                            </label>
+                        ) : null}
+                    </div>
 
                     {payloadState.validationError ? (
                         <div className="text-xs text-error">{payloadState.validationError}</div>
                     ) : null}
                     {!linkageConfigured ? (
                         <div className="text-xs text-error">Configure a BioXP runtime linkage first. The operator surface delegates to the robot-local protocol API.</div>
+                    ) : null}
+                    {!dryRun && !liveExecutionArmed ? (
+                        <div className="text-xs text-warning">Live protocol execution is blocked until the live execution arm checkbox is set.</div>
                     ) : null}
                     {(compileProtocol.isError || executeProtocol.isError || reviewProtocolJob.isError) ? (
                         <div className="text-xs text-error">
@@ -380,7 +404,7 @@ export const BioXpProtocolRunner = ({
                             disabled={submitDisabled}
                             className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
                         >
-                            {executeProtocol.isPending ? 'SUBMITTING...' : dryRun ? 'Run Dry-Run Job' : 'Run Live Job'}
+                            {executeProtocol.isPending ? 'SUBMITTING...' : dryRun ? 'Run Dry-Run Protocol' : 'Run Armed Live Protocol'}
                         </button>
                         {pendingReview ? (
                             <button
