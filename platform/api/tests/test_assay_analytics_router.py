@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import sys
 import types
@@ -8,6 +9,7 @@ import zipfile
 import pytest
 from io import BytesIO
 from pathlib import Path
+from sqlalchemy import select, func
 
 API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
@@ -78,6 +80,129 @@ def test_assay_capabilities_expose_separate_analytical_postgres_store(monkeypatc
     status = client.get("/api/assay-analytics/analytical-store/status")
     assert status.status_code == 200
     assert status.json()["url_preview"] == "postgresql+asyncpg://bms_assay:***@127.0.0.1:55432/bms_analytical_data"
+
+
+def test_empower_import_persist_true_writes_chromatography_rows_to_analytical_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "assay-analytical.sqlite"
+    monkeypatch.setenv("BMS_ANALYTICAL_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    from services.assay_analytical_store import (
+        AnalyticalImport,
+        AssayRun,
+        ChromInjection,
+        ChromPeak,
+        ChromTracePoint,
+        create_analytical_session_factory,
+        init_analytical_store,
+    )
+
+    asyncio.run(init_analytical_store())
+    client = TestClient(bms_api_main.app)
+    csv_payload = "Sample,Sample Type,Injection,Area,Retention Time,Primary Peak Percent,Resolution,Method,Date\n" "Persisted Sample,SAMPLE,7,12345.6,4.25,98.7,1.8,Empower Method,2026-01-14T12:34:56\n"
+
+    response = client.post(
+        "/api/assay-analytics/analysis/hplc/empower/import",
+        files=[("files", ("empower-export.csv", csv_payload.encode("utf-8"), "text/csv"))],
+        data={"persist": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analytical_import_id"]
+    assert payload["assay_run_id"]
+    assert payload["injections"][0]["analytical_injection_id"]
+    assert payload["injections"][0]["peaks"][0]["analytical_peak_id"]
+
+    async def counts() -> dict[str, int]:
+        session_factory = create_analytical_session_factory()
+        async with session_factory() as session:
+            return {
+                "imports": await session.scalar(select(func.count()).select_from(AnalyticalImport)),
+                "runs": await session.scalar(select(func.count()).select_from(AssayRun)),
+                "injections": await session.scalar(select(func.count()).select_from(ChromInjection)),
+                "peaks": await session.scalar(select(func.count()).select_from(ChromPeak)),
+                "trace_points": await session.scalar(select(func.count()).select_from(ChromTracePoint)),
+            }
+
+    assert asyncio.run(counts()) == {
+        "imports": 1,
+        "runs": 1,
+        "injections": 1,
+        "peaks": 1,
+        "trace_points": 0,
+    }
+
+
+def test_qpcr_csv_upload_persist_true_writes_and_loads_analytical_store_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "qpcr-analytical.sqlite"
+    monkeypatch.setenv("BMS_ANALYTICAL_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    from services.assay_analytical_store import (
+        AnalyticalImport,
+        AnalyticalSourceFile,
+        AssayRun,
+        QpcrWell,
+        QpcrStandardCurve,
+        create_analytical_session_factory,
+        init_analytical_store,
+    )
+
+    asyncio.run(init_analytical_store())
+    client = TestClient(bms_api_main.app)
+    csv_payload = "Well,Sample Name,Target Name,Task,Cq,Quantity\n" \
+        "A1,STD 1,GOI,STANDARD,18.0,1000000\n" \
+        "A2,STD 2,GOI,STANDARD,21.322,100000\n" \
+        "A3,STD 3,GOI,STANDARD,24.644,10000\n" \
+        "B1,Unknown 1,GOI,UNKNOWN,24.744,\n"
+
+    response = client.post(
+        "/api/assay-analytics/analysis/qpcr/upload-csv",
+        files={"file": ("quantstudio-results.csv", csv_payload.encode("utf-8"), "text/csv")},
+        data={"persist": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analytical_import_id"]
+    assert payload["assay_run_id"]
+    assert payload["analytical_source_file_id"]
+
+    loaded = client.get(f"/api/assay-analytics/analysis/qpcr/imports/{payload['analytical_import_id']}")
+    assert loaded.status_code == 200
+    loaded_payload = loaded.json()
+    assert loaded_payload["filename"] == "quantstudio-results.csv"
+    assert loaded_payload["n_wells"] == 4
+    assert loaded_payload["wells"][0]["well_position"] == "A1"
+    assert loaded_payload["standard_curve_stats_by_target"]["GOI"]["n_points"] == 3
+
+    imports = client.get("/api/assay-analytics/analysis/qpcr/imports")
+    assert imports.status_code == 200
+    assert imports.json()[0]["analytical_import_id"] == payload["analytical_import_id"]
+
+    async def counts() -> dict[str, int]:
+        session_factory = create_analytical_session_factory()
+        async with session_factory() as session:
+            return {
+                "imports": await session.scalar(select(func.count()).select_from(AnalyticalImport)),
+                "source_files": await session.scalar(select(func.count()).select_from(AnalyticalSourceFile)),
+                "runs": await session.scalar(select(func.count()).select_from(AssayRun)),
+                "wells": await session.scalar(select(func.count()).select_from(QpcrWell)),
+                "standard_curves": await session.scalar(select(func.count()).select_from(QpcrStandardCurve)),
+            }
+
+    assert asyncio.run(counts()) == {
+        "imports": 1,
+        "source_files": 1,
+        "runs": 1,
+        "wells": 4,
+        "standard_curves": 1,
+    }
 
 
 def test_frontend_payload_contracts_match_assay_router_endpoints() -> None:
@@ -782,6 +907,7 @@ def test_real_empower_db_export_zip_imports_cdf_arw_chromatograms_and_native_pea
     response = client.post(
         "/api/assay-analytics/analysis/hplc/empower/import",
         files=[("files", (zip_path.name, zip_path.read_bytes(), "application/zip"))],
+        data={"persist": "false"},
     )
 
     assert response.status_code == 200
@@ -841,7 +967,11 @@ def test_real_empower_db_export_folder_upload_groups_cdf_arw_pairs() -> None:
             files.append(("files", (Path(member).name, archive.read(member), "application/octet-stream")))
 
     client = TestClient(bms_api_main.app)
-    response = client.post("/api/assay-analytics/analysis/hplc/empower/import", files=files)
+    response = client.post(
+        "/api/assay-analytics/analysis/hplc/empower/import",
+        files=files,
+        data={"persist": "false"},
+    )
 
     assert response.status_code == 200
     payload = response.json()

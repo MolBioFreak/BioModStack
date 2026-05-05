@@ -44,9 +44,18 @@ import {
     useMotionPowerDiag,
     useMotionPowerEnable,
     useMotionPowerStatus,
+    useMotionRangeStatus,
     useMotionReferenceStatus,
     useMoveAbsolute,
     useMoveRelative,
+    useOemRuntimeCommand,
+    useOemRuntimeEmergencyStop,
+    useOemRuntimeRecover,
+    useOemRuntimeState,
+    useOemRuntimeStatus,
+    useOemStartupDoorEvent,
+    useOemStartupLatest,
+    useOemStartupRequest,
     usePrepareInterlock,
     useReconnectRuntime,
     useRuntimeStatus,
@@ -1334,7 +1343,7 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
 };
 
 export const BioXpCockpit = () => {
-    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'controls' | 'camera'>('connection');
+    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'manual' | 'controls' | 'camera'>('connection');
     const [linkageInput, setLinkageInput] = useState('');
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -1358,8 +1367,10 @@ export const BioXpCockpit = () => {
     const [liquidSource, setLiquidSource] = useState('reagent_rack:A1');
     const [liquidDestination, setLiquidDestination] = useState('reaction_plate:A1');
     const [latestLiquidAction, setLatestLiquidAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestOemAction, setLatestOemAction] = useState<{ action: string; data: any } | null>(null);
     const [latestReferenceAction, setLatestReferenceAction] = useState<{ action: string; data: any } | null>(null);
     const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: any } | null>(null);
+    const [showCommissioningControls, setShowCommissioningControls] = useState(false);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
     const hardwareMutationCount = useIsMutating({
@@ -1411,6 +1422,17 @@ export const BioXpCockpit = () => {
     const motionReferenceStatus = useMotionReferenceStatus(controlsPollingEnabled, ['x', 'y', 'z', 'g', 'door'], motionBusy ? false : 5000);
     const markMotionReferenced = useMarkMotionReferenced();
     const markMotionDesynced = useMarkMotionDesynced();
+    const oemStartupLatest = useOemStartupLatest(controlsPollingEnabled, motionBusy ? false : 5000);
+    const oemRuntimeStatus = useOemRuntimeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
+    const oemRuntimeState = useOemRuntimeState(controlsPollingEnabled, motionBusy ? false : 5000);
+    const oemStartupRequest = useOemStartupRequest();
+    const oemStartupDoorEvent = useOemStartupDoorEvent();
+    const oemRuntimeRecover = useOemRuntimeRecover();
+    const oemRuntimeEmergencyStop = useOemRuntimeEmergencyStop();
+    const oemInitializeSystem = useOemRuntimeCommand('initializeSystem');
+    const oemPrepareToRunJob = useOemRuntimeCommand('PrepareToRunJob');
+    const oemUnlockProcess = useOemRuntimeCommand('unlockProcess');
+    const motionRangeStatus = useMotionRangeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidStatus = useLiquidStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidInit = useLiquidInit();
     const liquidTip = useLiquidTip();
@@ -1604,6 +1626,8 @@ export const BioXpCockpit = () => {
 
     const recordLiquidAction = (action: string, data: any) => setLatestLiquidAction({ action, data });
     const recordLiquidError = (action: string, error: unknown) => recordLiquidAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
+    const recordOemAction = (action: string, data: any) => setLatestOemAction({ action, data });
+    const recordOemError = (action: string, error: unknown) => recordOemAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
     const recordReferenceAction = (action: string, data: any) => setLatestReferenceAction({ action, data });
     const recordReferenceError = (action: string, error: unknown) => recordReferenceAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
     const recordVisionAction = (action: string, data: any) => setLatestVisionAction({ action, data });
@@ -1690,6 +1714,12 @@ export const BioXpCockpit = () => {
             setStreamReady(false);
         }
     }, [pollCamera, cameraDevice, streamFps]);
+
+    useEffect(() => {
+        if (activeTab === 'manual' && !showCommissioningControls) {
+            setActiveTab('controls');
+        }
+    }, [activeTab, showCommissioningControls]);
 
     useEffect(() => {
         if (!pollCamera || streamReady) {
@@ -1782,26 +1812,32 @@ export const BioXpCockpit = () => {
                 <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${referenceRows.every((row) => row.state === 'referenced') && referenceRows.length ? 'bg-success/10 text-success border-success/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
                     REFERENCE: {getReferenceSummary(motionReferenceStatus.data).toUpperCase()}
                 </div>
-                <button
-                    onClick={() => markMotionReferenced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_verified_at_console', operator: 'bms-cockpit' }, {
-                        onSuccess: (data) => recordReferenceAction('mark_referenced', data),
-                        onError: (error) => recordReferenceError('mark_referenced', error),
-                    })}
-                    disabled={!isConnected || markMotionReferenced.isPending}
-                    className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {markMotionReferenced.isPending ? 'MARKING...' : 'Mark Referenced'}
-                </button>
-                <button
-                    onClick={() => markMotionDesynced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_forced_desync', operator: 'bms-cockpit' }, {
-                        onSuccess: (data) => recordReferenceAction('mark_desynced', data),
-                        onError: (error) => recordReferenceError('mark_desynced', error),
-                    })}
-                    disabled={!isConnected || markMotionDesynced.isPending}
-                    className="px-3 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {markMotionDesynced.isPending ? 'DESYNCING...' : 'Mark Desynced'}
-                </button>
+                {showCommissioningControls ? (
+                    <>
+                        <button
+                            onClick={() => markMotionReferenced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_verified_at_console', operator: 'bms-cockpit' }, {
+                                onSuccess: (data) => recordReferenceAction('mark_referenced', data),
+                                onError: (error) => recordReferenceError('mark_referenced', error),
+                            })}
+                            disabled={!isConnected || markMotionReferenced.isPending}
+                            className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {markMotionReferenced.isPending ? 'MARKING...' : 'Mark Referenced'}
+                        </button>
+                        <button
+                            onClick={() => markMotionDesynced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_forced_desync', operator: 'bms-cockpit' }, {
+                                onSuccess: (data) => recordReferenceAction('mark_desynced', data),
+                                onError: (error) => recordReferenceError('mark_desynced', error),
+                            })}
+                            disabled={!isConnected || markMotionDesynced.isPending}
+                            className="px-3 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {markMotionDesynced.isPending ? 'DESYNCING...' : 'Mark Desynced'}
+                        </button>
+                    </>
+                ) : (
+                    <div className="text-[11px] text-content-muted">Reference edits are commissioning-only; default handler view is readback-only.</div>
+                )}
             </div>
             {referenceRows.length > 0 && (
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -1821,8 +1857,8 @@ export const BioXpCockpit = () => {
 
     const liquidPanel = (
         <SectionCard
-            title="Liquid Handler"
-            subtitle="CAN pipette surface with explicit software-vs-hardware truth. Use at the physical console only until live validation is complete."
+            title="Liquid Handler Readback"
+            subtitle="OEM-backed liquid status stays visible by default. Direct pipette actions live only in Commissioning Motion."
         >
             <div className="flex items-center gap-3 flex-wrap">
                 <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${liquidStatus.data?.available ? 'bg-success/10 text-success border-success/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
@@ -1832,38 +1868,126 @@ export const BioXpCockpit = () => {
                     init {String(liquidStatus.data?.initialized ?? liquidStatus.data?.software_initialized ?? false)} | tip {String(liquidStatus.data?.tip_loaded ?? liquidStatus.data?.software_tip_loaded ?? false)}
                 </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Volume uL</span>
-                    <input type="number" min={0.1} step={0.1} value={liquidVolumeUl} onChange={(e) => setLiquidVolumeUl(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Cycles</span>
-                    <input type="number" min={1} max={20} value={liquidCycles} onChange={(e) => setLiquidCycles(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Pressure</span>
-                    <input value={liquidPressureProfile} onChange={(e) => setLiquidPressureProfile(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1">
-                    <span>Source</span>
-                    <input value={liquidSource} onChange={(e) => setLiquidSource(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-                <label className="text-xs text-content-muted space-y-1 md:col-span-2">
-                    <span>Destination</span>
-                    <input value={liquidDestination} onChange={(e) => setLiquidDestination(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
-                </label>
-            </div>
-            <div className="flex flex-wrap gap-2">
-                <button onClick={() => liquidInit.mutate({}, { onSuccess: (data) => recordLiquidAction('init', data), onError: (error) => recordLiquidError('init', error) })} disabled={!isConnected || liquidInit.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">{liquidInit.isPending ? 'INIT...' : 'Init'}</button>
-                <button onClick={() => liquidTip.mutate({ tip_action: 'load' }, { onSuccess: (data) => recordLiquidAction('load_tip', data), onError: (error) => recordLiquidError('load_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">Load Tip</button>
-                <button onClick={() => liquidTip.mutate({ tip_action: 'eject' }, { onSuccess: (data) => recordLiquidAction('eject_tip', data), onError: (error) => recordLiquidError('eject_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Eject Tip</button>
-                <button onClick={() => liquidAspirate.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('aspirate', data), onError: (error) => recordLiquidError('aspirate', error) })} disabled={!isConnected || liquidAspirate.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Aspirate</button>
-                <button onClick={() => liquidDispense.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('dispense', data), onError: (error) => recordLiquidError('dispense', error) })} disabled={!isConnected || liquidDispense.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Dispense</button>
-                <button onClick={() => liquidMix.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('mix', data), onError: (error) => recordLiquidError('mix', error) })} disabled={!isConnected || liquidMix.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Mix</button>
+
+            {liquidActionError && <div className="text-xs text-error">{liquidActionError}</div>}
+            <JsonBlock title="Liquid Snapshot" data={liquidStatus.data} fallback="Liquid status pending." />
+        </SectionCard>
+    );
+
+    const liquidCommissioningPanel = (
+        <SectionCard
+            title="Commissioning Liquid Commands"
+            subtitle="Direct pipette commands are not part of the default handler surface. Use only with the operator watching the instrument."
+        >
+            <div className="space-y-3 border border-warning/20 rounded-lg p-3 bg-warning/5">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <label className="text-xs text-content-muted space-y-1">
+                        <span>Volume uL</span>
+                        <input type="number" min={0.1} step={0.1} value={liquidVolumeUl} onChange={(e) => setLiquidVolumeUl(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                    </label>
+                    <label className="text-xs text-content-muted space-y-1">
+                        <span>Cycles</span>
+                        <input type="number" min={1} max={20} value={liquidCycles} onChange={(e) => setLiquidCycles(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                    </label>
+                    <label className="text-xs text-content-muted space-y-1">
+                        <span>Pressure</span>
+                        <input value={liquidPressureProfile} onChange={(e) => setLiquidPressureProfile(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                    </label>
+                    <label className="text-xs text-content-muted space-y-1">
+                        <span>Source</span>
+                        <input value={liquidSource} onChange={(e) => setLiquidSource(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                    </label>
+                    <label className="text-xs text-content-muted space-y-1 md:col-span-2">
+                        <span>Destination</span>
+                        <input value={liquidDestination} onChange={(e) => setLiquidDestination(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                    </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={() => liquidInit.mutate({}, { onSuccess: (data) => recordLiquidAction('init', data), onError: (error) => recordLiquidError('init', error) })} disabled={!isConnected || liquidInit.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">{liquidInit.isPending ? 'INIT...' : 'Init'}</button>
+                    <button onClick={() => liquidTip.mutate({ tip_action: 'load' }, { onSuccess: (data) => recordLiquidAction('load_tip', data), onError: (error) => recordLiquidError('load_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">Load Tip</button>
+                    <button onClick={() => liquidTip.mutate({ tip_action: 'eject' }, { onSuccess: (data) => recordLiquidAction('eject_tip', data), onError: (error) => recordLiquidError('eject_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Eject Tip</button>
+                    <button onClick={() => liquidAspirate.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('aspirate', data), onError: (error) => recordLiquidError('aspirate', error) })} disabled={!isConnected || liquidAspirate.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Aspirate</button>
+                    <button onClick={() => liquidDispense.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('dispense', data), onError: (error) => recordLiquidError('dispense', error) })} disabled={!isConnected || liquidDispense.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Dispense</button>
+                    <button onClick={() => liquidMix.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('mix', data), onError: (error) => recordLiquidError('mix', error) })} disabled={!isConnected || liquidMix.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Mix</button>
+                </div>
             </div>
             {liquidActionError && <div className="text-xs text-error">{liquidActionError}</div>}
-            <JsonBlock title="Liquid Snapshot / Last Command" data={latestLiquidAction?.data ?? liquidStatus.data} fallback="Liquid status pending." />
+            <JsonBlock title="Last Liquid Command" data={latestLiquidAction?.data} fallback="No direct liquid command executed yet." />
+        </SectionCard>
+    );
+
+    const oemReadbackPanel = (
+        <SectionCard
+            title="OEM Runtime & Startup"
+            subtitle="Primary BioXP operator surface: BMS proxies the robot-local OEM runtime and liquid-handler contract instead of owning a second motor supervisor."
+        >
+            <div className="rounded-lg border border-accent/20 bg-accent/5 p-3 space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">Live testing entrypoint</div>
+                <div className="text-xs text-content-muted">Use these OEM-backed actions before liquid/deck tests. Every button calls the robot-local BioXP API through BMS and records the exact response below.</div>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={() => oemStartupRequest.mutate({ operator: 'bms-cockpit', source: 'oem-startup-panel' }, { onSuccess: (data) => recordOemAction('startup_request', data), onError: (error) => recordOemError('startup_request', error) })}
+                        disabled={!isConnected || oemStartupRequest.isPending}
+                        className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {oemStartupRequest.isPending ? 'REQUESTING...' : 'Request OEM Startup'}
+                    </button>
+                    <button
+                        onClick={() => oemInitializeSystem.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('initializeSystem', data), onError: (error) => recordOemError('initializeSystem', error) })}
+                        disabled={!isConnected || oemInitializeSystem.isPending}
+                        className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {oemInitializeSystem.isPending ? 'INITIALIZING...' : 'Initialize System'}
+                    </button>
+                    <button
+                        onClick={() => oemPrepareToRunJob.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('PrepareToRunJob', data), onError: (error) => recordOemError('PrepareToRunJob', error) })}
+                        disabled={!isConnected || oemPrepareToRunJob.isPending}
+                        className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {oemPrepareToRunJob.isPending ? 'PREPARING...' : 'Prepare To Run Job'}
+                    </button>
+                    <button
+                        onClick={() => oemStartupDoorEvent.mutate({ event: 'closed', operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('door_closed', data), onError: (error) => recordOemError('door_closed', error) })}
+                        disabled={!isConnected || oemStartupDoorEvent.isPending}
+                        className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                    >
+                        Door Closed Event
+                    </button>
+                    <button
+                        onClick={() => oemUnlockProcess.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('unlockProcess', data), onError: (error) => recordOemError('unlockProcess', error) })}
+                        disabled={!isConnected || oemUnlockProcess.isPending}
+                        className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        Unlock Process
+                    </button>
+                    <button
+                        onClick={() => oemRuntimeRecover.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('runtime_recover', data), onError: (error) => recordOemError('runtime_recover', error) })}
+                        disabled={!isConnected || oemRuntimeRecover.isPending}
+                        className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {oemRuntimeRecover.isPending ? 'RECOVERING...' : 'Recover Runtime'}
+                    </button>
+                    <button
+                        onClick={() => oemRuntimeEmergencyStop.mutate({ operator: 'bms-cockpit' }, { onSuccess: (data) => recordOemAction('emergency_stop', data), onError: (error) => recordOemError('emergency_stop', error) })}
+                        disabled={!isConnected || oemRuntimeEmergencyStop.isPending}
+                        className="px-3 py-2 bg-error hover:bg-error/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {oemRuntimeEmergencyStop.isPending ? 'STOPPING...' : 'EMERGENCY STOP'}
+                    </button>
+                </div>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                <JsonBlock title="Latest OEM Action" data={latestOemAction?.data} fallback="No OEM action executed yet." />
+                <JsonBlock title="Startup Latest" data={oemStartupLatest.data} fallback="Startup status pending." />
+                <JsonBlock title="Runtime Status" data={oemRuntimeStatus.data} fallback="OEM runtime status pending." />
+                <JsonBlock title="Runtime State" data={oemRuntimeState.data} fallback="OEM runtime state pending." />
+                <JsonBlock title="Motion Range / Switches" data={motionRangeStatus.data} fallback="Range readback pending." />
+            </div>
+            {(oemStartupLatest.isError || oemRuntimeStatus.isError || oemRuntimeState.isError || motionRangeStatus.isError) && (
+                <div className="text-xs text-error">
+                    {getErrorMessage(oemStartupLatest.error) || getErrorMessage(oemRuntimeStatus.error) || getErrorMessage(oemRuntimeState.error) || getErrorMessage(motionRangeStatus.error)}
+                </div>
+            )}
         </SectionCard>
     );
 
@@ -2064,8 +2188,16 @@ export const BioXpCockpit = () => {
                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Quick Motion</div>
                 <div className="text-[10px] text-content-muted">Guarded jog controls for live calibration inside the viewer. Hold an arrow to keep nudging while limits and runtime guardrails stay active.</div>
             </div>
-            <CameraHoldJogPad enabled={isConnected} />
-            <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+            {showCommissioningControls ? (
+                <>
+                    <CameraHoldJogPad enabled={isConnected} />
+                    <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+                </>
+            ) : (
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
+                    Camera-overlaid jog controls are commissioning-only. Use the live image for observation unless the supervised commissioning toggle is open.
+                </div>
+            )}
         </div>
     );
     const motionPowerPanel = (
@@ -2127,103 +2259,112 @@ export const BioXpCockpit = () => {
                 </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-                <button
-                    onClick={() => {
-                        if (motionPowerApiMissing) {
-                            prepareInterlock.mutate(undefined, {
-                                onSuccess: (data) => recordMotionInfraAction('enable_legacy', { ...data, legacy_fallback: true }),
-                                onError: (error) => recordMotionInfraError('enable_legacy', error),
-                            });
-                            return;
-                        }
-                        motionPowerEnable.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('enable', data),
-                            onError: (error) => recordMotionInfraError('enable', error),
-                        });
-                    }}
-                    disabled={motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending)}
-                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
-                </button>
-                <button
-                    onClick={() =>
-                        motionArmStrictStartup.mutate(
-                            { run_homing: false },
-                            {
-                                onSuccess: (data) => recordMotionInfraAction('arm_motion', data),
-                                onError: (error) => recordMotionInfraError('arm_motion', error),
-                            },
-                        )
-                    }
-                    disabled={motionArmStrictStartup.isPending || motionPowerApiMissing}
-                    className="px-4 py-2 bg-success/20 hover:bg-success/30 text-success text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motion'}
-                </button>
-                <button
-                    onClick={() =>
-                        prepareInterlock.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('interlock', data),
-                            onError: (error) => recordMotionInfraError('interlock', error),
-                        })
-                    }
-                    disabled={prepareInterlock.isPending}
-                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Interlock'}
-                </button>
-                <button
-                    onClick={() =>
-                        clearLock.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('clear_lock', data),
-                            onError: (error) => recordMotionInfraError('clear_lock', error),
-                        })
-                    }
-                    disabled={clearLock.isPending}
-                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
-                </button>
-                <button
-                    onClick={() =>
-                        motionPowerDiag.mutate(undefined, {
-                            onSuccess: (data) => recordMotionInfraAction('diag', data),
-                            onError: (error) => recordMotionInfraError('diag', error),
-                        })
-                    }
-                    disabled={motionPowerDiag.isPending || motionPowerApiMissing}
-                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
-                >
-                    {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
-                </button>
-                <div className="flex items-center gap-2">
-                    <input
-                        type="number"
-                        min={1}
-                        max={5}
-                        value={motionHardResetRounds}
-                        onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
-                        className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
-                    />
-                    <button
-                        onClick={() =>
-                            motionHardReset.mutate(
-                                { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
-                                {
-                                    onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
-                                    onError: (error) => recordMotionInfraError('hard_reset', error),
-                                },
-                            )
-                        }
-                        disabled={motionHardReset.isPending || motionPowerApiMissing}
-                        className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
-                    >
-                        {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
-                    </button>
+            {showCommissioningControls ? (
+                <div className="space-y-3 rounded-lg border border-warning/20 bg-warning/5 p-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">Commissioning motor power actions</div>
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            onClick={() => {
+                                if (motionPowerApiMissing) {
+                                    prepareInterlock.mutate(undefined, {
+                                        onSuccess: (data) => recordMotionInfraAction('enable_legacy', { ...data, legacy_fallback: true }),
+                                        onError: (error) => recordMotionInfraError('enable_legacy', error),
+                                    });
+                                    return;
+                                }
+                                motionPowerEnable.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('enable', data),
+                                    onError: (error) => recordMotionInfraError('enable', error),
+                                });
+                            }}
+                            disabled={motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending)}
+                            className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionPowerEnable.isPending || (motionPowerApiMissing && prepareInterlock.isPending) ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                motionArmStrictStartup.mutate(
+                                    { run_homing: false },
+                                    {
+                                        onSuccess: (data) => recordMotionInfraAction('arm_motion', data),
+                                        onError: (error) => recordMotionInfraError('arm_motion', error),
+                                    },
+                                )
+                            }
+                            disabled={motionArmStrictStartup.isPending || motionPowerApiMissing}
+                            className="px-4 py-2 bg-success/20 hover:bg-success/30 text-success text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motion'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                prepareInterlock.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('interlock', data),
+                                    onError: (error) => recordMotionInfraError('interlock', error),
+                                })
+                            }
+                            disabled={prepareInterlock.isPending}
+                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Interlock'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                clearLock.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('clear_lock', data),
+                                    onError: (error) => recordMotionInfraError('clear_lock', error),
+                                })
+                            }
+                            disabled={clearLock.isPending}
+                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
+                        </button>
+                        <button
+                            onClick={() =>
+                                motionPowerDiag.mutate(undefined, {
+                                    onSuccess: (data) => recordMotionInfraAction('diag', data),
+                                    onError: (error) => recordMotionInfraError('diag', error),
+                                })
+                            }
+                            disabled={motionPowerDiag.isPending || motionPowerApiMissing}
+                            className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        >
+                            {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
+                        </button>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="number"
+                                min={1}
+                                max={5}
+                                value={motionHardResetRounds}
+                                onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
+                                className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
+                            />
+                            <button
+                                onClick={() =>
+                                    motionHardReset.mutate(
+                                        { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
+                                        {
+                                            onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
+                                            onError: (error) => recordMotionInfraError('hard_reset', error),
+                                        },
+                                    )
+                                }
+                                disabled={motionHardReset.isPending || motionPowerApiMissing}
+                                className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
+                            >
+                                {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
+                    Actuating power, interlock, lock-clear, and reset buttons are hidden from the default operator surface. Open Commissioning Motion only with the operator at the instrument.
+                </div>
+            )}
 
             {latestMotionInfraSummary && (
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] font-mono text-content-muted break-words">
@@ -2247,8 +2388,8 @@ export const BioXpCockpit = () => {
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
             <div className="flex justify-between items-start border-b border-border-secondary pb-4">
                 <div>
-                    <h2 className="text-lg font-semibold text-content">BioXP Hardware Interface</h2>
-                    <p className="text-sm text-content-muted">BMS proxy for the canonical BioXP USB runtime</p>
+                    <h2 className="text-lg font-semibold text-content">BioXP Handler Controls</h2>
+                    <p className="text-sm text-content-muted">OEM/liquid-handler-first BMS proxy for the robot-local BioXP runtime</p>
                 </div>
                 <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${isConnected ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30') : 'bg-error/10 text-error border-error/30'}`}>
                     HARDWARE: {statusLoading ? 'PINGING...' : isConnected ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE') : 'OFFLINE'}
@@ -2257,9 +2398,10 @@ export const BioXpCockpit = () => {
 
             <div className="flex gap-1 border-b border-border-secondary flex-wrap">
                 {([
-                    { key: 'connection', label: 'Linkage & Status' },
+                    { key: 'connection', label: 'Runtime Linkage' },
                     { key: 'operator', label: 'Protocol Operator' },
-                    { key: 'controls', label: 'Motion, Latch & Thermals' },
+                    ...(showCommissioningControls ? [{ key: 'manual', label: 'Commissioning Motion' }] as const : []),
+                    { key: 'controls', label: 'Handler Controls' },
                     { key: 'camera', label: 'Camera Feed' },
                 ] as const).map((tab) => (
                     <button
@@ -2358,21 +2500,8 @@ export const BioXpCockpit = () => {
                                 >
                                     {reconnectRuntime.isPending ? 'RECONNECTING...' : 'Reconnect USB Runtime'}
                                 </button>
-                                <button
-                                    onClick={() => prepareInterlock.mutate()}
-                                    disabled={!isConnected || prepareInterlock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Motion Interlock'}
-                                </button>
-                                <button
-                                    onClick={() => clearLock.mutate()}
-                                    disabled={!isConnected || clearLock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
-                                </button>
                             </div>
+                            <div className="text-[11px] text-content-muted">Motion interlock and lock-clear actions are commissioning-only and are not exposed on this default linkage/status tab.</div>
                             {(reconnectRuntime.isError || prepareInterlock.isError || clearLock.isError) && (
                                 <div className="text-xs text-error">
                                     {getErrorMessage(reconnectRuntime.error) || getErrorMessage(prepareInterlock.error) || getErrorMessage(clearLock.error)}
@@ -2385,22 +2514,29 @@ export const BioXpCockpit = () => {
                             title="Latch & Deck IO"
                             subtitle="Motion prep depends on the latch and deck IO states exposed by the BioXP runtime."
                         >
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => latchLock.mutate()}
-                                    disabled={!isConnected || latchLock.isPending}
-                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
-                                >
-                                    {latchLock.isPending ? 'LOCKING...' : 'Lock'}
-                                </button>
-                                <button
-                                    onClick={() => latchUnlock.mutate()}
-                                    disabled={!isConnected || latchUnlock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    {latchUnlock.isPending ? 'UNLOCKING...' : 'Unlock'}
-                                </button>
-                            </div>
+                            {showCommissioningControls ? (
+                                <div className="space-y-2 rounded-lg border border-warning/20 bg-warning/5 p-3">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">Commissioning latch actions</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={() => latchLock.mutate()}
+                                            disabled={!isConnected || latchLock.isPending}
+                                            className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                                        >
+                                            {latchLock.isPending ? 'LOCKING...' : 'Lock'}
+                                        </button>
+                                        <button
+                                            onClick={() => latchUnlock.mutate()}
+                                            disabled={!isConnected || latchUnlock.isPending}
+                                            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
+                                        >
+                                            {latchUnlock.isPending ? 'UNLOCKING...' : 'Unlock'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-[11px] text-content-muted">Latch state is readback-only by default; lock/unlock controls require Commissioning Motion.</div>
+                            )}
                             {(latchLock.isError || latchUnlock.isError || latchStatus.isError) && (
                                 <div className="text-xs text-error">
                                     {getErrorMessage(latchLock.error) || getErrorMessage(latchUnlock.error) || getErrorMessage(latchStatus.error)}
@@ -2490,34 +2626,84 @@ export const BioXpCockpit = () => {
                 />
             )}
 
-            {activeTab === 'controls' && (
+
+            {activeTab === 'manual' && (
                 !isConnected ? (
                     <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
                         <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Motion, latch, thermal, and chiller actions stay disabled until the runtime reports actual board reachability.</p>
+                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Commissioning motion buttons stay disabled until BMS is linked to the robot-local BioXP API.</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
-                            {motionPowerPanel}
-                            {referencePanel}
-                            {liquidPanel}
-                            {visionPanel}
                             <SectionCard
-                                title="Motion Control System"
-                                subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
+                                title="Commissioning Motion — Raw Axis Proxy"
+                                subtitle="Hidden from the default handler path. These supervised movement buttons execute through BMS → robot-local BioXP API proxy only for live commissioning, not normal liquid-handler workflow."
                             >
                                 <div className="text-[11px] font-mono text-content-muted">
-                                    Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
+                                    Safety profile: speed 100, acc 50 unless the robot preset reports a safer axis profile; abort if speed is nonzero with no position delta for 2s.
                                     {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
                                 </div>
-                                <div className="space-y-4">
+                                <div className="mt-3 space-y-4">
                                     <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                 </div>
+                            </SectionCard>
+                        </div>
+                        <div className="space-y-6">
+                            {motionPowerPanel}
+                            {referencePanel}
+                            {liquidCommissioningPanel}
+                            <SectionCard
+                                title="Thermal Door Commissioning Motion"
+                                subtitle="Door-axis motion is still separated from normal X/Y/Z/gripper movement because it interacts with the thermal subsystem."
+                            >
+                                {showCommissioningControls ? (
+                                    <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                ) : (
+                                    <div className="text-xs text-content-muted">Open Commissioning Motion before moving the thermal door axis directly. Thermal door context/readback remains available on Handler Controls.</div>
+                                )}
+                            </SectionCard>
+                        </div>
+                    </div>
+                )
+            )}
+
+            {activeTab === 'controls' && (
+                !isConnected ? (
+                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
+                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
+                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Handler readback, thermal, and chiller panels stay disabled until the runtime reports actual board reachability.</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <div className="space-y-6">
+                            {oemReadbackPanel}
+                            {liquidPanel}
+                            {referencePanel}
+                            {visionPanel}
+                            <SectionCard
+                                title="Commissioning Access"
+                                subtitle="Opens the separate Commissioning Motion tab for raw motion, power/interlock recovery, direct pipette, latch, camera-jog, and thermal-door actions."
+                            >
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCommissioningControls((value) => !value)}
+                                    className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
+                                >
+                                    {showCommissioningControls ? 'Hide Commissioning Controls' : 'Show Commissioning Controls'}
+                                </button>
+                                {showCommissioningControls ? (
+                                    <div className="space-y-4 border border-warning/20 rounded-lg p-3 bg-warning/5">
+                                        <div className="text-[11px] font-mono text-content-muted">
+                                            Commissioning Motion is now the only place for raw X/Y/Z/gripper movement, direct pipette commands, latch actions, power/interlock recovery, camera-jog, and thermal-door movement.
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-content-muted">Default live testing uses Runtime Linkage, Protocol Operator, and Handler Controls. Thermal Door remains available as readback and thermal-system context here; direct thermal-door movement is commissioning-only.</div>
+                                )}
                             </SectionCard>
                         </div>
 

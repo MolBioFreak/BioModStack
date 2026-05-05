@@ -2368,6 +2368,7 @@ def build_nextflow_command(
     explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
     explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
     explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
     explicit_container_dir = (
         params.get("container_dir")
         or os.getenv("BMS_CONTAINER_DIR")
@@ -2398,6 +2399,7 @@ def build_nextflow_command(
         cmd = [
             "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
+            "-w", str(explicit_work_dir),
             "--out_dir", output_dir,
         ]
     
@@ -2960,6 +2962,10 @@ def build_nextflow_command(
             'triattn_backend': 'bcp_triattn_backend',
             'context_store_mode': 'bcp_context_store_mode',
             'context_store_root': 'bcp_context_store_root',
+            'context_query_tile_tokens': 'bcp_context_query_tile_tokens',
+            'context_store_logical_size_cp': 'bcp_context_store_logical_size_cp',
+            'context_store_pair_tile_tokens': 'bcp_context_store_pair_tile_tokens',
+            'context_store_key_tile_tokens': 'bcp_context_store_key_tile_tokens',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -3013,6 +3019,7 @@ def build_nextflow_command(
         params.setdefault('bcp_backend', 'true-distributed-context-parallel')
         params.setdefault('bcp_triattn_backend', 'reference')
         params.setdefault('bcp_context_store_mode', 'evidence-only')
+        params.setdefault('bcp_context_query_tile_tokens', 512)
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
