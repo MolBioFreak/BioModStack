@@ -39,6 +39,7 @@ modes:
       - context_store_logical_size_cp
       - context_store_pair_tile_tokens
       - context_store_key_tile_tokens
+      - context_store_projection_cache_byte_budget
       - input_format
       - output_format
       - write_full_pae
@@ -155,6 +156,13 @@ params:
     description: Key-axis tile token count for virtual DRAM-streamed triangle attention blocks.
     required: false
     minimum: 1
+
+  - name: context_store_projection_cache_byte_budget
+    type: integer
+    description: Byte budget for exact CUDA K/V projection tile reuse in virtual-dram-stream-attention. 0 disables the cache.
+    required: false
+    default: 0
+    minimum: 0
 
   - name: input_format
     type: string

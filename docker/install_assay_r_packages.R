@@ -1,12 +1,10 @@
 #!/usr/bin/env Rscript
 
-options(repos = c(
-  ropensci = "https://ropensci.r-universe.dev",
-  CRAN = "https://cloud.r-project.org"
-))
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+cran_only_packages <- c("chromConverter")
 
 cran_packages <- c(
-  "chromConverter",
   "RDML",
   "qpcR",
   "chipPCR",
@@ -22,8 +20,9 @@ cran_packages <- c(
   "desirability"
 )
 
-runiverse_packages <- c("tidyqpcr")
 rqdeltact_packages <- c("RQdeltaCT")
+tidyqpcr_cran_deps <- c("tibble", "rlang", "dplyr", "ggplot2", "scales", "readr", "forcats", "assertthat", "tidyr")
+tidyqpcr_tarball <- "https://ropensci.r-universe.dev/src/contrib/tidyqpcr_1.0.tar.gz"
 bioconductor_packages <- c("HTqPCR")
 
 # Debian bookworm's r-base ships Matrix 1.5.x, but current MatrixModels/lme4
@@ -60,7 +59,8 @@ install_missing <- function(pkgs, repos = getOption("repos")) {
   invisible(TRUE)
 }
 
-install_missing(cran_packages)
+install_missing(cran_only_packages, repos = c(CRAN = "https://cloud.r-project.org"))
+install_missing(cran_packages, repos = c(CRAN = "https://cloud.r-project.org"))
 
 ensure_ggally_for_r42 <- function() {
   installed <- rownames(installed.packages())
@@ -77,8 +77,15 @@ ensure_ggally_for_r42 <- function() {
 }
 
 ensure_ggally_for_r42()
-install_missing(rqdeltact_packages)
-install_missing(runiverse_packages)
+install_missing(rqdeltact_packages, repos = c(CRAN = "https://cloud.r-project.org"))
+install_missing(tidyqpcr_cran_deps, repos = c(CRAN = "https://cloud.r-project.org"))
+if (!("tidyqpcr" %in% rownames(installed.packages()))) {
+  message("Installing R assay package: tidyqpcr")
+  install.packages(tidyqpcr_tarball, repos = NULL, type = "source", dependencies = FALSE)
+}
+if (!("tidyqpcr" %in% rownames(installed.packages()))) {
+  stop("Failed to install R package: tidyqpcr")
+}
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
   install.packages("BiocManager", repos = "https://cloud.r-project.org")
@@ -89,4 +96,4 @@ if (length(missing_bioc) > 0) {
   stop("Failed to install Bioconductor packages: ", paste(missing_bioc, collapse = ", "))
 }
 
-message("Installed BMS assay R packages: ", paste(c(cran_packages, rqdeltact_packages, runiverse_packages, bioconductor_packages), collapse = ", "))
+message("Installed BMS assay R packages: ", paste(c(cran_only_packages, cran_packages, rqdeltact_packages, "tidyqpcr", bioconductor_packages), collapse = ", "))

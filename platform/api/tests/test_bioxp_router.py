@@ -143,7 +143,7 @@ async def test_daemon_status_uses_proxy_status_as_single_runtime_truth(monkeypat
     async def fake_proxy_request(method: str, path: str, timeout: float = 65.0, **_: object) -> dict:
         assert method == 'GET'
         assert path == '/status'
-        assert timeout == 10.0
+        assert timeout == 35.0
         return {
             'status': 'ok',
             'transport': 'proxy',
@@ -369,3 +369,115 @@ async def test_oem_startup_runtime_and_range_routes_proxy_to_robot_runtime(monke
     with pytest.raises(HTTPException) as exc_info:
         await bioxp.oem_runtime_command('rawUnsupportedCommand', RequestStub())
     assert exc_info.value.status_code == 404
+
+@pytest.mark.asyncio
+async def test_bioxp_operations_capabilities_reports_named_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+
+    async def fake_proxy_request(method: str, path: str, **_: object) -> dict:
+        assert method == 'GET'
+        assert path == '/openapi.json'
+        return {
+            'paths': {
+                '/status': {},
+                '/motion/power/status': {},
+                '/latch/status': {},
+                '/motion/axes/status': {},
+                '/motion/power/enable': {},
+                '/motion/interlock/prepare': {},
+                '/motion/arm/strict_startup': {},
+                '/motion/axis/z/status': {},
+                '/motion/axis/relative': {},
+                '/motion/clear_lock': {},
+                '/oem/runtime/emergency_stop': {},
+            }
+        }
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.bioxp_operations_capabilities()
+
+    assert response['schema_version'] == 'bioxp.bms_operations_capabilities.v1'
+    assert response['robot_openapi_reachable'] is True
+    assert response['operations']['prepare_safe']['available'] is True
+    assert response['operations']['head_clear_lock']['available'] is True
+    assert response['operations']['head_lift_increment']['available'] is True
+    assert response['operations']['emergency_stop']['operator_ack_required'] is False
+    assert 'robot-local FastAPI owns hardware/runtime' in response['safety_boundary']
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_requires_operator_ack(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeRequest:
+        async def json(self) -> dict:
+            return {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.bioxp_operation_prepare_safe(FakeRequest())
+
+    assert exc_info.value.status_code == 400
+    assert 'operator_ack=true' in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_sequences_power_interlock_and_strict_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        if path == '/motion/axes/status':
+            return {'rows': {'x': {'status': {'speed': {'speed': 0}}}, 'z': {'status': {'speed': {'speed': 0}}}}}
+        if path == '/status':
+            return {'hardware_connected': True}
+        return {'ok': True, 'path': path}
+
+    class FakeRequest:
+        async def json(self) -> dict:
+            return {'operator_ack': True, 'operator': 'test-operator'}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.bioxp_operation_prepare_safe(FakeRequest())
+
+    assert response['operation'] == 'prepare_safe'
+    assert response['operator_ack'] is True
+    action_names = [action['name'] for action in response['actions']]
+    assert action_names == ['strict_startup_no_homing']
+    action_paths = [path for method, path, *_ in calls if method == 'POST']
+    assert action_paths == ['/motion/arm/strict_startup']
+    startup_payload = [json_data for method, path, json_data, *_ in calls if path == '/motion/arm/strict_startup'][0]
+    assert startup_payload['run_homing'] is False
+
+
+@pytest.mark.asyncio
+async def test_head_lift_increment_is_bounded_and_moves_z_negative(monkeypatch: pytest.MonkeyPatch) -> None:
+    posted_payloads: list[dict] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        if method == 'POST':
+            posted_payloads.append(json_data or {})
+        return {'ok': True, 'path': path}
+
+    class FakeRequest:
+        async def json(self) -> dict:
+            return {'operator_ack': True, 'steps_abs': 1000}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.bioxp_operation_head_lift_increment(FakeRequest())
+
+    assert response['operation'] == 'head_lift_increment'
+    assert posted_payloads == [{'axis': 'z', 'steps': -1000, 'reuse_prepared': False, 'capture_bundle': True, 'operator_note': 'BMS head lift increment'}]
+
+
+@pytest.mark.asyncio
+async def test_micro_move_proof_caps_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeRequest:
+        async def json(self) -> dict:
+            return {'operator_ack': True, 'axis': 'x', 'steps': 501}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.bioxp_operation_micro_move_proof(FakeRequest())
+
+    assert exc_info.value.status_code == 400
+    assert '+/-500 steps' in str(exc_info.value.detail)

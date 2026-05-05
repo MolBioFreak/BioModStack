@@ -10,6 +10,9 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from fastapi import HTTPException
+
+from routers import queue
 from routers.queue import _resolve_display_gpu_ids
 
 
@@ -64,3 +67,50 @@ def test_resolve_display_gpu_ids_skips_non_gpu_tail_stage_anchor_assignments() -
     )
 
     assert _resolve_display_gpu_ids(job) is None
+
+
+def test_valid_queue_gpu_indices_uses_local_hardware_limits_first(monkeypatch) -> None:
+    monkeypatch.setattr(queue, "HARDWARE_LIMITS", {2: {}, 0: {}})
+    monkeypatch.setattr(queue, "workflow_adapter_enabled", lambda: True)
+    monkeypatch.setattr(
+        queue,
+        "request_via_workflow_adapter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("adapter should not be called")),
+    )
+
+    assert queue._valid_queue_gpu_indices() == [0, 2]
+
+
+def test_valid_queue_gpu_indices_falls_back_to_workflow_adapter_when_local_empty(monkeypatch) -> None:
+    monkeypatch.setattr(queue, "HARDWARE_LIMITS", {})
+    monkeypatch.setattr(queue, "workflow_adapter_enabled", lambda: True)
+    monkeypatch.setattr(
+        queue,
+        "request_via_workflow_adapter",
+        lambda method, path: {
+            "gpus": [
+                {"index": 3, "name": "RTX 3090"},
+                {"index": "0", "name": "RTX 5090"},
+                {"index": 3, "name": "duplicate"},
+                {"index": "bad"},
+            ]
+        },
+    )
+
+    assert queue._valid_queue_gpu_indices() == [0, 3]
+
+
+def test_validate_queue_gpu_index_reports_adapter_valid_indices(monkeypatch) -> None:
+    monkeypatch.setattr(queue, "HARDWARE_LIMITS", {})
+    monkeypatch.setattr(queue, "workflow_adapter_enabled", lambda: True)
+    monkeypatch.setattr(queue, "request_via_workflow_adapter", lambda method, path: {"gpus": [{"index": 0}, {"index": 1}]})
+
+    queue._validate_queue_gpu_index(1)
+
+    try:
+        queue._validate_queue_gpu_index(4)
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "Invalid GPU index (valid: 0,1)"
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("expected HTTPException")

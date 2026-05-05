@@ -63,6 +63,49 @@ def _gpu_proxy_request(method: str, path: str, payload: dict[str, Any] | None = 
 def _model_payload(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(exclude_none=True)
 
+
+def _valid_gpu_indices_for_mutation() -> List[int]:
+    """Return GPU IDs accepted by mutating GPU-control endpoints.
+
+    Core-runtime API containers can legitimately have an empty local
+    HARDWARE_LIMITS table while live host GPU status is available through the
+    workflow adapter proxy.  Use the proxied status path in that mode so pins
+    and locks don't reject valid host GPUs with an empty valid-list.
+    """
+    if HARDWARE_LIMITS:
+        return sorted(int(idx) for idx in HARDWARE_LIMITS.keys())
+
+    if _gpu_proxy_enabled():
+        try:
+            payload = _gpu_proxy_request("GET", "/status")
+        except HTTPException as exc:
+            logger.warning("[GPU] Failed to resolve proxied GPU indices: %s", exc.detail)
+        else:
+            gpus = payload.get("gpus") if isinstance(payload, dict) else None
+            indices: List[int] = []
+            if isinstance(gpus, list):
+                for entry in gpus:
+                    if not isinstance(entry, dict):
+                        continue
+                    try:
+                        index = int(entry.get("index"))
+                    except (TypeError, ValueError):
+                        continue
+                    if index >= 0:
+                        indices.append(index)
+            if indices:
+                return sorted(set(indices))
+
+    return []
+
+
+def _validate_gpu_index_for_mutation(gpu_id: int) -> None:
+    valid_indices = _valid_gpu_indices_for_mutation()
+    if gpu_id not in valid_indices:
+        valid = ",".join(str(idx) for idx in valid_indices)
+        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Valid: {valid}.")
+
+
 # Power control state
 # - current_limits: currently active per-GPU watt limits
 # - saved_limits: profile used when "enabled" mode is toggled on
@@ -3284,9 +3327,7 @@ async def pin_workflow_to_gpu(workflow_type: str, gpu_id: int):
     Example: POST /gpu/workflow-pins/boltz/gpu/2
              → All Boltz jobs will run on GPU 2
     """
-    if gpu_id not in HARDWARE_LIMITS:
-        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Valid: {valid}.")
+    _validate_gpu_index_for_mutation(gpu_id)
     
     config = read_scheduler_config()
     
@@ -3364,9 +3405,7 @@ async def lock_gpu_for_batch(batch_id: str, gpu_id: int):
         batch_id: Unique batch identifier (e.g., parent job ID)
         gpu_id: GPU index to lock
     """
-    if gpu_id not in HARDWARE_LIMITS:
-        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
-        raise HTTPException(status_code=400, detail=f"Invalid GPU index: {gpu_id}. Valid: {valid}.")
+    _validate_gpu_index_for_mutation(gpu_id)
     
     config = read_scheduler_config()
     
