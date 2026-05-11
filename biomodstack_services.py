@@ -366,6 +366,8 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "capabilities": {
             "open_in_browser": True,
             "restart_all": True,
+            "start_api": True,
+            "stop_api": True,
             "restart_api": True,
             "stop_all": True,
             "runtime_api": True,
@@ -823,6 +825,12 @@ def cleanup_legacy_listener(kind: str, project_root: Path | None = None) -> None
     kill_targets: list[int] = []
     seen_targets: set[int] = set()
     for pid in listener_pids(port):
+        if pid_is_biomodstack_runtime_container(pid, kind, root):
+            # A host-networked core-runtime container can show up as a plain
+            # uvicorn/node listener on the host port. It is BioModStack-owned,
+            # not a foreign process, and legacy cleanup must not surface a
+            # misleading "non-BioModStack process" error for it.
+            continue
         chain = matching_process_chain(pid, matcher, root)
         if not chain:
             try:
@@ -973,6 +981,52 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+
+
+def start_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
+    root = (project_root or get_project_root()).resolve()
+    mode = resolve_runtime_mode(runtime_mode)
+    wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
+    ensure_user_units(root, runtime_mode=mode)
+
+    if mode == CONTAINER_RUNTIME_MODE:
+        ensure_target_enabled(root, runtime_mode=mode)
+        api_pids = listener_pids(API_PORT)
+        if api_pids and all(pid_is_biomodstack_runtime_container(pid, "api", root) for pid in api_pids):
+            wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+            return
+        if service_is_active(API_SERVICE, project_root=root):
+            run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+            cleanup_legacy_listener("api", root)
+        elif api_pids:
+            cleanup_legacy_listener("api", root)
+        run_core_runtime_script("up", "--no-deps", "bms-api", project_root=root)
+        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        return
+
+    api_pids = listener_pids(API_PORT)
+    if api_pids and all(pid_is_biomodstack_runtime_container(pid, "api", root) for pid in api_pids):
+        raise ServiceManagerError(
+            "Cannot start the dev API while the core runtime container API owns port 8000. "
+            "Stop the container API first or use runtime='container'."
+        )
+    if not service_is_active(API_SERVICE, project_root=root):
+        cleanup_legacy_listener("api", root)
+    run_systemctl("start", API_SERVICE, project_root=root)
+    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+
+
+def stop_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
+    root = (project_root or get_project_root()).resolve()
+    mode = resolve_runtime_mode(runtime_mode)
+    ensure_user_units(root, runtime_mode=mode)
+
+    if mode == CONTAINER_RUNTIME_MODE:
+        run_core_runtime_script("stop", "bms-api", project_root=root)
+        return
+
+    run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+    cleanup_legacy_listener("api", root)
 
 
 def restart_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:

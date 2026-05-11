@@ -5,7 +5,7 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_
@@ -129,8 +129,7 @@ class NucleotideSequenceResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NucleotideSequenceListItem(BaseModel):

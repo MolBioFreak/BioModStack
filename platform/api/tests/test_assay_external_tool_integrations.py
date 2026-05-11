@@ -146,3 +146,18 @@ def test_chromatography_analysis_uses_mocca2_engine_for_peak_picking() -> None:
     assert payload["baseline_method"] == "mocca2_flatfit"
     assert payload["n_peaks"] >= 2
     assert all(peak["peak_engine"] == "MOCCA2" for peak in payload["peaks"])
+
+
+def test_tool_registry_marks_stats_tools_component_degradation(monkeypatch) -> None:
+    monkeypatch.setattr(assay_tool_integrations.stats_tools, "stats_tools_available", lambda: False, raising=False)
+    monkeypatch.setattr(assay_tool_integrations, "_python_available", lambda import_name, distribution: {"available": True, "version": "1.0", "reason": None})
+    monkeypatch.setattr(assay_tool_integrations, "_r_package_status", lambda package: {"available": True, "version": "1.0", "reason": None})
+
+    registry = assay_tool_integrations.assay_tool_registry()
+    externalized = [tool for tool in registry if tool["adapter_type"] in {"python_package", "r_package"}]
+
+    assert externalized
+    assert all(tool["component"] == "stats-tools" for tool in externalized)
+    assert all(tool["runtime_available"] is False for tool in externalized)
+    assert all(tool["runtime_note"] == "stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools" for tool in externalized)
+    assert all(tool["degraded_by"] == "stats-tools" for tool in externalized)

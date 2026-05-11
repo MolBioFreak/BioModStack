@@ -700,6 +700,18 @@ interface SchedulerConfig {
     }>;
 }
 
+function isSchedulerConfigPayload(value: unknown): value is SchedulerConfig {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as { global?: unknown; overrides?: unknown };
+    return Boolean(
+        candidate.global &&
+        typeof candidate.global === 'object' &&
+        candidate.overrides &&
+        typeof candidate.overrides === 'object' &&
+        !Array.isArray(candidate.overrides)
+    );
+}
+
 function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [config, setConfig] = useState<SchedulerConfig | null>(null);
     const [loading, setLoading] = useState(false);
@@ -725,11 +737,24 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         maxConcurrentJobs: number | null;
     }>>({});
 
-    // Fetch config on mount
+    // Fetch config on mount. The dashboard must stay rendered if the workflow
+    // adapter is offline and the API returns an error payload instead of the
+    // scheduler config contract.
     useEffect(() => {
         fetch('/api/gpu/scheduler-config')
-            .then(res => res.json())
+            .then(async (res) => {
+                const data: unknown = await res.json();
+                if (!res.ok || !isSchedulerConfigPayload(data)) {
+                    console.warn('GPU scheduler config unavailable; hiding scheduler panel', {
+                        status: res.status,
+                        payload: data,
+                    });
+                    return null;
+                }
+                return data;
+            })
             .then(data => {
+                if (!data) return;
                 setConfig(data);
                 setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
                 setLocalBusyThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
@@ -741,7 +766,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
                 setLocalMaxLaunchesPerCycle(data.global?.max_launches_per_cycle ?? 3);
             })
-            .catch(console.error);
+            .catch(error => {
+                console.warn('GPU scheduler config unavailable; hiding scheduler panel', error);
+            });
     }, []);
 
     useEffect(() => {

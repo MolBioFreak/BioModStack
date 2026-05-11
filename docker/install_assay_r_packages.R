@@ -2,6 +2,14 @@
 
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 
+r_install_ncpus <- function() {
+  parsed <- suppressWarnings(as.integer(Sys.getenv("BMS_R_INSTALL_NCPUS", "1")))
+  if (is.na(parsed) || parsed < 1) {
+    return(1L)
+  }
+  parsed
+}
+
 cran_only_packages <- c("chromConverter")
 
 cran_packages <- c(
@@ -38,7 +46,7 @@ ensure_matrix_for_r42 <- function() {
       repos = NULL,
       type = "source",
       dependencies = c("Depends", "Imports", "LinkingTo"),
-      Ncpus = max(1, parallel::detectCores() - 1)
+      Ncpus = r_install_ncpus()
     )
   }
 }
@@ -51,7 +59,7 @@ install_missing <- function(pkgs, repos = getOption("repos")) {
       next
     }
     message("Installing R assay package: ", pkg)
-    install.packages(pkg, repos = repos, dependencies = c("Depends", "Imports", "LinkingTo"), Ncpus = max(1, parallel::detectCores() - 1))
+    install.packages(pkg, repos = repos, dependencies = c("Depends", "Imports", "LinkingTo"), Ncpus = r_install_ncpus())
     if (!(pkg %in% rownames(installed.packages()))) {
       stop("Failed to install R package: ", pkg)
     }
@@ -90,7 +98,7 @@ if (!("tidyqpcr" %in% rownames(installed.packages()))) {
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
   install.packages("BiocManager", repos = "https://cloud.r-project.org")
 }
-BiocManager::install(bioconductor_packages, ask = FALSE, update = FALSE, Ncpus = max(1, parallel::detectCores() - 1))
+BiocManager::install(bioconductor_packages, ask = FALSE, update = FALSE, Ncpus = r_install_ncpus())
 missing_bioc <- setdiff(bioconductor_packages, rownames(installed.packages()))
 if (length(missing_bioc) > 0) {
   stop("Failed to install Bioconductor packages: ", paste(missing_bioc, collapse = ", "))

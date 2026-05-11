@@ -18,6 +18,7 @@ These files are still useful as current rollout, guardrail, or follow-on impleme
 - [UI surface channel cutover implementation spec](2026-04-28-ui-surface-channel-cutover-spec.md)
 - [BioXP OEM control-surface replacement implementation plan](2026-05-04-bioxp-oem-control-surface-replacement-spec.md)
 - [BioXP current-control removal and OEM integration path](2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md)
+- [BioXP robot ↔ workstation interlink control panel spec](2026-05-08-bioxp-workstation-interlink-control-panel-spec.md)
 
 ## Archived plans and historical specs
 

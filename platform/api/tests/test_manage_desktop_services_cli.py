@@ -118,3 +118,25 @@ def test_start_defaults_to_container_runtime_when_flag_omitted(monkeypatch, caps
     assert module.main() == 0
     assert started == ["container"]
     assert capsys.readouterr().out.splitlines() == ["runtime=container"]
+
+
+def test_start_api_dispatches_to_api_only_service_action(monkeypatch, capsys) -> None:
+    module = load_module()
+    started: list[str] = []
+    monkeypatch.setattr(module, "start_api", lambda runtime_mode=None: started.append(runtime_mode or "missing"))
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "start-api", "--runtime", "dev"])
+
+    assert module.main() == 0
+    assert started == ["dev"]
+    assert capsys.readouterr().out.splitlines() == [f"API log: {module.API_LOG}"]
+
+
+def test_stop_api_dispatches_to_api_only_service_action(monkeypatch, capsys) -> None:
+    module = load_module()
+    stopped: list[str] = []
+    monkeypatch.setattr(module, "stop_api", lambda runtime_mode=None: stopped.append(runtime_mode or "missing"))
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "stop-api", "--runtime", "container"])
+
+    assert module.main() == 0
+    assert stopped == ["container"]
+    assert capsys.readouterr().out.splitlines() == ["Stopped BioModStack API"]

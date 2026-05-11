@@ -59,6 +59,18 @@ def test_assay_router_does_not_fabricate_fake_defaults_or_seed_data() -> None:
     assert "fallback" not in (source + registry_source).lower()
 
 
+def test_assay_router_has_single_real_dataset_routes_without_placeholder_handlers() -> None:
+    route_map = {}
+    for route in bms_api_main.app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", set()) or set()
+        if path in {"/api/assay-analytics/datasets", "/api/assay-analytics/datasets/{dataset_id}"} and "GET" in methods:
+            route_map.setdefault(path, []).append(getattr(getattr(route, "endpoint", None), "__name__", ""))
+
+    assert route_map["/api/assay-analytics/datasets"] == ["assay_datasets"]
+    assert route_map["/api/assay-analytics/datasets/{dataset_id}"] == ["assay_dataset_detail"]
+
+
 def test_assay_capabilities_expose_separate_analytical_postgres_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "BMS_ANALYTICAL_DATABASE_URL",
@@ -80,6 +92,68 @@ def test_assay_capabilities_expose_separate_analytical_postgres_store(monkeypatc
     status = client.get("/api/assay-analytics/analytical-store/status")
     assert status.status_code == 200
     assert status.json()["url_preview"] == "postgresql+asyncpg://bms_assay:***@127.0.0.1:55432/bms_analytical_data"
+
+
+def test_assay_dataset_listing_reports_db_service_degraded_instead_of_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.assay_analytical_store import AnalyticalStoreUnavailable
+
+    async def fail_list(*args, **kwargs):
+        raise AnalyticalStoreUnavailable("BMS DB service unavailable")
+
+    monkeypatch.setattr(assay_analytics, "list_analytical_datasets", fail_list)
+    client = TestClient(bms_api_main.app)
+
+    response = client.get("/api/assay-analytics/datasets")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["component"] == "db-service"
+    assert detail["degraded_by"] == "bms-db-service"
+    assert detail["offline_message"] == "db_service_offline — use BMS DB service → Start"
+
+
+def test_qpcr_upload_persist_true_reports_db_service_degraded_without_fabricating_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.assay_analytical_store import AnalyticalStoreUnavailable
+
+    async def fail_persist(*args, **kwargs):
+        raise AnalyticalStoreUnavailable("BMS DB service unavailable")
+
+    monkeypatch.setattr(assay_analytics, "persist_qpcr_import_response", fail_persist)
+    client = TestClient(bms_api_main.app)
+    csv_payload = "Well,Sample Name,Target Name,Task,Cq,Quantity\nA1,STD 1,GOI,STANDARD,18.0,1000000\nA2,Unknown 1,GOI,UNKNOWN,24.7,\n"
+
+    response = client.post(
+        "/api/assay-analytics/analysis/qpcr/upload-csv",
+        files={"file": ("db-offline.csv", csv_payload.encode("utf-8"), "text/csv")},
+        data={"persist": "true"},
+    )
+
+    assert response.status_code == 503
+    rendered = str(response.json())
+    assert "analytical_import_id" not in rendered
+    assert "db_service_offline — use BMS DB service → Start" in rendered
+
+
+def test_qpcr_upload_persist_false_still_runs_when_db_service_is_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.assay_analytical_store import AnalyticalStoreUnavailable
+
+    async def fail_persist(*args, **kwargs):
+        raise AnalyticalStoreUnavailable("BMS DB service unavailable")
+
+    monkeypatch.setattr(assay_analytics, "persist_qpcr_import_response", fail_persist)
+    client = TestClient(bms_api_main.app)
+    csv_payload = "Well,Sample Name,Target Name,Task,Cq,Quantity\nA1,STD 1,GOI,STANDARD,18.0,1000000\nA2,Unknown 1,GOI,UNKNOWN,24.7,\n"
+
+    response = client.post(
+        "/api/assay-analytics/analysis/qpcr/upload-csv",
+        files={"file": ("in-memory.csv", csv_payload.encode("utf-8"), "text/csv")},
+        data={"persist": "false"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"] == "in-memory.csv"
+    assert "analytical_import_id" not in payload
 
 
 def test_empower_import_persist_true_writes_chromatography_rows_to_analytical_store(
@@ -113,8 +187,22 @@ def test_empower_import_persist_true_writes_chromatography_rows_to_analytical_st
     payload = response.json()
     assert payload["analytical_import_id"]
     assert payload["assay_run_id"]
+    assert payload["dataset_id"]
     assert payload["injections"][0]["analytical_injection_id"]
     assert payload["injections"][0]["peaks"][0]["analytical_peak_id"]
+
+    datasets = client.get("/api/assay-analytics/datasets?assay_type=chromatography")
+    assert datasets.status_code == 200
+    assert datasets.json()[0]["dataset_id"] == payload["dataset_id"]
+
+    dataset_detail = client.get(f"/api/assay-analytics/datasets/{payload['dataset_id']}")
+    assert dataset_detail.status_code == 200
+    dataset_payload = dataset_detail.json()
+    assert dataset_payload["primary_import_id"] == payload["analytical_import_id"]
+    assert dataset_payload["chromatography_summary"]["n_injections"] == 1
+    assert dataset_payload["chromatography_injections"][0]["sample_name"] == "Persisted Sample"
+    assert dataset_payload["analysis_runs"][0]["analysis_kind"] == "empower_import_review"
+    assert dataset_payload["peak_table"][0]["area"] == 12345.6
 
     async def counts() -> dict[str, int]:
         session_factory = create_analytical_session_factory()
@@ -184,6 +272,19 @@ def test_qpcr_csv_upload_persist_true_writes_and_loads_analytical_store_rows(
     imports = client.get("/api/assay-analytics/analysis/qpcr/imports")
     assert imports.status_code == 200
     assert imports.json()[0]["analytical_import_id"] == payload["analytical_import_id"]
+
+    datasets = client.get("/api/assay-analytics/datasets?assay_type=qpcr")
+    assert datasets.status_code == 200
+    assert datasets.json()[0]["dataset_id"] == payload["dataset_id"]
+
+    dataset_detail = client.get(f"/api/assay-analytics/datasets/{payload['dataset_id']}")
+    assert dataset_detail.status_code == 200
+    dataset_payload = dataset_detail.json()
+    assert dataset_payload["primary_import_id"] == payload["analytical_import_id"]
+    assert dataset_payload["qpcr_summary"]["n_wells"] == 4
+    assert dataset_payload["qpcr_import"]["filename"] == "quantstudio-results.csv"
+    assert dataset_payload["qpcr_import"]["wells"][0]["well_position"] == "A1"
+    assert dataset_payload["qpcr_import"]["standard_curve_stats_by_target"]["GOI"]["n_points"] == 3
 
     async def counts() -> dict[str, int]:
         session_factory = create_analytical_session_factory()
