@@ -12,7 +12,7 @@ from sqlalchemy import select, func, and_, case, inspect as sa_inspect
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import load_only
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from pathlib import Path
 import math
@@ -345,8 +345,7 @@ class DesignResponse(BaseModel):
     
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DesignList(BaseModel):

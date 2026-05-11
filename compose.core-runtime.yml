@@ -3,6 +3,11 @@ services:
     image: postgres:16-alpine
     container_name: biomodstack-analytical-postgres
     restart: unless-stopped
+    labels:
+      org.biomodstack.service_id: bms-db-service
+      org.biomodstack.component: db-service
+      org.biomodstack.display_name: BMS DB service
+      org.biomodstack.optional_at_boot: "true"
     environment:
       POSTGRES_DB: bms_analytical_data
       POSTGRES_USER: bms_assay
@@ -22,12 +27,12 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      target: api-runtime
     container_name: biomodstack-api
     restart: unless-stopped
     network_mode: host
-    depends_on:
-      bms-analytical-postgres:
-        condition: service_healthy
+    group_add:
+      - "${BMS_DOCKER_GID:-999}"
     environment:
       BMS_HOME: /app
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
@@ -48,11 +53,25 @@ services:
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
       BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}
       BMS_ANALYTICAL_INIT_ON_STARTUP: ${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}
+      BMS_DB_SERVICE_ID: ${BMS_DB_SERVICE_ID:-bms-db-service}
+      BMS_DB_DISPLAY_NAME: ${BMS_DB_DISPLAY_NAME:-BMS DB service}
+      BMS_DB_COMPOSE_FILE: /app/compose.core-runtime.yml
+      BMS_DB_COMPOSE_SERVICES: ${BMS_DB_COMPOSE_SERVICES:-bms-db,bms-analytical-postgres}
+      BMS_DB_CONTAINER_NAMES: ${BMS_DB_CONTAINER_NAMES:-biomodstack-db,biomodstack-analytical-postgres}
+      BMS_CORE_DB_NAME: ${BMS_CORE_DB_NAME:-bms_core_runtime}
+      BMS_ANALYTICAL_DB_NAME: ${BMS_ANALYTICAL_DB_NAME:-bms_analytical_data}
+      BMS_STATS_TOOLS_EXTERNALIZED: ${BMS_STATS_TOOLS_EXTERNALIZED:-1}
+      BMS_STATS_TOOLS_COMPOSE_FILE: /app/compose.core-runtime.yml
+      BMS_DOCKER_COMPOSE_PROJECT: ${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}
+      BMS_DOCKER_GID: ${BMS_DOCKER_GID:-999}
       BIOXP_SERVER_URL: ${BIOXP_SERVER_URL:-}
     volumes:
       - type: bind
         source: ${BMS_STATE_DIR:-/mnt/BioModStack}
         target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     healthcheck:
       test:
         [
@@ -70,6 +89,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      target: api-runtime
     container_name: biomodstack-cpu-power
     restart: unless-stopped
     network_mode: host
@@ -96,6 +116,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+  bms-stats-tools:
+    profiles: ["stats-tools"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      target: stats-tools-runtime
+    container_name: biomodstack-stats-tools
+    restart: unless-stopped
+    labels:
+      org.biomodstack.service_id: bms-stats-tools
+      org.biomodstack.component: stats-tools
+      org.biomodstack.optional_at_boot: "true"
+    environment:
+      BMS_HOME: /app
+      BMS_STATS_TOOLS_EXTERNALIZED: "1"
+      BMS_STATS_TOOLS_MODE: worker
+      BMS_CONTAINER_STATE_PATH: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+      BMS_DATA: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@bms-analytical-postgres:5432/bms_analytical_data}
+    volumes:
+      - type: bind
+        source: ${BMS_STATE_DIR:-/mnt/BioModStack}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+    command: ["/app/platform/api/.venv/bin/python", "-c", "import time; print('bms-stats-tools ready', flush=True); time.sleep(10**9)"]
+    healthcheck:
+      test: ["CMD", "/app/platform/api/.venv/bin/python", "-c", "import importlib.util; assert importlib.util.find_spec('statsmodels') is not None"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   bms-web:
     build:

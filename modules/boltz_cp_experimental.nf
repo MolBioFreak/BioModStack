@@ -57,13 +57,30 @@ process RunBoltzCPExperimental {
     def contextLogicalSizeCpValue = (params.get('bcp_context_store_logical_size_cp', '') ?: '').toString().trim()
     def contextPairTileTokensValue = (params.get('bcp_context_store_pair_tile_tokens', '') ?: '').toString().trim()
     def contextKeyTileTokensValue = (params.get('bcp_context_store_key_tile_tokens', '') ?: '').toString().trim()
-    def contextProjectionCacheByteBudgetValue = (params.get('bcp_context_store_projection_cache_byte_budget', params.get('bcp_projection_cache_byte_budget', '0')) ?: '0').toString().trim()
+    def rawContextProjectedTriangleRhsRowReuseWindowValue = params.containsKey('bcp_context_store_projected_triangle_rhs_row_reuse_window')
+        ? params.get('bcp_context_store_projected_triangle_rhs_row_reuse_window')
+        : params.get('context_store_projected_triangle_rhs_row_reuse_window', '')
+    def contextProjectedTriangleRhsRowReuseWindowValue = (rawContextProjectedTriangleRhsRowReuseWindowValue ?: '').toString().trim()
+    // The virtual-DRAM projection cache must be large enough to retain one rank's
+    // K/V tile working set. A 1 GiB run on 9Z6Z CP4/LCp16 thrashed at ~1.28 GB/rank
+    // and produced 150k misses/rank with zero hits; 2 GiB immediately produced hits.
+    // Keep explicit 0 opt-outs possible, but do not silently default virtual mode
+    // to an ineffective no-cache/too-small path.
+    def contextProjectionCacheDefaultValue = contextStoreModeValue == 'virtual-dram-stream-attention' ? '2147483648' : '0'
+    def rawContextProjectionCacheByteBudgetValue = params.containsKey('bcp_context_store_projection_cache_byte_budget')
+        ? params.get('bcp_context_store_projection_cache_byte_budget')
+        : (params.containsKey('bcp_projection_cache_byte_budget') ? params.get('bcp_projection_cache_byte_budget') : contextProjectionCacheDefaultValue)
+    def contextProjectionCacheByteBudgetValue = rawContextProjectionCacheByteBudgetValue == null ? contextProjectionCacheDefaultValue : rawContextProjectionCacheByteBudgetValue.toString().trim()
+    if (!contextProjectionCacheByteBudgetValue) {
+        contextProjectionCacheByteBudgetValue = contextProjectionCacheDefaultValue
+    }
     def contextStoreEventLevelValue = (params.get('bcp_context_store_event_level', 'perf-summary') ?: 'perf-summary').toString().trim()
     def contextQueryTileTokens = shellQuote(contextQueryTileTokensValue)
     def contextLogicalSizeCp = shellQuote(contextLogicalSizeCpValue)
     def contextPairTileTokens = shellQuote(contextPairTileTokensValue)
     def contextKeyTileTokens = shellQuote(contextKeyTileTokensValue)
     def contextProjectionCacheByteBudget = shellQuote(contextProjectionCacheByteBudgetValue)
+    def contextProjectedTriangleRhsRowReuseWindow = shellQuote(contextProjectedTriangleRhsRowReuseWindowValue)
     def contextStoreEventLevel = shellQuote(contextStoreEventLevelValue)
     def maxMsaSeqs = shellQuote(maxMsaSeqsValue)
     def maxParallelSamples = shellQuote(maxParallelSamplesValue)
@@ -181,6 +198,7 @@ process RunBoltzCPExperimental {
     BCP_CONTEXT_STORE_PAIR_TILE_TOKENS=${contextPairTileTokens}
     BCP_CONTEXT_STORE_KEY_TILE_TOKENS=${contextKeyTileTokens}
     BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET=${contextProjectionCacheByteBudget}
+    BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW=${contextProjectedTriangleRhsRowReuseWindow}
     BCP_CONTEXT_STORE_EVENT_LEVEL=${contextStoreEventLevel}
     if [ -z "\$BCP_CONTEXT_STORE_EVENT_LEVEL" ]; then
         BCP_CONTEXT_STORE_EVENT_LEVEL=perf-summary
@@ -202,7 +220,7 @@ process RunBoltzCPExperimental {
     export BCP_CONFIDENCE_PREDICTION BCP_MAX_MSA_SEQS BCP_MAX_PARALLEL_SAMPLES BCP_PRECISION BCP_SAMPLING_STEPS
     export BCP_TRIATTN_BACKEND BCP_SDPA_WITH_BIAS_BACKEND BCP_SDPA_WITH_BIAS_SHARDWISE_BACKEND
     export BCP_ATOMS_PER_WINDOW_QUERIES_KEYS BCP_DATA_PLANE_SEMANTICS BCP_CONTEXT_STORE_MODE BCP_CONTEXT_STORE_ROOT BCP_CONTEXT_STORE_SEMANTICS BCP_CONTEXT_QUERY_TILE_TOKENS
-    export BCP_CONTEXT_STORE_LOGICAL_SIZE_CP BCP_CONTEXT_STORE_PAIR_TILE_TOKENS BCP_CONTEXT_STORE_KEY_TILE_TOKENS BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET BCP_CONTEXT_STORE_EVENT_LEVEL
+    export BCP_CONTEXT_STORE_LOGICAL_SIZE_CP BCP_CONTEXT_STORE_PAIR_TILE_TOKENS BCP_CONTEXT_STORE_KEY_TILE_TOKENS BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW BCP_CONTEXT_STORE_EVENT_LEVEL
     USE_MSA=${quotedUseMsa}
     CODE_ROOT=${codeRoot}
     MSA_PROVIDER=${quotedMsaProvider}
@@ -656,6 +674,7 @@ payload = {
     "context_store_pair_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_PAIR_TILE_TOKENS", "").strip(),
     "context_store_key_tile_tokens": os.environ.get("BCP_CONTEXT_STORE_KEY_TILE_TOKENS", "").strip(),
     "context_store_projection_cache_byte_budget": os.environ.get("BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET", "").strip(),
+    "context_store_projected_triangle_rhs_row_reuse_window": os.environ.get("BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW", "").strip(),
     "context_store_event_level": os.environ.get("BCP_CONTEXT_STORE_EVENT_LEVEL", "").strip(),
     "context_store_truth": {
         "predictor_owned": True,
@@ -667,6 +686,7 @@ payload = {
         "within_operation_memory_reduction_claimed": context_virtual_streaming_enabled or context_triangle_query_tile_enabled,
         "projection_cache_enabled": os.environ.get("BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET", "0").strip() not in {"", "0"},
         "projection_cache_byte_budget": os.environ.get("BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET", "0").strip(),
+        "projected_triangle_rhs_row_reuse_window": os.environ.get("BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW", "").strip() or "2",
         "memory_reduction_claimed": context_virtual_streaming_enabled or context_store_spill_enabled or context_triangle_query_tile_enabled,
         "memory_reduction_scope": memory_reduction_scope,
         "limitations": {
@@ -762,6 +782,10 @@ PY
         if [ -n "\$BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET" ]; then
             context_projection_cache_flag=(--context_store_projection_cache_byte_budget "\$BCP_CONTEXT_STORE_PROJECTION_CACHE_BYTE_BUDGET")
         fi
+        context_projected_triangle_rhs_reuse_window_flag=()
+        if [ -n "\$BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW" ]; then
+            context_projected_triangle_rhs_reuse_window_flag=(--context_store_projected_triangle_rhs_row_reuse_window "\$BCP_CONTEXT_STORE_PROJECTED_TRIANGLE_RHS_ROW_REUSE_WINDOW")
+        fi
 
         set +e
         "\$BOLTZ_PYTHON" -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node \$NPROC \
@@ -780,6 +804,7 @@ PY
             "\${context_pair_tile_tokens_flag[@]}" \
             "\${context_key_tile_tokens_flag[@]}" \
             "\${context_projection_cache_flag[@]}" \
+            "\${context_projected_triangle_rhs_reuse_window_flag[@]}" \
             --recycling_steps ${recyclingSteps} \
             --sampling_steps ${samplingSteps} \
             --diffusion_samples ${diffusionSamples} \

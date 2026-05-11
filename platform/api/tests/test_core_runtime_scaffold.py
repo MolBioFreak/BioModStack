@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 
 import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_api_image_proof_module():
+    script_path = REPO_ROOT / "scripts" / "bms_api_image_proof.py"
+    spec = importlib.util.spec_from_file_location("bms_api_image_proof", script_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_core_runtime_scaffold_files_exist() -> None:
@@ -27,12 +38,14 @@ def test_core_runtime_scaffold_files_exist() -> None:
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 
-    assert set(compose["services"]) == {"bms-api", "bms-analytical-postgres", "bms-cpu-power", "bms-web"}
+    assert set(compose["services"]) == {"bms-api", "bms-analytical-postgres", "bms-cpu-power", "bms-stats-tools", "bms-web"}
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
+    assert api["build"]["target"] == "api-runtime"
     assert api["container_name"] == "biomodstack-api"
     assert api["network_mode"] == "host"
+    assert api["group_add"] == ["${BMS_DOCKER_GID:-999}"]
     assert "ports" not in api
     assert "extra_hosts" not in api
     assert api["environment"]["BMS_HOME"] == "/app"
@@ -41,6 +54,10 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
     assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
     assert api["environment"]["BMS_ANALYTICAL_INIT_ON_STARTUP"] == "${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}"
+    assert api["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "${BMS_STATS_TOOLS_EXTERNALIZED:-1}"
+    assert api["environment"]["BMS_STATS_TOOLS_COMPOSE_FILE"] == "/app/compose.core-runtime.yml"
+    assert api["environment"]["BMS_DOCKER_COMPOSE_PROJECT"] == "${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
+    assert api["environment"]["BMS_DOCKER_GID"] == "${BMS_DOCKER_GID:-999}"
     assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
@@ -48,6 +65,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert api["environment"]["BMS_WORK"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
     assert "BIOXP_SERVER_URL" in api["environment"]
+    assert any(volume.get("source") == "/var/run/docker.sock" and volume.get("target") == "/var/run/docker.sock" for volume in api["volumes"])
 
     analytical_db = compose["services"]["bms-analytical-postgres"]
     assert analytical_db["image"] == "postgres:16-alpine"
@@ -57,9 +75,16 @@ def test_compose_core_runtime_contract() -> None:
     assert analytical_db["environment"]["POSTGRES_USER"] == "bms_assay"
     assert analytical_db["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}"
     assert analytical_db["volumes"] == ["bms_analytical_postgres_data:/var/lib/postgresql/data"]
+    assert analytical_db["labels"]["org.biomodstack.service_id"] == "bms-db-service"
+    assert analytical_db["labels"]["org.biomodstack.component"] == "db-service"
+    assert analytical_db["labels"]["org.biomodstack.display_name"] == "BMS DB service"
+    assert analytical_db["labels"]["org.biomodstack.optional_at_boot"] == "true"
+    assert "healthcheck" in analytical_db
+    assert "bms-analytical-postgres" not in api.get("depends_on", {})
 
     cpu_power = compose["services"]["bms-cpu-power"]
     assert cpu_power["build"]["dockerfile"] == "docker/api.Dockerfile"
+    assert cpu_power["build"]["target"] == "api-runtime"
     assert cpu_power["container_name"] == "biomodstack-cpu-power"
     assert cpu_power["network_mode"] == "host"
     assert cpu_power["user"] == "0:0"
@@ -69,6 +94,19 @@ def test_compose_core_runtime_contract() -> None:
     assert cpu_power["command"] == ["python", "/app/platform/api/tools/cpu_power_collector.py"]
     assert cpu_power["volumes"][0]["source"] == "/sys"
     assert cpu_power["volumes"][0]["read_only"] is True
+
+    stats_tools = compose["services"]["bms-stats-tools"]
+    assert stats_tools["profiles"] == ["stats-tools"]
+    assert stats_tools["build"]["dockerfile"] == "docker/api.Dockerfile"
+    assert stats_tools["build"]["target"] == "stats-tools-runtime"
+    assert stats_tools["container_name"] == "biomodstack-stats-tools"
+    assert stats_tools["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "1"
+    assert "bms-analytical-postgres" not in stats_tools.get("depends_on", {})
+    assert stats_tools["labels"]["org.biomodstack.service_id"] == "bms-stats-tools"
+    assert stats_tools["labels"]["org.biomodstack.component"] == "stats-tools"
+    assert stats_tools["labels"]["org.biomodstack.optional_at_boot"] == "true"
+    assert stats_tools["command"] == ["/app/platform/api/.venv/bin/python", "-c", "import time; print('bms-stats-tools ready', flush=True); time.sleep(10**9)"]
+    assert stats_tools["healthcheck"]["test"] == ["CMD", "/app/platform/api/.venv/bin/python", "-c", "import importlib.util; assert importlib.util.find_spec('statsmodels') is not None"]
 
     web = compose["services"]["bms-web"]
     assert web["build"]["dockerfile"] == "docker/web.Dockerfile"
@@ -97,7 +135,7 @@ def test_nginx_contract_preserves_bms_and_api_routes() -> None:
 def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:
     dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-    for required in [".git", ".venv", "platform/frontend/node_modules", "work", "bms_results", "analysis_cache", "*.db"]:
+    for required in [".git", ".venv", ".env", ".env.*", "!.env.core-runtime.example", "platform/frontend/node_modules", "work", "bms_results", "analysis_cache", "*.db"]:
         assert required in dockerignore
 
 
@@ -132,10 +170,21 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BMS_ANALYTICAL_DB_PORT=55432",
-        "BMS_ANALYTICAL_DB_PASSWORD=bms_assay_dev",
+        "BMS_ANALYTICAL_DB_PASSWORD=***",
         "BMS_ANALYTICAL_DATABASE_URL=postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT}/bms_analytical_data",
         "BMS_ANALYTICAL_INIT_ON_STARTUP=1",
         "BIOXP_SERVER_URL=",
+        "BMS_DOCKER_COMPOSE_PROJECT=biomodstack-core-runtime",
+        "BMS_DOCKER_GID=999",
+        "BMS_STATS_TOOLS_EXTERNALIZED=1",
+        "BMS_DB_SERVICE_ID=bms-db-service",
+        "BMS_DB_DISPLAY_NAME=\"BMS DB service\"",
+        "BMS_DB_COMPOSE_SERVICES=bms-db,bms-analytical-postgres",
+        "BMS_DB_CONTAINER_NAMES=biomodstack-db,biomodstack-analytical-postgres",
+        "BMS_CORE_DB_NAME=bms_core_runtime",
+        "BMS_ANALYTICAL_DB_NAME=bms_analytical_data",
+        "BMS_HOST_AGENT_URL=http://host.docker.internal:8798",
+        "BMS_HOST_AGENT_TIMEOUT_SECONDS=2.0",
     ]:
         assert required in env_example
     assert "BMS_API_HOST_PORT" not in env_example
@@ -148,6 +197,28 @@ def test_core_runtime_script_loads_repo_local_env_overrides() -> None:
     assert "BMS_CORE_RUNTIME_ENV_FILE" in runtime_script
     assert "--env-file" in runtime_script
     assert 'BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18080}"' in runtime_script
+
+
+def test_stats_tools_cli_uses_core_runtime_project_env_and_python_service() -> None:
+    cli = (REPO_ROOT / "scripts" / "bms").read_text(encoding="utf-8")
+
+    assert "BMS_DOCKER_COMPOSE_PROJECT" in cli
+    assert "biomodstack-core-runtime" in cli
+    assert "BMS_DOCKER_COMPOSE_ENV_FILE" in cli
+    assert "BMS_STATS_TOOLS_EXTERNALIZED=\"${BMS_STATS_TOOLS_EXTERNALIZED:-1}\"" in cli
+    assert "status|health|logs|start|stop|restart" in cli
+    assert "-m services.stats_tools" in cli
+
+
+def test_db_service_cli_uses_core_runtime_project_env_and_python_service_with_guarded_stop() -> None:
+    cli = (REPO_ROOT / "scripts" / "bms").read_text(encoding="utf-8")
+
+    assert "db-service" in cli
+    assert "BMS_DB_SERVICE_ID=\"${BMS_DB_SERVICE_ID:-bms-db-service}\"" in cli
+    assert "BMS_DB_CONTAINER_NAMES=\"${BMS_DB_CONTAINER_NAMES:-biomodstack-db,biomodstack-analytical-postgres}\"" in cli
+    assert "status|health|logs|start|restart|stop" in cli
+    assert "--i-know-this-disables-db-backed-features" in cli
+    assert "-m services.db_service" in cli
 
 
 def test_frontend_dev_server_owns_vite_default_port_with_hmr_enabled() -> None:
@@ -171,9 +242,37 @@ def test_one_command_ui_surface_smoke_checker_exists() -> None:
 def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
 
+    assert "FROM python:3.10-slim-bookworm AS api-base" in dockerfile
+    assert "FROM api-base AS api-runtime" in dockerfile
+    assert "FROM api-base AS stats-tools-runtime" in dockerfile
+    assert dockerfile.index("FROM api-base AS api-runtime") < dockerfile.index("FROM api-base AS stats-tools-runtime")
     assert "RUN uv sync --frozen --no-dev" in dockerfile
+    assert "COPY --chown=biomodstack:biomodstack . /app" in dockerfile
+    assert "docker.io" in dockerfile
+    assert "docker-compose" in dockerfile
+    assert "ARG BMS_R_INSTALL_NCPUS=1" in dockerfile
+    assert "ENV BMS_R_INSTALL_NCPUS=${BMS_R_INSTALL_NCPUS}" in dockerfile
     assert 'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]' in dockerfile
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
+
+
+def test_api_runtime_build_target_does_not_install_r_stats_stack() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
+    api_base_text, stats_and_final_text = dockerfile.split("FROM api-base AS stats-tools-runtime", 1)
+
+    assert "r-base" not in api_base_text
+    assert "r-cran-tidyverse" not in api_base_text
+    assert "Rscript /app/docker/install_assay_r_packages.R" not in api_base_text
+    assert "RUN Rscript /app/docker/install_assay_r_packages.R" in stats_and_final_text
+    assert "r-base" in stats_and_final_text
+
+
+def test_assay_r_package_installer_caps_parallel_compilation_by_default() -> None:
+    installer = (REPO_ROOT / "docker" / "install_assay_r_packages.R").read_text(encoding="utf-8")
+
+    assert 'Sys.getenv("BMS_R_INSTALL_NCPUS", "1")' in installer
+    assert "Ncpus = r_install_ncpus()" in installer
+    assert "parallel::detectCores() - 1" not in installer
 
 
 def test_httpx_is_a_runtime_dependency_for_container_api_startup() -> None:
@@ -181,6 +280,58 @@ def test_httpx_is_a_runtime_dependency_for_container_api_startup() -> None:
 
     assert '    "httpx>=0.27.0",' in pyproject
     assert 'dev = [\n    "pytest>=8.0.0",\n    "pytest-asyncio>=0.23.0",\n]' in pyproject
+
+
+def test_core_runtime_image_proof_script_reports_safe_api_runtime_contract() -> None:
+    module = _load_api_image_proof_module()
+
+    assessment = module.assess_repo_contract(REPO_ROOT)
+
+    assert assessment["ok"] is True
+    assert assessment["compose_project"] == "biomodstack-core-runtime"
+    assert assessment["api_service"]["build_target"] == "api-runtime"
+    assert assessment["stats_tools_service"]["build_target"] == "stats-tools-runtime"
+    assert assessment["api_runtime_stage_before_stats_tools_stage"] is True
+    assert assessment["api_runtime_prefix_has_r_stack"] is False
+    assert assessment["dockerignore_excludes_env_files"] is True
+    assert assessment["api_runtime_forbidden_markers"] == []
+
+
+def test_core_runtime_image_proof_script_redacts_credentials_from_logs_and_plans() -> None:
+    module = _load_api_image_proof_module()
+
+    redacted = module.redact_text(
+        "postgresql+asyncpg://bms_assay:super-secret@127.0.0.1:55432/bms_analytical_data\n"
+        "POSTGRES_PASSWORD=super-secret\n"
+        "BMS_ANALYTICAL_DATABASE_URL=postgresql://user:pw@example/db\n"
+    )
+
+    assert "super-secret" not in redacted
+    assert "user:pw@" not in redacted
+    assert "POSTGRES_PASSWORD=[REDACTED]" in redacted
+    assert "BMS_ANALYTICAL_DATABASE_URL=[REDACTED]" in redacted
+    assert "bms_assay:***@127.0.0.1" in redacted
+
+
+def test_core_runtime_image_proof_cli_is_exposed_from_bms_operator_script() -> None:
+    cli = (REPO_ROOT / "scripts" / "bms").read_text(encoding="utf-8")
+
+    assert "bms api-image preflight" in cli
+    assert "bms api-image plan" in cli
+    assert "scripts/bms_api_image_proof.py" in cli
+    assert "preflight|plan" in cli
+
+
+def test_core_runtime_image_proof_plan_uses_explicit_project_no_stats_rebuild_and_force_recreate() -> None:
+    module = _load_api_image_proof_module()
+
+    plan = module.render_recreate_plan(REPO_ROOT)
+
+    assert "docker compose -p biomodstack-core-runtime -f compose.core-runtime.yml build bms-api" in plan
+    assert "docker compose -p biomodstack-core-runtime -f compose.core-runtime.yml up -d --no-deps --force-recreate bms-api" in plan
+    assert "bms-stats-tools" not in plan
+    assert "--build" not in plan
+    assert "BMS DB service" in plan
 
 
 def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_routing() -> None:

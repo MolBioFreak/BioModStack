@@ -14,12 +14,15 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from scipy import stats
 from scipy.signal import find_peaks, peak_widths, savgol_filter
+from sqlalchemy.exc import SQLAlchemyError
 
 from services.assay_tool_integrations import assay_tool_registry, tools_by_category
 from services.assay_analytical_store import (
+    AnalyticalStoreUnavailable,
+    DB_SERVICE_OFFLINE_MESSAGE,
     analytical_store_status,
     list_analytical_datasets,
     load_analytical_dataset,
@@ -30,6 +33,25 @@ from services.assay_analytical_store import (
 from services.assay_chrom_persistence import persist_empower_import
 
 router = APIRouter()
+
+
+_DB_DEGRADED_EXCEPTIONS = (AnalyticalStoreUnavailable, SQLAlchemyError, OSError, ConnectionError)
+
+
+def _db_service_degraded_detail(exc: BaseException) -> Dict[str, Any]:
+    return {
+        "component": "db-service",
+        "service_id": "bms-db-service",
+        "degraded_by": "bms-db-service",
+        "display_name": "BMS DB service",
+        "offline_message": DB_SERVICE_OFFLINE_MESSAGE,
+        "message": str(exc),
+        "operator_action": "Start BMS DB service from the top bar or run `bms db-service start`.",
+    }
+
+
+def _raise_db_service_degraded(exc: BaseException) -> None:
+    raise HTTPException(status_code=503, detail=_db_service_degraded_detail(exc)) from exc
 
 # BioModStack-native assay analytics router.
 # It intentionally mirrors the prototype analysis-module API paths under
@@ -177,8 +199,7 @@ class DeltaCqRequest(BaseModel):
     reference_genes: List[str]
     target_genes: List[str]
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DeltaDeltaCqRequest(DeltaCqRequest):
@@ -884,12 +905,15 @@ def _build_qpcr_upload_response(wells: List[Dict[str, Any]], filename: Optional[
 
 async def _persist_qpcr_response_if_requested(response: Dict[str, Any], *, persist: bool, data: bytes, file: UploadFile) -> Dict[str, Any]:
     if persist:
-        durable_ids = await persist_qpcr_import_response(
-            response,
-            source_bytes=data,
-            filename=file.filename,
-            content_type=file.content_type,
-        )
+        try:
+            durable_ids = await persist_qpcr_import_response(
+                response,
+                source_bytes=data,
+                filename=file.filename,
+                content_type=file.content_type,
+            )
+        except _DB_DEGRADED_EXCEPTIONS as exc:
+            _raise_db_service_degraded(exc)
         response.update(durable_ids)
     return response
 
@@ -1622,17 +1646,26 @@ async def upload_qpcr_eds(file: UploadFile = File(...), persist: bool = Form(Fal
 
 @router.get("/analysis/qpcr/imports")
 async def qpcr_imports(limit: int = Query(50, ge=1, le=200)) -> List[Dict[str, Any]]:
-    return _json_clean(await list_qpcr_imports(limit=limit))
+    try:
+        return _json_clean(await list_qpcr_imports(limit=limit))
+    except _DB_DEGRADED_EXCEPTIONS as exc:
+        _raise_db_service_degraded(exc)
 
 
 @router.get("/datasets")
 async def assay_datasets(assay_type: Optional[str] = None, limit: int = Query(100, ge=1, le=500)) -> List[Dict[str, Any]]:
-    return _json_clean(await list_analytical_datasets(assay_type=assay_type, limit=limit))
+    try:
+        return _json_clean(await list_analytical_datasets(assay_type=assay_type, limit=limit))
+    except _DB_DEGRADED_EXCEPTIONS as exc:
+        _raise_db_service_degraded(exc)
 
 
 @router.get("/datasets/{dataset_id}")
 async def assay_dataset_detail(dataset_id: str) -> Dict[str, Any]:
-    payload = await load_analytical_dataset(dataset_id)
+    try:
+        payload = await load_analytical_dataset(dataset_id)
+    except _DB_DEGRADED_EXCEPTIONS as exc:
+        _raise_db_service_degraded(exc)
     if payload is None:
         raise HTTPException(status_code=404, detail="Analytical dataset not found")
     return _json_clean(payload)
@@ -1640,7 +1673,10 @@ async def assay_dataset_detail(dataset_id: str) -> Dict[str, Any]:
 
 @router.get("/analysis/qpcr/imports/{analytical_import_id}")
 async def qpcr_import_detail(analytical_import_id: str) -> Dict[str, Any]:
-    payload = await load_qpcr_import(analytical_import_id)
+    try:
+        payload = await load_qpcr_import(analytical_import_id)
+    except _DB_DEGRADED_EXCEPTIONS as exc:
+        _raise_db_service_degraded(exc)
     if payload is None:
         raise HTTPException(status_code=404, detail="qPCR analytical import not found")
     return _json_clean(payload)
@@ -2732,12 +2768,15 @@ async def empower_import(
         **analytics,
     }
     if persist:
-        durable_ids = await persist_empower_import(
-            import_session_id=import_id,
-            source_files=source_files,
-            injections=injections,
-            analytics=response,
-        )
+        try:
+            durable_ids = await persist_empower_import(
+                import_session_id=import_id,
+                source_files=source_files,
+                injections=injections,
+                analytics=response,
+            )
+        except _DB_DEGRADED_EXCEPTIONS as exc:
+            _raise_db_service_degraded(exc)
         response.update(durable_ids)
         # The in-memory object is retained only as a short-lived review session cache;
         # durable chromatography rows are written to the analytical PostgreSQL store above.
@@ -3198,16 +3237,6 @@ def regression_simple(request: RegressionRequest) -> Dict[str, Any]:
     )
 
 
-@router.get("/datasets")
-def datasets(category: Optional[str] = None) -> List[Dict[str, Any]]:
-    return []
-
-
-@router.get("/datasets/{dataset_id}")
-def dataset(dataset_id: int) -> Dict[str, Any]:
-    raise HTTPException(status_code=404, detail="No stored assay dataset found for that id. Import real assay data before loading a dataset.")
-
-
 @router.get("/tools")
 def external_tools() -> Dict[str, Any]:
     return _json_clean({"tools": assay_tool_registry(), "by_category": tools_by_category()})
@@ -3223,7 +3252,7 @@ def capabilities() -> Dict[str, Any]:
     tools = assay_tool_registry()
     return _json_clean(
         {
-            "service": "BioModStack Assay Analytics",
+            "service": "BioModStack Stats Toolkit",
             "surfaces": ["qPCR QuantStudio/StepOnePlus", "Waters/Empower chromatography", "plasmid DNA isoform analysis", "JMP-like DOE/statistics", "Plotly visualization"],
             "source_of_truth": "BMS API /api/assay-analytics",
             "not_used": "legacy standalone parser service",

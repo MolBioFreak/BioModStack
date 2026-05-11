@@ -61,7 +61,7 @@ def discover_gpus() -> Dict[int, Dict[str, Any]]:
             timeout=10,
         )
     except FileNotFoundError:
-        logger.warning("[GPU-META] nvidia-smi not found; GPU metadata will be empty")
+        logger.info("[GPU-META] nvidia-smi not found; optional GPU metadata will be empty")
         return {}
     except Exception as exc:
         logger.warning("[GPU-META] nvidia-smi query failed: %s", exc)
@@ -122,7 +122,7 @@ def discover_gpus() -> Dict[int, Dict[str, Any]]:
             ", ".join(f"GPU {i}: {m['name']} ({m['vram_mb']} MiB)" for i, m in sorted(metadata.items())),
         )
     else:
-        logger.warning("[GPU-META] No GPUs discovered from nvidia-smi")
+        logger.info("[GPU-META] No GPUs discovered from nvidia-smi")
 
     return metadata
 

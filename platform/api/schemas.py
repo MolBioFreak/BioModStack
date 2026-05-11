@@ -43,8 +43,8 @@ class JobCreate(BaseModel):
     batch_name: Optional[str] = Field(None, description="Human-readable batch name")
     sequence_length: Optional[int] = Field(None, description="Sequence length for VRAM estimation")
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "binder_test_001",
                 "model_id": "rfdiffusion",
@@ -58,6 +58,7 @@ class JobCreate(BaseModel):
                 "pinned_gpu": 0
             }
         }
+    )
 
 
 class JobResponse(BaseModel):
@@ -193,8 +194,7 @@ class DesignResponse(BaseModel):
     
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DesignUpdate(BaseModel):

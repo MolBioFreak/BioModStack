@@ -19,6 +19,25 @@ from sqlalchemy.schema import CreateColumn
 AnalyticalBase = declarative_base()
 
 
+class AnalyticalStoreUnavailable(RuntimeError):
+    """Raised when the optional BMS DB service is unavailable for assay analytics."""
+
+
+DB_SERVICE_OFFLINE_MESSAGE = "db_service_offline — use BMS DB service → Start"
+
+
+def _analytical_store_unavailable(context: str, exc: BaseException) -> AnalyticalStoreUnavailable:
+    message = str(exc).strip() or exc.__class__.__name__
+    return AnalyticalStoreUnavailable(f"{DB_SERVICE_OFFLINE_MESSAGE}; {context}: {message}")
+
+
+async def ensure_analytical_store_available(context: str = "analytical store operation") -> None:
+    try:
+        await init_analytical_store()
+    except Exception as exc:  # noqa: BLE001 - converted to explicit degraded DB-service status at router boundary.
+        raise _analytical_store_unavailable(context, exc) from exc
+
+
 @dataclass(frozen=True)
 class AnalyticalStoreSettings:
     """Connection settings for the assay/chromatography analytical store.
@@ -628,7 +647,7 @@ async def persist_qpcr_import_response(
 ) -> dict[str, str]:
     """Persist a parsed qPCR import into the analytical store and return durable IDs."""
 
-    await init_analytical_store()
+    await ensure_analytical_store_available("qPCR import persistence")
     import_id = _new_id()
     source_file_id = _new_id()
     run_id = _new_id()
@@ -872,7 +891,7 @@ async def persist_qpcr_import_response(
 async def persist_empower_import_response(response: dict[str, Any]) -> dict[str, str]:
     """Persist parsed Empower/HPLC review rows into the analytical store."""
 
-    await init_analytical_store()
+    await ensure_analytical_store_available("Empower import persistence")
     import_id = _new_id()
     run_id = _new_id()
     session_factory = create_analytical_session_factory()
@@ -953,7 +972,7 @@ async def persist_empower_import_response(response: dict[str, Any]) -> dict[str,
 
 
 async def list_analytical_datasets(assay_type: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    await init_analytical_store()
+    await ensure_analytical_store_available("analytical dataset listing")
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
         stmt = select(AnalyticalDataset).where(AnalyticalDataset.archived == False)  # noqa: E712
@@ -981,7 +1000,7 @@ async def list_analytical_datasets(assay_type: str | None = None, limit: int = 1
 
 
 async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
-    await init_analytical_store()
+    await ensure_analytical_store_available("analytical dataset load")
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
         dataset = (await session.execute(select(AnalyticalDataset).where(AnalyticalDataset.id == dataset_id, AnalyticalDataset.archived == False))).scalar_one_or_none()  # noqa: E712
@@ -1007,6 +1026,8 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
             ]
         chromatography_injections: list[dict[str, Any]] = []
         chromatography_summary: dict[str, Any] | None = None
+        qpcr_import: dict[str, Any] | None = None
+        qpcr_summary: dict[str, Any] | None = None
         analysis_runs: list[dict[str, Any]] = []
         if dataset.primary_assay_run_id:
             analysis_rows = (
@@ -1031,6 +1052,67 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
                 }
                 for row in analysis_rows
             ]
+        if dataset.assay_type == "qpcr" and dataset.primary_import_id and dataset.primary_assay_run_id:
+            import_row = (
+                await session.execute(
+                    select(AnalyticalImport).where(
+                        AnalyticalImport.id == dataset.primary_import_id,
+                        AnalyticalImport.assay_type == "qpcr",
+                    )
+                )
+            ).scalar_one_or_none()
+            well_rows = (
+                await session.execute(
+                    select(QpcrWell)
+                    .where(QpcrWell.run_id == dataset.primary_assay_run_id)
+                    .order_by(QpcrWell.well)
+                )
+            ).scalars().all()
+            curve_rows = (
+                await session.execute(select(QpcrStandardCurve).where(QpcrStandardCurve.run_id == dataset.primary_assay_run_id))
+            ).scalars().all()
+            metadata = import_row.metadata_json if import_row is not None and import_row.metadata_json else {}
+            targets = metadata.get("targets", [])
+            samples = metadata.get("samples", [])
+            wells_payload = [
+                {
+                    "analytical_well_id": well.id,
+                    "well_position": well.well_position,
+                    "sample_name": well.sample_name,
+                    "target_name": well.target_name,
+                    "task": well.task,
+                    "ct": well.ct,
+                    "cq": well.cq,
+                    "quantity": well.quantity,
+                    "ct_status": (well.flags_json or [None])[0] if well.flags_json else None,
+                    "reporter": well.reporter,
+                    "quencher": well.quencher,
+                }
+                for well in well_rows
+            ]
+            qpcr_import = {
+                "analytical_import_id": import_row.id if import_row is not None else dataset.primary_import_id,
+                "assay_run_id": dataset.primary_assay_run_id,
+                "filename": import_row.source_filename if import_row is not None else None,
+                "import_engine": import_row.parser_engine if import_row is not None else None,
+                "instrument_format": import_row.instrument_format if import_row is not None else None,
+                "n_wells": len(well_rows),
+                "targets": targets,
+                "samples": samples,
+                "wells": wells_payload,
+                "standard_curve_stats_by_target": {curve.target: curve.fit_json for curve in curve_rows},
+                "assay_summary": metadata.get("assay_summary"),
+                "eds_summary": metadata.get("eds_summary"),
+                "results_plotly_json": metadata.get("results_plotly_json"),
+                "standard_curve_plotly_json": metadata.get("standard_curve_plotly_json"),
+                "amplification_plotly_json": metadata.get("amplification_plotly_json"),
+            }
+            qpcr_summary = {
+                "n_wells": len(well_rows),
+                "n_standard_curves": len(curve_rows),
+                "targets": targets,
+                "samples": samples,
+            }
         if dataset.assay_type == "chromatography" and dataset.primary_assay_run_id:
             chrom_rows = (
                 await session.execute(
@@ -1100,6 +1182,9 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
             "source_files": sources,
             "analysis_runs": analysis_runs,
         }
+        if qpcr_summary is not None:
+            payload["qpcr_summary"] = qpcr_summary
+            payload["qpcr_import"] = qpcr_import
         if chromatography_summary is not None:
             payload["chromatography_summary"] = chromatography_summary
             payload["chromatography_injections"] = chromatography_injections
@@ -1134,6 +1219,7 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
 
 
 async def list_qpcr_imports(limit: int = 50) -> list[dict[str, Any]]:
+    await ensure_analytical_store_available("qPCR import listing")
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
         rows = (
@@ -1162,6 +1248,7 @@ async def list_qpcr_imports(limit: int = 50) -> list[dict[str, Any]]:
 
 
 async def load_qpcr_import(import_id: str) -> dict[str, Any] | None:
+    await ensure_analytical_store_available("qPCR import load")
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
         row = (
