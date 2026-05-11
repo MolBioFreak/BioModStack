@@ -9,6 +9,73 @@ const require = createRequire(import.meta.url)
 const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
 const stablePdbeMolstarPath = path.dirname(require.resolve('pdbe-molstar-stable/package.json'))
 
+const isExpectedPdbeMolstarEvalWarning = (warning: { code?: string; id?: string; message?: string }) =>
+  warning.code === 'EVAL' &&
+  (warning.id?.includes('pdbe-molstar') ||
+    warning.id?.includes('pdbe-molstar-stable') ||
+    warning.message?.includes('pdbe-molstar-component.js'))
+
+const normalizeChunkId = (id: string) => id.split(path.sep).join('/')
+
+function manualChunks(id: string): string | undefined {
+  const normalized = normalizeChunkId(id)
+
+  // Keep large generated MolBio demo data out of the route/app chunk so the
+  // sequence editor can request it only when that workspace is opened.
+  if (normalized.includes('demoConstructs.generated')) return 'molbio-demo-data'
+
+  if (!normalized.includes('/node_modules/')) return undefined
+
+  if (
+    normalized.includes('/node_modules/react/') ||
+    normalized.includes('/node_modules/react-dom/') ||
+    normalized.includes('/node_modules/react-router-dom/') ||
+    normalized.includes('/node_modules/@tanstack/react-query/')
+  ) {
+    return 'vendor-react'
+  }
+
+  if (
+    normalized.includes('/node_modules/@blueprintjs/') ||
+    normalized.includes('/node_modules/@popperjs/')
+  ) {
+    return 'vendor-blueprint'
+  }
+
+  if (
+    normalized.includes('/node_modules/plotly.js-dist-min/') ||
+    normalized.includes('/node_modules/react-plotly.js/') ||
+    normalized.includes('/node_modules/@plotly/') ||
+    normalized.includes('/node_modules/plotly.js/') ||
+    normalized.includes('/node_modules/d3-') ||
+    normalized.includes('/node_modules/d3/')
+  ) {
+    return 'vendor-plotly'
+  }
+
+  if (normalized.includes('/node_modules/seqviz/')) return 'vendor-seqviz'
+
+  if (normalized.includes('/node_modules/igv/')) return 'vendor-igv'
+
+  if (
+    normalized.includes('/node_modules/pdbe-molstar') ||
+    normalized.includes('/node_modules/molstar')
+  ) {
+    return 'vendor-molstar'
+  }
+
+  if (
+    normalized.includes('/node_modules/buffer/') ||
+    normalized.includes('/node_modules/safe-buffer/') ||
+    normalized.includes('/node_modules/string_decoder/') ||
+    normalized.includes('/node_modules/events/')
+  ) {
+    return 'vendor-node-shims'
+  }
+
+  return 'vendor'
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
@@ -46,6 +113,25 @@ export default defineConfig(({ mode }) => ({
       // 3.3.0 alias package until we can safely re-upgrade Molstar.
       'pdbe-molstar': stablePdbeMolstarPath,
     }
+  },
+  build: {
+    // After route-level splitting, the remaining intentionally-large chunks are
+    // scientific vendor bundles (Molstar/Plotly/IGV), not the initial app shell.
+    // Keep the budget below the former monolithic app chunk so regressions are
+    // still visible, but above the known stable Molstar vendor payload.
+    chunkSizeWarningLimit: 6500,
+    rollupOptions: {
+      output: {
+        manualChunks,
+      },
+      onwarn(warning, warn) {
+        // The pinned PDBe Molstar 3.3.0 vendor bundle contains an eval shim.
+        // Keep the warning scoped to this known bundle instead of hiding
+        // Rollup warnings globally; the larger chunk-size warnings remain visible.
+        if (isExpectedPdbeMolstarEvalWarning(warning)) return
+        warn(warning)
+      },
+    },
   },
   server: {
     // Browser development owns Vite's documented default port. Keep it strict

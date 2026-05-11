@@ -30,22 +30,18 @@ def test_default_linkage_state_path_uses_bms_data_root(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_set_linkage_normalizes_and_persists_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_legacy_set_linkage_is_disabled_and_does_not_persist_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     state_path = tmp_path / 'bioxp_linkage_url'
     monkeypatch.setattr(bioxp, 'LINKAGE_STATE_PATH', state_path)
     monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
 
-    def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
-        assert host == 'robot'
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('bioxp-runtime.example.invalid', port or 0))]
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.set_linkage(bioxp.LinkageRequest(url='robot:8123/'))
 
-    monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
-
-    response = await bioxp.set_linkage(bioxp.LinkageRequest(url='robot:8123/'))
-
-    assert response['url'] == 'http://bioxp-runtime.example.invalid:8123'
-    assert response['configured'] is True
-    assert state_path.read_text(encoding='utf-8') == 'http://bioxp-runtime.example.invalid:8123'
+    assert exc_info.value.status_code == 409
+    assert 'Legacy /api/bioxp/linkage mutation is disabled' in str(exc_info.value.detail)
+    assert bioxp._GLOBAL_LINKAGE_URL is None
+    assert not state_path.exists()
 
 
 def test_recommended_linkage_url_prefers_resolved_robot_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,17 +90,19 @@ def test_read_persisted_linkage_canonicalizes_robot_alias_and_rewrites_state(
 
 
 @pytest.mark.asyncio
-async def test_disconnect_linkage_clears_persisted_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_legacy_disconnect_linkage_is_disabled_and_does_not_clear_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     state_path = tmp_path / 'bioxp_linkage_url'
     state_path.write_text('http://robot:8123', encoding='utf-8')
     monkeypatch.setattr(bioxp, 'LINKAGE_STATE_PATH', state_path)
     monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
 
-    response = await bioxp.disconnect_linkage()
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.disconnect_linkage()
 
-    assert response['configured'] is False
-    assert response['url'] is None
-    assert not state_path.exists()
+    assert exc_info.value.status_code == 409
+    assert 'Legacy /api/bioxp/linkage/disconnect mutation is disabled' in str(exc_info.value.detail)
+    assert bioxp._GLOBAL_LINKAGE_URL == 'http://robot:8123'
+    assert state_path.read_text(encoding='utf-8') == 'http://robot:8123'
 
 
 @pytest.mark.asyncio
@@ -165,6 +163,40 @@ async def test_daemon_status_uses_proxy_status_as_single_runtime_truth(monkeypat
     assert response['healthy'] is True
     assert response['detail']
     assert 'ssh' not in response['detail'].lower()
+
+
+@pytest.mark.asyncio
+async def test_daemon_status_uses_targeted_power_when_aggregate_status_is_conservative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+    calls: list[tuple[str, str, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, timeout: float = 65.0, **_: object) -> dict:
+        calls.append((method, path, timeout))
+        if path == '/status':
+            return {
+                'status': 'degraded',
+                'runtime_available': True,
+                'hardware_connected': False,
+                'startup_error': None,
+                'status_error': None,
+            }
+        if path == '/motion/power/status':
+            return {
+                'hardware_connected': True,
+                'motion_arm': {'armed': False, 'reason': 'startup'},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.daemon_status()
+
+    assert calls == [('GET', '/status', 35.0), ('GET', '/motion/power/status', 45.0)]
+    assert response['linked_runtime_reachable'] is True
+    assert response['hardware_connected'] is True
+    assert response['inferred_via_proxy'] is True
+    assert response['targeted_power_readback']['hardware_connected'] is True
+    assert 'targeted controller readback' in response['detail']
 
 
 @pytest.mark.asyncio
@@ -230,10 +262,15 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['bms_proxy_routes']['/vision/inspect'] is True
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
     assert response['robot_local_expected_routes']['/motion/axes/current'] is True
+    assert response['bms_proxy_routes']['/motion/axis/zero'] is True
+    assert response['manual_motion_routes']['/motion/axis/zero'] is True
+    assert response['manual_motion_routes']['/motion/axis/home'] is False
     assert response['default_operator_routes']['/oem/runtime/status'] is True
     assert response['default_operator_routes']['/liquid/status'] is True
     assert '/motion/axis/relative' not in response['default_operator_routes']
     assert '/motion/axis/absolute' not in response['default_operator_routes']
+    assert '/motion/axis/zero' not in response['default_operator_routes']
+    assert '/motion/axis/home' not in response['default_operator_routes']
     assert '/liquid/aspirate' not in response['default_operator_routes']
     assert '/liquid/dispense' not in response['default_operator_routes']
     assert response['manual_motion_routes']['/motion/axis/relative'] is True
@@ -241,6 +278,7 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['commissioning_only_routes']['/motion/axis/relative'] is True
     assert response['commissioning_only_routes']['/liquid/aspirate'] is True
     assert response['disabled_routes']['/daemon/start'] is True
+    assert response['disabled_routes']['/motion/axis/home'] is True
     assert any('disabled by design' in note for note in response['notes'])
 
 
@@ -322,6 +360,37 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
         ('GET', '/camera/stream_state', None, None, 20.0),
         ('POST', '/vision/inspect', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
         ('POST', '/vision/barcode/read', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_motion_zero_proxies_but_manual_switch_home_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'ok': True, 'path': path, 'payload': json_data}
+
+    class ZeroRequestStub:
+        async def json(self):
+            return {'axis': 'z', 'wait_timeout_s': 6.0, 'operator_note': 'zero-route-test'}
+
+    class HomeRequestStub:
+        async def json(self):
+            return {'axis': 'x', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    zero = await bioxp.move_axis_zero(ZeroRequestStub())
+    assert zero['path'] == '/motion/axis/zero'
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.home_axis(HomeRequestStub())
+
+    assert exc_info.value.status_code == 409
+    assert 'limit-switch ignore' in str(exc_info.value.detail)
+    assert calls == [
+        ('POST', '/motion/axis/zero', {'axis': 'z', 'wait_timeout_s': 6.0, 'operator_note': 'zero-route-test'}, None, 65.0),
     ]
 
 @pytest.mark.asyncio

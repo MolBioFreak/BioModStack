@@ -50,11 +50,16 @@ case "${RUNTIME_MODE,,}" in
 esac
 
 notify "♻️  Restarting ALL services (API + UI)..."
-"$PROJECT_DIR/start_ui.sh" restart "${FORWARDED_ARGS[@]}"
+bash "$PROJECT_DIR/start_ui.sh" restart "${FORWARDED_ARGS[@]}"
 
 sleep 5
 
 notify "✅ Services restarted! Opening UI..."
-if command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$browser_url" || true
+xdg_open_path="$(command -v xdg-open || true)"
+if [ -n "$xdg_open_path" ]; then
+    if head -c 2 "$xdg_open_path" 2>/dev/null | grep -q '^#!'; then
+        bash "$xdg_open_path" "$browser_url" || true
+    else
+        "$xdg_open_path" "$browser_url" || true
+    fi
 fi

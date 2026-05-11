@@ -20,9 +20,11 @@ from biomodstack_services import (  # noqa: E402
     restart_all,
     restart_api,
     runtime_descriptor,
+    start_api,
     start_all,
     start_runtime_target,
     status_lines,
+    stop_api,
     stop_all,
 )
 
@@ -46,7 +48,10 @@ def notify(message: str, icon: str = NOTIFY_ICON) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
-    parser.add_argument("action", choices=["start", "start-target", "stop", "restart", "restart-api", "status"])
+    parser.add_argument(
+        "action",
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status"],
+    )
     parser.add_argument(
         "--runtime",
         choices=["dev", "container"],
@@ -82,6 +87,18 @@ def main() -> int:
             print("\n".join(status_lines(runtime_mode=runtime_mode)))
             return 0
 
+        if args.action == "start-api":
+            if args.notify:
+                notify("🚀 Starting BioModStack API…")
+            start_api(runtime_mode=runtime_mode)
+            if args.notify:
+                notify("✅ BioModStack API started")
+            if runtime_mode == "container":
+                print(f"Core runtime log: {CORE_RUNTIME_LOG}")
+            else:
+                print(f"API log: {API_LOG}")
+            return 0
+
         if args.action == "stop":
             if args.notify:
                 notify("🛑 Stopping BioModStack services…", icon="dialog-warning")
@@ -89,6 +106,15 @@ def main() -> int:
             if args.notify:
                 notify("✅ BioModStack services stopped", icon="dialog-information")
             print("Stopped BioModStack services")
+            return 0
+
+        if args.action == "stop-api":
+            if args.notify:
+                notify("🛑 Stopping BioModStack API…", icon="dialog-warning")
+            stop_api(runtime_mode=runtime_mode)
+            if args.notify:
+                notify("✅ BioModStack API stopped", icon="dialog-information")
+            print("Stopped BioModStack API")
             return 0
 
         if args.action == "restart":

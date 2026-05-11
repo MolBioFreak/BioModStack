@@ -25,10 +25,40 @@ export interface BioXpStatus {
     deck_io_snapshot?: Record<string, number | null> | null;
 }
 
-export interface LinkageStatus {
-    url: string | null;
-    configured?: boolean;
+export interface BioXpInterlinkSettings {
+    robot_api_url: string;
+    robot_ssh_host?: string;
+    connection_mode?: string;
+    display_name?: string;
+}
+
+export interface BioXpInterlinkActionRequest {
+    operator_ack?: string;
+    reason?: string;
+    sudo_password?: string;
+    watch_until_ready?: boolean;
+    tail?: number;
+}
+
+export interface BioXpInterlinkState {
+    component?: string;
+    configured: boolean;
+    active: boolean;
+    connection_mode?: string;
+    display_name?: string;
+    robot_api_url?: string | null;
+    robot_ssh_host?: string | null;
     recommended_url?: string | null;
+    reachable?: boolean | null;
+    hardware_connected?: boolean | null;
+    maintenance_state?: Record<string, any> | null;
+    last_probe_at?: string | null;
+    last_status?: Record<string, any> | null;
+    last_error?: Record<string, any> | null;
+    lifecycle_action?: string | null;
+    control_mode?: string;
+    runtime_note?: string;
+    auto_connect_on_launch?: boolean;
 }
 
 export interface AxisStatus {
@@ -430,36 +460,101 @@ const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
 
 const bioxpHardwareMutationKey = (...parts: string[]) => ['bioxp', 'hardware', ...parts] as const;
 
-export const useGetLinkage = () =>
-    useQuery<LinkageStatus, Error>({
-        queryKey: ['bioxp', 'linkage'],
+export const useBioXpInterlinkState = (probe = false, refetchIntervalMs: number | false = false) =>
+    useQuery<BioXpInterlinkState, Error>({
+        queryKey: ['bioxp', 'interlink', 'state', probe],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/linkage');
-            return res.data;
-        }
-    });
-
-export const useSetLinkage = () => {
-    const queryClient = useQueryClient();
-    return useMutation({
-        mutationFn: async (url: string) => {
-            const res = await api.post('/api/bioxp/linkage', { url });
+            const res = await api.get('/api/bioxp/interlink/state', { params: probe ? { probe: true } : undefined });
             return res.data;
         },
-        onSuccess: () => invalidateBioXp(queryClient)
+        refetchInterval: refetchIntervalMs,
+        retry: false,
+    });
+
+export const useSaveBioXpInterlinkSettings = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpInterlinkState, Error, BioXpInterlinkSettings>({
+        mutationFn: async (settings) => {
+            const res = await api.put('/api/bioxp/interlink/settings', settings);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
     });
 };
 
-export const useDisconnectLinkage = () => {
+export const useForgetBioXpInterlinkSettings = () => {
     const queryClient = useQueryClient();
-    return useMutation({
+    return useMutation<BioXpInterlinkState, Error, void>({
         mutationFn: async () => {
-            const res = await api.post('/api/bioxp/linkage/disconnect');
+            const res = await api.delete('/api/bioxp/interlink/settings');
             return res.data;
         },
-        onSuccess: () => invalidateBioXp(queryClient)
+        onSuccess: () => invalidateBioXp(queryClient),
     });
 };
+
+export const useBioXpInterlinkConnect = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpInterlinkState, Error, BioXpInterlinkSettings | void>({
+        mutationFn: async (settings) => {
+            const res = await api.post('/api/bioxp/interlink/connect', settings ?? undefined);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useBioXpInterlinkDisconnect = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpInterlinkState, Error, void>({
+        mutationFn: async () => {
+            const res = await api.post('/api/bioxp/interlink/disconnect');
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useBioXpInterlinkDiagnostics = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpInterlinkState, Error, { probe?: boolean }>({
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/interlink/diagnostics', null, { params: { probe: payload.probe ?? true } });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useBioXpRuntimeReset = () => {
+    const queryClient = useQueryClient();
+    return useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest>({
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/interlink/runtime-reset', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useBioXpRobotReboot = () => {
+    const queryClient = useQueryClient();
+    return useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest>({
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/interlink/robot-reboot', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useBioXpInterlinkLogs = () =>
+    useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest | void>({
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/interlink/logs', payload);
+            return res.data;
+        },
+    });
 
 export const useRuntimeStatus = () =>
     useQuery<RuntimeStatus, Error>({
@@ -623,6 +718,18 @@ export const useOemRuntimeEmergencyStop = () => {
         mutationKey: bioxpHardwareMutationKey('oem', 'runtime', 'emergency-stop'),
         mutationFn: async (payload = {}) => {
             const res = await api.post('/api/bioxp/oem/runtime/emergency_stop', payload);
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const usePrepareToRunJobReadiness = () => {
+    const queryClient = useQueryClient();
+    return useMutation<OemStatusPayload, Error, BioXpPayload | void>({
+        mutationKey: bioxpHardwareMutationKey('oem', 'runtime', 'readiness', 'prepare-to-run-job', 'dry-run'),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post('/api/bioxp/oem/runtime/readiness/prepare-to-run-job/dry-run', payload);
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient),
@@ -1028,12 +1135,10 @@ export const useHomeAxis = () => {
     return useMutation<AxisMotionResult, Error, { axis: AxisName } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'home-to-zero'),
         mutationFn: async ({ axis, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
-            // Temporary operator-safe semantics: Home means return this axis to controller coordinate 0.
-            // Do not call the robot-local switch-search homing routine here; it currently vibrates/stalls.
-            const res = await api.post('/api/bioxp/motion/axis/home', {
+            // Compatibility-safe operator command: return to controller coordinate 0.
+            // True OEM switch-search homing remains available at /motion/axis/home but is not this UI button.
+            const res = await api.post('/api/bioxp/motion/axis/zero', {
                 axis,
-                mode: 'absolute_zero',
-                position_steps: 0,
                 wait_timeout_s: 60.0,
                 capture_bundle,
                 dry_run_bundle,

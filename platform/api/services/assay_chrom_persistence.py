@@ -20,7 +20,7 @@ from services.assay_analytical_store import (
     ChromPeak,
     ChromTracePoint,
     create_analytical_session_factory,
-    init_analytical_store,
+    ensure_analytical_store_available,
 )
 
 
@@ -154,7 +154,7 @@ async def persist_empower_import(
     run_datetimes = [_parse_datetime(injection.get("run_date")) for injection in injections]
     run_datetimes = [value for value in run_datetimes if value is not None]
 
-    await init_analytical_store()
+    await ensure_analytical_store_available("Empower chromatography import persistence")
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
         if batch_hash:

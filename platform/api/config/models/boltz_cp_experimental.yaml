@@ -40,6 +40,7 @@ modes:
       - context_store_pair_tile_tokens
       - context_store_key_tile_tokens
       - context_store_projection_cache_byte_budget
+      - context_store_projected_triangle_rhs_row_reuse_window
       - input_format
       - output_format
       - write_full_pae
@@ -163,6 +164,17 @@ params:
     required: false
     default: 0
     minimum: 0
+
+  - name: context_store_projected_triangle_rhs_row_reuse_window
+    type: integer
+    description: >
+      Bounded row-window size for reusing projected triangle-multiplication RHS
+      CUDA tiles across output row tiles in virtual-dram-stream-attention. Larger
+      values reduce RHS H2D traffic but keep more LHS row tiles resident on the
+      rank GPU; default 2 preserves the current conservative path.
+    required: false
+    default: 2
+    minimum: 1
 
   - name: input_format
     type: string

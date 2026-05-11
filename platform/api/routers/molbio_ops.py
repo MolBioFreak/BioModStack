@@ -5,7 +5,7 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -83,8 +83,7 @@ class MutationSchema(BaseModel):
     to: str
     from_base: Optional[str] = Field(default=None, alias="from")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class MutagenesisRequest(SequenceInput):
@@ -132,8 +131,7 @@ class NucleotideSequenceResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DigestFragmentResponse(BaseModel):
