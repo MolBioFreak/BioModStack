@@ -197,7 +197,7 @@ export function Dashboard() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             alert(`Job resubmitted! New job: ${response.data.new_job_name}`);
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             alert(`Resubmit failed: ${error.response?.data?.detail || error.message}`);
         }
     });
@@ -241,7 +241,7 @@ export function Dashboard() {
             const note = response.data.resume_stage_note ? `\nNote: ${response.data.resume_stage_note}` : '';
             alert(`${successPrefix} New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}${note}`);
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             const failurePrefix = resumeDialogMode === 'reorchestrate' ? 'Re-orchestrate failed' : 'Resume failed';
             alert(`${failurePrefix}: ${error.response?.data?.detail || error.message}`);
         }
@@ -380,14 +380,14 @@ export function Dashboard() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             alert(`Deleted! ${response.data.children_deleted} children, ${response.data.directories_deleted.length} directories removed`);
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             alert(`Delete failed: ${error.response?.data?.detail || error.message}`);
         }
     });
 
-    const handleDelete = (_jobId: string, _jobName: string) => {
+    const handleDelete = (jobId: string) => {
         // Confirmation is already done in the button onClick
-        deleteMutation.mutate(_jobId);
+        deleteMutation.mutate(jobId);
     };
 
     const navigate = useNavigate();
@@ -412,12 +412,12 @@ export function Dashboard() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             alert(`Force-launched on GPU ${response.data.gpu_id}`);
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             alert(`Force-run failed: ${error.response?.data?.detail || error.message}`);
         }
     });
 
-    const handleForceRun = (jobId: string, _gpuId?: number) => {
+    const handleForceRun = (jobId: string) => {
         forceRunMutation.mutate(jobId);
     };
 

@@ -5,7 +5,7 @@ export type AxisName = 'x' | 'y' | 'z' | 'g' | 'door';
 export type ThermalBankName = 'nest' | 'lid' | 'pedestal';
 export type ChillerBankName = 'rc' | 'oc';
 
-type BioXpPayload = Record<string, any>;
+type BioXpPayload = Record<string, UntypedApiValue>;
 
 export interface BioXpStatus {
     status: string;
@@ -21,7 +21,7 @@ export interface BioXpStatus {
         status_code?: number;
         detail?: unknown;
     } | null;
-    board_status?: Record<string, any> | null;
+    board_status?: Record<string, UntypedApiValue> | null;
     deck_io_snapshot?: Record<string, number | null> | null;
 }
 
@@ -51,10 +51,10 @@ export interface BioXpInterlinkState {
     recommended_url?: string | null;
     reachable?: boolean | null;
     hardware_connected?: boolean | null;
-    maintenance_state?: Record<string, any> | null;
+    maintenance_state?: Record<string, UntypedApiValue> | null;
     last_probe_at?: string | null;
-    last_status?: Record<string, any> | null;
-    last_error?: Record<string, any> | null;
+    last_status?: Record<string, UntypedApiValue> | null;
+    last_error?: Record<string, UntypedApiValue> | null;
     lifecycle_action?: string | null;
     control_mode?: string;
     runtime_note?: string;
@@ -63,7 +63,7 @@ export interface BioXpInterlinkState {
 
 export interface AxisStatus {
     axis: string;
-    preset: Record<string, any>;
+    preset: Record<string, UntypedApiValue>;
     status: {
         position?: { position: number | null; ok: boolean };
         speed?: { speed: number | null; ok: boolean };
@@ -129,22 +129,22 @@ export interface MotionArtifactBundle {
 
 export interface AxisMotionResult {
     axis: AxisName | string;
-    board_status?: Record<string, any> | null;
-    interlock?: Record<string, any> | null;
-    prep?: Record<string, any> | null;
+    board_status?: Record<string, UntypedApiValue> | null;
+    interlock?: Record<string, UntypedApiValue> | null;
+    prep?: Record<string, UntypedApiValue> | null;
     prep_policy?: MotionPrepPolicy | null;
     motion_truth?: MotionTruth | null;
     artifact_bundle?: MotionArtifactBundle | null;
-    motion_profile?: Record<string, any> | null;
+    motion_profile?: Record<string, UntypedApiValue> | null;
     position_before?: { position?: number | null; ok?: boolean } | null;
     position_after?: { position?: number | null; ok?: boolean } | null;
     position_delta?: number | null;
     target_position?: number | null;
-    switch_activity_before?: Record<string, any> | null;
-    switch_activity_after?: Record<string, any> | null;
-    move?: Record<string, any> | null;
-    wait?: Record<string, any> | null;
-    home?: Record<string, any> | null;
+    switch_activity_before?: Record<string, UntypedApiValue> | null;
+    switch_activity_after?: Record<string, UntypedApiValue> | null;
+    move?: Record<string, UntypedApiValue> | null;
+    wait?: Record<string, UntypedApiValue> | null;
+    home?: Record<string, UntypedApiValue> | null;
     dry_run?: boolean;
     skipped_hardware_io?: boolean;
     message?: string | null;
@@ -159,15 +159,15 @@ export interface MotionArtifactOptions {
 
 export interface MotionPowerStatus {
     hardware_connected?: boolean;
-    board_status?: Record<string, any> | null;
+    board_status?: Record<string, UntypedApiValue> | null;
     deck_io_snapshot?: Record<string, number | null> | null;
     rail_24v?: {
         raw?: number | null;
         no24v?: boolean | null;
-        ack?: Record<string, any> | null;
+        ack?: Record<string, UntypedApiValue> | null;
     } | null;
-    motion_arm?: Record<string, any> | null;
-    latch_override?: Record<string, any> | null;
+    motion_arm?: Record<string, UntypedApiValue> | null;
+    latch_override?: Record<string, UntypedApiValue> | null;
 }
 
 export type GantryAxisName = Extract<AxisName, 'x' | 'y' | 'z'>;
@@ -180,7 +180,7 @@ export interface MotionAxisCurrentPayload {
 
 export interface MotionAxisCurrentResponse {
     ok: boolean;
-    axes: Partial<Record<GantryAxisName, Record<string, any>>>;
+    axes: Partial<Record<GantryAxisName, Record<string, UntypedApiValue>>>;
     current_param_bounds?: string;
     motion_commanded?: boolean;
 }
@@ -199,7 +199,7 @@ export interface CameraSnapshotResponse {
 
 export interface CameraDevicesResponse {
     ok: boolean;
-    rows: Array<Record<string, any>>;
+    rows: Array<Record<string, UntypedApiValue>>;
     preferred_device?: string | null;
 }
 
@@ -235,7 +235,7 @@ export interface CameraControlWriteResponse {
     device: string;
     error?: string | null;
     stream_active?: boolean;
-    stream_state?: Record<string, any>;
+    stream_state?: Record<string, UntypedApiValue>;
 }
 
 export interface CameraStreamOptions {
@@ -288,7 +288,7 @@ export interface BioXpOperationCapabilities {
     linkage_url?: string | null;
     linkage_configured?: boolean;
     robot_openapi_reachable?: boolean;
-    openapi_error?: Record<string, any> | null;
+    openapi_error?: Record<string, UntypedApiValue> | null;
     operations?: Record<string, {
         available?: boolean;
         required_routes?: Record<string, boolean>;
@@ -303,7 +303,7 @@ export interface BioXpOperationReadiness {
     linkage_url?: string | null;
     runtime_reachable?: boolean;
     hardware_connected?: boolean;
-    layers?: Record<string, any>;
+    layers?: Record<string, UntypedApiValue>;
     notes?: string[];
 }
 
@@ -315,9 +315,9 @@ export interface BioXpOperationReport {
     operator?: string;
     physical_confirmation_required?: boolean;
     truth_level?: string;
-    before?: Record<string, any>;
-    actions?: Array<Record<string, any>>;
-    after?: Record<string, any>;
+    before?: Record<string, UntypedApiValue>;
+    actions?: Array<Record<string, UntypedApiValue>>;
+    after?: Record<string, UntypedApiValue>;
     notes?: string[];
 }
 
@@ -330,12 +330,12 @@ export interface BioXpOperationPayload extends BioXpPayload {
     steps_abs?: number;
 }
 
-export type OemStatusPayload = Record<string, any>;
+export type OemStatusPayload = Record<string, UntypedApiValue>;
 
 export interface MotionReferenceStatus {
     ok?: boolean;
     axes?: string[];
-    rows?: Record<string, Record<string, any>>;
+    rows?: Record<string, Record<string, UntypedApiValue>>;
     state_path?: string;
     generated_at?: string;
     error?: string | null;
@@ -347,7 +347,7 @@ export interface MotionReferenceMarkPayload {
     reason?: string;
     operator?: string;
     origin_position_steps?: number | null;
-    metadata?: Record<string, any>;
+    metadata?: Record<string, UntypedApiValue>;
 }
 
 export interface LiquidLocation {
@@ -370,7 +370,7 @@ export interface LiquidCommandPayload {
     air_gap_ul?: number | null;
     blow_out?: boolean;
     operator?: string;
-    metadata?: Record<string, any>;
+    metadata?: Record<string, UntypedApiValue>;
 }
 
 export interface LiquidStatus {
@@ -385,15 +385,15 @@ export interface LiquidStatus {
     software_tip_loaded?: boolean;
     pressure_profile?: string;
     last_command?: string | null;
-    hardware_tip_status?: Record<string, any> | null;
-    hardware_pressure?: Record<string, any> | null;
+    hardware_tip_status?: Record<string, UntypedApiValue> | null;
+    hardware_pressure?: Record<string, UntypedApiValue> | null;
     hardware_truth_level?: string;
-    driver_result?: Record<string, any> | null;
-    preflight?: Record<string, any> | null;
+    driver_result?: Record<string, UntypedApiValue> | null;
+    preflight?: Record<string, UntypedApiValue> | null;
     error?: string | null;
 }
 
-export type LiquidCommandResponse = LiquidStatus & Record<string, any>;
+export type LiquidCommandResponse = LiquidStatus & Record<string, UntypedApiValue>;
 
 export interface CameraStreamState {
     ok?: boolean;
@@ -401,19 +401,19 @@ export interface CameraStreamState {
     busy?: boolean;
     device?: string | null;
     pid?: number | null;
-    stream?: Record<string, any> | null;
-    reset_provenance?: Record<string, any> | null;
+    stream?: Record<string, UntypedApiValue> | null;
+    reset_provenance?: Record<string, UntypedApiValue> | null;
     error?: string | null;
 }
 
-export type VisionCommandPayload = Record<string, any>;
-export type VisionCommandResponse = Record<string, any>;
+export type VisionCommandPayload = Record<string, UntypedApiValue>;
+export type VisionCommandResponse = Record<string, UntypedApiValue>;
 
 export type DaemonStatus = RuntimeStatus;
 
 export interface ProtocolCompilePayload {
     source_type?: 'native' | 'oem_xml';
-    document?: Record<string, any>;
+    document?: Record<string, UntypedApiValue>;
     xml_path?: string;
 }
 
@@ -425,7 +425,7 @@ export interface ProtocolJobSummary {
     source_type?: string;
     created_at?: string;
     updated_at?: string;
-    pending_review?: Record<string, any> | null;
+    pending_review?: Record<string, UntypedApiValue> | null;
 }
 
 export interface ProtocolJobBundle {
@@ -437,21 +437,21 @@ export interface ProtocolJobBundle {
     protocol: {
         source_type: string;
         source_path?: string | null;
-        coverage?: Record<string, any>;
-        experiment?: Record<string, any>;
-        inventory?: Record<string, any>;
-        document: Record<string, any>;
+        coverage?: Record<string, UntypedApiValue>;
+        experiment?: Record<string, UntypedApiValue>;
+        inventory?: Record<string, UntypedApiValue>;
+        document: Record<string, UntypedApiValue>;
     };
     execution: {
         dry_run: boolean;
-        runtime_state: Record<string, any>;
+        runtime_state: Record<string, UntypedApiValue>;
     };
     operator?: {
         manual_review_required?: boolean;
-        pending_review?: Record<string, any> | null;
-        reviews?: Array<Record<string, any>>;
+        pending_review?: Record<string, UntypedApiValue> | null;
+        reviews?: Array<Record<string, UntypedApiValue>>;
     };
-    artifacts?: Record<string, any>;
+    artifacts?: Record<string, UntypedApiValue>;
 }
 
 const invalidateBioXp = (queryClient: ReturnType<typeof useQueryClient>) => {
@@ -528,7 +528,7 @@ export const useBioXpInterlinkDiagnostics = () => {
 
 export const useBioXpRuntimeReset = () => {
     const queryClient = useQueryClient();
-    return useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest>({
+    return useMutation<Record<string, UntypedApiValue>, Error, BioXpInterlinkActionRequest>({
         mutationFn: async (payload) => {
             const res = await api.post('/api/bioxp/interlink/runtime-reset', payload);
             return res.data;
@@ -539,7 +539,7 @@ export const useBioXpRuntimeReset = () => {
 
 export const useBioXpRobotReboot = () => {
     const queryClient = useQueryClient();
-    return useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest>({
+    return useMutation<Record<string, UntypedApiValue>, Error, BioXpInterlinkActionRequest>({
         mutationFn: async (payload) => {
             const res = await api.post('/api/bioxp/interlink/robot-reboot', payload);
             return res.data;
@@ -549,7 +549,7 @@ export const useBioXpRobotReboot = () => {
 };
 
 export const useBioXpInterlinkLogs = () =>
-    useMutation<Record<string, any>, Error, BioXpInterlinkActionRequest | void>({
+    useMutation<Record<string, UntypedApiValue>, Error, BioXpInterlinkActionRequest | void>({
         mutationFn: async (payload = {}) => {
             const res = await api.post('/api/bioxp/interlink/logs', payload);
             return res.data;
@@ -1039,6 +1039,43 @@ export const useMotionArmStrictStartup = () => {
     });
 };
 
+export type OemMotionModePayload = {
+    operator?: string;
+    operator_ack?: string;
+    run_homing?: boolean;
+    dry_run?: boolean;
+    capture_bundle?: boolean;
+    source?: string;
+    [key: string]: UntypedApiValue;
+};
+
+const OEM_MOTION_MODE_ROUTES: Record<'home_xy' | 'rehome' | 'initialize_motion', string> = {
+    home_xy: '/api/bioxp/motion/oem/home_xy',
+    rehome: '/api/bioxp/motion/oem/rehome',
+    initialize_motion: '/api/bioxp/motion/oem/initialize_motion',
+};
+
+const useOemMotionMode = (mode: 'home_xy' | 'rehome' | 'initialize_motion', timeout_s?: number) => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpPayload, Error, OemMotionModePayload | undefined>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'oem', mode),
+        mutationFn: async (payload = {}) => {
+            const res = await api.post(OEM_MOTION_MODE_ROUTES[mode], {
+                operator: 'bms-cockpit',
+                source: `bms-oem-${mode}`,
+                timeout_s,
+                ...payload,
+            });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useOemHomeXY = () => useOemMotionMode('home_xy', 120.0);
+export const useOemRehome = () => useOemMotionMode('rehome', 180.0);
+export const useOemInitializeMotion = () => useOemMotionMode('initialize_motion', 180.0);
+
 export const useMotionHardReset = () => {
     const queryClient = useQueryClient();
     return useMutation({
@@ -1069,6 +1106,8 @@ export const useMoveRelative = () => {
         axis: AxisName;
         steps: number;
         wait_timeout_s?: number;
+        speed?: number;
+        acc?: number;
         reuse_prepared?: boolean;
         capture_bundle?: boolean;
         dry_run_bundle?: boolean;
@@ -1080,6 +1119,8 @@ export const useMoveRelative = () => {
             axis,
             steps,
             wait_timeout_s = 15.0,
+            speed,
+            acc,
             reuse_prepared = false,
             capture_bundle = false,
             dry_run_bundle = false,
@@ -1090,6 +1131,8 @@ export const useMoveRelative = () => {
                 axis,
                 steps,
                 wait_timeout_s,
+                speed,
+                acc,
                 reuse_prepared,
                 capture_bundle,
                 dry_run_bundle,
@@ -1108,13 +1151,15 @@ export const useMoveRelative = () => {
 
 export const useMoveAbsolute = () => {
     const queryClient = useQueryClient();
-    return useMutation<AxisMotionResult, Error, { axis: AxisName; position_steps: number } & MotionArtifactOptions>({
+    return useMutation<AxisMotionResult, Error, { axis: AxisName; position_steps: number; speed?: number; acc?: number } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'absolute'),
-        mutationFn: async ({ axis, position_steps, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
+        mutationFn: async ({ axis, position_steps, speed, acc, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
             const res = await api.post('/api/bioxp/motion/axis/absolute', {
                 axis,
                 position_steps,
                 wait_timeout_s: 60.0,
+                speed,
+                acc,
                 capture_bundle,
                 dry_run_bundle,
                 operator_note,
@@ -1130,16 +1175,21 @@ export const useMoveAbsolute = () => {
     });
 };
 
-export const useHomeAxis = () => {
+const invalidateAxisMotion = (queryClient: ReturnType<typeof useQueryClient>, axis: AxisName) => {
+    queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', axis] });
+    queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
+    queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
+};
+
+export const useZeroAxis = () => {
     const queryClient = useQueryClient();
-    return useMutation<AxisMotionResult, Error, { axis: AxisName } & MotionArtifactOptions>({
-        mutationKey: bioxpHardwareMutationKey('motion', 'home-to-zero'),
-        mutationFn: async ({ axis, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
-            // Compatibility-safe operator command: return to controller coordinate 0.
-            // True OEM switch-search homing remains available at /motion/axis/home but is not this UI button.
+    return useMutation<AxisMotionResult, Error, { axis: AxisName; speed?: number } & MotionArtifactOptions>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'zero'),
+        mutationFn: async ({ axis, speed, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
             const res = await api.post('/api/bioxp/motion/axis/zero', {
                 axis,
                 wait_timeout_s: 60.0,
+                speed,
                 capture_bundle,
                 dry_run_bundle,
                 operator_note,
@@ -1147,11 +1197,27 @@ export const useHomeAxis = () => {
             });
             return res.data;
         },
-        onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', variables.axis] });
-            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
-            queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
-        }
+        onSuccess: (_, variables) => invalidateAxisMotion(queryClient, variables.axis)
+    });
+};
+
+export const useHomeAxis = () => {
+    const queryClient = useQueryClient();
+    return useMutation<AxisMotionResult, Error, { axis: AxisName; speed?: number } & MotionArtifactOptions>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'switch-home'),
+        mutationFn: async ({ axis, speed, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
+            const res = await api.post('/api/bioxp/motion/axis/home', {
+                axis,
+                timeout_s: 90.0,
+                speed,
+                capture_bundle,
+                dry_run_bundle,
+                operator_note,
+                snapshot_refs,
+            });
+            return res.data;
+        },
+        onSuccess: (_, variables) => invalidateAxisMotion(queryClient, variables.axis)
     });
 };
 

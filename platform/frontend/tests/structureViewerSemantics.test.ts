@@ -242,7 +242,7 @@ test('ConforNets confidence cards surface scalar confidence, error, and landscap
                     sample_semantics: 'independent_generated_conformer_sample',
                 },
             },
-        } as any,
+        } as UntypedApiValue,
     });
 
     assert.deepEqual(cards.map((card) => [card.label, card.value, card.decimals]), [
@@ -301,7 +301,7 @@ test('ConforNets chain id is extracted from request metadata for residue color f
                     chain_id: 'B',
                 },
             },
-        } as any),
+        } as UntypedApiValue),
         'B',
     );
     assert.equal(
@@ -313,7 +313,7 @@ test('ConforNets chain id is extracted from request metadata for residue color f
                     },
                 },
             },
-        } as any),
+        } as UntypedApiValue),
         'C',
     );
 });
@@ -330,7 +330,7 @@ test('ConforNets scalar pLDDT can drive a uniform residue color fallback when pe
                 full_confidence_tensor_count: 0,
             },
         },
-    } as any;
+    } as UntypedApiValue;
     const colorForValue = (value: number) => ({ r: Math.round(value), g: 0, b: 0 });
 
     assert.equal(getConforNetsScalarPlddt(selectedDesign), 76.3321);
@@ -365,7 +365,7 @@ test('ConforNets scalar pLDDT fallback is not forced when full per-residue confi
                 full_confidence_tensor_count: 4,
             },
         },
-    } as any;
+    } as UntypedApiValue;
     const colorForValue = (value: number) => ({ r: Math.round(value), g: 0, b: 0 });
 
     const colorMap = buildPlddtResidueColorMap({
@@ -391,12 +391,12 @@ test('ConforNets scalar pLDDT fallback is not forced when full per-residue confi
 });
 
 test('ConforNets detection uses artifact, provenance, and nested sample metadata', () => {
-    assert.equal(isConforNetsDesign({ artifact_group: 'confornets' } as any), true);
-    assert.equal(isConforNetsDesign({ provenance: { artifact_group: 'confornets' } } as any), true);
-    assert.equal(isConforNetsDesign({ provenance: { model_id: 'confornets_experimental' } } as any), true);
-    assert.equal(isConforNetsDesign({ confidence_metrics: { confornets_sample: { frame_index: 4 } } } as any), true);
-    assert.equal(isConforNetsDesign({ name: 'cn_00009_sample_9' } as any), true);
-    assert.equal(isConforNetsDesign({ name: 'variant_001_model_0' } as any), false);
+    assert.equal(isConforNetsDesign({ artifact_group: 'confornets' } as UntypedApiValue), true);
+    assert.equal(isConforNetsDesign({ provenance: { artifact_group: 'confornets' } } as UntypedApiValue), true);
+    assert.equal(isConforNetsDesign({ provenance: { model_id: 'confornets_experimental' } } as UntypedApiValue), true);
+    assert.equal(isConforNetsDesign({ confidence_metrics: { confornets_sample: { frame_index: 4 } } } as UntypedApiValue), true);
+    assert.equal(isConforNetsDesign({ name: 'cn_00009_sample_9' } as UntypedApiValue), true);
+    assert.equal(isConforNetsDesign({ name: 'variant_001_model_0' } as UntypedApiValue), false);
 });
 
 test('ConforNets sample index prefers explicit frame metadata over name parsing', () => {
@@ -404,11 +404,11 @@ test('ConforNets sample index prefers explicit frame metadata over name parsing'
         getConforNetsSampleIndex({
             name: 'cn_00009_sample_9',
             confidence_metrics: { confornets_sample: { frame_index: 3 } },
-        } as any),
+        } as UntypedApiValue),
         3,
     );
-    assert.equal(getConforNetsSampleIndex({ name: 'cn_00009_sample_9' } as any), 9);
-    assert.equal(getConforNetsSampleIndex({ name: 'other' } as any), null);
+    assert.equal(getConforNetsSampleIndex({ name: 'cn_00009_sample_9' } as UntypedApiValue), 9);
+    assert.equal(getConforNetsSampleIndex({ name: 'other' } as UntypedApiValue), null);
 });
 
 test('ConforNets conformer navigation exposes slider and step targets', () => {
@@ -416,7 +416,7 @@ test('ConforNets conformer navigation exposes slider and step targets', () => {
         { id: 'sample-0', job_id: 'job-a', name: 'cn_00000_sample_0', artifact_group: 'confornets' },
         { id: 'sample-1', job_id: 'job-a', name: 'cn_00001_sample_1', artifact_group: 'confornets' },
         { id: 'sample-2', job_id: 'job-a', name: 'cn_00002_sample_2', artifact_group: 'confornets' },
-    ] as any[], 'sample-1');
+    ] as UntypedApiValue[], 'sample-1');
 
     assert.ok(conformerSet);
     const navigation = buildConforNetsConformerNavigation(conformerSet);
@@ -439,7 +439,7 @@ test('ConforNets overlay ids are de-duplicated, valid, sorted, and never include
         { id: 'sample-0', job_id: 'job-a', name: 'cn_00000_sample_0', artifact_group: 'confornets' },
         { id: 'sample-1', job_id: 'job-a', name: 'cn_00001_sample_1', artifact_group: 'confornets' },
         { id: 'sample-2', job_id: 'job-a', name: 'cn_00002_sample_2', artifact_group: 'confornets' },
-    ] as any[], 'sample-1');
+    ] as UntypedApiValue[], 'sample-1');
 
     assert.ok(conformerSet);
     assert.deepEqual(

@@ -117,7 +117,7 @@ function findORFs(sequence: string, minLength: number = 100): ORF[] {
     const stopCodons = ['TAA', 'TAG', 'TGA'];
 
     // Search all 6 reading frames (3 forward, 3 reverse)
-    for (let strand of [1, -1] as const) {
+    for (const strand of [1, -1] as const) {
         const workSeq = strand === 1 ? seq : reverseComplementSequence(seq, 'dna');
 
         for (let frame = 0; frame < 3; frame++) {
@@ -273,7 +273,7 @@ export function SearchPanel({
 
         // Sort by position
         return results.sort((a, b) => a.start - b.start);
-    }, [searchQuery, sequenceData.sequence, searchBothStrands, caseSensitive, useRegex]);
+    }, [searchQuery, caseSensitive, sequenceData.sequence, sequenceData.circular, useRegex, searchBothStrands, sequenceType]);
 
     useEffect(() => {
         if (activeTab !== 'search') return;

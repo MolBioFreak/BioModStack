@@ -28,9 +28,40 @@ test('BioXP shell and page labels point to Handler Controls, not legacy harness/
     assert.doesNotMatch(layoutSource, /BioXP Control Surface/);
 });
 
-test('default Handler Controls tab contains readback and OEM surfaces, not commissioning action panels', () => {
+test('default Handler Controls tab contains readback and live motion/grabber surfaces, not commissioning action panels', () => {
     const controlsTab = sourceBetween(cockpitSource, "{activeTab === 'controls'", "{activeTab === 'camera'");
+    const liveMotionPanel = sourceBetween(cockpitSource, 'const liveXyzMotionPanel = (', 'const liquidPanel = (');
+    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
 
+    assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
+    assert.match(liveMotionPanel, /Live X\/Y\/Z \+ Grabber Motion/);
+    assert.doesNotMatch(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.doesNotMatch(cockpitSource, />\s*OEM HomeXY\s*</);
+    assert.doesNotMatch(cockpitSource, />\s*Rehome Diagnostic \/ No Homing\s*</);
+    assert.doesNotMatch(cockpitSource, />\s*OEM Rehome ACK\s*</);
+    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion \/ No Homing\s*</);
+    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion ACK\s*</);
+    assert.equal(cockpitSource.match(/Arm Motors No Homing/g)?.length ?? 0, 1);
+    assert.match(liveMotionPanel, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.match(axisControls, /Speed/);
+    assert.match(axisControls, /Acc/);
+    assert.match(axisControls, /SliderNumberControl/);
+    assert.match(cockpitSource, /aria-label=\{`\$\{label\} value`\}/);
+    assert.match(cockpitSource, /inputMode="numeric"/);
+    assert.match(axisControls, /Absolute target/);
+    assert.match(axisControls, /boundedAbsolutePosition/);
+    assert.match(axisControls, /boundedStepMagnitude/);
+    assert.match(axisControls, /clampRelativeStepsForDirection/);
+    assert.match(cockpitSource, /AXIS_MOTION_SLIDER_PROFILES/);
+    assert.match(cockpitSource, /stepMax: 91919/);
+    assert.match(cockpitSource, /stepMax: 95247/);
+    assert.match(cockpitSource, /stepMax: 160000/);
+    assert.match(cockpitSource, /stepMax: 15000/);
+    assert.doesNotMatch(axisControls, /Capture validation bundle/);
+    assert.doesNotMatch(axisControls, /Dry-run bundle only/);
+    assert.doesNotMatch(axisControls, /Operator note for supervised validation/);
+    assert.doesNotMatch(axisControls, /Snapshot refs or image paths/);
+    assert.doesNotMatch(liveMotionPanel, /These controls can physically move the robot/);
     assert.match(controlsTab, /\{oemReadbackPanel\}/);
     assert.match(controlsTab, /\{liquidPanel\}/);
     assert.match(controlsTab, /\{referencePanel\}/);
@@ -72,6 +103,10 @@ test('frontend client still exposes all required proxy families while UI gates r
         '/api/bioxp/liquid/status',
         '/api/bioxp/motion/axis/relative',
         '/api/bioxp/motion/axis/zero',
+        '/api/bioxp/motion/axis/home',
+        '/api/bioxp/motion/oem/home_xy',
+        '/api/bioxp/motion/oem/rehome',
+        '/api/bioxp/motion/oem/initialize_motion',
         '/api/bioxp/motion/power/enable',
         '/api/bioxp/protocol/execute',
     ]) {
@@ -91,21 +126,30 @@ test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw r
     assert.doesNotMatch(oemPanel, /recordOemAction\('PrepareToRunJob'/);
 });
 
-test('Home-to-zero controls use the zero route and raw switch telemetry does not software-block motion', () => {
+test('Zero and Switch Home controls are separate and raw switch telemetry does not software-block motion', () => {
     const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
     const cameraAxisControls = sourceBetween(cockpitSource, 'const CameraAxisQuickControls = ({', 'type CameraHoldJogCommand = {');
     const axisDirectionHelper = sourceBetween(cockpitSource, 'const getAxisDirectionState = (', 'const hasMutationKeyPrefix =');
 
     assert.match(clientSource, /\/api\/bioxp\/motion\/axis\/zero/);
-    assert.doesNotMatch(clientSource, /api\.post\('\/api\/bioxp\/motion\/axis\/home'/);
+    assert.match(clientSource, /api\.post\('\/api\/bioxp\/motion\/axis\/home'/);
+    assert.match(clientSource, /export const useZeroAxis/);
+    assert.match(clientSource, /export const useHomeAxis/);
+    assert.match(clientSource, /export const useOemHomeXY/);
+    assert.match(clientSource, /export const useOemRehome/);
+    assert.match(clientSource, /export const useOemInitializeMotion/);
     assert.match(axisDirectionHelper, /blocked: false/);
     assert.match(axisControls, /const negativeMoveBlocked = false/);
     assert.match(axisControls, /const positiveMoveBlocked = false/);
-    assert.match(axisControls, /const homeToZeroBlocked = false/);
-    assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| homeToZeroBlocked\}/);
+    assert.match(axisControls, /const zeroToControllerBlocked = false/);
+    assert.match(axisControls, /const switchHomeBlocked = false/);
+    assert.match(axisControls, /Zero → 0/);
+    assert.match(axisControls, /Switch Home/);
+    assert.match(axisControls, /disabled=\{!enabled \|\| zeroAxis\.isPending \|\| zeroToControllerBlocked\}/);
+    assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
     assert.match(axisControls, /No frontend motion block is applied/);
-    assert.match(cameraAxisControls, /const homeToZeroBlocked = false/);
-    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending\}/);
+    assert.match(cameraAxisControls, /const zeroToControllerBlocked = false/);
+    assert.match(cameraAxisControls, /Zero → 0/);
     assert.match(cameraAxisControls, /telemetry only/);
     assert.doesNotMatch(axisControls, /limitConflictBlocked/);
     assert.doesNotMatch(axisControls, /Home → 0 blocked/);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInputPresets, fetchPresetDirectories } from '../lib/api';
 
@@ -51,11 +51,11 @@ export function StructureInput({
         enabled: enableDirectory,
     });
 
-    const presets = presetsData?.data ?? [];
-    const directories = directoriesData?.data ?? [];
+    const presets = useMemo(() => presetsData?.data ?? [], [presetsData?.data]);
+    const directories = useMemo(() => directoriesData?.data ?? [], [directoriesData?.data]);
 
     // Group presets by category
-    const groupedPresets = presets.reduce((groups: Record<string, any[]>, preset: any) => {
+    const groupedPresets = presets.reduce((groups: Record<string, UntypedApiValue[]>, preset: UntypedApiValue) => {
         const cat = preset.category || 'General';
         if (!groups[cat]) groups[cat] = [];
         groups[cat].push(preset);
@@ -70,7 +70,7 @@ export function StructureInput({
         }
 
         // Try to parse chain info from the selected preset
-        const preset = presets.find((p: any) => p.path === value);
+        const preset = presets.find((p: UntypedApiValue) => p.path === value);
         if (preset?.chains) {
             setParsedChains(preset.chains);
             onChainParsed?.(preset.chains);
@@ -101,10 +101,10 @@ export function StructureInput({
                 setParsedChains([]);
             }
         }, 300);
-    }, [value, presets]);
+    }, [value, presets, onChainParsed]);
 
     // Handle multi-select toggle
-    const togglePreset = (preset: any) => {
+    const togglePreset = (preset: UntypedApiValue) => {
         const newSelected = new Set(selectedIds);
         if (newSelected.has(preset.id)) {
             newSelected.delete(preset.id);
@@ -113,13 +113,13 @@ export function StructureInput({
         }
         setSelectedIds(newSelected);
         const paths = presets
-            .filter((p: any) => newSelected.has(p.id))
-            .map((p: any) => p.path)
+            .filter((p: UntypedApiValue) => newSelected.has(p.id))
+            .map((p: UntypedApiValue) => p.path)
             .join(',');
         onChange(paths);
     };
 
-    const selectedPreset = presets.find((p: any) => p.path === value);
+    const selectedPreset = presets.find((p: UntypedApiValue) => p.path === value);
 
     // Mode tabs
     const modes = [
@@ -138,7 +138,7 @@ export function StructureInput({
                     {modes.map(m => (
                         <button
                             key={m.id}
-                            onClick={() => setMode(m.id as any)}
+                            onClick={() => setMode(m.id as UntypedApiValue)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${mode === m.id
                                 ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/25'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-300'
@@ -162,7 +162,7 @@ export function StructureInput({
                                         <span className="h-px bg-slate-700 flex-1"></span>
                                     </div>
                                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                        {(catPresets as any[]).map((preset: any) => (
+                                        {(catPresets as UntypedApiValue[]).map((preset: UntypedApiValue) => (
                                             <button
                                                 key={preset.id}
                                                 onClick={() => onChange(preset.path)}
@@ -247,8 +247,8 @@ export function StructureInput({
                                         setSelectedIds(new Set());
                                         onChange('');
                                     } else {
-                                        setSelectedIds(new Set(presets.map((p: any) => p.id)));
-                                        onChange(presets.map((p: any) => p.path).join(','));
+                                        setSelectedIds(new Set(presets.map((p: UntypedApiValue) => p.id)));
+                                        onChange(presets.map((p: UntypedApiValue) => p.path).join(','));
                                     }
                                 }}
                                 className="text-xs text-cyan-400 hover:text-cyan-300"
@@ -257,7 +257,7 @@ export function StructureInput({
                             </button>
                         </div>
                         <div className="max-h-64 overflow-y-auto space-y-1 bg-slate-800/50 rounded-lg p-2">
-                            {presets.map((preset: any) => (
+                            {presets.map((preset: UntypedApiValue) => (
                                 <label
                                     key={preset.id}
                                     className="flex items-center gap-3 p-2 hover:bg-slate-700/50 rounded cursor-pointer"
@@ -284,7 +284,7 @@ export function StructureInput({
                             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm"
                         >
                             <option value="">Select a batch directory...</option>
-                            {directories.map((dir: any) => (
+                            {directories.map((dir: UntypedApiValue) => (
                                 <option key={dir.id} value={dir.path}>{dir.name}</option>
                             ))}
                         </select>

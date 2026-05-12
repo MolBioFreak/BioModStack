@@ -608,7 +608,7 @@ export function MolecularInputModal({
                     {activeTab === 'demos' && (
                         <div className="space-y-3">
                             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-100">
-                                These demos are imported from public Addgene browse-sequence pages for fast testing inside the toolkit. Treat them as external reference records and verify provenance before any real build decision.
+                                These demos are imported from public Addgene browse-sequence pages for fast testing inside the toolkit. Treat them as external reference records and verify provenance before unknown real build decision.
                             </div>
                             <div className="grid gap-3 lg:grid-cols-2">
                             {demos.map((demo) => (

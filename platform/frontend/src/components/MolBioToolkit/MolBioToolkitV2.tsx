@@ -1,12 +1,13 @@
 /**
  * MolBioToolkit - Seqviz-based sequence editor
- * 
+ *
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
-import { SequenceViewer, DEFAULT_VISIBILITY, type ColorPaletteName } from './SequenceViewer';
+import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
+import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
 import { createHistoryState, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
@@ -264,7 +265,7 @@ function normalizeFeatureList(features: Feature[]): Feature[] {
     return dedupeFeatures(features);
 }
 
-function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, any>, fallbackId: string): Feature {
+function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, UntypedApiValue>, fallbackId: string): Feature {
     const rawSegments = Array.isArray(feature.segments)
         ? feature.segments
         : Array.isArray(feature.locations)
@@ -272,7 +273,7 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, any>,
             : [];
 
     const segments = rawSegments
-        .map((segment: any) => ({
+        .map((segment: UntypedApiValue) => ({
             start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
             end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
         }))
@@ -309,11 +310,11 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, any>,
     };
 }
 
-function normalizePrimerRecord(primer: Partial<Primer> & Record<string, any>, fallbackId: string): Primer {
+function normalizePrimerRecord(primer: Partial<Primer> & Record<string, UntypedApiValue>, fallbackId: string): Primer {
     type PrimerSite = NonNullable<Primer['sites']>[number];
     const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
     const sites: PrimerSite[] = rawSites
-        .map((site: any): PrimerSite | null => {
+        .map((site: UntypedApiValue): PrimerSite | null => {
             const rawStart = Number(site?.start ?? site?.bindingSiteStart ?? primer.start ?? 0);
             const rawEnd = Number(site?.end ?? site?.bindingSiteEnd ?? primer.end ?? 0);
             const start = site?.bindingSiteStart != null && site?.start == null ? Math.max(0, rawStart - 1) : rawStart;
@@ -366,11 +367,11 @@ function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceDat
         circular: seq.is_circular,
         sequenceType: seq.sequence_type,
         features: normalizeFeatureList((seq.features || []).map((feature: Feature, index: number) => normalizeFeatureRecord(
-            feature as Feature & Record<string, any>,
+            feature as Feature & Record<string, UntypedApiValue>,
             feature.id || `loaded_feature_${index}`,
         ))),
         primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
-            primer as Primer & Record<string, any>,
+            primer as Primer & Record<string, UntypedApiValue>,
             primer.id || `loaded_primer_${index}`,
         )),
         translations: [],
@@ -952,8 +953,8 @@ export function MolBioToolkitV2() {
                 sequence: normalizedSequence,
                 circular: parsed.circular ?? false,
                 sequenceType: inferredType,
-                features: normalizeFeatureList((parsed.features || []).map((f: any, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
-                primers: (parsed.primers || []).map((p: any, i: number) => normalizePrimerRecord(p, `p_${i}`)),
+                features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
+                primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(p, `p_${i}`)),
                 translations: [],
                 analysisTracks: [],
                 sourceFile: file.name,
@@ -1021,7 +1022,7 @@ export function MolBioToolkitV2() {
             setIsDirty(false);
             loadLibrary();
         }
-    }, [selectedSequenceId, sequenceData, updateSequence, createSequence, loadLibrary]);
+    }, [sequenceData.sequence, sequenceData.sequenceType, sequenceData.name, sequenceData.description, sequenceData.circular, sequenceData.features, sequenceData.primers, sequenceData.analysisTracks, sequenceData.organism, sequenceData.accession, sequenceData.sourceFile, selectedSequenceId, updateSequence, setSequenceData, createSequence, loadLibrary]);
 
     // Visibility toggle handler
     const handleVisibilityChange = useCallback((key: keyof VisibilityState) => {
@@ -1120,6 +1121,7 @@ export function MolBioToolkitV2() {
     type ResizeHandleSide = 'left' | 'right';
     const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
     const [viewMode, setViewMode] = useState<ViewMode>('both');
+    const effectiveViewMode: ViewMode = sequenceData.circular ? viewMode : 'linear';
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
@@ -1182,7 +1184,7 @@ export function MolBioToolkitV2() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [primerTmSettings.algorithm, sequenceData.sequenceType]);
 
     useEffect(() => {
         if (!primerTmOptions) {
@@ -1326,7 +1328,7 @@ export function MolBioToolkitV2() {
             // Apply fragment filter if enabled
             let filteredFeatures = detectedFeatures;
             if (settings.filterFragments) {
-                filteredFeatures = detectedFeatures.filter((f: any) => !f.is_fragment);
+                filteredFeatures = detectedFeatures.filter((f: UntypedApiValue) => !f.is_fragment);
             }
 
             if (filteredFeatures.length === 0) {
@@ -1346,7 +1348,7 @@ export function MolBioToolkitV2() {
             };
 
             // Convert detected features to our Feature format
-            const newFeatures: Feature[] = filteredFeatures.map((f: any, i: number) => ({
+            const newFeatures: Feature[] = filteredFeatures.map((f: UntypedApiValue, i: number) => ({
                 id: `auto_${Date.now()}_${i}`,
                 name: f.name,
                 type: f.type,
@@ -1710,7 +1712,7 @@ export function MolBioToolkitV2() {
                             isDirty={isDirty}
                             loading={loading}
                             isAnnotating={isAnnotating}
-                            viewMode={viewMode}
+                            viewMode={effectiveViewMode}
                             onViewModeChange={setViewMode}
                             showGCTrack={showGCTrack}
                             onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
@@ -1775,7 +1777,7 @@ export function MolBioToolkitV2() {
                                                 onSelection={handleSelection}
                                                 onContextMenu={handleViewerContextMenu}
                                                 highlightedRegions={highlightedRegions}
-                                                viewMode={viewMode}
+                                                viewMode={effectiveViewMode}
                                                 colorPalette={colorPalette}
                                                 visibleFrames={visibleFrames}
                                             />
@@ -1800,7 +1802,7 @@ export function MolBioToolkitV2() {
                                             onSelection={handleSelection}
                                             onContextMenu={handleViewerContextMenu}
                                             highlightedRegions={highlightedRegions}
-                                            viewMode={viewMode}
+                                            viewMode={effectiveViewMode}
                                             colorPalette={colorPalette}
                                             visibleFrames={visibleFrames}
                                         />

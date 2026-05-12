@@ -91,7 +91,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
     };
 
     // Load template
-    const loadTemplate = (params: any) => {
+    const loadTemplate = (params: UntypedApiValue) => {
         // Skip the useEffect that resets strands on length change
         skipLengthResetRef.current = true;
         setNaType(params.naType || 'dna');
@@ -124,7 +124,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
         } else {
             setPrimerStrand(Array(length).fill(null) as Base[]);
         }
-    }, [length, naType]);
+    }, [enforceWC, length, naType]);
 
     // Update primer when template changes (if WC enforced)
     useEffect(() => {
@@ -157,7 +157,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
         const entries: LigandEntry[] = [];
         const baseId = ligandCount;
 
-        // Template strand (if has any bases)
+        // Template strand (if has unknown bases)
         const templateSeq = templateStrand.filter(b => b !== null).join('');
         if (templateSeq.length > 0) {
             entries.push({
@@ -279,7 +279,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                     <div className="px-6 pb-4 border-b border-slate-700">
                         {savedTemplates.length > 0 ? (
                             <div className="flex flex-wrap gap-2">
-                                {savedTemplates.map((t: any) => (
+                                {savedTemplates.map((t: UntypedApiValue) => (
                                     <div key={t.id} className="flex items-center gap-1 bg-slate-800 rounded-lg pl-3 pr-1 py-1">
                                         <button
                                             onClick={() => loadTemplate(t.params)}
@@ -408,7 +408,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                             value={sequenceText}
                             onChange={(e) => handleSequenceTextChange(e.target.value)}
                             placeholder="Paste sequence: ATCGATCG or AUCGAUCG..."
-                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
                                        text-white font-mono text-sm resize-y min-h-[60px]
                                        focus:ring-2 focus:ring-blue-500 outline-none
                                        placeholder:text-slate-500"

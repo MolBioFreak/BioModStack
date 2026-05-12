@@ -4,7 +4,8 @@
 
 // Main components
 export { MolBioToolkitV2 } from './MolBioToolkitV2';
-export { SequenceViewer, EMPTY_SEQUENCE, DEFAULT_VISIBILITY } from './SequenceViewer';
+export { SequenceViewer } from './SequenceViewer';
+export { EMPTY_SEQUENCE, DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 export { SequenceHeader } from './SequenceHeader';
 export { VisibilityPanel } from './VisibilityPanel';
 export { ExportDropdown } from './ExportDropdown';

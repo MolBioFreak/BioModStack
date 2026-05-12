@@ -35,6 +35,23 @@ def test_core_runtime_scaffold_files_exist() -> None:
     assert missing == []
 
 
+def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM api-base AS api-runtime" in dockerfile
+    assert "BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba" in dockerfile
+    assert "BMS_MICROMAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX}" in dockerfile
+    assert "BMS_PLANNOTATE_ENV=plannotate" in dockerfile
+    assert "https://micro.mamba.pm/api/micromamba/linux-64/latest" in dockerfile
+    assert "micromamba --root-prefix \"${MAMBA_ROOT_PREFIX}\" create" in dockerfile
+    assert "-c conda-forge -c bioconda plannotate" in dockerfile
+    assert '"pandas<3"' in dockerfile
+    assert '"setuptools<81"' in dockerfile
+    assert "streamlit.web.cli" in dockerfile
+    assert ".any(axis=1) #only the rows that are in the columns of hit" in dockerfile
+    assert "plannotate setupdb" in dockerfile
+
+
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 

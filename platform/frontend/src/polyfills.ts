@@ -1,13 +1,16 @@
 import { Buffer } from 'buffer';
 
-// @ts-ignore
+type PolyfilledWindow = Window & typeof globalThis & {
+    global: Window & typeof globalThis;
+    Buffer: typeof Buffer;
+    process: { env: Record<string, string> };
+};
+
 if (typeof window !== 'undefined') {
-    // @ts-ignore
-    window.global = window;
-    // @ts-ignore
-    window.Buffer = Buffer;
-    // @ts-ignore
-    window.process = { env: {} };
+    const polyfilledWindow = window as PolyfilledWindow;
+    polyfilledWindow.global = polyfilledWindow;
+    polyfilledWindow.Buffer = Buffer;
+    polyfilledWindow.process = { env: {} };
 
     // Clean up corrupted localStorage entries from OVE/Teselagen
     // These cause "SyntaxError: JSON.parse: unexpected end of data" warnings

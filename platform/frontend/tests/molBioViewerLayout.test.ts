@@ -136,6 +136,13 @@ test('mol bio toolkit source wires fullscreen and side-panel collapse controls',
     assert.match(source, /onToggleToolPanel/);
 });
 
+test('linear imported constructs force the sequence viewer out of plasmid/circular mode', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /const effectiveViewMode: ViewMode = sequenceData\.circular \? viewMode : 'linear';/);
+    assert.equal((source.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+});
+
 test('sequence header exposes focus and panel collapse actions', () => {
     const source = readFileSync(HEADER_PATH, 'utf8');
 

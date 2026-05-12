@@ -19,8 +19,8 @@ const getErrorMessage = (error: unknown) => {
 
 const actionSummary = (data: unknown) => {
     if (!data || typeof data !== 'object') return null;
-    const record = data as Record<string, any>;
-    const commandResult = record.command_result as Record<string, any> | undefined;
+    const record = data as Record<string, UntypedApiValue>;
+    const commandResult = record.command_result as Record<string, UntypedApiValue> | undefined;
     const pieces = [
         record.action ? String(record.action).toUpperCase() : null,
         typeof record.active === 'boolean' ? `active=${record.active ? 'yes' : 'no'}` : null,

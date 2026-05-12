@@ -13,7 +13,7 @@ export interface PresetSelectorProps {
     enableDirectory?: boolean;    // Show directory mode for PDB type
 }
 
-export function PresetSelector({ presetType, value, onChange, onBrowse, label: _label, placeholder, enableMultiSelect = false, enableDirectory = false }: PresetSelectorProps) {
+export function PresetSelector({ presetType, value, onChange, onBrowse, placeholder, enableMultiSelect = false, enableDirectory = false }: PresetSelectorProps) {
     const { data: presetsData } = useQuery({
         queryKey: ['presets', presetType],
         queryFn: () => fetchInputPresets(presetType),
@@ -33,7 +33,7 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
     // Group presets by category
-    const groupedPresets = presets.reduce((groups: Record<string, any[]>, preset: any) => {
+    const groupedPresets = presets.reduce((groups: Record<string, UntypedApiValue[]>, preset: UntypedApiValue) => {
         const cat = preset.category || 'general';
         if (!groups[cat]) groups[cat] = [];
         groups[cat].push(preset);
@@ -41,14 +41,14 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
     }, {});
 
     // Get display value for the selected preset
-    const selectedPreset = presets.find((p: any) =>
+    const selectedPreset = presets.find((p: UntypedApiValue) =>
         presetType === 'pdb' ? p.path === value :
             presetType === 'contig' ? p.value === value :
                 presetType === 'sequence' ? p.sequence === value : p.id === value
     );
 
     // Handle multi-select toggle
-    const togglePreset = (preset: any) => {
+    const togglePreset = (preset: UntypedApiValue) => {
         const newSelected = new Set(selectedIds);
         if (newSelected.has(preset.id)) {
             newSelected.delete(preset.id);
@@ -59,8 +59,8 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
 
         // Update value with comma-separated paths for multi-select
         const selectedPaths = presets
-            .filter((p: any) => newSelected.has(p.id))
-            .map((p: any) => p.path)
+            .filter((p: UntypedApiValue) => newSelected.has(p.id))
+            .map((p: UntypedApiValue) => p.path)
             .join(',');
         onChange(selectedPaths);
     };
@@ -72,9 +72,9 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
             setSelectedIds(new Set());
             onChange('');
         } else {
-            const allIds = new Set(presets.map((p: any) => p.id));
+            const allIds = new Set(presets.map((p: UntypedApiValue) => p.id));
             setSelectedIds(allIds);
-            onChange(presets.map((p: any) => p.path).join(','));
+            onChange(presets.map((p: UntypedApiValue) => p.path).join(','));
         }
     };
 
@@ -93,7 +93,7 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
                 {availableModes.map(m => (
                     <button
                         key={m.id}
-                        onClick={() => setMode(m.id as any)}
+                        onClick={() => setMode(m.id as UntypedApiValue)}
                         className={`px-2 py-1 rounded transition-colors ${mode === m.id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
                     >
                         {m.label}
@@ -110,7 +110,7 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     >
                         <option value="">{placeholder || 'Select a preset...'}</option>
-                        {presets.map((preset: any) => (
+                        {presets.map((preset: UntypedApiValue) => (
                             <option
                                 key={preset.id}
                                 value={presetType === 'pdb' ? preset.path : presetType === 'contig' ? preset.value : preset.id}
@@ -156,7 +156,7 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
                         {Object.entries(groupedPresets).map(([category, catPresets]) => (
                             <div key={category} className="mb-2">
                                 <div className="text-xs text-slate-400 uppercase tracking-wide mb-1 px-2">{category}</div>
-                                {(catPresets as any[]).map((preset: any) => (
+                                {(catPresets as UntypedApiValue[]).map((preset: UntypedApiValue) => (
                                     <label
                                         key={preset.id}
                                         className="flex items-center gap-2 p-2 hover:bg-slate-800 rounded cursor-pointer"
@@ -186,15 +186,15 @@ export function PresetSelector({ presetType, value, onChange, onBrowse, label: _
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     >
                         <option value="">Select a batch directory...</option>
-                        {directories.map((dir: any) => (
+                        {directories.map((dir: UntypedApiValue) => (
                             <option key={dir.id} value={dir.path}>
                                 {dir.name}
                             </option>
                         ))}
                     </select>
-                    {directories.find((d: any) => d.path === value)?.description && (
+                    {directories.find((d: UntypedApiValue) => d.path === value)?.description && (
                         <p className="text-xs text-slate-500">
-                            {directories.find((d: any) => d.path === value)?.description}
+                            {directories.find((d: UntypedApiValue) => d.path === value)?.description}
                         </p>
                     )}
                     {/* Browse button for custom directory */}

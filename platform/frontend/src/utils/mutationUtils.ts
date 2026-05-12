@@ -52,7 +52,7 @@ export interface MutationLibraryOptions {
 // Parse region string "23-42, 67-72" -> Region objects
 export function parseRegions(input: string): MutationRegion[] {
     if (!input.trim()) return [];
-    
+
     return input.split(',').map((part, idx) => {
         const [start, end] = part.trim().split('-').map(n => parseInt(n));
         if (isNaN(start)) return null;
@@ -132,7 +132,7 @@ export function generateLibrary(
     const allowDeletions = options.allowDeletions ?? false;
     const indelSizes = (options.indelSizes && options.indelSizes.length > 0) ? options.indelSizes : [];
     const indelProbability = Math.max(0, Math.min(1, options.indelProbability ?? 0));
-    
+
     // Get all valid positions from enabled regions
     let validPositions: number[] = [];
     activeRegions.forEach(r => {
@@ -213,8 +213,8 @@ export function generateLibrary(
     for (let i = 0; i < numVariants; i++) {
         const numMutations = pickMutationCount();
         const selectedPositions = new Set<number>();
-        
-        let variantSeq = baseSequence.split('');
+
+        const variantSeq = baseSequence.split('');
         const currentMutations: Mutation[] = [];
 
         let indel: { type: 'insertion' | 'deletion'; position: number; size: number } | null = null;

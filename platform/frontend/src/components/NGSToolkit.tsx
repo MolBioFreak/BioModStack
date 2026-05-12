@@ -1250,7 +1250,8 @@ function parseModkitBedRecords(text: string): ParsedBedRecord[] {
     return rows;
 }
 
-function inferPercentScaleFromBedText(_text: string): number {
+function inferPercentScaleFromBedText(text: string): number {
+    void text;
     // modkit pileup bedMethyl uses column 11 as percent modified (0..100).
     // Keep scale fixed at 1 to avoid 100x inflation when controls have only sub-1% calls.
     return 1;
@@ -1734,9 +1735,9 @@ function resolveIgvReadsTrackHeight(container: HTMLDivElement | null, auxiliaryT
     return Math.max(IGV_READS_TRACK_MIN_HEIGHT_PX, Math.floor(height - reserved - IGV_READS_TRACK_BOTTOM_GUTTER_PX));
 }
 
-function findIgvAlignmentTrack(browser: any): any | null {
+function findIgvAlignmentTrack(browser: UntypedApiValue): UntypedApiValue | null {
     if (!browser || typeof browser.findTracks !== 'function') return null;
-    const tracks = browser.findTracks((track: any) => {
+    const tracks = browser.findTracks((track: UntypedApiValue) => {
         if (!track) return false;
         const type = String(track.type || track.config?.type || '').toLowerCase();
         return type === 'alignment' || Boolean(track.alignmentTrack);
@@ -1748,7 +1749,7 @@ function findIgvAlignmentTrack(browser: any): any | null {
 }
 
 function applyIgvAlignmentOptionsToTrack(
-    track: any,
+    track: UntypedApiValue,
     options: { displayMode: string; colorBy: string; groupBy: string }
 ): void {
     if (!track) return;
@@ -1819,22 +1820,22 @@ function applyIgvAlignmentOptionsToTrack(
     trackView?.repaintViews?.();
 }
 
-function resolveIgvAuxiliaryTrackHeight(browser: any): number {
+function resolveIgvAuxiliaryTrackHeight(browser: UntypedApiValue): number {
     if (!browser || typeof browser.findTracks !== 'function') return 0;
-    const auxTracks = browser.findTracks((track: any) => {
+    const auxTracks = browser.findTracks((track: UntypedApiValue) => {
         if (!track) return false;
         const type = String(track.type || track.config?.type || '').toLowerCase();
         return type !== 'alignment' && type !== 'ruler' && type !== 'ideogram';
     });
     if (!Array.isArray(auxTracks) || auxTracks.length === 0) return 0;
-    return auxTracks.reduce((sum: number, track: any) => {
+    return auxTracks.reduce((sum: number, track: UntypedApiValue) => {
         const height = Number(track?.height ?? track?.config?.height);
         if (!Number.isFinite(height)) return sum + 42;
         return sum + Math.max(20, Math.round(height));
     }, 0);
 }
 
-function resizeIgvAlignmentTrackToContainer(browser: any, container: HTMLDivElement | null): void {
+function resizeIgvAlignmentTrackToContainer(browser: UntypedApiValue, container: HTMLDivElement | null): void {
     const track = findIgvAlignmentTrack(browser);
     if (!track) return;
     const alignmentTrack = track.alignmentTrack || track;
@@ -1988,9 +1989,9 @@ function ensureIgvThemeStyles(container: HTMLDivElement | null): void {
     shadowRoot.appendChild(style);
 }
 
-function patchIgvRulerContrast(browser: any): void {
+function patchIgvRulerContrast(browser: UntypedApiValue): void {
     if (!browser || typeof browser.findTracks !== 'function') return;
-    const tracks = browser.findTracks((track: any) => {
+    const tracks = browser.findTracks((track: UntypedApiValue) => {
         if (!track) return false;
         const type = String(track.type || track.config?.type || '').toLowerCase();
         const idOrName = String(track.id || track.name || '').toLowerCase();
@@ -2006,7 +2007,7 @@ function patchIgvRulerContrast(browser: any): void {
         }
 
         const originalDoDraw = track.doDraw.bind(track);
-        track.doDraw = (args: any) => {
+        track.doDraw = (args: UntypedApiValue) => {
             const context = args?.context;
             if (!context || typeof context.save !== 'function' || typeof context.restore !== 'function') {
                 return originalDoDraw(args);
@@ -2030,14 +2031,14 @@ function patchIgvRulerContrast(browser: any): void {
             context.shadowColor = 'rgba(0, 0, 0, 0.5)';
             context.shadowBlur = 1;
             if (originalFillText) {
-                context.fillText = (...drawArgs: any[]) => {
+                context.fillText = (...drawArgs: UntypedApiValue[]) => {
                     context.fillStyle = textColor;
                     context.font = `600 13px ${fontFamily}`;
                     return originalFillText(...drawArgs);
                 };
             }
             if (originalStrokeText) {
-                context.strokeText = (...drawArgs: any[]) => {
+                context.strokeText = (...drawArgs: UntypedApiValue[]) => {
                     context.strokeStyle = 'rgba(0, 0, 0, 0.55)';
                     context.lineWidth = 1.2;
                     return originalStrokeText(...drawArgs);
@@ -2161,7 +2162,7 @@ export function NGSToolkit() {
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
-    const igvBrowserRef = useRef<any | null>(null);
+    const igvBrowserRef = useRef<UntypedApiValue | null>(null);
     const igvLoadedSourceKeyRef = useRef('');
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
@@ -2291,7 +2292,7 @@ export function NGSToolkit() {
     const currentStage = stagePayload?.current_stage || selectedJob?.current_stage || null;
     const currentStageKey = currentStage ? normalizeStageKey(currentStage) : '';
     const forceCompleteByJobStatus = selectedJob?.status === 'completed';
-    const stageOutputs = (stagePayload?.stage_outputs || {}) as StageOutputsMap;
+    const stageOutputs = useMemo(() => (stagePayload?.stage_outputs || {}) as StageOutputsMap, [stagePayload?.stage_outputs]);
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
@@ -2770,7 +2771,7 @@ export function NGSToolkit() {
         themeColors.success,
         themeColors.error,
     ]);
-    const multimerMetrics = multimerReport?.metrics || {};
+    const multimerMetrics = useMemo(() => multimerReport?.metrics || {}, [multimerReport?.metrics]);
     const expectedPlasmidSize = Number.isFinite(multimerMetrics.expected_plasmid_size)
         ? multimerMetrics.expected_plasmid_size
         : Number.parseFloat(String(selectedJobParams.expected_plasmid_size ?? ''));
@@ -3214,18 +3215,7 @@ export function NGSToolkit() {
         return () => {
             cancelled = true;
         };
-    }, [
-        selectedJob?.id,
-        shouldShowMultimerInspector,
-        multimerArtifacts.summaryUrl,
-        multimerArtifacts.lengthsUrl,
-        multimerArtifacts.candidatesUrl,
-        multimerArtifacts.dimerSummaryUrl,
-        multimerArtifacts.dimerConsensusUrl,
-        multimerArtifacts.dominantDimerConsensusUrl,
-        selectedReferenceFastaUrl,
-        multimerArtifacts.missingReason,
-    ]);
+    }, [selectedJob?.id, shouldShowMultimerInspector, multimerArtifacts.summaryUrl, multimerArtifacts.lengthsUrl, multimerArtifacts.candidatesUrl, multimerArtifacts.dimerSummaryUrl, multimerArtifacts.dimerConsensusUrl, multimerArtifacts.dominantDimerConsensusUrl, selectedReferenceFastaUrl, multimerArtifacts.missingReason, selectedJob]);
 
     useEffect(() => {
         let cancelled = false;
@@ -3338,14 +3328,7 @@ export function NGSToolkit() {
         return () => {
             cancelled = true;
         };
-    }, [
-        selectedJob?.id,
-        shouldShowMethylationInspector,
-        methylationArtifacts.summaryUrl,
-        methylationArtifacts.bedUrl,
-        methylationArtifacts.missingReason,
-        activeIgvFastaUrl,
-    ]);
+    }, [selectedJob?.id, shouldShowMethylationInspector, methylationArtifacts.summaryUrl, methylationArtifacts.bedUrl, methylationArtifacts.missingReason, activeIgvFastaUrl, selectedJob]);
 
     useEffect(() => {
         if (!igvModalOpen) return;
@@ -3368,7 +3351,7 @@ export function NGSToolkit() {
         }
 
         let cancelled = false;
-        let igvBrowser: any = null;
+        let igvBrowser: UntypedApiValue = null;
         const loadToken = ++igvLoadTokenRef.current;
         const isCurrentLoad = () => igvLoadTokenRef.current === loadToken;
 
@@ -3394,7 +3377,7 @@ export function NGSToolkit() {
                 if (isCurrentLoad() && !cancelled) {
                     setIgvVersion(version);
                 }
-                const igvAny = igv as any;
+                const igvAny = igv as UntypedApiValue;
                 if (typeof igvAny.setDefaults === 'function') {
                     igvAny.setDefaults({
                         showControls: true,
@@ -3473,6 +3456,8 @@ export function NGSToolkit() {
             }
         };
 
+        const igvContainer = igvContainerRef.current;
+
         initIgv();
 
         return () => {
@@ -3486,8 +3471,8 @@ export function NGSToolkit() {
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
-            if (igvContainerRef.current) {
-                igvContainerRef.current.innerHTML = '';
+            if (igvContainer) {
+                igvContainer.innerHTML = '';
             }
         };
     }, [
@@ -3513,7 +3498,7 @@ export function NGSToolkit() {
         setIgvError(null);
         try {
             if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
-                const existingTracks = browser.findTracks((track: any) => track && track.type !== 'ruler');
+                const existingTracks = browser.findTracks((track: UntypedApiValue) => track && track.type !== 'ruler');
                 if (Array.isArray(existingTracks)) {
                     for (const track of existingTracks) {
                         try {
