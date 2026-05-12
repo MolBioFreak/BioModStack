@@ -3,7 +3,7 @@
  */
 
 import { Link, useLocation } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     buildUiDiagnosticsPayload,
@@ -23,9 +23,11 @@ import { BioXpInterlinkMenu } from './BioXpInterlinkControlPanel';
 import {
     InfraControlStateCollector,
     InfraTelemetryCollector,
+} from './InfraLiveTelemetry';
+import {
     SHARED_FAN_CONTROL_QUERY_KEY,
     SHARED_POWER_CONTROL_QUERY_KEY,
-} from './InfraLiveTelemetry';
+} from './infraTelemetryQueryKeys';
 import {
     fetchFanControl,
     fetchPowerControl,
@@ -504,7 +506,7 @@ function DiagnosticsMenu() {
             return;
         }
         void refreshDiagnostics();
-    }, [isOpen]);
+    }, [diagnostics, isOpen, loading]);
 
     const handleCopyDiagnostics = async () => {
         const payload = diagnostics ?? await refreshDiagnostics();
@@ -830,7 +832,7 @@ interface FanControlState {
     gpus: Record<string, PerGpuFanStatus>;
 }
 
-const toNumericRecord = (value: any): Record<string, number> => {
+const toNumericRecord = (value: UntypedApiValue): Record<string, number> => {
     if (!value || typeof value !== 'object') return {};
     const out: Record<string, number> = {};
     Object.entries(value).forEach(([k, v]) => {
@@ -840,7 +842,7 @@ const toNumericRecord = (value: any): Record<string, number> => {
     return out;
 };
 
-const normalizePowerState = (raw: any): PowerControlState => {
+const normalizePowerState = (raw: UntypedApiValue): PowerControlState => {
     return {
         limits: toNumericRecord(raw?.limits),
         saved_limits: toNumericRecord(raw?.saved_limits),
@@ -855,16 +857,16 @@ const normalizePowerState = (raw: any): PowerControlState => {
     };
 };
 
-const normalizeFanState = (raw: any): FanControlState => {
+const normalizeFanState = (raw: UntypedApiValue): FanControlState => {
     const gpus: Record<string, PerGpuFanStatus> = {};
     if (raw?.gpus && typeof raw.gpus === 'object') {
-        Object.entries(raw.gpus).forEach(([key, value]: [string, any]) => {
+        Object.entries(raw.gpus).forEach(([key, value]: [string, UntypedApiValue]) => {
             gpus[String(key)] = {
                 gpu_index: Number(value?.gpu_index ?? Number(key)),
                 gpu_name: String(value?.gpu_name || `GPU ${key}`),
                 settings_gpu_target: value?.settings_gpu_target != null ? Number(value.settings_gpu_target) : null,
                 fan_targets: Array.isArray(value?.fan_targets)
-                    ? value.fan_targets.map((v: any) => String(v)).filter((v: string) => v.length > 0)
+                    ? value.fan_targets.map((v: UntypedApiValue) => String(v)).filter((v: string) => v.length > 0)
                     : [],
                 mapping_source: value?.mapping_source ? String(value.mapping_source) : '',
                 mode: (value?.mode || 'unknown') as 'auto' | 'manual' | 'unknown',
@@ -885,7 +887,7 @@ const normalizeFanState = (raw: any): FanControlState => {
         message: String(raw?.message || ''),
         backend: String(raw?.backend || 'unknown'),
         available_modes: Array.isArray(raw?.available_modes)
-            ? raw.available_modes.map((m: any) => String(m)).filter((m: string) => m.length > 0)
+            ? raw.available_modes.map((m: UntypedApiValue) => String(m)).filter((m: string) => m.length > 0)
             : [],
         gpus,
     };
@@ -918,7 +920,7 @@ function PowerControlMenu() {
         refetchOnWindowFocus: false,
     });
 
-    const syncFanDrafts = (nextFanState: FanControlState) => {
+    const syncFanDrafts = useCallback((nextFanState: FanControlState) => {
         const nextTargets: Record<string, number> = {};
         const nextModes: Record<string, 'auto' | 'manual'> = {};
         Object.entries(nextFanState.gpus).forEach(([gpuKey, gpu]) => {
@@ -931,29 +933,29 @@ function PowerControlMenu() {
         });
         setDraftFanTargets(nextTargets);
         setDraftFanModes(nextModes);
-    };
+    }, []);
 
-    const syncPowerFromCache = (syncDrafts: boolean) => {
-        const cached = queryClient.getQueryData<any>(SHARED_POWER_CONTROL_QUERY_KEY);
+    const syncPowerFromCache = useCallback((syncDrafts: boolean) => {
+        const cached = queryClient.getQueryData<UntypedApiValue>(SHARED_POWER_CONTROL_QUERY_KEY);
         if (!cached?.data) return;
         const normalized = normalizePowerState(cached.data);
         setState(normalized);
         if (syncDrafts) {
             setDraftLimits(normalized.limits);
         }
-    };
+    }, [queryClient]);
 
-    const syncFanFromCache = (syncDrafts: boolean) => {
-        const cached = queryClient.getQueryData<any>(SHARED_FAN_CONTROL_QUERY_KEY);
+    const syncFanFromCache = useCallback((syncDrafts: boolean) => {
+        const cached = queryClient.getQueryData<UntypedApiValue>(SHARED_FAN_CONTROL_QUERY_KEY);
         if (!cached?.data) return;
         const normalized = normalizeFanState(cached.data);
         setFanState(normalized);
         if (syncDrafts) {
             syncFanDrafts(normalized);
         }
-    };
+    }, [queryClient, syncFanDrafts]);
 
-    const refreshHardwareState = async (syncDrafts: boolean) => {
+    const refreshHardwareState = useCallback(async (syncDrafts: boolean) => {
         try {
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY }),
@@ -964,17 +966,17 @@ function PowerControlMenu() {
         } catch (error) {
             console.error('Failed to refresh hardware control state:', error);
         }
-    };
+    }, [queryClient, syncFanFromCache, syncPowerFromCache]);
 
     useEffect(() => {
         if (!powerControlData?.data) return;
         syncPowerFromCache(false);
-    }, [powerControlData, queryClient]);
+    }, [powerControlData, queryClient, syncPowerFromCache]);
 
     useEffect(() => {
         if (!fanControlData?.data) return;
         syncFanFromCache(false);
-    }, [fanControlData, queryClient]);
+    }, [fanControlData, queryClient, syncFanFromCache]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -982,9 +984,9 @@ function PowerControlMenu() {
         syncPowerFromCache(true);
         syncFanFromCache(true);
         void refreshHardwareState(true);
-    }, [isOpen]);
+    }, [isOpen, refreshHardwareState, syncFanFromCache, syncPowerFromCache]);
 
-    const applyPowerControl = async (payload: Record<string, any>, loadingKey: string) => {
+    const applyPowerControl = async (payload: Record<string, UntypedApiValue>, loadingKey: string) => {
         setLoading(loadingKey);
         setMessage(null);
         try {
@@ -1001,7 +1003,7 @@ function PowerControlMenu() {
         } catch (error) {
             const msg =
                 typeof error === 'object' && error && 'response' in error
-                    ? String((error as any).response?.data?.detail || (error as any).response?.data?.message || (error as any).message || error)
+                    ? String((error as UntypedApiValue).response?.data?.detail || (error as UntypedApiValue).response?.data?.message || (error as UntypedApiValue).message || error)
                     : error instanceof Error
                         ? error.message
                         : String(error);
@@ -1011,7 +1013,7 @@ function PowerControlMenu() {
         }
     };
 
-    const applyFanControl = async (payload: Record<string, any>, loadingKey: string) => {
+    const applyFanControl = async (payload: Record<string, UntypedApiValue>, loadingKey: string) => {
         setLoading(loadingKey);
         setMessage(null);
         try {
@@ -1027,7 +1029,7 @@ function PowerControlMenu() {
         } catch (error) {
             const msg =
                 typeof error === 'object' && error && 'response' in error
-                    ? String((error as any).response?.data?.detail || (error as any).response?.data?.message || (error as any).message || error)
+                    ? String((error as UntypedApiValue).response?.data?.detail || (error as UntypedApiValue).response?.data?.message || (error as UntypedApiValue).message || error)
                     : error instanceof Error
                         ? error.message
                         : String(error);
@@ -1422,7 +1424,7 @@ function PowerControlMenu() {
 function MSAServerSettingsMenu() {
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
-    const [status, setStatus] = useState<any>(null);
+    const [status, setStatus] = useState<UntypedApiValue>(null);
     const [availableGpus, setAvailableGpus] = useState<Array<{ index: number; name: string; memory_total_mb?: number }>>([]);
     const [settings, setSettings] = useState({
         include_envdb_on_start: false,
@@ -1533,7 +1535,7 @@ function MSAServerSettingsMenu() {
     const allRunning = Boolean(status?.all_running);
     const indicatorClass = allRunning ? 'bg-blue-400' : running ? 'bg-amber-400' : 'bg-slate-600';
     const serverLines = Array.isArray(status?.servers)
-        ? status.servers.map((srv: any) => {
+        ? status.servers.map((srv: UntypedApiValue) => {
             const state = srv?.running ? 'RUNNING' : 'STOPPED';
             const alias = srv?.db_alias || 'unknown';
             const pid = srv?.pid ?? 'n/a';

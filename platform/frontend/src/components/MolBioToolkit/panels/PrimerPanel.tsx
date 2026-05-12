@@ -304,7 +304,7 @@ export function PrimerPanel({
         };
     }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType]);
 
-    const useSelectionAsPrimer = (reverse: boolean) => {
+    const handleSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
         setError(null);
         const seq = reverse
@@ -604,13 +604,13 @@ export function PrimerPanel({
                             </div>
                             <div className="flex gap-2">
                                 <button
-                                    onClick={() => useSelectionAsPrimer(false)}
+                                    onClick={() => handleSelectionAsPrimer(false)}
                                     className="flex-1 px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs transition-colors"
                                 >
                                     Use as Forward
                                 </button>
                                 <button
-                                    onClick={() => useSelectionAsPrimer(true)}
+                                    onClick={() => handleSelectionAsPrimer(true)}
                                     className="flex-1 px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs transition-colors"
                                 >
                                     Use as Reverse

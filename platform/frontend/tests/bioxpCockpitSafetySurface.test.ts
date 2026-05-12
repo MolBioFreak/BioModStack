@@ -32,22 +32,40 @@ test('motion power actions are gated behind the commissioning toggle without mot
     assert.match(motionPowerPanel, /Actuating power, interlock, and lock-clear buttons are hidden/);
 });
 
-test('raw axis movement is demoted to commissioning motion instead of the default operator path', () => {
+test('commissioning motion keeps axis controls while default handler restores gripper', () => {
     const manualTab = sourceBetween("{activeTab === 'manual'", "{activeTab === 'controls'");
     const tabList = sourceBetween('<div className="flex gap-1 border-b border-border-secondary flex-wrap">', "{activeTab === 'connection'");
 
     assert.match(tabList, /showCommissioningControls \? \[\{ key: 'manual', label: 'Commissioning Motion' \}\]/);
     assert.match(manualTab, /Commissioning Motion — Axis Controls/);
-    assert.match(manualTab, /Hidden from the default handler path/);
-    assert.match(manualTab, /raw switch-search home is disabled/);
+    assert.match(manualTab, /Commissioning-only axis surface for raw\/recovery contexts/);
+    assert.doesNotMatch(manualTab, /Direct OEM homing modes/);
     assert.match(manualTab, /<AxisControls axis="x" label="Gantry X"/);
     assert.match(manualTab, /<AxisControls axis="y" label="Gantry Y"/);
     assert.match(manualTab, /<AxisControls axis="z" label="Pipette Z"/);
     assert.match(manualTab, /<AxisControls axis="g" label="Gripper"/);
     assert.match(manualTab, /\{liquidCommissioningPanel\}/);
     assert.doesNotMatch(manualTab, /Reconnect USB Runtime/);
-    assert.doesNotMatch(cockpitSource, />\s*OEM Home\s*</);
-    assert.match(cockpitSource, /Switch-home disabled/);
+    assert.match(cockpitSource, /Live X\/Y\/Z \+ Grabber Motion/);
+    assert.match(cockpitSource, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.match(cockpitSource, /AXIS_MOTION_SLIDER_PROFILES/);
+    assert.match(cockpitSource, /type="range"/);
+    assert.match(cockpitSource, /type="number"/);
+    assert.match(cockpitSource, /inputMode="numeric"/);
+    assert.match(cockpitSource, /Absolute target/);
+    assert.match(cockpitSource, /Payloads are clamped before send/);
+    assert.match(cockpitSource, /stepMax: 15000/);
+    assert.doesNotMatch(cockpitSource, /Capture validation bundle/);
+    assert.doesNotMatch(cockpitSource, /Dry-run bundle only/);
+    assert.doesNotMatch(cockpitSource, /Operator note for supervised validation/);
+    assert.doesNotMatch(cockpitSource, /Snapshot refs or image paths/);
+    assert.doesNotMatch(cockpitSource, /These controls can physically move the robot/);
+    assert.match(cockpitSource, />\s*Switch Home\s*</);
+    assert.doesNotMatch(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.doesNotMatch(cockpitSource, />\s*OEM HomeXY\s*</);
+    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion ACK\s*</);
+    assert.equal(cockpitSource.match(/Arm Motors No Homing/g)?.length ?? 0, 1);
+    assert.doesNotMatch(cockpitSource, /Switch-home disabled/);
 });
 
 test('camera overlaid jog controls are commissioning-only', () => {
@@ -63,6 +81,7 @@ test('default handler controls preserve readback and thermal surfaces while dire
     const liquidPanel = sourceBetween('const liquidPanel = (', 'const liquidCommissioningPanel = (');
     const liquidCommissioningPanel = sourceBetween('const liquidCommissioningPanel = (', 'const oemReadbackPanel = (');
 
+    assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
     assert.match(controlsTab, /\{oemReadbackPanel\}/);
     assert.match(controlsTab, /\{liquidPanel\}/);
     assert.match(controlsTab, /Thermal Cycler/);
@@ -70,7 +89,7 @@ test('default handler controls preserve readback and thermal surfaces while dire
     assert.match(controlsTab, /Commissioning Access/);
     assert.doesNotMatch(controlsTab, /\{motionPowerPanel\}/);
     assert.doesNotMatch(controlsTab, /\{liquidCommissioningPanel\}/);
-    assert.match(cockpitSource, /OEM Runtime & Startup/);
+    assert.match(cockpitSource, /OEM Runtime Readback & No-Motion Checks/);
     assert.match(cockpitSource, /Handler Controls/);
     assert.match(cockpitSource, /Startup Preflight \/ No Motion/);
     assert.match(cockpitSource, /EMERGENCY STOP/);
@@ -81,6 +100,20 @@ test('default handler controls preserve readback and thermal surfaces while dire
     assert.match(liquidCommissioningPanel, />\s*Aspirate\s*</);
     assert.match(liquidCommissioningPanel, />\s*Dispense\s*</);
     assert.match(liquidCommissioningPanel, />\s*Mix\s*</);
+});
+
+test('OEM readback panel does not duplicate live motion or homing controls', () => {
+    const oemReadbackPanel = sourceBetween('const oemReadbackPanel = (', 'const visionPanel = (');
+
+    assert.match(oemReadbackPanel, /No-motion startup\/readiness/);
+    assert.match(oemReadbackPanel, /Startup Preflight \/ No Motion/);
+    assert.match(oemReadbackPanel, /PrepareToRunJob Readiness \/ No Motion/);
+    assert.match(oemReadbackPanel, /EMERGENCY STOP/);
+    assert.doesNotMatch(oemReadbackPanel, /Arm Motors No Homing/);
+    assert.doesNotMatch(oemReadbackPanel, /Direct OEM homing modes/);
+    assert.doesNotMatch(oemReadbackPanel, />\s*OEM HomeXY\s*</);
+    assert.doesNotMatch(oemReadbackPanel, />\s*OEM Rehome ACK\s*</);
+    assert.doesNotMatch(oemReadbackPanel, />\s*InitializeMotion ACK\s*</);
 });
 
 test('service operations tab exposes named operation wrappers without acknowledgement form clutter', () => {

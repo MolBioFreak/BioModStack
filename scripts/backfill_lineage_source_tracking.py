@@ -27,6 +27,9 @@ from antibody_pipeline_contract import (  # noqa: E402
 from database import async_session, Job, Design  # noqa: E402
 
 
+job_lookup: Dict[str, Job] = {}
+
+
 def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 

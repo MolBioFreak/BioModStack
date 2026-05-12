@@ -1,6 +1,6 @@
 
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
@@ -105,7 +105,7 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
                 </div>
 
                 <div className="flex-1 overflow-auto p-2">
-                    {files?.data.entries.map((entry: any) => (
+                    {files?.data.entries.map((entry: UntypedApiValue) => (
                         <div
                             key={entry.path}
                             onClick={() => entry.is_directory ? handleNavigate(entry.path) : onSelect(entry.path)}
@@ -146,14 +146,14 @@ function ParamField({
     setSequenceToSave,
     ligandPresets
 }: {
-    param: any;
-    params: Record<string, any>;
-    updateParam: (key: string, value: any) => void;
+    param: UntypedApiValue;
+    params: Record<string, UntypedApiValue>;
+    updateParam: (key: string, value: UntypedApiValue) => void;
     setShowFileBrowser: (name: string | null) => void;
     setActiveSequenceField: (name: string) => void;
     setShowSequenceManager: (show: boolean) => void;
     setSequenceToSave?: (sequence: { sequence: string; name?: string } | null) => void;
-    ligandPresets: any[];
+    ligandPresets: UntypedApiValue[];
 }) {
     const isSequenceField = param.preset_type === 'sequence' || param.name === 'sequence' || param.type === 'text';
     const isContigField = typeof param.name === 'string' && param.name.includes('contig');
@@ -198,7 +198,7 @@ function ParamField({
                         onChange={(e) => updateParam(param.name, e.target.checked)}
                         className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
                     />
-                    <span className="text-sm text-slate-200">{Boolean(value) ? 'Enabled' : 'Disabled'}</span>
+                    <span className="text-sm text-slate-200">{value ? 'Enabled' : 'Disabled'}</span>
                 </label>
             ) : param.enum ? (
                 <select
@@ -264,7 +264,7 @@ function ParamField({
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     >
                         <option value="">Select preset ligand...</option>
-                        {ligandPresets.map((preset: any) => (
+                        {ligandPresets.map((preset: UntypedApiValue) => (
                             <option key={preset.id} value={preset.smiles}>
                                 {preset.name}
                             </option>
@@ -371,18 +371,18 @@ export function JobSubmission() {
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(urlTemplate);
 
     // Wrapper to sync state with URL
-    const setSelectedTemplateId = (id: string | null) => {
+    const setSelectedTemplateId = useCallback((id: string | null) => {
         setSelectedTemplateIdInternal(id);
         if (id) {
             setSearchParams({ template: id }, { replace: true });
         } else {
             setSearchParams({}, { replace: true });
         }
-    };
+    }, [setSearchParams]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
-    const [params, setParams] = useState<Record<string, any>>({});
+    const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
     const [showFileBrowser, setShowFileBrowser] = useState<string | null>(null);
     const [showSequenceManager, setShowSequenceManager] = useState(false);
     const [showTemplateManager, setShowTemplateManager] = useState(false);
@@ -390,17 +390,17 @@ export function JobSubmission() {
     const [activeSequenceField, setActiveSequenceField] = useState<string>('sequence');
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [clonedValues, setClonedValues] = useState<Record<string, any> | undefined>(undefined);
+    const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
     const [dedicatedTemplateVersion, setDedicatedTemplateVersion] = useState(0);
     const [templateManagerContext, setTemplateManagerContext] = useState<{
-        currentParams?: Record<string, any>;
+        currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
         currentMode?: string;
         baseTemplateId?: string;
     }>({});
 
     const openTemplateManager = (context: {
-        currentParams?: Record<string, any>;
+        currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
         currentMode?: string;
         baseTemplateId?: string;
@@ -472,7 +472,7 @@ export function JobSubmission() {
                 console.error("Failed to parse cloned job data", e);
             }
         }
-    }, []);
+    }, [setSelectedTemplateId]);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -492,7 +492,7 @@ export function JobSubmission() {
         protein_local_redesign: 'protein_local_redesign',
         boltz_cp_experimental: 'boltz_cp_experimental',
     };
-    const hardcodedWorkflowTemplates = [
+    const hardcodedWorkflowTemplates = useMemo(() => [
         {
             id: 'mutagenesis',
             name: 'Mutagenesis Library',
@@ -547,8 +547,8 @@ export function JobSubmission() {
             color: '#6366F1',
             stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
         },
-    ];
-    const hardcodedExperimentalTemplates = [
+    ], []);
+    const hardcodedExperimentalTemplates = useMemo(() => [
         {
             id: 'protein_local_redesign',
             name: 'Protein Local Redesign',
@@ -563,24 +563,24 @@ export function JobSubmission() {
                 { tool: 'Boltz-2 (Opt.)' }
             ],
         }
-    ];
+    ], []);
     const visibleApiTemplates = useMemo(() => {
         const templates = templatesData?.data ?? [];
-        return templates.filter((t: any) =>
+        return templates.filter((t: UntypedApiValue) =>
             !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
-            (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
+            (t.id !== 'dna_polymerase' || (window as UntypedApiValue).__DEBUG_MODE__)
         );
     }, [templatesData]);
     const workflowTemplateCards = useMemo(
-        () => [...visibleApiTemplates.filter((t: any) => !t.experimental), ...hardcodedWorkflowTemplates],
-        [visibleApiTemplates]
+        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => !t.experimental), ...hardcodedWorkflowTemplates],
+        [hardcodedWorkflowTemplates, visibleApiTemplates]
     );
     const experimentalTemplateCards = useMemo(
-        () => [...visibleApiTemplates.filter((t: any) => t.experimental), ...hardcodedExperimentalTemplates],
-        [visibleApiTemplates]
+        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => t.experimental), ...hardcodedExperimentalTemplates],
+        [hardcodedExperimentalTemplates, visibleApiTemplates]
     );
 
-    const routeUserTemplate = (template: any) => {
+    const routeUserTemplate = (template: UntypedApiValue) => {
         const dedicatedTemplateId =
             (isDedicatedLauncherTemplate(template.base_template_id) && template.base_template_id) ||
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
@@ -637,7 +637,7 @@ export function JobSubmission() {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             console.error('Job submission failed:', error);
             const detail = error.response?.data?.detail;
             const message = typeof detail === 'object'
@@ -647,26 +647,26 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental'].includes(model.id));
-    const selectedModel = models.find((m: any) => m.id === selectedModelId);
-    const selectedMode = selectedModel?.modes.find((m: any) => m.id === selectedModeId);
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental'].includes(model.id));
+    const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
+    const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
 
     // Initialize params when model/mode changes (manual mode)
     useEffect(() => {
         if (selectedModel) {
-            const defaults: Record<string, any> = {};
-            (selectedModel.params || []).forEach((p: any) => {
+            const defaults: Record<string, UntypedApiValue> = {};
+            (selectedModel.params || []).forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             setParams(defaults);
         }
-    }, [selectedModelId]);
+    }, [selectedModel, selectedModelId]);
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
         if (templateDetail?.user_params) {
-            const defaults: Record<string, any> = {};
-            templateDetail.user_params.forEach((p: any) => {
+            const defaults: Record<string, UntypedApiValue> = {};
+            templateDetail.user_params.forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             setParams(defaults);
@@ -677,18 +677,18 @@ export function JobSubmission() {
         if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId)) {
             return;
         }
-        const matchedTemplate = visibleApiTemplates.find((template: any) => template.id === selectedTemplateId);
+        const matchedTemplate = visibleApiTemplates.find((template: UntypedApiValue) => template.id === selectedTemplateId);
         if (matchedTemplate) {
             setWizardMode(matchedTemplate.experimental ? 'experimental' : 'templates');
         }
     }, [selectedTemplateId, visibleApiTemplates]);
 
     // Handle param change
-    const updateParam = (key: string, value: any) => {
+    const updateParam = (key: string, value: UntypedApiValue) => {
         setParams(prev => ({ ...prev, [key]: value }));
     };
 
-    const getTemplateIconLabel = (template: any) => {
+    const getTemplateIconLabel = (template: UntypedApiValue) => {
         if (template.id === 'protein_cad_experimental') return 'PC';
         if (template.id === 'caliby_experimental') return 'CB';
         if (template.id === 'protein_hunter_experimental') return 'PH';
@@ -704,7 +704,7 @@ export function JobSubmission() {
                                     : 'OL';
     };
 
-    const renderTemplateCard = (template: any) => {
+    const renderTemplateCard = (template: UntypedApiValue) => {
         const isSelected = selectedTemplateId === template.id;
         return (
             <div
@@ -745,7 +745,7 @@ export function JobSubmission() {
                 </div>
                 <p className="mb-2 text-xs opacity-70 line-clamp-2">{template.description}</p>
                 <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
-                    {template.stages.map((stage: any, idx: number) => (
+                    {template.stages.map((stage: UntypedApiValue, idx: number) => (
                         <div key={idx} className="flex items-center">
                             <span
                                 className="rounded px-1.5 py-0.5 font-medium"
@@ -763,7 +763,7 @@ export function JobSubmission() {
         );
     };
 
-    const getModelCardBadge = (model: any) => {
+    const getModelCardBadge = (model: UntypedApiValue) => {
         const identity = `${model.id ?? ''} ${model.name ?? ''}`.toLowerCase();
         if (identity.includes('proteinmpnn') || identity.includes('ligandmpnn') || identity.includes('fampnn') || identity.includes('full-atom mpnn')) {
             return 'SEQ';
@@ -793,18 +793,18 @@ export function JobSubmission() {
     };
 
     // Filter params for current mode
-    const visibleParams = (selectedModel?.params || []).filter((p: any) => {
+    const visibleParams = useMemo(() => (selectedModel?.params || []).filter((p: UntypedApiValue) => {
         if (!selectedMode) return false;
         if (selectedMode.params && selectedMode.params.length > 0) {
             return selectedMode.params.includes(p.name);
         }
         return !p.hidden;
-    }) ?? [];
+    }) ?? [], [selectedMode, selectedModel?.params]);
 
     // Group visible params by ui_group
     const groupedParams = useMemo(() => {
-        const groups: Record<string, any[]> = {};
-        visibleParams.forEach((p: any) => {
+        const groups: Record<string, UntypedApiValue[]> = {};
+        visibleParams.forEach((p: UntypedApiValue) => {
             const group = p.ui_group || 'General';
             if (!groups[group]) groups[group] = [];
             groups[group].push(p);
@@ -911,7 +911,7 @@ export function JobSubmission() {
             // Manual mode
 
             // Filter params to only include those defined in the selected mode
-            const filteredParams: Record<string, any> = {};
+            const filteredParams: Record<string, UntypedApiValue> = {};
             if (selectedMode && selectedMode.params) {
                 selectedMode.params.forEach((paramName: string) => {
                     if (params[paramName] !== undefined && params[paramName] !== '') {
@@ -1128,7 +1128,7 @@ export function JobSubmission() {
                                         </div>
                                     )}
                                     <div className="grid grid-cols-2 gap-3">
-                                        {(wizardMode === 'experimental' ? experimentalTemplateCards : workflowTemplateCards).map((template: any) =>
+                                        {(wizardMode === 'experimental' ? experimentalTemplateCards : workflowTemplateCards).map((template: UntypedApiValue) =>
                                             renderTemplateCard(template)
                                         )}
                                     </div>
@@ -1147,7 +1147,7 @@ export function JobSubmission() {
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Select Model</label>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {models.map((model: any) => (
+                                {models.map((model: UntypedApiValue) => (
                                     <div
                                         key={model.id}
                                         onClick={() => {
@@ -1213,7 +1213,7 @@ export function JobSubmission() {
                             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
                                 <p className="text-sm text-slate-400 mb-3">This template runs the following stages:</p>
                                 <div className="flex flex-wrap items-center gap-2">
-                                    {templateDetail.stages.map((stage: any, idx: number) => (
+                                    {templateDetail.stages.map((stage: UntypedApiValue, idx: number) => (
                                         <div key={idx} className="flex items-center">
                                             <div className="bg-slate-700 px-3 py-1.5 rounded-lg">
                                                 <span className="text-sm font-medium text-slate-200">{idx + 1}. {stage.name}</span>
@@ -1229,10 +1229,10 @@ export function JobSubmission() {
 
                             {/* User Parameters */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {templateDetail.user_params.map((param: any) => {
+                                {templateDetail.user_params.map((param: UntypedApiValue) => {
                                     // Conditional Rendering Logic
                                     if (param.condition) {
-                                        const controllingParam = templateDetail.user_params.find((p: any) => p.name === param.condition.param);
+                                        const controllingParam = templateDetail.user_params.find((p: UntypedApiValue) => p.name === param.condition.param);
                                         // Use params value if set, otherwise fall back to the controlling param's default
                                         const controllingValue = params[param.condition.param] !== undefined
                                             ? params[param.condition.param]
@@ -1296,8 +1296,8 @@ export function JobSubmission() {
                                     >
                                         <option value="" disabled>Select a mode...</option>
                                         {(selectedModel.modes || [])
-                                            .filter((mode: any) => mode.id !== 'dna_complex') // Deprecated: use Boltz-2 Complex Prediction instead
-                                            .map((mode: any) => (
+                                            .filter((mode: UntypedApiValue) => mode.id !== 'dna_complex') // Deprecated: use Boltz-2 Complex Prediction instead
+                                            .map((mode: UntypedApiValue) => (
                                                 <option key={mode.id} value={mode.id}>
                                                     {mode.name}
                                                 </option>
@@ -1321,7 +1321,7 @@ export function JobSubmission() {
                                                     </h3>
                                                 )}
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    {groupedParams[groupName].map((param: any) => (
+                                                    {groupedParams[groupName].map((param: UntypedApiValue) => (
                                                         <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} setSequenceToSave={setSequenceToSave} ligandPresets={ligandPresets} />
                                                     ))}
                                                 </div>
@@ -1344,7 +1344,7 @@ export function JobSubmission() {
                                                 </button>
                                                 {showAdvanced && (
                                                     <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                        {groupedParams['Advanced'].map((param: any) => (
+                                                        {groupedParams['Advanced'].map((param: UntypedApiValue) => (
                                                             <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} setSequenceToSave={setSequenceToSave} ligandPresets={ligandPresets} />
                                                         ))}
                                                     </div>

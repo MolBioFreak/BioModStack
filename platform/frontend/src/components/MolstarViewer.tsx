@@ -40,7 +40,7 @@ const parseResidueColorKey = (key: string): { chainId: string; residueNumber: nu
     if (delimited) {
         return { chainId: delimited[1], residueNumber: parseInt(delimited[2], 10) };
     }
-    const legacy = key.match(/^([A-Za-z])(\-?\d+)$/);
+    const legacy = key.match(/^([A-Za-z])(-?\d+)$/);
     if (legacy) {
         return { chainId: legacy[1], residueNumber: parseInt(legacy[2], 10) };
     }
@@ -127,7 +127,7 @@ export default function MolstarViewer({
     const residueColorSignature = useMemo(() => buildResidueColorSignature(residueColors), [residueColors]);
     const interactionTouchAction = useMemo(() => {
         const coarsePointer = typeof window.matchMedia === 'function'
-            && (window.matchMedia('(any-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches);
+            && (window.matchMedia('(unknown-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches);
 
         return resolveMolstarTouchAction({
             maxTouchPoints: navigator.maxTouchPoints ?? 0,
@@ -222,9 +222,9 @@ export default function MolstarViewer({
         let cancelled = false;
         const overlayLoadOptions = { fullLoad: false };
 
-        const waitForPrimaryStructure = async (): Promise<any | null> => {
+        const waitForPrimaryStructure = async (): Promise<UntypedApiValue | null> => {
             for (let i = 0; i < 60; i += 1) {
-                const viewer = viewerRef.current as any;
+                const viewer = viewerRef.current as UntypedApiValue;
                 const viewerInstance = viewer?.viewerInstance;
                 const hasPrimaryStructure = typeof viewerInstance?.load === 'function'
                     && (viewerInstance.structureRefMap?.size ?? 0) > 0;
@@ -275,7 +275,7 @@ export default function MolstarViewer({
         if (!viewerRef.current) return;
         if (lastAppliedSelectionSignatureRef.current === selectionSignature) return;
 
-        const viewer = viewerRef.current as any;
+        const viewer = viewerRef.current as UntypedApiValue;
 
         // Wait for viewer to be ready
         const waitForReady = async () => {
@@ -329,7 +329,7 @@ export default function MolstarViewer({
         if (!viewerRef.current) return;
         if (lastAppliedResidueColorSignatureRef.current === residueColorSignature) return;
 
-        const viewer = viewerRef.current as any;
+        const viewer = viewerRef.current as UntypedApiValue;
 
         // Wait for viewer to be ready
         const waitForReady = async () => {
@@ -442,7 +442,7 @@ export default function MolstarViewer({
             )}
             {React.createElement('pdbe-molstar', {
                 key: absoluteUrl, // Force re-mount when URL changes
-                ref: (el: HTMLElement) => { viewerRef.current = el; },
+                ref: viewerRef,
                 'custom-data-url': absoluteUrl,
                 'custom-data-format': format,
                 'bg-color-r': bgColor.r.toString(),

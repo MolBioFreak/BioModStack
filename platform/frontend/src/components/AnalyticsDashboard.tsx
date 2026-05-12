@@ -65,7 +65,7 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
     },
     fampnn: {
         title: 'FAMPNN Sequence Design',
-        description: 'Sequence design quality centered on PSCE plus any additional flattened FAMPNN sidechain signals.',
+        description: 'Sequence design quality centered on PSCE plus unknown additional flattened FAMPNN sidechain signals.',
         accent: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
     },
     caliby: {
@@ -493,7 +493,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
 
     const metricLookup = useMemo(() => new Map(metricOptions.map((option) => [option.key, option])), [metricOptions]);
 
-    const getMetricValue = (design: Design, key: string): number | null => {
+    const getMetricValue = useCallback((design: Design, key: string): number | null => {
         if (key === 'screening_passed') {
             if (!design.screening_reason) return null;
             return design.screening_reason.trim().toLowerCase() === 'passed' ? 1 : 0;
@@ -507,7 +507,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         if (typeof flattened === 'number' && Number.isFinite(flattened)) return flattened;
 
         return null;
-    };
+    }, [plotlyMetricsByDesign]);
 
     const getPpiflowScopeLabel = (design: Design): string => {
         const provenance = design.provenance && typeof design.provenance === 'object' && !Array.isArray(design.provenance)
@@ -556,9 +556,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             }
         }
         return counts;
-    }, [designs, metricOptions, plotlyMetricsByDesign]);
+    }, [designs, getMetricValue, metricOptions]);
 
-    const hasMetricData = (key: string | null | undefined): key is string => !!key && (metricCounts.get(key) || 0) > 0;
+    const hasMetricData = useCallback((key: string | null | undefined): key is string => !!key && (metricCounts.get(key) || 0) > 0, [metricCounts]);
     const getMetricLabel = (key: string) => metricLookup.get(key)?.label || toMetricLabel(key);
     const extractValues = (key: string) =>
         designs
@@ -588,7 +588,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             mapped[option.family].push(option.key);
         }
         return mapped;
-    }, [metricOptions, metricCounts]);
+    }, [metricOptions, hasMetricData]);
 
     const familyDesignCounts = useMemo(() => {
         const counts: Record<Exclude<MetricFamily, 'dynamic'>, number> = {
@@ -612,7 +612,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
 
     const availableMetricKeys = useMemo(
         () => metricOptions.filter((option) => hasMetricData(option.key)).map((option) => option.key),
-        [metricOptions, metricCounts],
+        [metricOptions, hasMetricData],
     );
 
     const rankedAvailableAnalysisLenses = useMemo(
@@ -634,7 +634,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             return preferredAnalysisLens;
         }
         return rankedAvailableAnalysisLenses[0] || 'validation';
-    }, [familyDesignCounts, familyMetricKeys, preferredAnalysisLens, rankedAvailableAnalysisLenses]);
+    }, [familyDesignCounts, preferredAnalysisLens, rankedAvailableAnalysisLenses]);
 
     const resolvedAnalysisLens = analysisLensOverride === 'auto' ? autoDetectedAnalysisLens : analysisLensOverride;
     const resolvedColorScale = reverseColorScale ? `${colorScale}_r` : colorScale;
@@ -2248,14 +2248,14 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                 <section className="space-y-4">
                     <SectionHeader
                         title="Custom Plotly Lab"
-                        description="Use the flattened metric surface to explore any new RFA, validator, or downstream-model fields without touching the dashboard code again."
+                        description="Use the flattened metric surface to explore unknown new RFA, validator, or downstream-model fields without touching the dashboard code again."
                         count={availableMetricKeys.length}
                         accentClass="border-slate-700 bg-slate-800/70 text-slate-200"
                     />
                     <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
                         <PlotCard
                             title="Custom 2D Scatter"
-                            description="Pick any two metric axes plus a color channel."
+                            description="Pick unknown two metric axes plus a color channel."
                             hasData={buildScatter(custom2dX, custom2dY, custom2dColor).length > 0}
                         >
                             <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">

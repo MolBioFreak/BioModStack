@@ -1,7 +1,7 @@
 /**
  * EpitopeMolstarViewer Component
  * 3D structure viewer for visualizing and selecting epitope residues
- * 
+ *
  * Features:
  * - Displays uploaded PDB structure in 3D
  * - Highlights selected epitope residues (synced from 2D selector)
@@ -49,7 +49,6 @@ export default function EpitopeMolstarViewer({
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
-
     // Load script using shared loader
     useEffect(() => {
         ensureMolstarLoaded().then(() => setIsScriptLoaded(true));
@@ -57,14 +56,20 @@ export default function EpitopeMolstarViewer({
 
     // Create blob URL from PDB data if provided
     useEffect(() => {
-        if (pdbData) {
-            const blob = new Blob([pdbData], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            setBlobUrl(url);
-            return () => URL.revokeObjectURL(url);
-        } else {
-            setBlobUrl(null);
-        }
+        let url: string | null = null;
+        const timer = window.setTimeout(() => {
+            if (pdbData) {
+                const blob = new Blob([pdbData], { type: 'text/plain' });
+                url = URL.createObjectURL(blob);
+                setBlobUrl(url);
+            } else {
+                setBlobUrl(null);
+            }
+        }, 0);
+        return () => {
+            window.clearTimeout(timer);
+            if (url) URL.revokeObjectURL(url);
+        };
     }, [pdbData]);
 
     // Handle click events from Molstar for 3D→2D sync
@@ -123,7 +128,7 @@ export default function EpitopeMolstarViewer({
     // Apply selections to viewer
     const applySelections = useCallback(async () => {
         if (!viewerRef.current) return;
-        const viewer = viewerRef.current as any;
+        const viewer = viewerRef.current as UntypedApiValue;
 
         // Wait for viewer to be ready
         for (let i = 0; i < 50; i++) {
@@ -231,7 +236,7 @@ export default function EpitopeMolstarViewer({
 
             {React.createElement('pdbe-molstar', {
                 key: effectiveUrl,
-                ref: (el: HTMLElement) => { viewerRef.current = el; },
+                ref: viewerRef,
                 'custom-data-url': effectiveUrl,
                 'custom-data-format': format,
                 'bg-color-r': bgColor.r.toString(),
