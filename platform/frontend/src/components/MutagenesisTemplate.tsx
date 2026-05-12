@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
@@ -8,11 +8,14 @@ import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import MolstarViewer from './MolstarViewer';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
+import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
+
+const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 } as const;
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
-    onSubmit: (jobName: string, variants: VariantSequence[], predictorConfig: any) => void;
+    onSubmit: (jobName: string, variants: VariantSequence[], predictorConfig: UntypedApiValue) => void;
 }
 
 export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplateProps) {
@@ -44,11 +47,8 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         setFrustrampnnResults([]);
     }, [baseSequence]);
 
-    // Official FrustraMPNN thresholds from constants.py
-    const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 };
-
     // Helper: Convert frustration score to RGB color matching FrustraMPNN color scheme
-    const frustrationToColor = (frustration: number): { r: number; g: number; b: number } => {
+    const frustrationToColor = useCallback((frustration: number): { r: number; g: number; b: number } => {
         // Official colors: red (highly) <= -1.0, gray (neutral), green (minimally) >= 0.58
         if (frustration <= FRUSTRATION_THRESHOLDS.highly) {
             return { r: 239, g: 68, b: 68 };    // Red: highly frustrated
@@ -56,7 +56,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             return { r: 34, g: 197, b: 94 };    // Green: minimally frustrated
         }
         return { r: 156, g: 163, b: 175 };      // Gray: neutral
-    };
+    }, []);
 
     // Build frustration color map for Molstar viewer
     const frustrationColorMap = useMemo(() => {
@@ -66,7 +66,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             colorMap.set(`A${result.position}`, frustrationToColor(result.frustration));
         });
         return colorMap;
-    }, [frustrampnnResults]);
+    }, [frustrampnnResults, frustrationToColor]);
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -198,7 +198,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         setIsDragging(false);
     };
 
-    const handleGeneratePreview = () => {
+    const handleGeneratePreview = useCallback(() => {
         if (!baseSequence) return;
 
         if (mode === 'library') {
@@ -282,13 +282,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 setGeneratedVariants([]);
             }
         }
-    };
+    }, [allowedAAsInput, allowDeletions, allowInsertions, baseSequence, blockedAAsInput, excludeResiduesInput, indelProbability, indelSizes, manualMutations, mode, mutationCountExact, mutationCountMode, mutationCountSetInput, mutationsPerVariant, numVariants, regions, selectedPositions, strategy]);
 
     // Manual Mutation Handlers
     const handleAddMutation = (pos: number, toAA: string) => {
         const fromAA = baseSequence[pos - 1];
         setManualMutations(prev => {
-            // Remove existing mutation at this pos if any
+            // Remove existing mutation at this pos if unknown
             const filtered = prev.filter(m => m.position !== pos);
             // Add new if different from wild type
             if (fromAA !== toAA) {
@@ -305,7 +305,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     // Auto-update preview in manual mode
     useMemo(() => {
         if (mode === 'manual') handleGeneratePreview();
-    }, [manualMutations, mode]);
+    }, [handleGeneratePreview, mode]);
 
     const handleSubmit = () => {
         if (generatedVariants.length === 0) return;
@@ -699,7 +699,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <label className="block text-sm font-medium text-slate-300 mb-2">Strategy</label>
                                 <select
                                     value={strategy}
-                                    onChange={(e) => setStrategy(e.target.value as any)}
+                                    onChange={(e) => setStrategy(e.target.value as UntypedApiValue)}
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
                                 >
                                     <option value="random">Random (Any AA)</option>
@@ -725,7 +725,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         <div className="space-y-2">
                                             <select
                                                 value={mutationCountMode}
-                                                onChange={(e) => setMutationCountMode(e.target.value as any)}
+                                                onChange={(e) => setMutationCountMode(e.target.value as UntypedApiValue)}
                                                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-sm"
                                             >
                                                 <option value="range">Range (min-max)</option>
@@ -925,7 +925,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
                                             // Convert native profile to our display format
                                             // Auto-select highly frustrated positions for mutation
-                                            const results = data.native_profile.map((d: any) => ({
+                                            const results = data.native_profile.map((d: UntypedApiValue) => ({
                                                 position: d.position + 1,  // Convert to 1-indexed
                                                 aa: d.wildtype,
                                                 frustration: d.frustration_pred,
@@ -1029,7 +1029,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         <label className="block text-xs text-slate-400 mb-2">Generation Mode</label>
                                         <select
                                             value={maturationGenMode}
-                                            onChange={(e) => setMaturationGenMode(e.target.value as any)}
+                                            onChange={(e) => setMaturationGenMode(e.target.value as UntypedApiValue)}
                                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
                                         >
                                             <option value="singles">Single Mutants Only</option>

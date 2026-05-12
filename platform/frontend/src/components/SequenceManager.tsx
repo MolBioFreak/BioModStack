@@ -1,6 +1,6 @@
 /**
  * SequenceManager - Component for creating/editing/managing user sequences
- * 
+ *
  * Features:
  * - List view of saved sequences with search
  * - Create new sequence with name, sequence, description, organism, UniProt ID
@@ -63,7 +63,7 @@ export function SequenceManager({
             resetForm();
             setMode('list');
         },
-        onError: (err: any) => {
+        onError: (err: UntypedApiValue) => {
             setFormError(err.response?.data?.detail || 'Failed to create sequence');
         }
     });
@@ -77,7 +77,7 @@ export function SequenceManager({
             resetForm();
             setMode('list');
         },
-        onError: (err: any) => {
+        onError: (err: UntypedApiValue) => {
             setFormError(err.response?.data?.detail || 'Failed to update sequence');
         }
     });
@@ -97,7 +97,7 @@ export function SequenceManager({
             queryClient.invalidateQueries({ queryKey: ['user-sequences'] });
             alert(`Imported ${data.imported} sequences from presets (${data.skipped} already existed)`);
         },
-        onError: (err: any) => {
+        onError: (err: UntypedApiValue) => {
             alert('Failed to import presets: ' + (err.message || 'Unknown error'));
         }
     });
@@ -121,7 +121,7 @@ export function SequenceManager({
             setFormName(initialName);
             setMode('edit');
         }
-    }, [initialSequence, initialName]);
+    }, [initialSequence, initialName, mode]);
 
     // Populate form when editing
     useEffect(() => {
@@ -190,8 +190,8 @@ export function SequenceManager({
 
     return (
         <div className="flex-1 flex flex-col h-full min-h-[400px]">
-            {/* Header - Only showing title here might be redundant if parent has tabs. 
-                 But let's include a small header for List Mode actions if needed. 
+            {/* Header - Only showing title here might be redundant if parent has tabs.
+                 But let's include a small header for List Mode actions if needed.
                  Actually, the 'New Sequence' button is in the list view.
                  Let's stick to just content. */}
 

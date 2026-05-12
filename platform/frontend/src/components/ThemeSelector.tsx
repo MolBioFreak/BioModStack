@@ -3,8 +3,8 @@
  */
 
 import { useState } from 'react';
-import { useTheme, THEMES } from './ThemeProvider';
-import type { ThemeId } from './ThemeProvider';
+import { useTheme, THEMES } from './themeContext';
+import type { ThemeId } from './themeContext';
 
 export function ThemeSelector() {
     const { theme, setTheme, themeConfig } = useTheme();

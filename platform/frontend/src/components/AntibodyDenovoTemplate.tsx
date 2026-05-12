@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -9,14 +9,12 @@ import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
 import {
     QualitySettingsPanel,
-    PRESETS,
-    applyPpiFlowStageMode,
-    normalizePpiFlowTuningProfile,
     type QualitySettings,
     type PPIFlowStageMode,
     type PPIFlowRegionMode,
     type PPIFlowObjectiveMode,
 } from './QualitySettingsPanel';
+import { PRESETS, applyPpiFlowStageMode, normalizePpiFlowTuningProfile } from './qualitySettingsLogic';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
@@ -24,7 +22,8 @@ import {
     deriveBoltzgenScaffoldSelectionUpdate,
     resolveBoltzgenReferencePreviewEnabled,
 } from './antibodyDenovoBoltzgenScaffold';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
+import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 import {
     clearAntibodyRefinementLaunchState,
@@ -40,7 +39,7 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
-    initialValues?: Record<string, any>;
+    initialValues?: Record<string, UntypedApiValue>;
 }
 
 type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
@@ -90,10 +89,10 @@ const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> =>
     const parsed = cloneDefaultLoopRanges();
 
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        Object.entries(raw as Record<string, any>).forEach(([loopId, value]) => {
+        Object.entries(raw as Record<string, UntypedApiValue>).forEach(([loopId, value]) => {
             if (!parsed[loopId] || !value || typeof value !== 'object') return;
-            const min = Number((value as any).min);
-            const max = Number((value as any).max);
+            const min = Number((value as UntypedApiValue).min);
+            const max = Number((value as UntypedApiValue).max);
             if (Number.isFinite(min) && Number.isFinite(max) && min >= 1 && max >= min) {
                 parsed[loopId] = { min, max };
             }
@@ -121,7 +120,7 @@ const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> =>
 const normalizeLoopScopeInput = (raw: string | null | undefined): string | undefined => {
     if (!raw) return undefined;
     const loops = raw
-        .replace(/[\[\]]/g, '')
+        .split('[').join('').split(']').join('')
         .split(/[\s,;|]+/)
         .map((value) => value.trim().toUpperCase())
         .filter(Boolean);
@@ -300,13 +299,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
-    const normalizeProtenixModel = (model?: string) => {
+    const normalizeProtenixModel = useCallback((model?: string) => {
         if (!model) return 'protenix_base_20250630_v1.0.0';
         if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
         if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
         return model;
-    };
-    const mergeQualitySettingsFromParams = (params?: Record<string, any>): QualitySettings => {
+    }, []);
+    const mergeQualitySettingsFromParams = useCallback((params?: Record<string, UntypedApiValue>): QualitySettings => {
         const legacyPresetKey = typeof params?.quality_preset === 'string' && params.quality_preset in PRESETS
             ? (params.quality_preset as keyof typeof PRESETS)
             : 'balanced';
@@ -328,7 +327,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 ) {
                     return;
                 }
-                (merged as any)[key] = key === 'protenix_model_weights'
+                (merged as UntypedApiValue)[key] = key === 'protenix_model_weights'
                     ? normalizeProtenixModel(params[key])
                     : params[key];
             }
@@ -358,7 +357,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         return merged;
-    };
+    }, [normalizeProtenixModel]);
 
     const [jobName, setJobName] = useState('antibody_design');
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
@@ -439,8 +438,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             : 3
     );
     const [rfantibodyMaxTargetDistance, setRfantibodyMaxTargetDistance] = useState<number>(
-        Number.isFinite(Number((initialValues as any)?.rfantibody_max_target_distance))
-            ? Math.max(0, Number((initialValues as any)?.rfantibody_max_target_distance))
+        Number.isFinite(Number((initialValues as UntypedApiValue)?.rfantibody_max_target_distance))
+            ? Math.max(0, Number((initialValues as UntypedApiValue)?.rfantibody_max_target_distance))
             : 0
     );
     const [rfantibodyMaxEpitopeCentroidDistance, setRfantibodyMaxEpitopeCentroidDistance] = useState<number>(
@@ -699,9 +698,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const isSingleDomainFramework = frameworkType === 'nanobody'
         || detectedAntibodyType.includes('vhh')
         || detectedAntibodyType.includes('nanobody');
-    const availableDesignLoops = isSingleDomainFramework
+    const availableDesignLoops = useMemo(() => (isSingleDomainFramework
         ? ['H1', 'H2', 'H3']
-        : ['H1', 'H2', 'H3', 'L1', 'L2', 'L3'];
+        : ['H1', 'H2', 'H3', 'L1', 'L2', 'L3']), [isSingleDomainFramework]);
     const availableDesignLoopKey = availableDesignLoops.join(',');
 
     // If starting in refinement mode, we are bypassing RFantibody by default
@@ -739,26 +738,26 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 loop_ids: nextLoops,
             };
         });
-    }, [availableDesignLoopKey]);
+    }, [availableDesignLoopKey, availableDesignLoops]);
 
-    const buildFilesApiUrl = (mode: 'download' | 'pdb', path: string) =>
-        `/api/files/${mode}/${encodeURIComponent(path)}`;
+    const buildFilesApiUrl = useCallback((mode: 'download' | 'pdb', path: string) =>
+        `/api/files/${mode}/${encodeURIComponent(path)}`, []);
 
-    const loadPdbFileFromUrl = async (url: string, fallbackName: string) => {
+    const loadPdbFileFromUrl = useCallback(async (url: string, fallbackName: string) => {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
         const fileName = fallbackName.toLowerCase().endsWith('.pdb') ? fallbackName : `${fallbackName}.pdb`;
         return new File([blob], fileName, { type: 'chemical/x-pdb' });
-    };
+    }, []);
 
-    const loadSabdabFrameworkFile = async (pdbCode: string, fallbackName: string) => {
+    const loadSabdabFrameworkFile = useCallback(async (pdbCode: string, fallbackName: string) => {
         const response = await downloadSabdabFramework(pdbCode, {
             scheme: 'imgt',
             convert_hlt: true,
             include_content: true,
         });
-        const data = response.data as any;
+        const data = response.data as UntypedApiValue;
         if (!data?.pdb_content) {
             throw new Error(`No PDB content returned for SAbDab framework ${pdbCode}`);
         }
@@ -769,9 +768,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             url: URL.createObjectURL(blob),
             filePath: data.file_path as string | undefined,
         };
-    };
+    }, []);
 
-    const restoreFrameworkPreview = async (saved: Record<string, any>) => {
+    const restoreFrameworkPreview = useCallback(async (saved: Record<string, UntypedApiValue>) => {
         const savedFramework = saved.sabdab_framework as SelectedFramework | undefined;
         const savedFrameworkPath = (saved.custom_framework_path || saved.framework_pdb || savedFramework?.filePath || '').trim();
 
@@ -822,9 +821,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         setSabdabFramework(null);
-    };
+    }, [buildFilesApiUrl, loadPdbFileFromUrl, loadSabdabFrameworkFile]);
 
-    const getSavedResidueSelection = (saved: Record<string, any>): string[] => {
+    const getSavedResidueSelection = useCallback((saved: Record<string, UntypedApiValue>): string[] => {
         if (Array.isArray(saved.selected_residues)) {
             return saved.selected_residues.map((res) => String(res).trim()).filter(Boolean);
         }
@@ -835,15 +834,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 .filter(Boolean);
         }
         return [];
-    };
+    }, []);
 
-    const getSavedTargetModelNumber = (saved: Record<string, any>): number | null => {
+    const getSavedTargetModelNumber = useCallback((saved: Record<string, UntypedApiValue>): number | null => {
         const raw = saved.target_model_number ?? saved.selected_target_model ?? saved.target_model;
         const parsed = Number(raw);
         return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
-    };
+    }, []);
 
-    const queueRestoredSelection = (saved: Record<string, any>) => {
+    const queueRestoredSelection = useCallback((saved: Record<string, UntypedApiValue>) => {
         const residues = getSavedResidueSelection(saved);
         const rawChain = saved.selected_chain || saved.antigen_chains || null;
         const chain = typeof rawChain === 'string'
@@ -858,9 +857,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setSelectedChain(chain);
         }
         setSelectedResidues(new Set(residues));
-    };
+    }, [getSavedResidueSelection, getSavedTargetModelNumber]);
 
-    const restoreTargetFromSaved = async (saved: Record<string, any>) => {
+    const restoreTargetFromSaved = useCallback(async (saved: Record<string, UntypedApiValue>) => {
         const savedSource = saved.target_source as { type?: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | undefined;
         const savedUploadedPath = typeof saved.uploaded_path === 'string' ? saved.uploaded_path : '';
         const rawPath = (savedSource?.path || savedUploadedPath || saved.target_pdb || '').trim();
@@ -903,13 +902,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         const file = await loadPdbFileFromUrl(fetchUrl, sourceName);
         setTargetPdb(file);
-    };
+    }, [buildFilesApiUrl, loadPdbFileFromUrl]);
 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
     const submitMutation = useMutation({
-        mutationFn: async (data: any) => submitJob(data),
+        mutationFn: async (data: UntypedApiValue) => submitJob(data),
         onSuccess: () => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -918,12 +917,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     });
 
     const boltzgenPreviewMutation = useMutation({
-        mutationFn: async (payload: { params: Record<string, any>; validate?: boolean }) => previewBoltzGenDesignSpec(payload),
+        mutationFn: async (payload: { params: Record<string, UntypedApiValue>; validate?: boolean }) => previewBoltzGenDesignSpec(payload),
         onSuccess: (response) => {
             setBoltzgenPreview(response.data);
             setShowBoltzgenPreview(true);
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             const detail = error.response?.data?.detail;
             const message = typeof detail === 'object' ? JSON.stringify(detail, null, 2) : (detail || error.message);
             window.alert('BoltzGen preview failed:\n' + message);
@@ -936,7 +935,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }, [selectedChain, ppiflowSeedAntigenChains]);
 
     const launchMutagenesisMutation = useMutation({
-        mutationFn: async (data: any) => launchManualMutagenesis(data),
+        mutationFn: async (data: UntypedApiValue) => launchManualMutagenesis(data),
         onSuccess: () => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -999,7 +998,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     };
 
     const buildStandaloneBoltzgenParams = (pdbPath: string, epitopeString: string) => {
-        const boltzgenParams: Record<string, any> = {
+        const boltzgenParams: Record<string, UntypedApiValue> = {
             diffusion_method: 'boltzgen',
             run_boltzgen_only: true,
             run_docking: false,
@@ -1175,7 +1174,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             const epitopeString = Array.from(selectedResidues).sort().join(',');
             const params = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
             await boltzgenPreviewMutation.mutateAsync({ params, validate: true });
-        } catch (error: any) {
+        } catch (error: UntypedApiValue) {
             window.alert(`BoltzGen preview failed:\n${error?.message || error}`);
         }
     };
@@ -1265,7 +1264,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             ) {
                 setInteractiveGateStage(initialValues.interactive_gate_stage);
             }
-            // Handling renamed/mapped boolean params if any
+            // Handling renamed/mapped boolean params if unknown
             if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
             if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
             if (Array.isArray(initialValues.pinned_gpus)) setPinnedGpus(initialValues.pinned_gpus);
@@ -1366,8 +1365,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (!isRefinementMode && initialValues.rfantibody_min_target_contacts !== undefined) {
                 setRfantibodyMinTargetContacts(Math.max(0, Number(initialValues.rfantibody_min_target_contacts) || 0));
             }
-            if (!isRefinementMode && (initialValues as any).rfantibody_max_target_distance !== undefined) {
-                setRfantibodyMaxTargetDistance(Math.max(0, Number((initialValues as any).rfantibody_max_target_distance) || 0));
+            if (!isRefinementMode && (initialValues as UntypedApiValue).rfantibody_max_target_distance !== undefined) {
+                setRfantibodyMaxTargetDistance(Math.max(0, Number((initialValues as UntypedApiValue).rfantibody_max_target_distance) || 0));
             }
             if (!isRefinementMode && initialValues.rfantibody_max_epitope_centroid_distance !== undefined) {
                 setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(initialValues.rfantibody_max_epitope_centroid_distance) || 0));
@@ -1381,7 +1380,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (typeof initialValues.protect_tetrad === 'boolean') setProtectTetrad(initialValues.protect_tetrad);
             else if (typeof initialValues.protect_vhh_tetrad === 'boolean') setProtectTetrad(initialValues.protect_vhh_tetrad);
             if (Array.isArray(initialValues.manual_cdr_definitions)) {
-                const defs = initialValues.manual_cdr_definitions.map((d: any) => ({
+                const defs = initialValues.manual_cdr_definitions.map((d: UntypedApiValue) => ({
                     ...d,
                     residues: new Set(d.residues || [])
                 }));
@@ -1396,7 +1395,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             restoreFrameworkPreview(initialValues)
                 .catch((e) => console.error('[ANTIBODY_DENOVO] Failed to restore saved framework state', e));
         }
-    }, [initialValues]);
+    }, [initialValues, isRefinementMode, mergeQualitySettingsFromParams, queueRestoredSelection, restoreFrameworkPreview, restoreTargetFromSaved]);
 
     // Parse the uploaded/selected target structure, preserving all available models.
     useEffect(() => {
@@ -1435,7 +1434,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 setParsedChains([]);
             })
             .finally(() => setIsParsing(false));
-    }, [targetPdb]);
+    }, [getSavedTargetModelNumber, initialValues, selectedTargetModel, targetPdb, uploadedPath]);
 
     // Keep the active target chains/viewer content aligned to the currently selected model.
     useEffect(() => {
@@ -1479,7 +1478,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         setSelectedResidues(nextResidues);
         restoringSelectionRef.current = null;
-    }, [parsedTargetStructure, selectedTargetModel]);
+    }, [parsedTargetStructure, pdbBlobUrl, selectedChain, selectedResidues, selectedTargetModel]);
 
     // Parse custom framework PDB for accurate CDR mapping when uploaded.
     useEffect(() => {
@@ -2006,7 +2005,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (isRefinementMode && refinementParentJobId && (refinementDesignIds?.length || refinementReviewFilterSetId)) {
                 // Determine action based on UI settings
                 // Nextflow determines the correct start based on skip flags which jobs.py injects
-                const refinementOverrides = { ...jobData.params } as Record<string, any>;
+                const refinementOverrides = { ...jobData.params } as Record<string, UntypedApiValue>;
                 for (const key of [
                     'enable_rfantibody_filter',
                     'rfantibody_screen_reference_scope',
@@ -3724,28 +3723,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                         console.error('Failed to parse cached framework PDB:', err);
                                                         setParsedFrameworkChains([]);
                                                     });
-                                            } else if (fw?.pdbCode) {
-                                                // Fallback: Use RCSB PDB download URL for Mol* viewer
-                                                const fwUrl = `https://files.rcsb.org/download/${fw.pdbCode.toUpperCase()}.pdb`;
-                                                setFrameworkPdbUrl(fwUrl);
-                                                setViewerMode('framework');
-                                                setShow3DViewer(true);
-                                                setParsedFrameworkChains([]);
-
-                                                fetch(fwUrl)
-                                                    .then((res) => {
-                                                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                                                        return res.blob();
-                                                    })
-                                                    .then((blob) => {
-                                                        const fwFile = new File([blob], `${fw.pdbCode}.pdb`);
-                                                        return parsePDBFile(fwFile);
-                                                    })
-                                                    .then((parsed) => setParsedFrameworkChains(parsed.chains))
-                                                    .catch((err) => {
-                                                        console.error('Failed to parse fallback framework PDB:', err);
-                                                        setParsedFrameworkChains([]);
-                                                    });
                                             } else {
                                                 setFrameworkPdbUrl(null);
                                                 setParsedFrameworkChains([]);
@@ -4626,7 +4603,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     {interactiveGateStage === 'post_rfantibody'
                                         ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
                                         : interactiveGateStage === 'post_fampnn'
-                                            ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
+                                            ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before unknown structure validator is called.'
                                             : interactiveGateStage === 'post_caliby'
                                                 ? 'Pause immediately after Caliby sequence design so you can review the experimental Potts-designed candidates before maturation or structure validation.'
                                             : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
@@ -4958,7 +4935,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                     <div className="text-sm font-medium text-[var(--text-primary)]">Per-seed sampling</div>
                                     <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                                        `Samples per seed` in the left column controls how many backbones PPIFlow generates for each seed complex. Use the review gate to prune the batch before any heavier downstream work.
+                                        `Samples per seed` in the left column controls how many backbones PPIFlow generates for each seed complex. Use the review gate to prune the batch before unknown heavier downstream work.
                                     </p>
                                 </div>
                             </>
@@ -5441,8 +5418,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
                             loaded.push('rfantibody_min_target_contacts');
                         }
-                        if (!isRefinementMode && (p as any).rfantibody_max_target_distance !== undefined) {
-                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as any).rfantibody_max_target_distance) || 0));
+                        if (!isRefinementMode && (p as UntypedApiValue).rfantibody_max_target_distance !== undefined) {
+                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as UntypedApiValue).rfantibody_max_target_distance) || 0));
                             loaded.push('rfantibody_max_target_distance');
                         }
                         if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
@@ -5480,7 +5457,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         }
                         // Manual CDR definitions - deserialize from arrays
                         if (Array.isArray(p.manual_cdr_definitions)) {
-                            const defs = p.manual_cdr_definitions.map((d: any) => ({
+                            const defs = p.manual_cdr_definitions.map((d: UntypedApiValue) => ({
                                 ...d,
                                 residues: new Set(d.residues || [])
                             }));

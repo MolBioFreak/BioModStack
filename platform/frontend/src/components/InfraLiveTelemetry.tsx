@@ -20,10 +20,10 @@ const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const MIN_GAP_BREAK_MS = 12000;
-export const SHARED_SYSTEM_QUERY_KEY = ['system'];
-export const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
-export const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
-export const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
+const SHARED_SYSTEM_QUERY_KEY = ['system'];
+const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
+const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
+const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
 const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
 const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
 let sharedTelemetryCollectorSubscribers = 0;
@@ -824,7 +824,7 @@ function GpuInlinePowerControl({
 
     useEffect(() => {
         setFanInputValue(String(Math.round(getEffectiveFanTarget(fan))));
-    }, [fan?.target_percent, fan?.profile_target_percent, fan?.current_percent, fan?.mode, fan?.profile_mode]);
+    }, [fan]);
 
     const parsedValue = parseInt(inputValue, 10);
     const isOutOfRange =
@@ -1680,7 +1680,7 @@ export function InfraLiveTelemetry({
             windowMinutes,
             samples: trimRetainedSamples(samples),
         });
-    }, [pollIntervalMs, windowMinutes]);
+    }, [pollIntervalMs, samples, windowMinutes]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;

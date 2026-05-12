@@ -5,7 +5,8 @@ import { fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Jo
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
-import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
+import { LigandSelector, type LigandEntry } from './LigandSelector';
+import { componentIdFromIndex } from './ligandSelectorData';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 
 interface ProteinLocalRedesignTemplateProps {
@@ -694,7 +695,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
         });
     };
 
-    const usePredictedSourceDesign = (design: Design) => {
+    const handlePredictedSourceDesign = (design: Design) => {
         setSelectedTarget({
             type: 'run',
             url: `/api/designs/${design.id}/pdb`,
@@ -1061,7 +1062,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                                                 <button
                                                     key={design.id}
                                                     type="button"
-                                                    onClick={() => usePredictedSourceDesign(design)}
+                                                    onClick={() => handlePredictedSourceDesign(design)}
                                                     className="rounded-lg border px-3 py-3 text-left transition-colors"
                                                     style={themedMutedInsetStyle}
                                                 >

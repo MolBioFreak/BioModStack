@@ -71,7 +71,7 @@ function parseTrackValues(
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('#'));
     if (lines.length === 0) {
-        throw new Error('Track input does not contain any data rows');
+        throw new Error('Track input does not contain unknown data rows');
     }
 
     const firstColumns = lines[0].split(/[\t,\s]+/).filter(Boolean);
@@ -142,7 +142,7 @@ export function RnaStructurePanel({
     const [trackRawInput, setTrackRawInput] = useState('');
     const [useSelectedTrackForGuidance, setUseSelectedTrackForGuidance] = useState(false);
 
-    const analysisTracks = sequenceData.analysisTracks || [];
+    const analysisTracks = useMemo(() => sequenceData.analysisTracks || [], [sequenceData.analysisTracks]);
 
     useEffect(() => {
         let cancelled = false;

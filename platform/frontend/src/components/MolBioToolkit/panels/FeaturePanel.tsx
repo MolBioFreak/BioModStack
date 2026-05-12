@@ -344,7 +344,7 @@ export function FeaturePanel({
     const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<FeatureDraft>(createEmptyDraft);
 
-    const features = sequenceData.features || [];
+    const features = useMemo(() => sequenceData.features || [], [sequenceData.features]);
 
     const usedTypes = useMemo(
         () => [...new Set(features.map((feature) => feature.type))].sort(),
@@ -416,7 +416,7 @@ export function FeaturePanel({
         setAddDraft(createEmptyDraft());
     };
 
-    const buildFeature = (draft: FeatureDraft, existingId?: string): Feature | null => {
+    const buildFeature = (draft: FeatureDraft, featureId: string): Feature | null => {
         const start = Number(draft.start);
         const end = Number(draft.end);
         const normalizedSegments = draft.segments
@@ -445,7 +445,7 @@ export function FeaturePanel({
             : { start: start - 1, end };
 
         return {
-            id: existingId || `feature_${Date.now().toString(36)}`,
+            id: featureId,
             name: draft.name.trim(),
             type: draft.type,
             start: bounds.start,
@@ -461,7 +461,7 @@ export function FeaturePanel({
     };
 
     const addFeature = () => {
-        const feature = buildFeature(addDraft);
+        const feature = buildFeature(addDraft, `feature_${Date.now().toString(36)}`);
         if (!feature) return;
         onAddFeature(feature);
         resetAddDraft();

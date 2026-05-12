@@ -2987,7 +2987,6 @@ def run_colabfold_msa_workflow(
                 use_gpu_flag = False
                 selected_gpu_id = None
                 normalized_gpu_server_mode = "off"
-                mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
             else:
                 gpu_uniref_search_db = Path(gpu_target_db_status["uniref30_2302_db"]["gpu_target_db"])
                 if config["use_env"]:

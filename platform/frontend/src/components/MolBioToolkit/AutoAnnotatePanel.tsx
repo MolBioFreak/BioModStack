@@ -1,6 +1,6 @@
 /**
  * AutoAnnotatePanel - Settings panel for pLannotate auto-annotation
- * 
+ *
  * Exposes all pLannotate configuration options to the user.
  */
 
@@ -12,7 +12,7 @@ export interface AutoAnnotateSettings {
     filterFragments: boolean; // Filter out partial/fragment matches
 }
 
-export const DEFAULT_SETTINGS: AutoAnnotateSettings = {
+const DEFAULT_SETTINGS: AutoAnnotateSettings = {
     minIdentity: 35,       // Lower threshold catches more features
     detailed: true,        // Detailed search by default for better detection
     filterFragments: false

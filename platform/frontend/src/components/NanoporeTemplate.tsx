@@ -35,7 +35,7 @@ type InputSource = 'pod5' | 'bam' | 'fastq';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath' | 'wfCloneWorkflowDir';
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'browse' | 'paste' | 'create';
-type PathFilter = 'any' | 'bam' | 'fastq' | 'fasta';
+type PathFilter = 'unknown' | 'bam' | 'fastq' | 'fasta';
 
 interface PathPickerState {
     field: PathField;
@@ -171,7 +171,7 @@ function formatPathDisplay(path: string): string {
 
 function matchesPathFilter(fileName: string, filter: PathFilter): boolean {
     const name = fileName.toLowerCase();
-    if (filter === 'any') return true;
+    if (filter === 'unknown') return true;
     if (filter === 'bam') return name.endsWith('.bam');
     if (filter === 'fastq') return /\.(fastq|fq)(\.gz)?$/i.test(name);
     if (filter === 'fasta') return /\.(fasta|fa|fna)(\.gz)?$/i.test(name);
@@ -1148,7 +1148,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 )}
                             </div>
                             <button
-                                onClick={() => openPathPicker({ field: 'pod5Dir', title: 'Select POD5 Directory', mode: 'directory', filter: 'any' })}
+                                onClick={() => openPathPicker({ field: 'pod5Dir', title: 'Select POD5 Directory', mode: 'directory', filter: 'unknown' })}
                                 className="px-3 py-2 rounded border border-[var(--border-primary)] text-[var(--text-primary)] text-sm hover:bg-[var(--bg-tertiary)] transition-colors"
                             >
                                 Browse
@@ -1915,7 +1915,7 @@ nextflow run ngs.nf -profile nanopore_methylation \\
                                                 )}
                                             </div>
                                             <button
-                                                onClick={() => openPathPicker({ field: 'wfCloneWorkflowDir', title: 'Select wf-clone Directory', mode: 'directory', filter: 'any' })}
+                                                onClick={() => openPathPicker({ field: 'wfCloneWorkflowDir', title: 'Select wf-clone Directory', mode: 'directory', filter: 'unknown' })}
                                                 className="px-3 py-1.5 rounded border border-[var(--border-primary)] text-[var(--text-primary)] text-sm hover:bg-[var(--bg-tertiary)] transition-colors"
                                             >
                                                 Browse
@@ -2089,7 +2089,7 @@ nextflow run ngs.nf -profile nanopore_methylation \\
                                 </div>
                             ) : (
                                 <div className="space-y-1">
-                                    {browserEntries.map((entry: any) => {
+                                    {browserEntries.map((entry: UntypedApiValue) => {
                                         const isDirectory = Boolean(entry.is_directory);
                                         const isSelectable = pathPicker.mode === 'directory'
                                             ? isDirectory
@@ -2146,7 +2146,7 @@ nextflow run ngs.nf -profile nanopore_methylation \\
                         <div className="px-4 py-2 border-t border-[var(--border-primary)] text-xs text-[var(--text-secondary)] flex items-center justify-between">
                             <span>
                                 {pathPicker.mode === 'file'
-                                    ? (pathPicker.filter === 'any'
+                                    ? (pathPicker.filter === 'unknown'
                                         ? 'File selection enabled.'
                                         : `Showing selectable ${pathPicker.filter.toUpperCase()} files.`)
                                     : 'Directory selection enabled.'}

@@ -22,6 +22,7 @@ from services.assembly.types import (
     AssemblyError,
     AssemblyFragment,
     AssemblyJunction,
+    AssemblyProduct,
     FragmentEnd,
 )
 from services.molbio_ops import (
@@ -926,6 +927,83 @@ class AutoAnnotateResponse(BaseModel):
     message: str
 
 
+def _resolve_plannotate_executable(configured: str | None = None) -> str | None:
+    """Return an executable path/name when pLannotate tooling is available."""
+    import os
+    import shutil
+
+    if not configured:
+        return None
+    if os.path.sep in configured:
+        return configured if os.path.exists(configured) else None
+    return shutil.which(configured) or None
+
+
+def _build_plannotate_command(
+    *,
+    input_file: str,
+    output_dir: str,
+    is_linear: bool,
+    detailed: bool,
+) -> list[str]:
+    """Build the pLannotate command for either micromamba or direct installs."""
+    import os
+    import shutil
+    from pathlib import Path
+
+    sensitive_yaml = os.getenv(
+        "BMS_PLANNOTATE_SENSITIVE_YAML",
+        str(Path.home() / ".plannotate_sensitive.yml"),
+    )
+    plannotate_bin = _resolve_plannotate_executable(os.getenv("BMS_PLANNOTATE_BIN"))
+    micromamba_bin = _resolve_plannotate_executable(os.getenv("BMS_MICROMAMBA_BIN")) or shutil.which("micromamba")
+    micromamba_root_prefix = os.getenv("BMS_MICROMAMBA_ROOT_PREFIX")
+    plannotate_env = os.getenv("BMS_PLANNOTATE_ENV", "plannotate")
+
+    if micromamba_bin:
+        cmd = [micromamba_bin, "run"]
+        if micromamba_root_prefix:
+            cmd.extend(["--root-prefix", micromamba_root_prefix])
+        cmd.extend(["-n", plannotate_env, "plannotate"])
+    else:
+        plannotate_bin = plannotate_bin or shutil.which("plannotate")
+        if not plannotate_bin:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "pLannotate is not available in this runtime: neither micromamba nor "
+                    "plannotate is on PATH. Rebuild bms-api with pLannotate support, or set "
+                    "BMS_MICROMAMBA_BIN/BMS_PLANNOTATE_BIN and BMS_PLANNOTATE_ENV."
+                ),
+            )
+        cmd = [plannotate_bin]
+
+    cmd.extend([
+        "batch",
+        "-i", input_file,
+        "-o", output_dir,
+        "--csv",
+    ])
+    if os.path.exists(sensitive_yaml):
+        cmd.extend(["-y", sensitive_yaml])
+    if is_linear:
+        cmd.append("-l")
+    if detailed:
+        cmd.append("-d")
+    return cmd
+
+
+def _plannotate_error_means_no_features(stderr: str, stdout: str) -> bool:
+    """pLannotate can exit non-zero on valid non-plasmid/no-hit inputs."""
+    combined = f"{stderr}\n{stdout}"
+    no_feature_markers = [
+        "Cannot set a DataFrame without columns to the column feat loc",
+        "no features",
+        "no annotations",
+    ]
+    return any(marker.lower() in combined.lower() for marker in no_feature_markers)
+
+
 @router.post("/auto-annotate", response_model=AutoAnnotateResponse)
 async def auto_annotate(request: AutoAnnotateRequest):
     """
@@ -937,13 +1015,12 @@ async def auto_annotate(request: AutoAnnotateRequest):
     - Promoters and terminators
     - Common tags and reporters
     
-    Requires pLannotate to be installed via micromamba.
+    Requires pLannotate to be available directly or through the configured micromamba env.
     """
     import subprocess
     import tempfile
     import csv
     import os
-    from pathlib import Path
     
     # Validate sequence
     sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
@@ -965,32 +1042,13 @@ async def auto_annotate(request: AutoAnnotateRequest):
             for i in range(0, len(sequence), 60):
                 f.write(sequence[i:i+60] + "\n")
         
-        # Build plannotate command with optional sensitive search config.
-        sensitive_yaml = os.getenv(
-            "BMS_PLANNOTATE_SENSITIVE_YAML",
-            str(Path.home() / ".plannotate_sensitive.yml"),
+        # Build pLannotate command with optional sensitive search config.
+        cmd = _build_plannotate_command(
+            input_file=input_file,
+            output_dir=output_dir,
+            is_linear=request.is_linear,
+            detailed=request.detailed,
         )
-        micromamba_bin = os.getenv("BMS_MICROMAMBA_BIN", "micromamba")
-        micromamba_root_prefix = os.getenv("BMS_MICROMAMBA_ROOT_PREFIX")
-        plannotate_env = os.getenv("BMS_PLANNOTATE_ENV", "plannotate")
-
-        cmd = [micromamba_bin, "run", "-n", plannotate_env]
-        if micromamba_root_prefix:
-            cmd.extend(["--root-prefix", micromamba_root_prefix])
-        cmd.extend([
-            "plannotate", "batch",
-            "-i", input_file,
-            "-o", output_dir,
-            "--csv",
-        ])
-        if os.path.exists(sensitive_yaml):
-            cmd.extend(["-y", sensitive_yaml])
-        
-        if request.is_linear:
-            cmd.append("-l")  # --linear flag
-        
-        if request.detailed:
-            cmd.append("-d")  # --detailed flag
         
         # Run pLannotate
         try:
@@ -1002,12 +1060,19 @@ async def auto_annotate(request: AutoAnnotateRequest):
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="pLannotate timed out")
+        except FileNotFoundError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"pLannotate runtime unavailable: {str(e)}",
+            ) from e
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"pLannotate execution failed: {str(e)}")
 
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             stdout = (result.stdout or "").strip()
+            if _plannotate_error_means_no_features(stderr, stdout):
+                return AutoAnnotateResponse(features=[], message="No features detected")
             detail = stderr or stdout or f"pLannotate exited with status {result.returncode}"
             raise HTTPException(status_code=500, detail=detail[:1000])
         

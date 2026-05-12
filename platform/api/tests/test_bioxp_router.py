@@ -262,9 +262,15 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['bms_proxy_routes']['/vision/inspect'] is True
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
     assert response['robot_local_expected_routes']['/motion/axes/current'] is True
+    assert response['robot_local_expected_routes']['/motion/oem/home_xy'] is True
+    assert response['robot_local_expected_routes']['/motion/oem/rehome'] is True
+    assert response['robot_local_expected_routes']['/motion/oem/initialize_motion'] is True
     assert response['bms_proxy_routes']['/motion/axis/zero'] is True
+    assert response['bms_proxy_routes']['/motion/oem/home_xy'] is True
+    assert response['bms_proxy_routes']['/motion/oem/rehome'] is True
+    assert response['bms_proxy_routes']['/motion/oem/initialize_motion'] is True
     assert response['manual_motion_routes']['/motion/axis/zero'] is True
-    assert response['manual_motion_routes']['/motion/axis/home'] is False
+    assert response['manual_motion_routes']['/motion/axis/home'] is True
     assert response['default_operator_routes']['/oem/runtime/status'] is True
     assert response['default_operator_routes']['/liquid/status'] is True
     assert '/motion/axis/relative' not in response['default_operator_routes']
@@ -278,7 +284,7 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['commissioning_only_routes']['/motion/axis/relative'] is True
     assert response['commissioning_only_routes']['/liquid/aspirate'] is True
     assert response['disabled_routes']['/daemon/start'] is True
-    assert response['disabled_routes']['/motion/axis/home'] is True
+    assert '/motion/axis/home' not in response['disabled_routes']
     assert any('disabled by design' in note for note in response['notes'])
 
 
@@ -364,7 +370,7 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
 
 
 @pytest.mark.asyncio
-async def test_motion_zero_proxies_but_manual_switch_home_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_motion_zero_and_manual_switch_home_are_separate_proxy_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str, dict | None, dict | None, float]] = []
 
     async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
@@ -377,20 +383,18 @@ async def test_motion_zero_proxies_but_manual_switch_home_fails_closed(monkeypat
 
     class HomeRequestStub:
         async def json(self):
-            return {'axis': 'x', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}
+            return {'axis': 'g', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}
 
     monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
 
     zero = await bioxp.move_axis_zero(ZeroRequestStub())
+    home = await bioxp.home_axis(HomeRequestStub())
     assert zero['path'] == '/motion/axis/zero'
+    assert home['path'] == '/motion/axis/home'
 
-    with pytest.raises(HTTPException) as exc_info:
-        await bioxp.home_axis(HomeRequestStub())
-
-    assert exc_info.value.status_code == 409
-    assert 'limit-switch ignore' in str(exc_info.value.detail)
     assert calls == [
         ('POST', '/motion/axis/zero', {'axis': 'z', 'wait_timeout_s': 6.0, 'operator_note': 'zero-route-test'}, None, 65.0),
+        ('POST', '/motion/axis/home', {'axis': 'g', 'timeout_s': 9.0, 'operator_note': 'real-home-route-test'}, None, 90.0),
     ]
 
 @pytest.mark.asyncio
@@ -418,6 +422,9 @@ async def test_oem_startup_runtime_and_range_routes_proxy_to_robot_runtime(monke
     assert await bioxp.oem_runtime_command_history(limit=7) == {'ok': True, 'path': '/oem/runtime/commands/history', 'params': {'limit': 7}}
     assert await bioxp.oem_motion_worker_status() == {'ok': True, 'path': '/oem/motion_worker/status', 'params': None}
     assert await bioxp.motion_oem_startup_step(RequestStub()) == {'ok': True, 'path': '/motion/oem/startup_step', 'params': None}
+    assert await bioxp.motion_oem_home_xy(RequestStub()) == {'ok': True, 'path': '/motion/oem/home_xy', 'params': None}
+    assert await bioxp.motion_oem_rehome(RequestStub()) == {'ok': True, 'path': '/motion/oem/rehome', 'params': None}
+    assert await bioxp.motion_oem_initialize_motion(RequestStub()) == {'ok': True, 'path': '/motion/oem/initialize_motion', 'params': None}
     assert await bioxp.motion_range_status() == {'ok': True, 'path': '/motion/range/status', 'params': None}
 
     assert calls == [
@@ -432,6 +439,9 @@ async def test_oem_startup_runtime_and_range_routes_proxy_to_robot_runtime(monke
         ('GET', '/oem/runtime/commands/history', None, {'limit': 7}, 30.0),
         ('GET', '/oem/motion_worker/status', None, None, 30.0),
         ('POST', '/motion/oem/startup_step', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
+        ('POST', '/motion/oem/home_xy', {'operator': 'bms-test', 'dry_run': True}, None, 120.0),
+        ('POST', '/motion/oem/rehome', {'operator': 'bms-test', 'dry_run': True}, None, 180.0),
+        ('POST', '/motion/oem/initialize_motion', {'operator': 'bms-test', 'dry_run': True}, None, 180.0),
         ('GET', '/motion/range/status', None, None, 30.0),
     ]
 

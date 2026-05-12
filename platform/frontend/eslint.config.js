@@ -19,5 +19,13 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // The React Compiler diagnostics bundled into eslint-plugin-react-hooks v7
+      // report architecture-level optimization blockers, not runtime hook safety.
+      // Keep the production hook contract enforced while avoiding noisy failures
+      // until this app is intentionally compiled with the React Compiler.
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

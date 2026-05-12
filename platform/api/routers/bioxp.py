@@ -238,6 +238,9 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/oem/motion_worker/abort": True,
     "/oem/switch_audit": True,
     "/motion/oem/startup_step": True,
+    "/motion/oem/home_xy": True,
+    "/motion/oem/rehome": True,
+    "/motion/oem/initialize_motion": True,
     "/motion/range/status": True,
     "/motion/reference/status": True,
     "/motion/reference/mark_referenced": True,
@@ -258,10 +261,9 @@ MANUAL_MOTION_ROUTES: Dict[str, bool] = {
     "/motion/axis/relative": True,
     "/motion/axis/absolute": True,
     "/motion/axis/zero": True,
-    # Disabled at the BMS proxy after live X/Z manual-home limit-ignore incidents.
-    # Use OEM startup-step recipes or explicit zero/relative moves only until
-    # the robot-local route proves switch deassert -> active transitions.
-    "/motion/axis/home": False,
+    # Real robot-local manual switch-search home. This is intentionally separate
+    # from /motion/axis/zero so the UI cannot silently replace home with zero.
+    "/motion/axis/home": True,
 }
 DIRECT_LIQUID_COMMAND_ROUTES: Dict[str, bool] = {
     "/liquid/init": True,
@@ -282,7 +284,6 @@ COMMISSIONING_ONLY_ROUTES: Dict[str, bool] = {
 DISABLED_ROUTES: Dict[str, bool] = {
     "/daemon/start": True,
     "/daemon/stop": True,
-    "/motion/axis/home": True,
 }
 
 OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
@@ -1173,6 +1174,21 @@ async def motion_oem_startup_step(request: Request):
     return await proxy_request("POST", "/motion/oem/startup_step", await request.json(), timeout=90.0)
 
 
+@router.post("/motion/oem/home_xy")
+async def motion_oem_home_xy(request: Request):
+    return await proxy_request("POST", "/motion/oem/home_xy", await request.json(), timeout=120.0)
+
+
+@router.post("/motion/oem/rehome")
+async def motion_oem_rehome(request: Request):
+    return await proxy_request("POST", "/motion/oem/rehome", await request.json(), timeout=180.0)
+
+
+@router.post("/motion/oem/initialize_motion")
+async def motion_oem_initialize_motion(request: Request):
+    return await proxy_request("POST", "/motion/oem/initialize_motion", await request.json(), timeout=180.0)
+
+
 @router.get("/motion/range/status")
 async def motion_range_status():
     return await proxy_request("GET", "/motion/range/status", timeout=30.0)
@@ -1305,21 +1321,11 @@ async def move_axis_zero(request: Request):
 @router.post("/motion/axis/home")
 async def home_axis(request: Request):
     payload = await _request_json_or_empty(request)
-    axis = str(payload.get("axis", "")).lower() or "unknown"
-    raise HTTPException(
-        status_code=409,
-        detail={
-            "message": "Manual switch-search home is disabled at the BMS proxy after live X/Z limit-switch ignore incidents.",
-            "axis": axis,
-            "blocked_route": "/motion/axis/home",
-            "allowed_alternatives": [
-                "/motion/axis/zero for controller-coordinate return-to-zero",
-                "/motion/oem/startup_step for supervised OEM-shaped step recipes",
-                "/motion/axis/relative for operator-watched bounded jogs",
-            ],
-            "required_fix": "Robot-local home must prove switch deassertion followed by an active transition before any setHome/reference claim.",
-        },
-    )
+    # BMS is only the reachable proxy here; robot-local FastAPI owns the actual
+    # homing implementation and must return the motion/audit evidence. Keep this
+    # route separate from /motion/axis/zero so Home is never silently rewritten to
+    # controller-zero.
+    return await proxy_request("POST", "/motion/axis/home", payload, timeout=90.0)
 
 @router.post("/thermal/baseline")
 async def thermal_baseline():
