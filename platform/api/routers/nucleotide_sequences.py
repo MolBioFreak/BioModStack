@@ -80,6 +80,8 @@ class NucleotideSequenceCreate(BaseModel):
     description: Optional[str] = None
     sequence: str
     sequence_type: str = "dna"
+    molecule_strandedness: Optional[str] = None
+    molecule_orientation: Optional[str] = None
     is_circular: bool = False
     features: Optional[List[FeatureSchema]] = None
     primers: Optional[List[PrimerSchema]] = None
@@ -95,6 +97,8 @@ class NucleotideSequenceUpdate(BaseModel):
     description: Optional[str] = None
     sequence: Optional[str] = None
     sequence_type: Optional[str] = None
+    molecule_strandedness: Optional[str] = None
+    molecule_orientation: Optional[str] = None
     is_circular: Optional[bool] = None
     features: Optional[List[FeatureSchema]] = None
     primers: Optional[List[PrimerSchema]] = None
@@ -111,6 +115,9 @@ class NucleotideSequenceResponse(BaseModel):
     description: Optional[str]
     sequence: str
     sequence_type: str
+    molecule_strandedness: str
+    molecule_orientation: str
+    molecule_label: str
     is_circular: bool
     length: int
     features: Optional[List[Any]]
@@ -138,6 +145,9 @@ class NucleotideSequenceListItem(BaseModel):
     name: str
     description: Optional[str]
     sequence_type: str
+    molecule_strandedness: str
+    molecule_orientation: str
+    molecule_label: str
     is_circular: bool
     length: int
     gc_content: Optional[float]
@@ -166,9 +176,14 @@ def calculate_gc_content(sequence: str) -> float:
 
 
 def clean_sequence(sequence: str, seq_type: str = "dna") -> str:
-    """Clean and validate nucleotide sequence."""
+    """Clean, canonicalize, and validate a DNA/RNA nucleotide sequence."""
     seq = sequence.upper().replace(" ", "").replace("\n", "").replace("\r", "")
-    valid_chars = set("ATCGNRYMKSWHBVD") if seq_type == "dna" else set("AUCGNRYMKSWHBVD")
+    if seq_type == "rna":
+        seq = seq.replace("T", "U")
+        valid_chars = set("AUCGNRYMKSWHBVD")
+    else:
+        seq = seq.replace("U", "T")
+        valid_chars = set("ATCGNRYMKSWHBVD")
     cleaned = "".join(c for c in seq if c in valid_chars)
     return cleaned
 
@@ -178,6 +193,10 @@ def normalize_sequence_type(sequence_type: Optional[str], sequence: str) -> str:
     normalized = (sequence_type or "").strip().lower()
     if normalized in {"dna", "rna"}:
         return normalized
+    if "rna" in normalized:
+        return "rna"
+    if "dna" in normalized:
+        return "dna"
 
     upper = sequence.upper()
     if "U" in upper and "T" not in upper:
@@ -185,11 +204,82 @@ def normalize_sequence_type(sequence_type: Optional[str], sequence: str) -> str:
     return "dna"
 
 
-def entity_kind_for(sequence_type: str, is_circular: bool) -> str:
-    """Derive a UI-friendly construct kind without requiring a DB migration."""
-    if sequence_type == "rna":
-        return "circular_rna" if is_circular else "rna"
-    return "plasmid" if is_circular else "dna"
+def normalize_molecule_strandedness(strandedness: Optional[str], sequence_type: str) -> str:
+    """Normalize molecule strandedness, preserving explicit ss/ds metadata when present."""
+    token = (strandedness or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if token in {
+        "ss",
+        "single",
+        "single-stranded",
+        "single-strand",
+        "single-stranded-dna",
+        "single-stranded-rna",
+        "ss-dna",
+        "ss-rna",
+        "ssdna",
+        "ssrna",
+    } or "single-strand" in token or "ssrna" in token or "ssdna" in token or "ss-rna" in token or "ss-dna" in token:
+        return "single"
+    if token in {
+        "ds",
+        "double",
+        "double-stranded",
+        "double-strand",
+        "double-stranded-dna",
+        "double-stranded-rna",
+        "ds-dna",
+        "ds-rna",
+        "dsdna",
+        "dsrna",
+    } or "double-strand" in token or "dsrna" in token or "dsdna" in token or "ds-rna" in token or "ds-dna" in token:
+        return "double"
+    if token in {"unknown", "not-known", "na", "n/a"}:
+        return "unknown"
+
+    # Legacy imports did not carry strandedness. These defaults match the common
+    # construct assumptions while still allowing ssDNA/dsRNA to be explicit.
+    return "single" if sequence_type == "rna" else "double"
+
+
+def normalize_molecule_orientation(orientation: Optional[str], strandedness: str) -> str:
+    """Normalize single-strand sense/orientation metadata."""
+    if strandedness == "double":
+        return "not_applicable"
+
+    token = (orientation or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if token in {"+", "plus", "positive", "positive-sense", "positive-strand", "plus-sense", "plus-strand", "+sense", "sense", "coding"}:
+        return "positive"
+    if token in {"-", "minus", "negative", "negative-sense", "negative-strand", "minus-sense", "minus-strand", "-sense", "antisense", "anti-sense"}:
+        return "negative"
+    if token in {"ambisense", "ambi-sense", "+/-", "-/+"}:
+        return "ambisense"
+    if token in {"not-applicable", "not_applicable", "n/a", "na"}:
+        return "not_applicable"
+    return "unknown"
+
+
+def molecule_label_for(sequence_type: str, strandedness: str, orientation: str) -> str:
+    polymer = "RNA" if sequence_type == "rna" else "DNA"
+    if strandedness == "double":
+        return f"ds{polymer}"
+    if strandedness == "single":
+        if orientation == "positive":
+            return f"(+)ss{polymer}"
+        if orientation == "negative":
+            return f"(-)ss{polymer}"
+        if orientation == "ambisense":
+            return f"ambisense ss{polymer}"
+        return f"ss{polymer}"
+    return polymer
+
+
+def entity_kind_for(sequence_type: str, is_circular: bool, strandedness: str = "unknown", orientation: str = "unknown") -> str:
+    """Derive a UI-friendly construct kind without requiring consumers to infer labels."""
+    if sequence_type == "dna" and is_circular and strandedness in {"unknown", "double"}:
+        return "plasmid"
+    label = molecule_label_for(sequence_type, strandedness, orientation).lower()
+    label = label.replace("(+)", "positive_").replace("(-)", "negative_").replace(" ", "_")
+    return f"circular_{label}" if is_circular else label
 
 
 def topology_for(is_circular: bool) -> str:
@@ -198,12 +288,18 @@ def topology_for(is_circular: bool) -> str:
 
 def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
     """Serialize a DB sequence row with computed frontend-facing metadata."""
+    strandedness = normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), seq.sequence_type)
+    orientation = normalize_molecule_orientation(getattr(seq, "molecule_orientation", None), strandedness)
+    molecule_label = molecule_label_for(seq.sequence_type, strandedness, orientation)
     return NucleotideSequenceResponse(
         id=seq.id,
         name=seq.name,
         description=seq.description,
         sequence=seq.sequence,
         sequence_type=seq.sequence_type,
+        molecule_strandedness=strandedness,
+        molecule_orientation=orientation,
+        molecule_label=molecule_label,
         is_circular=seq.is_circular,
         length=seq.length,
         features=normalize_feature_payloads(seq.features, seq.length),
@@ -217,7 +313,7 @@ def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
         operation=seq.operation,
         operation_params=seq.operation_params,
         version=seq.version,
-        entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular),
+        entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular, strandedness, orientation),
         topology=topology_for(seq.is_circular),
         created_at=seq.created_at,
         updated_at=seq.updated_at,
@@ -362,6 +458,9 @@ async def list_sequences(
             name=seq.name,
             description=seq.description,
             sequence_type=seq.sequence_type,
+            molecule_strandedness=(strandedness := normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), seq.sequence_type)),
+            molecule_orientation=(orientation := normalize_molecule_orientation(getattr(seq, "molecule_orientation", None), strandedness)),
+            molecule_label=molecule_label_for(seq.sequence_type, strandedness, orientation),
             is_circular=seq.is_circular,
             length=seq.length,
             gc_content=seq.gc_content,
@@ -369,7 +468,7 @@ async def list_sequences(
             organism=seq.organism,
             accession=seq.accession,
             source_file=seq.source_file,
-            entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular),
+            entity_kind=entity_kind_for(seq.sequence_type, seq.is_circular, strandedness, orientation),
             topology=topology_for(seq.is_circular),
             created_at=seq.created_at,
             updated_at=seq.updated_at,
@@ -391,6 +490,8 @@ async def create_sequence(
         raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
     
     # Create new sequence record
+    strandedness = normalize_molecule_strandedness(data.molecule_strandedness, normalized_type)
+    orientation = normalize_molecule_orientation(data.molecule_orientation, strandedness)
     seq_id = str(uuid.uuid4())
     seq = NucleotideSequence(
         id=seq_id,
@@ -398,6 +499,8 @@ async def create_sequence(
         description=data.description,
         sequence=cleaned_seq,
         sequence_type=normalized_type,
+        molecule_strandedness=strandedness,
+        molecule_orientation=orientation,
         is_circular=data.is_circular,
         length=len(cleaned_seq),
         features=normalize_feature_payloads(data.features, len(cleaned_seq)),
@@ -469,6 +572,24 @@ async def update_sequence(
     if data.sequence_type is not None:
         seq.sequence_type = next_sequence_type
         changed = True
+
+    if data.molecule_strandedness is not None:
+        seq.molecule_strandedness = normalize_molecule_strandedness(data.molecule_strandedness, next_sequence_type)
+        changed = True
+    elif getattr(seq, "molecule_strandedness", None) in {None, ""}:
+        seq.molecule_strandedness = normalize_molecule_strandedness(None, next_sequence_type)
+        changed = True
+
+    if data.molecule_orientation is not None or data.molecule_strandedness is not None:
+        seq.molecule_orientation = normalize_molecule_orientation(
+            data.molecule_orientation if data.molecule_orientation is not None else getattr(seq, "molecule_orientation", None),
+            normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), next_sequence_type),
+        )
+        changed = True
+    elif getattr(seq, "molecule_orientation", None) in {None, ""}:
+        seq.molecule_orientation = normalize_molecule_orientation(None, normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), next_sequence_type))
+        changed = True
+
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
         changed = True

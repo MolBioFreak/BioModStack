@@ -1600,12 +1600,18 @@ export interface SequenceAnalysisTrack {
     created_at?: string | null;
 }
 
+export type NucleotideMoleculeStrandedness = 'single' | 'double' | 'unknown';
+export type NucleotideMoleculeOrientation = 'positive' | 'negative' | 'ambisense' | 'not_applicable' | 'unknown';
+
 export interface NucleotideSequence {
     id: string;
     name: string;
     description: string | null;
     sequence: string;
     sequence_type: 'dna' | 'rna';
+    molecule_strandedness: NucleotideMoleculeStrandedness;
+    molecule_orientation: NucleotideMoleculeOrientation;
+    molecule_label: string;
     is_circular: boolean;
     length: number;
     features: SequenceFeature[] | null;
@@ -1630,6 +1636,9 @@ export interface NucleotideSequenceListItem {
     name: string;
     description: string | null;
     sequence_type: 'dna' | 'rna';
+    molecule_strandedness: NucleotideMoleculeStrandedness;
+    molecule_orientation: NucleotideMoleculeOrientation;
+    molecule_label: string;
     is_circular: boolean;
     length: number;
     gc_content: number | null;
@@ -1648,6 +1657,8 @@ export interface NucleotideSequenceCreate {
     description?: string;
     sequence: string;
     sequence_type?: 'dna' | 'rna';
+    molecule_strandedness?: NucleotideMoleculeStrandedness;
+    molecule_orientation?: NucleotideMoleculeOrientation;
     is_circular?: boolean;
     features?: SequenceFeature[];
     primers?: SequencePrimer[];

@@ -36,6 +36,7 @@ import {
     ANTIBODY_REFINEMENT_PIPELINE_MODE,
 } from '../lib/antibodyModes';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -2239,11 +2240,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 {deNovoDownstreamLocked ? (
                     <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
-                        Initial {deNovoGenerator === 'ppiflow' ? 'PPIFlow seeded' : 'BoltzGen'} runs stay generator-only here. Select the top candidates from that batch, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> to expose redesign, PPIFlow, and validation.
+                        Generator-only first pass. Shortlist outputs, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for heavier stages.
                     </p>
                 ) : (
                     <p className="mt-3 text-[11px] text-[var(--text-secondary)]">
-                        This keeps the initial run in a batch-run-filter loop. Most campaigns should start generator-only, then push the top subset into refinement for heavier downstream work.
+                        Batch-run-filter first; enable downstream stages only when needed.
                     </p>
                 )}
             </div>
@@ -2279,6 +2280,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 </div>
             </div>
+
+            <ModelDocumentationLinks
+                topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2']}
+                summary="Generator and validator background is linked out; this launcher keeps controls and review gates up front."
+                compact
+                className="mb-6"
+            />
 
             {deNovoGeneratorSelector}
 
@@ -2316,10 +2324,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             {isRefinementMode
                                 ? 'Selected outputs are re-queued through antibody refinement. Choose which stages to rerun below.'
                                 : deNovoGenerator === 'ppiflow'
-                                    ? 'Initial PPIFlow seeded generation runs in the same shell. Downstream redesign stays hidden until you explicitly enable it or launch Antibody Refinement from selected outputs.'
+                                    ? 'Initial PPIFlow pass; refinement opens from shortlisted outputs.'
                                 : deNovoGenerator === 'boltzgen'
-                                    ? 'Initial BoltzGen nanobody generation runs in the same shell. Downstream redesign stays hidden until you explicitly enable it or launch Antibody Refinement from selected outputs.'
-                                    : 'Initial de novo runs start generator-only by default. Turn on downstream stages above when you want them in the first batch run.'}
+                                    ? 'Initial BoltzGen pass; refinement opens from shortlisted outputs.'
+                                    : 'Initial de novo pass starts generator-only; enable downstream stages above.'}
                         </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2 text-[11px]">
@@ -2658,8 +2666,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                                 <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-400">
                                     {mutagenesisLaunchMode === 'seeded_refinement'
-                                        ? 'Seeded refinement preserves user-imposed residues during downstream redesign. For indels, the workflow first rebuilds structural seeds, then automatically relaunches antibody refinement from the rebuilt variants.'
-                                        : 'Exact evaluation is the direct predictor path. It is useful for checking one exact mutant, but it is not a full redesign/refinement round.'}
+                                        ? 'Seeded refinement locks requested residues, rebuilds indel seeds, then relaunches refinement.'
+                                        : 'Exact evaluation checks the requested mutant directly; it is not a redesign round.'}
                                 </div>
 
                                 <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -4295,8 +4303,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 </h3>
                                 <p className="text-xs text-slate-500 mt-1">
                                     {isRefinementMode
-                                        ? 'Run the coarse RFantibody contact-distance screen on the designs selected for this refinement round. Leave it enabled when you selected a broad set and want the workflow to auto-reject obviously detached inputs before FAMPNN, PPIFlow, or validation. Turn it off if you already curated the set manually and want everything to pass through unchanged.'
-                                        : 'Coarse pre-FAMPNN screen for obviously bad backbones. This is intentionally simple: keep backbones that at least approach the selected epitope before spending sequence-design and validator compute on them.'}
+                                        ? 'Re-screen selected inputs before downstream refinement. Turn off if already curated.'
+                                        : 'Optional coarse contact screen before expensive downstream stages.'}
                                 </p>
                             </div>
 
@@ -4416,7 +4424,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </div>
 
                             <p className="text-xs text-slate-500">
-                                Recommended coarse screen: at least `1` epitope contact within `8 A`, minimum epitope distance below `20 A`, at least `3` loose target contacts within `12 A`, and epitope centroid distance below `40 A`. Use `CDR loops` for the default triage lens. Switch to `Whole antibody` when framework engagement should count explicitly. If you pause at RFantibody review, screening summaries are still generated even when automatic filtering is off.
+                                Defaults: CDR loops, 1 epitope contact @8 A, 3 target contacts @12 A. Switch scope only when framework engagement should count.
                             </p>
                         </div>
                     )}
@@ -4492,7 +4500,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <div className="rounded-lg border p-4" style={themedInsetStyle}>
                             <div className="text-sm font-semibold text-[var(--text-primary)]">Generator-Only Batch</div>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                                Downstream redesign, validation, and QC controls stay hidden until you enable them in the orchestration menu above. The default path is intentionally lighter for batch generation and filtering.
+                                Controls stay hidden until enabled in orchestration above.
                             </p>
                         </div>
                     )}
@@ -4504,9 +4512,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 {isRefinementMode
                                     ? 'Choose whether the refinement loop pauses for manual review or runs through without intervention.'
                                     : deNovoGenerator === 'ppiflow'
-                                        ? 'Choose whether the seeded PPIFlow batch is a straight generation run or a review-first batch before you reopen selected outputs in Antibody Refinement.'
+                                        ? 'Straight run or pause for review before refinement.'
                                     : deNovoGenerator === 'boltzgen'
-                                        ? 'Choose whether the BoltzGen batch is a straight generation run or a review-first batch before you reopen selected outputs in Antibody Refinement.'
+                                        ? 'Straight run or pause for review before refinement.'
                                         : 'Choose whether the workflow pauses for manual review or runs through without intervention.'}
                             </p>
                         </div>
@@ -4540,14 +4548,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
                                 <div className="text-xs font-medium text-[var(--text-primary)]">BoltzGen Review Loop</div>
                                 <p className="text-xs text-[var(--text-secondary)]">
-                                    Interactive mode pauses the BoltzGen batch after generation and filtering so you can shortlist candidates, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, PPIFlow, and validation.
+                                    Pause after generation/filtering, shortlist, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span>.
                                 </p>
                             </div>
                         ) : interactiveWorkflow && deNovoGenerator === 'ppiflow' && !isRefinementMode ? (
                             <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
                                 <div className="text-xs font-medium text-[var(--text-primary)]">PPIFlow Review Loop</div>
                                 <p className="text-xs text-[var(--text-secondary)]">
-                                    Interactive mode pauses the seeded PPIFlow batch after backbone generation and filtering so you can shortlist candidates, then reopen the selected subset in <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span> for sequence redesign, maturation, and validation.
+                                    Pause after generation/filtering, shortlist, then open <span className="font-medium text-[var(--text-primary)]">Antibody Refinement</span>.
                                 </p>
                             </div>
                         ) : interactiveWorkflow && (
@@ -4601,12 +4609,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 </div>
                                 <p className="text-xs text-[var(--text-secondary)]">
                                     {interactiveGateStage === 'post_rfantibody'
-                                        ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
+                                        ? 'Pause after RFantibody before sequence design and validation.'
                                         : interactiveGateStage === 'post_fampnn'
-                                            ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before unknown structure validator is called.'
+                                            ? 'Pause after FAMPNN filtering before structure validation.'
                                             : interactiveGateStage === 'post_caliby'
-                                                ? 'Pause immediately after Caliby sequence design so you can review the experimental Potts-designed candidates before maturation or structure validation.'
-                                            : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
+                                                ? 'Pause after Caliby sequence design before maturation or validation.'
+                                            : 'Pause after validation; review metrics and relaunch refinement from Results.'}
                                 </p>
                             </div>
                         )}
@@ -4642,8 +4650,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                         <p className="text-xs text-[var(--text-secondary)]">
                             {structureValidator === 'protenix'
-                                ? 'Protenix inference controls live in Quality Settings. Flexible co-fold remains the default; anchored-target mode uses task-local target templates without freezing the binder.'
-                                : 'Boltz-2 controls and post-validation filters live inside Quality Settings. Flexible co-fold remains the default; anchored-target mode injects templates only on the target chains.'}
+                                ? 'Protenix runtime controls live in Quality Settings; flexible co-fold is default.'
+                                : 'Boltz-2 runtime controls and filters live in Quality Settings.'}
                         </p>
                     </div>
                     )}

@@ -18,29 +18,69 @@ test('BIOXP LINK topbar menu exists and matches existing utility-menu pattern', 
     assert.match(panelSource, /BioXP robot interlink/);
 });
 
-test('interlink panel exposes governed connection, diagnostics, and honest log/lifecycle status', () => {
+test('interlink panel exposes governed connection, diagnostics, logs, and button-only runtime controls', () => {
     for (const marker of [
-        'Saved profile is inactive',
+        'Status:',
+        'Endpoint:',
+        'maskEndpointForDisplay',
+        'xxx.xxx',
+        'Profile settings',
         'Connect',
         'Disconnect',
         'Forget saved profile',
         'Diagnostics',
-        'Fetch robot logs',
-        'Robot service logs',
-        'Fetches the last 120 robot-local API service lines',
-        'Lifecycle actions unavailable here',
-        'reset/reboot controls are intentionally not shown',
-        'never homes, arms, recovers motion, or moves axes',
+        'Robot logs',
+        'Advanced controls',
+        'Restart runtime',
+        'RESET BIOXP RUNTIME',
+        'Reboot host',
+        'REBOOT ROBOT',
+        'Documentation',
+        'BMS interlink spec',
+        'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-05-08-bioxp-workstation-interlink-control-panel-spec.md',
+        'BioXP vendor',
+        'https://telesisbio.com/products/bioxp-system/',
+        'PyUSB GitHub',
+        'FastAPI docs',
     ]) {
         assert.match(panelSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     for (const removed of [
+        'Profile is inert until Connect',
+        'Status/control only — no motion',
+        'Endpoint is masked outside edit mode',
+        'active URL:',
+        'recommended:',
+        'state:',
+        'reachable:',
+        'saved endpoint hidden',
+        'add endpoint',
+        'Fetch robot logs',
+        'Recent robot API logs (last 120 lines)',
+        'Advanced controls (restart/reboot)',
+        'Some deployments do not support these actions',
+        'BMS proxy route only',
+        'typed confirmation required',
+        'type RESET BIOXP RUNTIME',
+        'type REBOOT ROBOT',
+        'runtimeAck',
+        'rebootAck',
+        'Saved profile is inactive',
         'optional sudo password',
-        'Reset robot local runtime',
-        'Restart robot OS',
-        'RESET BIOXP RUNTIME',
-        'REBOOT ROBOT',
-        'Robot service log lines',
+        'Lifecycle actions unavailable here',
+        'reset/reboot controls are intentionally not shown',
+        'Robot service logs',
+        'Fetches the last 120 robot-local API service lines',
+        'Last 120 robot-local API lines',
+        'Runtime controls',
+        'Robot API runtime/container controls',
+        'governed BMS proxy endpoints only',
+        'BMS proxy only; no raw-port access or motion',
+        'raw container-internal FastAPI port',
+        'Typed ack required',
+        'supported=false',
+        'Advanced robot host reboot',
+        'never home, arm, recover motion, or move axes',
     ]) {
         assert.doesNotMatch(panelSource, new RegExp(removed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
@@ -86,10 +126,14 @@ test('BioXP cockpit is gated by active interlink state and does not own reset li
     assert.match(cockpitSource, /Reset chiller profile/);
 });
 
-test('runtime reset and robot reboot are not exposed as cockpit actions', () => {
-    assert.doesNotMatch(panelSource, /Reset robot local runtime/);
-    assert.doesNotMatch(panelSource, /Restart robot OS/);
-    assert.match(panelSource, /Lifecycle actions unavailable here/);
+test('runtime reset and robot reboot are exposed as button-only interlink menu actions but not cockpit actions', () => {
+    assert.match(panelSource, /Restart runtime/);
+    assert.match(panelSource, /operator_ack: 'RESET BIOXP RUNTIME'/);
+    assert.match(panelSource, /Reboot host/);
+    assert.match(panelSource, /operator_ack: 'REBOOT ROBOT'/);
+    assert.doesNotMatch(panelSource, /placeholder="type RESET BIOXP RUNTIME"/);
+    assert.doesNotMatch(panelSource, /placeholder="type REBOOT ROBOT"/);
     assert.doesNotMatch(cockpitSource, /Reset robot local runtime/);
     assert.doesNotMatch(cockpitSource, /Restart robot OS/);
+    assert.doesNotMatch(cockpitSource, /Reboot robot host/);
 });

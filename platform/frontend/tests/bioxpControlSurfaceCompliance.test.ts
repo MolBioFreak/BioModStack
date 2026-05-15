@@ -35,13 +35,16 @@ test('default Handler Controls tab contains readback and live motion/grabber sur
 
     assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
     assert.match(liveMotionPanel, /Live X\/Y\/Z \+ Grabber Motion/);
-    assert.doesNotMatch(cockpitSource, /Direct OEM homing modes for supervised testing/);
-    assert.doesNotMatch(cockpitSource, />\s*OEM HomeXY\s*</);
-    assert.doesNotMatch(cockpitSource, />\s*Rehome Diagnostic \/ No Homing\s*</);
-    assert.doesNotMatch(cockpitSource, />\s*OEM Rehome ACK\s*</);
-    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion \/ No Homing\s*</);
-    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion ACK\s*</);
+    assert.match(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.match(cockpitSource, /OEM HomeXY/);
+    assert.match(cockpitSource, />\s*Rehome Diagnostic \/ No Homing\s*</);
+    assert.match(cockpitSource, /OEM Rehome ACK/);
+    assert.match(cockpitSource, />\s*InitializeMotion \/ No Homing\s*</);
+    assert.match(cockpitSource, /InitializeMotion ACK/);
     assert.equal(cockpitSource.match(/Arm Motors No Homing/g)?.length ?? 0, 1);
+    assert.equal(cockpitSource.match(/OEM HomeXY/g)?.length ?? 0, 1);
+    assert.equal(cockpitSource.match(/OEM Rehome ACK/g)?.length ?? 0, 1);
+    assert.equal(cockpitSource.match(/InitializeMotion ACK/g)?.length ?? 0, 1);
     assert.match(liveMotionPanel, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
     assert.match(axisControls, /Speed/);
     assert.match(axisControls, /Acc/);
@@ -147,10 +150,13 @@ test('Zero and Switch Home controls are separate and raw switch telemetry does n
     assert.match(axisControls, /Switch Home/);
     assert.match(axisControls, /disabled=\{!enabled \|\| zeroAxis\.isPending \|\| zeroToControllerBlocked\}/);
     assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
-    assert.match(axisControls, /No frontend motion block is applied/);
+    assert.match(axisControls, /Root-cause fix belongs in robot profile\/current\/switch semantics, not UI blocking/);
+    assert.match(axisControls, /Root-cause fix belongs in robot profile\/current\/switch semantics, not UI blocking/);
     assert.match(cameraAxisControls, /const zeroToControllerBlocked = false/);
     assert.match(cameraAxisControls, /Zero → 0/);
-    assert.match(cameraAxisControls, /telemetry only/);
+    assert.match(cameraAxisControls, /telemetry only; no frontend motion block/);
+    assert.match(cockpitSource, /UP\/-Z/);
+    assert.match(cockpitSource, /DN\/\+Z/);
     assert.doesNotMatch(axisControls, /limitConflictBlocked/);
     assert.doesNotMatch(axisControls, /Home → 0 blocked/);
     assert.doesNotMatch(axisControls, /Raw switch conflict fault/);
