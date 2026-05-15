@@ -62,19 +62,21 @@ def test_compose_core_runtime_contract() -> None:
     assert api["build"]["target"] == "api-runtime"
     assert api["container_name"] == "biomodstack-api"
     assert api["network_mode"] == "host"
-    assert api["group_add"] == ["${BMS_DOCKER_GID:-999}"]
+    assert "group_add" not in api
     assert "ports" not in api
     assert "extra_hosts" not in api
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
+    assert api["environment"]["BMS_HOST_AGENT_URL"] == "${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}"
+    assert api["environment"]["BMS_HOST_AGENT_TIMEOUT_SECONDS"] == "${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}"
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
     assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
     assert api["environment"]["BMS_ANALYTICAL_INIT_ON_STARTUP"] == "${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}"
     assert api["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "${BMS_STATS_TOOLS_EXTERNALIZED:-1}"
     assert api["environment"]["BMS_STATS_TOOLS_COMPOSE_FILE"] == "/app/compose.core-runtime.yml"
     assert api["environment"]["BMS_DOCKER_COMPOSE_PROJECT"] == "${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
-    assert api["environment"]["BMS_DOCKER_GID"] == "${BMS_DOCKER_GID:-999}"
+    assert "BMS_DOCKER_GID" not in api["environment"]
     assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
@@ -82,7 +84,10 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert api["environment"]["BMS_WORK"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
     assert "BIOXP_SERVER_URL" in api["environment"]
-    assert any(volume.get("source") == "/var/run/docker.sock" and volume.get("target") == "/var/run/docker.sock" for volume in api["volumes"])
+    assert not any(
+        volume.get("source") == "/var/run/docker.sock" or volume.get("target") == "/var/run/docker.sock"
+        for volume in api.get("volumes", [])
+    )
 
     analytical_db = compose["services"]["bms-analytical-postgres"]
     assert analytical_db["image"] == "postgres:16-alpine"
@@ -192,7 +197,7 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_ANALYTICAL_INIT_ON_STARTUP=1",
         "BIOXP_SERVER_URL=",
         "BMS_DOCKER_COMPOSE_PROJECT=biomodstack-core-runtime",
-        "BMS_DOCKER_GID=999",
+
         "BMS_STATS_TOOLS_EXTERNALIZED=1",
         "BMS_DB_SERVICE_ID=bms-db-service",
         "BMS_DB_DISPLAY_NAME=\"BMS DB service\"",
@@ -200,11 +205,12 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_DB_CONTAINER_NAMES=biomodstack-db,biomodstack-analytical-postgres",
         "BMS_CORE_DB_NAME=bms_core_runtime",
         "BMS_ANALYTICAL_DB_NAME=bms_analytical_data",
-        "BMS_HOST_AGENT_URL=http://host.docker.internal:8798",
+        "BMS_HOST_AGENT_URL=http://127.0.0.1:8798",
         "BMS_HOST_AGENT_TIMEOUT_SECONDS=2.0",
     ]:
         assert required in env_example
     assert "BMS_API_HOST_PORT" not in env_example
+    assert "BMS_DOCKER_GID" not in env_example
 
 
 def test_core_runtime_script_loads_repo_local_env_overrides() -> None:

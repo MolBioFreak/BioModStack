@@ -295,6 +295,42 @@ def test_stats_tools_rejects_unknown_lifecycle_action() -> None:
     assert "unsupported stats-tools action" in response.json()["detail"]
 
 
+def test_stats_tools_action_prefers_configured_host_agent_without_docker(monkeypatch) -> None:
+    from services import stats_tools
+
+    host_agent_actions: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fail_docker_available():
+        raise AssertionError("BMS API must not touch Docker directly when Host Agent is configured")
+
+    def fake_host_agent_action(service_id: str, action: str, payload: dict[str, object] | None = None):
+        host_agent_actions.append((service_id, action, payload))
+        return {
+            "component": "stats-tools",
+            "service_id": service_id,
+            "service_name": "bms-stats-tools",
+            "container_name": "biomodstack-stats-tools",
+            "state": "running",
+            "health": "healthy",
+            "runtime_available": True,
+            "last_action": action,
+            "logs_tail": payload["tail"] if payload else None,
+        }
+
+    monkeypatch.setenv("BMS_HOST_AGENT_URL", "http://127.0.0.1:8798")
+    monkeypatch.setenv("BMS_STATS_TOOLS_EXTERNALIZED", "1")
+    monkeypatch.setattr(stats_tools, "_host_agent_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(stats_tools, "_run_host_agent_service_action", fake_host_agent_action, raising=False)
+    monkeypatch.setattr(stats_tools, "_docker_available", fail_docker_available, raising=False)
+
+    payload = stats_tools.run_stats_tools_action("start", tail=77)
+
+    assert host_agent_actions == [("bms-stats-tools", "start", {"tail": 77})]
+    assert payload["control_mode"] == "host-agent"
+    assert payload["host_agent_available"] is True
+    assert payload["last_action"] == "start"
+
+
 def test_db_service_status_endpoint_invokes_service_layer(monkeypatch) -> None:
     descriptor = {
         "component": "db-service",
