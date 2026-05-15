@@ -8,10 +8,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from services.host_agent_client import (
+    get_host_agent_service as _get_host_agent_service,
+    host_agent_enabled as _host_agent_enabled,
+    run_host_agent_service_action as _run_host_agent_service_action,
+)
+
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 STATS_TOOLS_COMPONENT = "stats-tools"
+STATS_TOOLS_SERVICE_ID = "bms-stats-tools"
 STATS_TOOLS_SERVICE_NAME = os.getenv("BMS_STATS_TOOLS_SERVICE", "bms-stats-tools")
 STATS_TOOLS_CONTAINER_NAME = os.getenv("BMS_STATS_TOOLS_CONTAINER", "biomodstack-stats-tools")
 STATS_TOOLS_OFFLINE_MESSAGE = "stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools"
@@ -196,8 +203,72 @@ def _inspect_state() -> dict[str, Any]:
     }
 
 
+def _host_agent_unavailable_descriptor(tail: int, exc: Exception, *, last_action: str | None = None) -> dict[str, Any]:
+    descriptor = {
+        "component": STATS_TOOLS_COMPONENT,
+        "service_id": STATS_TOOLS_SERVICE_ID,
+        "service_name": STATS_TOOLS_SERVICE_NAME,
+        "container_name": STATS_TOOLS_CONTAINER_NAME,
+        "externalized": True,
+        "optional_at_boot": True,
+        "control_mode": "host-agent",
+        "state": "unknown",
+        "health": "degraded",
+        "runtime_available": False,
+        "runtime_note": f"Host Agent unavailable: {exc}",
+        "offline_message": STATS_TOOLS_OFFLINE_MESSAGE,
+        "commands": COMMANDS,
+        "logs": "",
+        "logs_tail": tail,
+        "host_agent_available": False,
+    }
+    if last_action is not None:
+        descriptor["last_action"] = last_action
+    return descriptor
+
+
+def _normalize_host_agent_payload(payload: dict[str, Any], tail: int, *, last_action: str | None = None) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
+        "component": STATS_TOOLS_COMPONENT,
+        "service_id": STATS_TOOLS_SERVICE_ID,
+        "service_name": STATS_TOOLS_SERVICE_NAME,
+        "container_name": STATS_TOOLS_CONTAINER_NAME,
+        "externalized": True,
+        "optional_at_boot": True,
+        "control_mode": "host-agent",
+        "state": "unknown",
+        "health": "unknown",
+        "runtime_available": False,
+        "runtime_note": None,
+        "offline_message": STATS_TOOLS_OFFLINE_MESSAGE,
+        "commands": COMMANDS,
+        "logs": "",
+        "logs_tail": tail,
+        "host_agent_available": True,
+    }
+    normalized.update(payload)
+    normalized["component"] = str(normalized.get("component") or STATS_TOOLS_COMPONENT)
+    normalized["service_id"] = str(normalized.get("service_id") or STATS_TOOLS_SERVICE_ID)
+    normalized["externalized"] = True
+    normalized["optional_at_boot"] = bool(normalized.get("optional_at_boot", True))
+    normalized["control_mode"] = "host-agent"
+    normalized["host_agent_available"] = True
+    normalized["offline_message"] = normalized.get("offline_message") or STATS_TOOLS_OFFLINE_MESSAGE
+    normalized["commands"] = normalized.get("commands") or COMMANDS
+    normalized["logs_tail"] = tail
+    if last_action is not None:
+        normalized["last_action"] = last_action
+    return normalized
+
+
 def describe_stats_tools(tail: int = 120) -> dict[str, Any]:
     embedded = not stats_tools_externalized()
+    if not embedded and _host_agent_enabled():
+        try:
+            return _normalize_host_agent_payload(_get_host_agent_service(STATS_TOOLS_SERVICE_ID, tail=tail), tail)
+        except (RuntimeError, OSError, ValueError) as exc:
+            return _host_agent_unavailable_descriptor(tail, exc)
+
     inspected = _inspect_state() if stats_tools_externalized() else {
         "state": "embedded",
         "health": "healthy",
@@ -212,6 +283,7 @@ def describe_stats_tools(tail: int = 120) -> dict[str, Any]:
         "externalized": not embedded,
         "optional_at_boot": True,
         "control_mode": "docker-compose-profile" if stats_tools_externalized() else "embedded-core-runtime",
+        "host_agent_available": False,
         "state": inspected["state"],
         "health": inspected["health"],
         "runtime_available": bool(inspected["runtime_available"]),
@@ -236,6 +308,16 @@ def run_stats_tools_action(action: str, tail: int = 120) -> dict[str, Any]:
 
     if normalized in {"status", "health"}:
         return describe_stats_tools(tail=tail)
+
+    if stats_tools_externalized() and _host_agent_enabled():
+        try:
+            return _normalize_host_agent_payload(
+                _run_host_agent_service_action(STATS_TOOLS_SERVICE_ID, normalized, {"tail": tail}),
+                tail,
+                last_action=normalized,
+            )
+        except (RuntimeError, OSError, ValueError) as exc:
+            return _host_agent_unavailable_descriptor(tail, exc, last_action=normalized)
 
     if normalized == "logs":
         ok, note = _docker_available()
