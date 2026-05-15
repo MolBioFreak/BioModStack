@@ -47,13 +47,13 @@ function TopologyBadge({ circular }: { circular: boolean }) {
     );
 }
 
-function SequenceTypeBadge({ sequenceType }: { sequenceType: string }) {
+function SequenceTypeBadge({ sequenceType, label }: { sequenceType: string; label?: string }) {
     const color = sequenceType === 'rna'
         ? 'bg-fuchsia-500/15 text-fuchsia-300'
         : 'bg-amber-500/15 text-amber-300';
     return (
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${color}`}>
-            {sequenceType}
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${color}`}>
+            {label || sequenceType.toUpperCase()}
         </span>
     );
 }
@@ -366,7 +366,7 @@ export function MolecularInputModal({
                                             </div>
 
                                             <div className="mt-3 flex flex-wrap items-center gap-2">
-                                                <SequenceTypeBadge sequenceType={sequence.sequence_type} />
+                                                <SequenceTypeBadge sequenceType={sequence.sequence_type} label={sequence.molecule_label} />
                                                 {sequence.entity_kind && (
                                                     <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[11px] text-slate-300">
                                                         {sequence.entity_kind.replace(/_/g, ' ')}
@@ -408,7 +408,7 @@ export function MolecularInputModal({
                                 <div className="text-3xl">🧬</div>
                                 <div className="mt-3 text-base font-medium text-slate-200">Import construct file</div>
                                 <div className="mt-1 text-sm text-slate-400">GenBank, FASTA, and SnapGene `.dna` are supported.</div>
-                                <div className="mt-4 text-xs text-slate-500">Click to choose a file and load it into the editor.</div>
+                                <div className="mt-4 text-xs text-slate-500">Click to choose a file, save it to the construct library, and open it in the editor.</div>
                             </div>
                             <input
                                 ref={importInputRef}
@@ -427,7 +427,7 @@ export function MolecularInputModal({
                                         onClick={handleImportSelectedFile}
                                         className="mt-4 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
                                     >
-                                        Import Into Editor
+                                        Import and Save
                                     </button>
                                 </div>
                             )}

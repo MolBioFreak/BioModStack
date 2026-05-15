@@ -25,6 +25,7 @@ import {
     type PrimerTmOptionsResponse,
     type PrimerTmSettings,
     type RnaStructureResult,
+    type NucleotideSequenceCreate,
 } from '../../lib/api';
 import type {
     AnalysisTrack,
@@ -41,10 +42,16 @@ import type {
 import { EMPTY_SEQUENCE } from './types';
 import {
     calculateGcPercent,
+    displayStrandForMoleculeOrientation,
+    inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromSequence,
+    moleculeLabelForNucleotide,
+    normalizeSequenceForType,
     reverseComplementSequence,
     sequenceUnitLabel,
+    type NucleotideDisplayStrand,
 } from './utils/nucleotides';
+import { findOpenReadingFrames } from './utils/orfs';
 import { dedupeFeatures, featureBounds } from './utils/features';
 import {
     MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
@@ -366,6 +373,9 @@ function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceDat
         sequence: seq.sequence,
         circular: seq.is_circular,
         sequenceType: seq.sequence_type,
+        moleculeStrandedness: seq.molecule_strandedness,
+        moleculeOrientation: seq.molecule_orientation,
+        moleculeLabel: seq.molecule_label,
         features: normalizeFeatureList((seq.features || []).map((feature: Feature, index: number) => normalizeFeatureRecord(
             feature as Feature & Record<string, UntypedApiValue>,
             feature.id || `loaded_feature_${index}`,
@@ -419,6 +429,37 @@ function trackToApi(track: AnalysisTrack): SequenceAnalysisTrack {
         min_value: track.minValue,
         max_value: track.maxValue,
         created_at: track.createdAt,
+    };
+}
+
+function sequencePayloadFromData(sequenceData: SequenceData): NucleotideSequenceCreate {
+    const normalizedType = sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType;
+    return {
+        name: sequenceData.name.trim() || 'Untitled sequence',
+        description: sequenceData.description?.trim() || undefined,
+        sequence: sequenceData.sequence,
+        is_circular: sequenceData.circular,
+        sequence_type: normalizedType,
+        molecule_strandedness: sequenceData.moleculeStrandedness,
+        molecule_orientation: sequenceData.moleculeOrientation,
+        features: normalizeFeatureList(sequenceData.features).map((feature) => ({
+            ...feature,
+            qualifiers: feature.qualifiers,
+            provenance: feature.provenance,
+            segments: feature.segments,
+            notes: feature.notes || feature.qualifiers,
+        })),
+        primers: sequenceData.primers?.map((primer) => ({
+            ...primer,
+            sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+            notes: primer.notes,
+            provenance: primer.provenance,
+            sites: primer.sites,
+        })),
+        analysis_tracks: (sequenceData.analysisTracks || []).map(trackToApi),
+        organism: sequenceData.organism,
+        accession: sequenceData.accession,
+        source_file: sequenceData.sourceFile,
     };
 }
 
@@ -542,72 +583,11 @@ function formatSelectionLabel(ranges: SelectionRange[], circular: boolean): stri
     return `${ranges[0].start + 1} - ${ranges[0].end} + ${ranges[1].start + 1} - ${ranges[1].end}`;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ORF FINDER UTILITY
-// ═══════════════════════════════════════════════════════════════════════════════
-
-interface Translation {
-    start: number;
-    end: number;
-    strand: 1 | -1;
-    frame?: 1 | 2 | 3;
-}
-
-function reverseComplementSeq(seq: string): string {
-    const complement: Record<string, string> = {
-        'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G',
-        'a': 't', 't': 'a', 'g': 'c', 'c': 'g',
-        'N': 'N', 'n': 'n',
-    };
-    return seq.split('').reverse().map(c => complement[c] || c).join('');
-}
-
-/**
- * Find all Open Reading Frames in a sequence.
- * Scans all 6 reading frames (3 forward, 3 reverse).
- * Returns ORFs sorted by length (longest first).
- */
-function findORFs(sequence: string, minLength: number = 100): Translation[] {
-    const orfs: Translation[] = [];
-    const seq = sequence.toUpperCase();
-    const startCodon = 'ATG';
-    const stopCodons = ['TAA', 'TAG', 'TGA'];
-
-    // Search all 6 reading frames (3 forward, 3 reverse)
-    for (const strand of [1, -1] as const) {
-        const workSeq = strand === 1 ? seq : reverseComplementSeq(seq);
-
-        for (let frame = 0; frame < 3; frame++) {
-            let i = frame;
-            while (i < workSeq.length - 2) {
-                const codon = workSeq.substring(i, i + 3);
-                if (codon === startCodon) {
-                    // Look for stop codon in same frame
-                    for (let j = i + 3; j < workSeq.length - 2; j += 3) {
-                        const testCodon = workSeq.substring(j, j + 3);
-                        if (stopCodons.includes(testCodon)) {
-                            const orfLen = j + 3 - i;
-                            if (orfLen >= minLength) {
-                                // Convert positions back to original strand coordinates
-                                const start = strand === 1 ? i : seq.length - (j + 3);
-                                const end = strand === 1 ? j + 3 : seq.length - i;
-                                // Frame is 1, 2, or 3 (1-indexed from frame loop 0-2)
-                                const frameNum = (frame + 1) as 1 | 2 | 3;
-                                orfs.push({ start, end, strand, frame: frameNum });
-                            }
-                            break;
-                        }
-                    }
-                }
-                i += 3;
-            }
-        }
+function sourceDisplayStrandForSequenceData(sequenceData: SequenceData): NucleotideDisplayStrand {
+    if (sequenceData.sequenceType === 'protein') {
+        return 'plus';
     }
-
-    // Sort by length descending, limit to top 20 for performance
-    return orfs
-        .sort((a, b) => (b.end - b.start) - (a.end - a.start))
-        .slice(0, 20);
+    return displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -670,6 +650,15 @@ export function MolBioToolkitV2() {
         },
     ]);
     const [activeWorkspaceId, setActiveWorkspaceId] = useState('workspace_initial');
+    const [activeDisplayStrand, setActiveDisplayStrand] = useState<NucleotideDisplayStrand>(() => sourceDisplayStrandForSequenceData(EMPTY_SEQUENCE));
+    const sourceDisplayStrand = useMemo(
+        () => sourceDisplayStrandForSequenceData(sequenceData),
+        [sequenceData.moleculeOrientation, sequenceData.sequenceType],
+    );
+
+    const handleDisplayStrandChange = useCallback((strand: NucleotideDisplayStrand) => {
+        setActiveDisplayStrand(strand);
+    }, []);
 
     // API hooks
     const {
@@ -738,6 +727,7 @@ export function MolBioToolkitV2() {
             return;
         }
         setActiveWorkspaceId(workspaceId);
+        setActiveDisplayStrand(sourceDisplayStrandForSequenceData(workspace.historyState.present));
         hydrate(workspace.historyState);
         setSelectedSequenceId(workspace.sequenceId);
         setIsDirty(workspace.dirty);
@@ -766,6 +756,7 @@ export function MolBioToolkitV2() {
             },
         ]);
         setActiveWorkspaceId(tabId);
+        setActiveDisplayStrand(sourceDisplayStrandForSequenceData(nextSequence));
         hydrate(nextHistory);
         setSelectedSequenceId(options?.sequenceId || null);
         setIsDirty(options?.dirty ?? false);
@@ -787,6 +778,7 @@ export function MolBioToolkitV2() {
                 sequenceType: EMPTY_SEQUENCE.sequenceType,
             }]);
             setActiveWorkspaceId(workspaceTabs[0].id);
+            setActiveDisplayStrand(sourceDisplayStrandForSequenceData(EMPTY_SEQUENCE));
             hydrate(emptyHistory);
             setSelectedSequenceId(null);
             setIsDirty(false);
@@ -805,6 +797,7 @@ export function MolBioToolkitV2() {
             const nextWorkspace = remaining[Math.max(0, currentIndex - 1)] || remaining[0];
             if (nextWorkspace) {
                 setActiveWorkspaceId(nextWorkspace.id);
+                setActiveDisplayStrand(sourceDisplayStrandForSequenceData(nextWorkspace.historyState.present));
                 hydrate(nextWorkspace.historyState);
                 setSelectedSequenceId(nextWorkspace.sequenceId);
                 setIsDirty(nextWorkspace.dirty);
@@ -819,7 +812,7 @@ export function MolBioToolkitV2() {
     // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
         if (sequenceData.sequence && sequenceData.sequence.length > 100) {
-            setDerivedTranslations(findORFs(sequenceData.sequence, 100));
+            setDerivedTranslations(findOpenReadingFrames(sequenceData.sequence, 100));
         } else {
             setDerivedTranslations([]);
         }
@@ -887,12 +880,17 @@ export function MolBioToolkitV2() {
         circular: boolean;
         description?: string;
     }) => {
+        const moleculeStrandedness = data.sequenceType === 'rna' ? 'single' : 'double';
+        const moleculeOrientation = moleculeStrandedness === 'double' ? 'not_applicable' : 'unknown';
         const newSequence: SequenceData = {
             name: data.name,
             description: data.description,
             sequence: data.sequence,
             circular: data.circular,
             sequenceType: data.sequenceType,
+            moleculeStrandedness,
+            moleculeOrientation,
+            moleculeLabel: moleculeLabelForNucleotide(data.sequenceType, moleculeStrandedness, moleculeOrientation),
             features: [],
             primers: [],
             translations: [],
@@ -935,24 +933,24 @@ export function MolBioToolkitV2() {
             }
 
             const parsed = results[0].parsedSequence;
-            const normalizedSequence = (parsed.sequence || '').toUpperCase();
-            const inferredType = parsed.isProtein
-                ? 'protein'
-                : parsed.type === 'RNA'
-                    ? 'rna'
-                    : inferSequenceTypeFromSequence(normalizedSequence);
+            const moleculeMetadata = inferNucleotideMoleculeMetadataFromParsedRecord(parsed);
+            const inferredType = parsed.isProtein ? 'protein' : moleculeMetadata.sequenceType;
 
             if (inferredType === 'protein') {
                 alert('Protein records are not supported in the molecular toolkit yet. Import a DNA or RNA construct instead.');
                 return;
             }
 
+            const normalizedSequence = normalizeSequenceForType(parsed.sequence || '', inferredType);
             const sequenceData: SequenceData = {
                 name: parsed.name || file.name.replace(/\.[^.]+$/, ''),
                 description: parsed.description || undefined,
                 sequence: normalizedSequence,
                 circular: parsed.circular ?? false,
                 sequenceType: inferredType,
+                moleculeStrandedness: moleculeMetadata.moleculeStrandedness,
+                moleculeOrientation: moleculeMetadata.moleculeOrientation,
+                moleculeLabel: moleculeMetadata.moleculeLabel,
                 features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
                 primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(p, `p_${i}`)),
                 translations: [],
@@ -960,47 +958,34 @@ export function MolBioToolkitV2() {
                 sourceFile: file.name,
             };
 
+            const savedImport = await createSequence(sequencePayloadFromData(sequenceData));
+            if (savedImport) {
+                openWorkspace(sequenceDataFromApiRecord(savedImport), {
+                    sequenceId: savedImport.id,
+                    dirty: false,
+                    label: `Import and save ${savedImport.name}`,
+                });
+                await loadLibrary();
+                return;
+            }
+
             openWorkspace(sequenceData, {
                 sequenceId: null,
                 dirty: true,
                 label: `Import ${sequenceData.name}`,
             });
+            alert('Imported into the editor, but saving to the construct library failed. Use Save after checking the API status.');
         } catch (error) {
             console.error('Import error:', error);
             alert(`Failed to parse file: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-    }, [openWorkspace]);
+    }, [openWorkspace, createSequence, loadLibrary]);
 
     // Save sequence
     const saveSequence = useCallback(async () => {
         if (!sequenceData.sequence.trim()) return;
 
-        const normalizedType = sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType;
-        const payload = {
-            name: sequenceData.name.trim() || 'Untitled sequence',
-            description: sequenceData.description?.trim() || undefined,
-            sequence: sequenceData.sequence,
-            is_circular: sequenceData.circular,
-            sequence_type: normalizedType,
-            features: normalizeFeatureList(sequenceData.features).map((feature) => ({
-                ...feature,
-                qualifiers: feature.qualifiers,
-                provenance: feature.provenance,
-                segments: feature.segments,
-                notes: feature.notes || feature.qualifiers,
-            })),
-            primers: sequenceData.primers?.map((primer) => ({
-                ...primer,
-                sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
-                notes: primer.notes,
-                provenance: primer.provenance,
-                sites: primer.sites,
-            })),
-            analysis_tracks: (sequenceData.analysisTracks || []).map(trackToApi),
-            organism: sequenceData.organism,
-            accession: sequenceData.accession,
-            source_file: sequenceData.sourceFile,
-        };
+        const payload = sequencePayloadFromData(sequenceData);
 
         let saved = false;
         if (selectedSequenceId) {
@@ -1022,7 +1007,7 @@ export function MolBioToolkitV2() {
             setIsDirty(false);
             loadLibrary();
         }
-    }, [sequenceData.sequence, sequenceData.sequenceType, sequenceData.name, sequenceData.description, sequenceData.circular, sequenceData.features, sequenceData.primers, sequenceData.analysisTracks, sequenceData.organism, sequenceData.accession, sequenceData.sourceFile, selectedSequenceId, updateSequence, setSequenceData, createSequence, loadLibrary]);
+    }, [sequenceData.sequence, sequenceData.sequenceType, sequenceData.moleculeStrandedness, sequenceData.moleculeOrientation, sequenceData.name, sequenceData.description, sequenceData.circular, sequenceData.features, sequenceData.primers, sequenceData.analysisTracks, sequenceData.organism, sequenceData.accession, sequenceData.sourceFile, selectedSequenceId, updateSequence, setSequenceData, createSequence, loadLibrary]);
 
     // Visibility toggle handler
     const handleVisibilityChange = useCallback((key: keyof VisibilityState) => {
@@ -1714,6 +1699,9 @@ export function MolBioToolkitV2() {
                             isAnnotating={isAnnotating}
                             viewMode={effectiveViewMode}
                             onViewModeChange={setViewMode}
+                            activeDisplayStrand={activeDisplayStrand}
+                            sourceDisplayStrand={sourceDisplayStrand}
+                            onDisplayStrandChange={handleDisplayStrandChange}
                             showGCTrack={showGCTrack}
                             onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
                             onOpenLibrary={() => setShowInputModal(true)}
@@ -1780,6 +1768,7 @@ export function MolBioToolkitV2() {
                                                 viewMode={effectiveViewMode}
                                                 colorPalette={colorPalette}
                                                 visibleFrames={visibleFrames}
+                                                activeDisplayStrand={activeDisplayStrand}
                                             />
                                         </div>
                                         {rnaStructureResult && (
@@ -1805,6 +1794,7 @@ export function MolBioToolkitV2() {
                                             viewMode={effectiveViewMode}
                                             colorPalette={colorPalette}
                                             visibleFrames={visibleFrames}
+                                            activeDisplayStrand={activeDisplayStrand}
                                         />
                                     </div>
                                 )}

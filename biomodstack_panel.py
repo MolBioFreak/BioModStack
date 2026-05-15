@@ -249,6 +249,59 @@ def read_named_log_tail(log_type: str, lines: int = 30) -> str:
     log_path = LOG_PATHS.get(log_type, CORE_RUNTIME_LOG)
     return read_log_tail(log_path, lines)
 
+
+def call_local_api_json(method: str, path: str, payload: Optional[dict] = None, timeout: float = 8.0) -> dict:
+    """Call the local BMS API from the native control panel."""
+    import urllib.error
+    import urllib.request
+
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(f"{API_URL}{path}", data=data, headers=headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body)
+        except Exception:
+            detail = body
+        raise RuntimeError(f"{method.upper()} {path} failed ({exc.code}): {detail}") from exc
+
+
+def get_bioxp_interlink_state(probe: bool = False, timeout: float = 3.0) -> dict:
+    query = "?probe=true" if probe else ""
+    return call_local_api_json("GET", f"/api/bioxp/interlink/state{query}", timeout=timeout)
+
+
+def summarize_bioxp_interlink_state(state: dict) -> str:
+    if not state:
+        return "BMS API unavailable"
+    active = bool(state.get("active"))
+    configured = bool(state.get("configured"))
+    reachable = state.get("reachable")
+    hardware = state.get("hardware_connected")
+    if active:
+        label = "LINKED" if reachable is not False else "DEGRADED"
+    elif configured:
+        label = "SAVED / inactive"
+    else:
+        label = "not configured"
+    parts = [label]
+    if reachable is not None:
+        parts.append(f"reachable={'yes' if reachable else 'no'}")
+    if hardware is not None:
+        parts.append(f"hardware={'yes' if hardware else 'no'}")
+    url = state.get("robot_api_url") or state.get("recommended_url")
+    if url:
+        parts.append(str(url))
+    return "  |  ".join(parts)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -324,6 +377,7 @@ class BioModStackPanel(Adw.Application):
         content.append(self._build_status_section())
         content.append(self._build_privilege_section())
         content.append(self._build_runtime_ports_section())
+        content.append(self._build_bioxp_section())
         content.append(self._build_actions_section())
         content.append(self._build_logs_section())
         content.append(self._build_database_section())
@@ -459,6 +513,155 @@ class BioModStackPanel(Adw.Application):
             "Runtime Ports Saved",
             "Restart the selected surfaces, then reload Electron/browser to apply the new ports.",
         )
+
+    def _build_bioxp_section(self) -> Gtk.Widget:
+        """BioXP robot interlink controls exposed in the native control panel."""
+        group = Adw.PreferencesGroup()
+        group.set_title("BioXP Robot Runtime")
+
+        self.bioxp_row = Adw.ActionRow()
+        self.bioxp_row.set_title("Interlink")
+        self._update_bioxp_row(probe=False)
+        group.add(self.bioxp_row)
+
+        settings_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        settings_box.set_halign(Gtk.Align.START)
+        self.bioxp_url_entry = Gtk.Entry()
+        self.bioxp_url_entry.set_width_chars(32)
+        self.bioxp_url_entry.set_placeholder_text("Robot API URL, e.g. http://100.124.140.56:8123")
+        try:
+            state = get_bioxp_interlink_state(probe=False, timeout=1.5)
+            self.bioxp_url_entry.set_text(str(state.get("robot_api_url") or state.get("recommended_url") or ""))
+        except Exception:
+            self.bioxp_url_entry.set_text(os.environ.get("BIOXP_SERVER_URL", ""))
+        settings_box.append(self.bioxp_url_entry)
+
+        btn_bioxp_connect = Gtk.Button(label="Connect")
+        btn_bioxp_connect.add_css_class("suggested-action")
+        btn_bioxp_connect.connect("clicked", self._on_bioxp_connect)
+        settings_box.append(btn_bioxp_connect)
+
+        btn_bioxp_disconnect = Gtk.Button(label="Disconnect")
+        btn_bioxp_disconnect.connect("clicked", self._on_bioxp_disconnect)
+        settings_box.append(btn_bioxp_disconnect)
+
+        settings_row = Adw.ActionRow()
+        settings_row.set_title("Robot API endpoint")
+        settings_row.set_subtitle("Uses BMS /api/bioxp/interlink/* proxy routes, not the raw container-internal FastAPI port.")
+        settings_row.set_child(settings_box)
+        group.add(settings_row)
+
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        action_box.set_halign(Gtk.Align.START)
+
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.connect("clicked", self._on_bioxp_refresh)
+        action_box.append(btn_refresh)
+
+        btn_diagnostics = Gtk.Button(label="Diagnostics")
+        btn_diagnostics.connect("clicked", self._on_bioxp_diagnostics)
+        action_box.append(btn_diagnostics)
+
+        btn_logs = Gtk.Button(label="Robot Logs")
+        btn_logs.connect("clicked", self._on_bioxp_logs)
+        action_box.append(btn_logs)
+
+        btn_runtime_reset = Gtk.Button(label="Restart API Runtime")
+        btn_runtime_reset.add_css_class("destructive-action")
+        btn_runtime_reset.set_tooltip_text("Requires the BMS API/robot deployment to support /api/bioxp/interlink/runtime-reset.")
+        btn_runtime_reset.connect("clicked", self._on_bioxp_runtime_reset)
+        action_box.append(btn_runtime_reset)
+
+        action_row = Adw.ActionRow()
+        action_row.set_title("Runtime controls")
+        action_row.set_subtitle("No homing, arming, USB motion recovery, or axis movement is performed by these controls.")
+        action_row.set_child(action_box)
+        group.add(action_row)
+        return group
+
+    def _bioxp_settings_payload(self) -> dict:
+        url = str(self.bioxp_url_entry.get_text()).strip() if hasattr(self, "bioxp_url_entry") else ""
+        return {
+            "robot_api_url": url,
+            "robot_ssh_host": "robot",
+            "connection_mode": "direct_http",
+            "display_name": "BioXP3200",
+        }
+
+    def _update_bioxp_row(self, probe: bool = False):
+        if not hasattr(self, "bioxp_row"):
+            return
+        try:
+            state = get_bioxp_interlink_state(probe=probe, timeout=4.0 if probe else 1.5)
+            self.bioxp_row.set_subtitle(summarize_bioxp_interlink_state(state))
+            if hasattr(self, "bioxp_url_entry") and not str(self.bioxp_url_entry.get_text()).strip():
+                self.bioxp_url_entry.set_text(str(state.get("robot_api_url") or state.get("recommended_url") or ""))
+        except Exception as exc:
+            self.bioxp_row.set_subtitle(f"BMS API/BioXP interlink unavailable: {exc}")
+
+    def _show_bioxp_result(self, title: str, result: dict):
+        status = "ok" if result.get("ok", True) is not False and result.get("supported", True) is not False else "not complete"
+        detail = result.get("runtime_note") or result.get("reason") or result.get("detail") or summarize_bioxp_interlink_state(result)
+        show_notification(title, f"{status}: {detail}")
+        if hasattr(self, "log_view"):
+            buffer = self.log_view.get_buffer()
+            buffer.set_text(json.dumps(result, indent=2, sort_keys=True))
+
+    def _on_bioxp_refresh(self, button):
+        self._update_bioxp_row(probe=True)
+
+    def _on_bioxp_connect(self, button):
+        payload = self._bioxp_settings_payload()
+        if not payload["robot_api_url"]:
+            show_notification("BioXP Connect", "Robot API URL is required.")
+            return
+        try:
+            result = call_local_api_json("POST", "/api/bioxp/interlink/connect", payload, timeout=20.0)
+        except Exception as exc:
+            show_notification("BioXP Connect Failed", str(exc))
+            return
+        self._update_bioxp_row(probe=False)
+        self._show_bioxp_result("BioXP Connected", result)
+
+    def _on_bioxp_disconnect(self, button):
+        try:
+            result = call_local_api_json("POST", "/api/bioxp/interlink/disconnect", {}, timeout=8.0)
+        except Exception as exc:
+            show_notification("BioXP Disconnect Failed", str(exc))
+            return
+        self._update_bioxp_row(probe=False)
+        self._show_bioxp_result("BioXP Disconnected", result)
+
+    def _on_bioxp_diagnostics(self, button):
+        try:
+            result = call_local_api_json("POST", "/api/bioxp/interlink/diagnostics?probe=true", {}, timeout=20.0)
+        except Exception as exc:
+            show_notification("BioXP Diagnostics Failed", str(exc))
+            return
+        self._update_bioxp_row(probe=False)
+        self._show_bioxp_result("BioXP Diagnostics", result)
+
+    def _on_bioxp_logs(self, button):
+        try:
+            result = call_local_api_json("POST", "/api/bioxp/interlink/logs", {"tail": 120}, timeout=20.0)
+        except Exception as exc:
+            show_notification("BioXP Logs Failed", str(exc))
+            return
+        self._show_bioxp_result("BioXP Logs", result)
+
+    def _on_bioxp_runtime_reset(self, button):
+        try:
+            result = call_local_api_json(
+                "POST",
+                "/api/bioxp/interlink/runtime-reset",
+                {"operator_ack": "RESET BIOXP RUNTIME", "tail": 120},
+                timeout=30.0,
+            )
+        except Exception as exc:
+            show_notification("BioXP Runtime Restart Failed", str(exc))
+            return
+        self._update_bioxp_row(probe=False)
+        self._show_bioxp_result("BioXP Runtime Restart", result)
     
     def _build_actions_section(self) -> Gtk.Widget:
         """Quick action buttons."""
@@ -821,6 +1024,7 @@ X-GNOME-Autostart-enabled=true
         self._update_status_row()
         self._update_jobs_row()
         self._update_db_info()
+        self._update_bioxp_row(probe=False)
         return True  # Keep timer running
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -21,6 +21,11 @@ const normalizeChunkId = (id: string) => id.split(path.sep).join('/')
 function manualChunks(id: string): string | undefined {
   const normalized = normalizeChunkId(id)
 
+  // Keep Rollup/CommonJS helper modules with React. If these helpers fall into
+  // the generic vendor chunk, vendor-react can import vendor while vendor also
+  // imports vendor-react/Plotly, producing a production-only circular init crash.
+  if (id.includes('\0commonjsHelpers.js') || normalized.includes('commonjsHelpers.js')) return 'vendor-react'
+
   // Keep large generated MolBio demo data out of the route/app chunk so the
   // sequence editor can request it only when that workspace is opened.
   if (normalized.includes('demoConstructs.generated')) return 'molbio-demo-data'
@@ -74,7 +79,10 @@ function manualChunks(id: string): string | undefined {
     return 'vendor-node-shims'
   }
 
-  return 'vendor'
+  // Do not force every remaining dependency into one generic vendor chunk. That
+  // can create a hard circular dependency between React and Plotly/common helper
+  // chunks in production. Let Rollup place residual shared dependencies safely.
+  return undefined
 }
 
 // https://vite.dev/config/

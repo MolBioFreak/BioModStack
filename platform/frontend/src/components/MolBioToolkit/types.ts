@@ -2,7 +2,7 @@
  * Shared TypeScript types for MolBioToolkit
  */
 
-import type { SequenceAnalysisTrack } from '../../lib/api';
+import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, SequenceAnalysisTrack } from '../../lib/api';
 
 // Import types from SequenceViewer for re-export and use
 import type {
@@ -41,6 +41,9 @@ export interface NucleotideSequenceResponse {
     description: string | null;
     sequence: string;
     sequence_type: 'dna' | 'rna';
+    molecule_strandedness: NucleotideMoleculeStrandedness;
+    molecule_orientation: NucleotideMoleculeOrientation;
+    molecule_label: string;
     is_circular: boolean;
     length: number;
     features: Feature[] | null;
@@ -65,6 +68,9 @@ export interface NucleotideSequenceListItem {
     name: string;
     description: string | null;
     sequence_type: 'dna' | 'rna';
+    molecule_strandedness: NucleotideMoleculeStrandedness;
+    molecule_orientation: NucleotideMoleculeOrientation;
+    molecule_label: string;
     is_circular: boolean;
     length: number;
     gc_content: number | null;

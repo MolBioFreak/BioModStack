@@ -15,6 +15,7 @@ import {
 
 const TOOLKIT_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx');
 const HEADER_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceHeader.tsx');
+const VIEWER_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceViewer.tsx');
 
 test('tool panel defaults stay tuned per workflow', () => {
     assert.equal(getDefaultMolBioToolPanelWidth('view'), 288);
@@ -141,6 +142,25 @@ test('linear imported constructs force the sequence viewer out of plasmid/circul
 
     assert.match(source, /const effectiveViewMode: ViewMode = sequenceData\.circular \? viewMode : 'linear';/);
     assert.equal((source.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+});
+
+test('sequence viewer does not add a separate linear drag overlay over SeqViz', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.doesNotMatch(source, /data-linear-range-navigator/);
+    assert.doesNotMatch(source, /Linear range drag/);
+    assert.match(source, /onSelection=\{\(sel\) => \{/);
+});
+
+test('sequence viewer remount key changes when RNA/DNA identity changes at same length', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(source, /viewerSequenceKey/);
+    assert.match(source, /seqVizSeqType = sequenceData\.sequenceType === 'protein' \? 'aa' : sequenceData\.sequenceType/);
+    assert.match(source, /seqType=\{seqVizSeqType\}/);
+    assert.match(source, /sequenceData\.sequenceType/);
+    assert.match(source, /displaySequence\.slice\(0, 24\)/);
+    assert.match(source, /key=\{viewerSequenceKey\}/);
 });
 
 test('sequence header exposes focus and panel collapse actions', () => {

@@ -255,7 +255,7 @@ process BatchProtenixValidation {
 
     mkdir -p validation_designs raw_predictions predictions
 
-    SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
+    SHARED_PROTENIX_ROOT="/protenix_weights"
     if [ "${anchor_target}" = "true" ]; then
         export PROTENIX_ROOT_DIR="\$PWD/.protenix_anchor_root"
         mkdir -p "\$PROTENIX_ROOT_DIR"

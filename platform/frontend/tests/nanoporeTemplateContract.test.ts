@@ -12,7 +12,7 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
 
     assert.match(template, /const FASTQ_DEFAULT_MINIMAP_PRESET: MinimapPreset = 'map-ont'/u);
-    assert.match(template, /bundled minimap2 2\.24 compatible default/u);
+    assert.match(template, /map-ont \(ONT reads\)/u);
     assert.doesNotMatch(template, /lr:hq/u, 'frontend must not expose the minimap2 lr:hq preset until the bundled runtime supports it');
     assert.doesNotMatch(ngsToolkit, /lr:hq/u, 'reusing an old NGS job must not silently seed lr:hq');
     assert.match(ngsToolkit, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
@@ -60,4 +60,37 @@ test('NGS modkit summary label matches the rendered preview limit', () => {
     assert.match(ngsToolkit, /modkit summary \(first 20 rows\)/u);
     assert.match(ngsToolkit, /methylationReport\.summary\.rows\.slice\(0, 20\)/u);
     assert.doesNotMatch(ngsToolkit, /modkit summary \(first 100 rows\)/u);
+});
+
+test('Nanopore surfaces avoid always-on explainer copy', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+    const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
+
+    assert.doesNotMatch(template, /Pipeline Overview/u);
+    assert.doesNotMatch(template, /Optional low-level parameters/u);
+    assert.doesNotMatch(template, /Outputs include `fastq_qc_summary/u);
+    assert.doesNotMatch(ngsToolkit, /Walled garden/u);
+    assert.doesNotMatch(ngsToolkit, /Control note:/u);
+    assert.doesNotMatch(ngsToolkit, /Hidden by default to avoid confusion/u);
+    assert.doesNotMatch(ngsToolkit, /Raw modkit loci preview \(debug/u);
+});
+
+test('Nanopore surfaces expose external documentation linkouts in a compact box', () => {
+    const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
+
+    assert.match(ngsToolkit, /Documentation/u);
+    assert.match(ngsToolkit, /const NANOPORE_DOC_LINKS = \[/u);
+    for (const url of [
+        'https://dorado-docs.readthedocs.io/en/latest/',
+        'https://github.com/nanoporetech/dorado',
+        'https://github.com/nanoporetech/modkit',
+        'https://github.com/epi2me-labs/wf-clone-validation',
+        'https://github.com/lh3/minimap2',
+        'https://igv.org/doc/igvjs/',
+        'https://www.nextflow.io/docs/latest/index.html',
+    ]) {
+        assert.ok(ngsToolkit.includes(url), `missing docs link ${url}`);
+    }
+    assert.match(ngsToolkit, /target="_blank"/u);
+    assert.match(ngsToolkit, /rel="noreferrer"/u);
 });
