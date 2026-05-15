@@ -31,8 +31,6 @@ services:
     container_name: biomodstack-api
     restart: unless-stopped
     network_mode: host
-    group_add:
-      - "${BMS_DOCKER_GID:-999}"
     environment:
       BMS_HOME: /app
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
@@ -50,6 +48,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}
       BMS_CORE_RUNTIME_MODE: ${BMS_CORE_RUNTIME_MODE:-1}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
+      BMS_HOST_AGENT_URL: ${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}
+      BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
       BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}
       BMS_ANALYTICAL_INIT_ON_STARTUP: ${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}
@@ -63,15 +63,11 @@ services:
       BMS_STATS_TOOLS_EXTERNALIZED: ${BMS_STATS_TOOLS_EXTERNALIZED:-1}
       BMS_STATS_TOOLS_COMPOSE_FILE: /app/compose.core-runtime.yml
       BMS_DOCKER_COMPOSE_PROJECT: ${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}
-      BMS_DOCKER_GID: ${BMS_DOCKER_GID:-999}
       BIOXP_SERVER_URL: ${BIOXP_SERVER_URL:-}
     volumes:
       - type: bind
         source: ${BMS_STATE_DIR:-/mnt/BioModStack}
         target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
     healthcheck:
       test:
         [
