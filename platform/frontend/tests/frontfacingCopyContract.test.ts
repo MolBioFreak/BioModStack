@@ -41,6 +41,8 @@ test('structure-prediction batch/target copy stays short and operator-focused', 
         'Shared target:',
         'Imported target is staged for conditioned/frozen complex prediction; keep the primary chain sequence unchanged.',
         'Physics/FK steering; use batching for high sample counts.',
+        'Target conditioning needs a shared target or complex component.',
+        'Shards EnvDB for balanced/maximum runs. Fast screens quickly; Off is rollback/debug.',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -50,6 +52,8 @@ test('structure-prediction batch/target copy stays short and operator-focused', 
         'Shared-target screen active:',
         'Imported target structure is available for conditioned or frozen complex prediction.',
         'Enable physics/FK steering potentials. Can improve geometry, but high sample counts multiply internal particles and should use memory-safe batching.',
+        'Target conditioning currently applies to complex predictions. Add a shared target source or additional complex component before launching.',
+        'Keeps the total MSA CPU budget fixed while splitting EnvDB target search for high-quality balanced/maximum runs.',
     ]) {
         rejectSnippet(source, stale);
     }
