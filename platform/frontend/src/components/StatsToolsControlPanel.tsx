@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const STATS_TOOLS_ENDPOINT = '/api/system/stats-tools';
-const STATS_TOOLS_OFFLINE_MESSAGE = 'stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools';
+const STATS_TOOLS_OFFLINE_MESSAGE = 'stats_tools_offline — press Start';
 const STATS_TOOLS_COMMANDS = [
     'bms stats-tools status',
     'bms stats-tools start',
@@ -9,6 +9,12 @@ const STATS_TOOLS_COMMANDS = [
     'bms stats-tools restart',
     'bms stats-tools logs --tail 120',
 ];
+
+const STATS_TOOLS_DOC_LINKS = [
+    { label: 'BMS stats plan', href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/reports/2026-05-05-bms-workflow-stats-tools-containerization-plan.md' },
+    { label: 'R Project', href: 'https://www.r-project.org/' },
+    { label: 'Plotly docs', href: 'https://plotly.com/javascript/' },
+] as const;
 
 interface StatsToolsStatus {
     component?: string;
@@ -39,8 +45,8 @@ interface StatsToolsControlPanelProps {
 
 export function StatsToolsControlPanel({
     embeddedContext = 'stats-toolkit-debug',
-    title = 'Stats Toolkit debug / stats-tools container',
-    subtitle = 'Start, stop, restart, inspect health, and tail logs for the optional stats-tools runtime.',
+    title = 'Stats Tools',
+    subtitle = 'Optional runtime: start/stop/restart, health, logs.',
     className = '',
     autoRefresh = true,
 }: StatsToolsControlPanelProps) {
@@ -112,7 +118,10 @@ export function StatsToolsControlPanel({
                 ? 'bg-rose-400'
                 : 'bg-slate-600';
     const commands = status?.commands && status.commands.length > 0 ? status.commands : STATS_TOOLS_COMMANDS;
-    const note = status?.runtime_note || status?.offline_message || (!runtimeAvailable ? STATS_TOOLS_OFFLINE_MESSAGE : 'stats-tools available');
+    const rawNote = status?.runtime_note || status?.offline_message || (!runtimeAvailable ? STATS_TOOLS_OFFLINE_MESSAGE : '');
+    const note = runtimeAvailable
+        ? (status?.runtime_note && !/offline/i.test(status.runtime_note) ? status.runtime_note : '')
+        : rawNote;
 
     return (
         <section
@@ -143,14 +152,33 @@ export function StatsToolsControlPanel({
                 <div><span className="text-slate-500">Mode:</span> {status?.control_mode || 'unknown'}</div>
             </div>
 
-            <div className={`rounded border px-2 py-1.5 text-[11px] ${runtimeAvailable ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
-                {note}
+            {note && (
+                <div className={`rounded border px-2 py-1.5 text-[11px] ${runtimeAvailable ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
+                    {note}
+                </div>
+            )}
+
+            <div className="rounded border border-slate-700 bg-slate-950/50 p-2">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Documentation</p>
+                <div className="flex flex-wrap gap-2">
+                    {STATS_TOOLS_DOC_LINKS.map((link) => (
+                        <a
+                            key={link.href}
+                            href={link.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded border border-slate-600 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:border-cyan-500/70 hover:bg-cyan-500/10"
+                        >
+                            {link.label}
+                        </a>
+                    ))}
+                </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                <button onClick={() => void runAction('start')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Start stats-tools</button>
-                <button onClick={() => void runAction('stop')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50">Stop stats-tools</button>
-                <button onClick={() => void runAction('restart')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-blue-500/50 text-blue-300 hover:bg-blue-500/20 disabled:opacity-50">Restart stats-tools</button>
+                <button onClick={() => void runAction('start')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Start</button>
+                <button onClick={() => void runAction('stop')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50">Stop</button>
+                <button onClick={() => void runAction('restart')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-blue-500/50 text-blue-300 hover:bg-blue-500/20 disabled:opacity-50">Restart</button>
                 <button onClick={() => void runAction('health')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50">Health</button>
                 <button onClick={() => void runAction('logs')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50">Logs</button>
             </div>
@@ -158,10 +186,10 @@ export function StatsToolsControlPanel({
             {loading && <div className="text-[11px] text-cyan-300">Running stats-tools {loading}...</div>}
             {message && <div className={`text-[11px] ${message.startsWith('✗') ? 'text-rose-300' : 'text-emerald-300'}`}>{message}</div>}
 
-            <div>
-                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Operator commands</p>
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-2 text-[11px] leading-relaxed text-slate-200 border border-slate-700">{commands.join('\n')}</pre>
-            </div>
+            <details className="rounded border border-slate-700 bg-slate-950/50 p-2 text-[11px] text-slate-300">
+                <summary className="cursor-pointer font-semibold uppercase tracking-wider text-slate-400">CLI commands</summary>
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-2 leading-relaxed text-slate-200 border border-slate-800">{commands.join('\n')}</pre>
+            </details>
 
             <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Logs</p>
@@ -182,7 +210,7 @@ export function StatsToolsMenu() {
                 title="Stats Toolkit control panel"
             >
                 <span className="h-2 w-2 rounded-full bg-slate-500" />
-                Stats-tools
+                Stats Tools
             </button>
 
             {isOpen && (
@@ -194,8 +222,8 @@ export function StatsToolsMenu() {
                     >
                         <StatsToolsControlPanel
                             embeddedContext="topbar-control-panel"
-                            title="Stats-tools control panel"
-                            subtitle="Same lifecycle controls as Stats Toolkit → Debug. Optional at core boot."
+                            title="Stats Tools"
+                            subtitle="Optional runtime: start/stop/restart, health, logs."
                             autoRefresh={isOpen}
                         />
                     </div>

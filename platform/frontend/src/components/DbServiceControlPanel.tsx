@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react';
 
 const DB_SERVICE_ENDPOINT = '/api/system/db-service';
-const DB_SERVICE_OFFLINE_MESSAGE = 'db_service_offline — use BMS DB service → Start';
+const DB_SERVICE_OFFLINE_MESSAGE = 'db_service_offline — press Start DB';
 const DB_SERVICE_COMMANDS = [
     'bms db-service status',
     'bms db-service start',
     'bms db-service restart',
     'bms db-service logs --tail 120',
 ];
+
+const DB_SERVICE_DOC_LINKS = [
+    { label: 'BMS DB spec', href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-05-06-bms-db-service-host-agent-code-level-spec.md' },
+    { label: 'PostgreSQL docs', href: 'https://www.postgresql.org/docs/current/' },
+    { label: 'SQLite docs', href: 'https://www.sqlite.org/docs.html' },
+] as const;
 
 interface DbLogicalDatabaseStatus {
     name?: string;
@@ -50,8 +56,8 @@ interface DbServiceControlPanelProps {
 
 export function DbServiceControlPanel({
     embeddedContext = 'assay-db-debug',
-    title = 'BMS DB service',
-    subtitle = 'Start, restart, inspect health, and tail logs for the optional DB runtime. API/web boot stays available when this is offline.',
+    title = 'BMS DB',
+    subtitle = 'Optional DB runtime: start/restart, health, logs.',
     className = '',
     autoRefresh = true,
 }: DbServiceControlPanelProps) {
@@ -142,7 +148,10 @@ export function DbServiceControlPanel({
                 ? 'bg-rose-400'
                 : 'bg-slate-600';
     const commands = status?.commands && status.commands.length > 0 ? status.commands : DB_SERVICE_COMMANDS;
-    const note = status?.runtime_note || status?.offline_message || (!runtimeAvailable ? DB_SERVICE_OFFLINE_MESSAGE : 'BMS DB service available');
+    const rawNote = status?.runtime_note || status?.offline_message || (!runtimeAvailable ? DB_SERVICE_OFFLINE_MESSAGE : '');
+    const note = runtimeAvailable
+        ? (status?.runtime_note && !/offline/i.test(status.runtime_note) ? status.runtime_note : '')
+        : rawNote;
     const logicalDatabases = status?.logical_databases ?? [];
 
     return (
@@ -174,8 +183,27 @@ export function DbServiceControlPanel({
                 <div><span className="text-slate-500">Mode:</span> {status?.control_mode || 'unknown'}</div>
             </div>
 
-            <div className={`rounded border px-2 py-1.5 text-[11px] ${runtimeAvailable ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
-                {note}
+            {note && (
+                <div className={`rounded border px-2 py-1.5 text-[11px] ${runtimeAvailable ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
+                    {note}
+                </div>
+            )}
+
+            <div className="rounded border border-slate-700 bg-slate-950/50 p-2">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Documentation</p>
+                <div className="flex flex-wrap gap-2">
+                    {DB_SERVICE_DOC_LINKS.map((link) => (
+                        <a
+                            key={link.href}
+                            href={link.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded border border-slate-600 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:border-cyan-500/70 hover:bg-cyan-500/10"
+                        >
+                            {link.label}
+                        </a>
+                    ))}
+                </div>
             </div>
 
             {logicalDatabases.length > 0 && (
@@ -191,8 +219,8 @@ export function DbServiceControlPanel({
             )}
 
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                <button onClick={() => void runAction('start')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Start BMS DB service</button>
-                <button onClick={() => void runAction('restart')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-blue-500/50 text-blue-300 hover:bg-blue-500/20 disabled:opacity-50">Restart BMS DB service</button>
+                <button onClick={() => void runAction('start')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Start DB</button>
+                <button onClick={() => void runAction('restart')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-blue-500/50 text-blue-300 hover:bg-blue-500/20 disabled:opacity-50">Restart DB</button>
                 <button onClick={() => void runAction('health')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50">Health</button>
                 <button onClick={() => void runAction('logs')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50">Logs</button>
             </div>
@@ -200,10 +228,10 @@ export function DbServiceControlPanel({
             {loading && <div className="text-[11px] text-cyan-300">Running {displayName} {loading}...</div>}
             {message && <div className={`text-[11px] ${message.startsWith('✗') ? 'text-rose-300' : 'text-emerald-300'}`}>{message}</div>}
 
-            <div>
-                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Operator commands</p>
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-2 text-[11px] leading-relaxed text-slate-200 border border-slate-700">{commands.join('\n')}</pre>
-            </div>
+            <details className="rounded border border-slate-700 bg-slate-950/50 p-2 text-[11px] text-slate-300">
+                <summary className="cursor-pointer font-semibold uppercase tracking-wider text-slate-400">CLI commands</summary>
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-2 leading-relaxed text-slate-200 border border-slate-800">{commands.join('\n')}</pre>
+            </details>
 
             <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Logs</p>
@@ -236,8 +264,8 @@ export function DbServiceMenu() {
                     >
                         <DbServiceControlPanel
                             embeddedContext="topbar-control-panel"
-                            title="BMS DB service"
-                            subtitle="Optional at API/web boot. Start/restart the DB and inspect degraded assay analytics state."
+                            title="BMS DB"
+                            subtitle="Optional DB runtime: start/restart, health, logs."
                             autoRefresh={isOpen}
                         />
                     </div>

@@ -260,7 +260,7 @@ function detectProteinBasePreview(text: string): ImportPreview {
         },
         notes: [
             'ProteinBase evaluation payload detected. Import will create a synthetic completed job in the existing Results Viewer.',
-            'Boltz-2 / ESMFold metrics such as pLDDT, iPSAE, iPTM, pTM, and complex confidence values flow into existing design analytics fields.',
+            'Structure metrics map into existing design analytics fields.',
             'Rows without a structure prediction URL are skipped during import so malformed edge cases do not blank the viewer.',
         ],
         warnings: structureMetric
@@ -320,7 +320,7 @@ function detectTabularPreview(text: string): ImportPreview {
             structure: pickLikelyColumn(columns, STRUCTURE_COLUMN_PATTERNS),
         },
         notes: [
-            'Tabular columns were auto-detected so the viewer can expose sequence / pLDDT / structure mapping hints instead of dropping you into a blank state.',
+            'Columns auto-detected; sequence / pLDDT / structure hints are shown when present.',
         ],
         warnings: [
             'Generic CSV / TSV import preview is wired, but only ProteinBase JSONL currently creates a synthetic completed job from the UI.',
@@ -745,7 +745,7 @@ export function DataViewerLanding({
                             <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Existing data</div>
                             <h3 className="mt-2 text-lg font-semibold text-white">Open a recent workflow or imported dataset</h3>
                             <p className="mt-2 text-sm text-slate-400">
-                                The viewer still uses the existing job/design pipeline. Recent jobs appear here so you can jump in without hunting through the header dropdown.
+                                Recent jobs and imported datasets appear here.
                             </p>
                         </div>
 

@@ -14,6 +14,16 @@ type ToolkitView = 'launch' | 'runs';
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
 type StageOutputsMap = Record<string, string[]>;
 
+const NANOPORE_DOC_LINKS = [
+    { label: 'Dorado docs', href: 'https://dorado-docs.readthedocs.io/en/latest/' },
+    { label: 'Dorado GitHub', href: 'https://github.com/nanoporetech/dorado' },
+    { label: 'modkit GitHub', href: 'https://github.com/nanoporetech/modkit' },
+    { label: 'wf-clone GitHub', href: 'https://github.com/epi2me-labs/wf-clone-validation' },
+    { label: 'minimap2 GitHub', href: 'https://github.com/lh3/minimap2' },
+    { label: 'IGV.js docs', href: 'https://igv.org/doc/igvjs/' },
+    { label: 'Nextflow docs', href: 'https://www.nextflow.io/docs/latest/index.html' },
+] as const;
+
 interface IgvArtifacts {
     bamPath: string | null;
     bamUrl: string | null;
@@ -3792,9 +3802,6 @@ export function NGSToolkit() {
                 <div className="flex items-center justify-between">
                     <div>
                         <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Data Visualization Toolkit</h1>
-                        <p className="text-[var(--text-secondary)]">
-                            Walled garden for Nanopore orchestration and run monitoring
-                        </p>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
@@ -3824,6 +3831,22 @@ export function NGSToolkit() {
                         >
                             Runs
                         </button>
+                    </div>
+                </div>
+                <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs uppercase tracking-wide text-[var(--text-secondary)] mr-1">Documentation</span>
+                        {NANOPORE_DOC_LINKS.map((link) => (
+                            <a
+                                key={link.href}
+                                href={link.href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2.5 py-1 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-xs text-[var(--text-primary)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] transition-colors"
+                            >
+                                {link.label}
+                            </a>
+                        ))}
                     </div>
                 </div>
             </header>
@@ -3864,7 +3887,7 @@ export function NGSToolkit() {
                                 type="text"
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
-                                placeholder="Search nanopore jobs by name or ID..."
+                                placeholder="Search jobs..."
                                 className="w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
                                 style={{ borderColor: 'var(--border-primary)' }}
                             />
@@ -4009,7 +4032,7 @@ export function NGSToolkit() {
                         </div>
 
                         {!selectedJob ? (
-                            <p className="text-sm text-[var(--text-secondary)]">Select a nanopore run to inspect parameters, stage progress, and artifacts.</p>
+                            <p className="text-sm text-[var(--text-secondary)]">Select a run to inspect.</p>
                         ) : (
                             <>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -4135,11 +4158,6 @@ export function NGSToolkit() {
                                             IGV unavailable: {igvMissingReason}
                                         </p>
                                     )}
-                                    {isFastqOnlyRun && !igvReady && (
-                                        <p className="text-xs text-[var(--text-secondary)]">
-                                            FASTQ-only runs require `reference_fasta` + `fastq_align` outputs to inspect alignments in IGV.
-                                        </p>
-                                    )}
                                     {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
                                         <div className="flex flex-wrap items-center gap-2 pt-1">
                                             {igvReportDownloadHref && (
@@ -4224,30 +4242,12 @@ export function NGSToolkit() {
                                                         </a>
                                                     )}
                                                 </div>
-                                                {(multimerArtifacts.summaryPath
-                                                    || multimerArtifacts.lengthsPath
-                                                    || multimerArtifacts.candidatesPath
-                                                    || multimerArtifacts.dimerSummaryPath
-                                                    || multimerArtifacts.dimerConsensusPath
-                                                    || multimerArtifacts.dominantDimerConsensusPath
-                                                    || multimerArtifacts.logPath) && (
-                                                        <div className="text-[11px] text-[var(--text-secondary)] font-mono break-all">
-                                                            {multimerArtifacts.summaryPath && <div>summary: {multimerArtifacts.summaryPath}</div>}
-                                                            {multimerArtifacts.lengthsPath && <div>read lengths: {multimerArtifacts.lengthsPath}</div>}
-                                                            {multimerArtifacts.candidatesPath && <div>candidates: {multimerArtifacts.candidatesPath}</div>}
-                                                            {multimerArtifacts.dimerSummaryPath && <div>alignment stats: {multimerArtifacts.dimerSummaryPath}</div>}
-                                                            {multimerArtifacts.dominantDimerConsensusPath && <div>consensus (dominant): {multimerArtifacts.dominantDimerConsensusPath}</div>}
-                                                            {!multimerArtifacts.dominantDimerConsensusPath && multimerArtifacts.dimerConsensusPath && <div>consensus: {multimerArtifacts.dimerConsensusPath}</div>}
-                                                            {multimerArtifacts.logPath && <div>log: {multimerArtifacts.logPath}</div>}
-                                                        </div>
-                                                    )}
-
                                                 {multimerError && (
                                                     <p className="text-xs text-amber-300">{multimerError}</p>
                                                 )}
 
                                                 {!hasFastqQcDetails ? (
-                                                    <p className="text-sm text-[var(--text-secondary)]">FASTQ QC completed but no parsed summary rows are available yet.</p>
+                                                    <p className="text-sm text-[var(--text-secondary)]">No parsed FASTQ summary yet.</p>
                                                 ) : (
                                                     <>
                                                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -4316,12 +4316,12 @@ export function NGSToolkit() {
                                                                 />
                                                             </div>
                                                         ) : (
-                                                            <p className="text-xs text-[var(--text-secondary)]">Read length table unavailable; histogram not shown.</p>
+                                                            <p className="text-xs text-[var(--text-secondary)]">No read-length table.</p>
                                                         )}
 
                                                         {topMultimerCandidates.length > 0 && (
                                                             <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded p-3">
-                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Multimer candidate preview (first 40)</div>
+                                                                <div className="text-xs text-[var(--text-secondary)] mb-2">Multimer candidates</div>
                                                                 <div className="overflow-x-auto">
                                                                     <table className="w-full text-xs">
                                                                         <thead>
@@ -4389,25 +4389,12 @@ export function NGSToolkit() {
                                                     </a>
                                                 )}
                                             </div>
-                                            {(methylationArtifacts.summaryPath || methylationArtifacts.bedPath) && (
-                                                <div className="text-[11px] text-[var(--text-secondary)] font-mono break-all">
-                                                    {methylationArtifacts.summaryPath && (
-                                                        <div>summary: {methylationArtifacts.summaryPath}</div>
-                                                    )}
-                                                    {methylationArtifacts.bedPath && (
-                                                        <div>bed: {methylationArtifacts.bedPath}</div>
-                                                    )}
-                                                </div>
-                                            )}
-
                                             {methylationError && (
                                                 <p className="text-xs text-amber-300">{methylationError}</p>
                                             )}
 
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                modkit codes: <span className="font-mono">a=6mA</span>, <span className="font-mono">m=5mC</span>, <span className="font-mono">h=5hmC</span>.
-                                                Plotly chart is plasmid-focused: Dam at <span className="font-mono">GATC</span> (6mA) and Dcm at <span className="font-mono">CCWGG</span> (5mC) on both strands.
-                                                Dcm percentages use <span className="font-mono">max(m, h)</span> per site (not sum) to avoid inflated totals.
+                                                Dam/Dcm motif view; Dcm uses <span className="font-mono">max(m, h)</span>.
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="text-[var(--text-secondary)]">Strand view:</span>
@@ -4485,13 +4472,13 @@ export function NGSToolkit() {
                                                 &gt;5% sites: <span className="font-mono">{filteredMotifHighSites.length}</span>.
                                             </div>
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                Control note: for non-methylating strains, most motif sites should typically remain at or below ~5% at adequate depth (default {motifMinCoverage}x + strand concordance required with +/- agreement within {MOTIF_CONCORDANCE_DELTA_PERCENT}%).
+                                                Negative controls: expect ≤5% at adequate depth.
                                             </div>
 
                                             {methylationPlotData.length > 0 ? (
                                                 <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3">
                                                     <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                        <div className="text-xs text-[var(--text-secondary)] mb-2">Motif-targeted strand bar chart (Dam/Dcm)</div>
+                                                        <div className="text-xs text-[var(--text-secondary)] mb-2">Dam/Dcm motif methylation</div>
                                                         <Plot
                                                             data={methylationPlotData}
                                                             layout={methylationPlotLayout}
@@ -4536,7 +4523,7 @@ export function NGSToolkit() {
                                                             )}
                                                         </div>
                                                         <div className="text-[11px] text-[var(--text-secondary)] space-y-1">
-                                                            <div>Motif site shading intensity tracks % modified (low to high).</div>
+                                                            <div>Shading = % modified; +/- hues are separate.</div>
                                                             <div className="flex flex-wrap items-center gap-3">
                                                                 <span className="inline-flex items-center gap-1">
                                                                     <span className="h-2.5 w-8 rounded border border-[var(--border-primary)]" style={{
@@ -4550,7 +4537,6 @@ export function NGSToolkit() {
                                                                     }} />
                                                                     <span className="font-mono">Dcm</span>
                                                                 </span>
-                                                                <span>+/- strands use distinct hues.</span>
                                                             </div>
                                                         </div>
                                                         {referenceSequenceRows.length > 0 ? (
@@ -4608,7 +4594,7 @@ export function NGSToolkit() {
                                                                 </div>
                                                             </div>
                                                         ) : (
-                                                            <p className="text-xs text-[var(--text-secondary)]">Reference sequence is not available for this run.</p>
+                                                            <p className="text-xs text-[var(--text-secondary)]">Reference sequence unavailable.</p>
                                                         )}
                                                         {selectedSequencePosition != null && (
                                                             <p className="text-xs text-[var(--text-secondary)]">
@@ -4618,7 +4604,7 @@ export function NGSToolkit() {
                                                     </div>
                                                 </div>
                                             ) : (
-                                                <p className="text-xs text-[var(--text-secondary)]">No per-site methylation points available for plotting yet.</p>
+                                                <p className="text-xs text-[var(--text-secondary)]">No per-site methylation points.</p>
                                             )}
 
                                             <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 space-y-2">
@@ -4714,7 +4700,7 @@ export function NGSToolkit() {
                                             <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
                                                 <div className="flex items-center justify-between gap-3 mb-2">
                                                     <div className="text-xs text-[var(--text-secondary)]">
-                                                        Raw modkit loci preview (debug, not Dam/Dcm motif-filtered)
+                                                        Raw modkit loci
                                                     </div>
                                                     <button
                                                         type="button"
@@ -4762,11 +4748,7 @@ export function NGSToolkit() {
                                                     ) : (
                                                         <p className="text-xs text-[var(--text-secondary)]">No methylation BED rows available to preview.</p>
                                                     )
-                                                ) : (
-                                                    <p className="text-xs text-[var(--text-secondary)]">
-                                                        Hidden by default to avoid confusion with motif-filtered Dam/Dcm calls above.
-                                                    </p>
-                                                )}
+                                                ) : null}
                                             </div>
                                         </div>
                                     )}
@@ -4965,7 +4947,7 @@ export function NGSToolkit() {
                                 )}
                                 {!igvLoading && !igvError && !igvReadsTrackLoaded && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
-                                        Reference loaded. Tracks autoload once viewer initializes, or click 'Load tracks'.
+                                        Reference loaded; tracks autoload or use Load tracks.
                                     </div>
                                 )}
                                 {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (

@@ -59,6 +59,7 @@ test('vite build has explicit manual chunks and a post-split chunk-size budget',
   for (const chunkName of ['vendor-react', 'vendor-blueprint', 'vendor-plotly', 'vendor-seqviz', 'vendor-igv', 'vendor-molstar']) {
     assert.match(source, new RegExp(`['"]${chunkName}['"]`, 'u'), `${chunkName} manual chunk is required`);
   }
+  assert.match(source, /commonjsHelpers\.js/u, 'CommonJS helpers should stay out of the generic vendor chunk to avoid React/Plotly circular init crashes');
   assert.match(source, /\/node_modules\/@plotly\//u, 'Plotly subpackages should not fall through into the generic vendor chunk');
   assert.match(source, /\/node_modules\/seqviz\//u, 'SeqViz should not fall through into the generic vendor chunk');
   assert.match(source, /demoConstructs\.generated/u, 'generated MolBio demo data should stay outside the initial app chunk');

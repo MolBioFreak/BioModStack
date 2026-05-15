@@ -5,14 +5,26 @@
  */
 
 import { SeqViz } from "seqviz";
-import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
-import type { PrimerTmSettings } from '../../lib/api';
+import {
+    useEffect,
+    useMemo,
+    useRef,
+    type MouseEvent as ReactMouseEvent,
+} from "react";
+import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, PrimerTmSettings } from '../../lib/api';
 import {
     getSeqVizTouchRotationWheelDelta,
     installSeqVizTouchBridge,
     shouldEnableSeqVizTouchBridge,
 } from './utils/seqVizTouch';
 import { COLOR_PALETTES } from './sequenceViewerConstants';
+import {
+    displayStrandForMoleculeOrientation,
+    sequenceForDisplayStrand,
+    transformDirectionForDisplayStrand,
+    transformRangeForDisplayStrand,
+    type NucleotideDisplayStrand,
+} from './utils/nucleotides';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -114,6 +126,9 @@ export interface SequenceData {
     sequence: string;
     circular: boolean;
     sequenceType: 'dna' | 'rna' | 'protein';
+    moleculeStrandedness?: NucleotideMoleculeStrandedness;
+    moleculeOrientation?: NucleotideMoleculeOrientation;
+    moleculeLabel?: string;
     features: Feature[];
     primers?: Primer[];
     translations?: Translation[];
@@ -158,6 +173,7 @@ interface SequenceViewerProps {
     viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
     colorPalette?: ColorPaletteName;
     visibleFrames?: Set<1 | 2 | 3 | -1 | -2 | -3>;
+    activeDisplayStrand?: NucleotideDisplayStrand;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -192,25 +208,43 @@ export function SequenceViewer({
     className,
     viewMode,
     colorPalette = 'classic',
-    visibleFrames = new Set([1])
+    visibleFrames = new Set([1]),
+    activeDisplayStrand,
 }: SequenceViewerProps) {
+    const nucleotideSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    const sourceDisplayStrand = sequenceData.sequenceType === 'protein'
+        ? 'plus'
+        : displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
+    const resolvedDisplayStrand = activeDisplayStrand ?? sourceDisplayStrand;
+    const sequenceLength = sequenceData.sequence.length;
+
     const featureAnnotations = useMemo(() => {
         return sequenceData.features.flatMap((feature) => {
             const segments = feature.segments && feature.segments.length > 0
                 ? feature.segments
                 : [{ start: feature.start, end: feature.end }];
 
-            return segments.map((segment, index) => ({
-                name: segments.length > 1 ? `${feature.name} [${index + 1}/${segments.length}]` : feature.name,
-                start: segment.start,
-                end: segment.end,
-                direction: feature.strand,
-                color: feature.color || "#3b82f6",
-                type: feature.type,
-                id: segments.length > 1 ? `${feature.id}::segment:${index}` : feature.id,
-            }));
+            return segments.map((segment, index) => {
+                const displayRange = transformRangeForDisplayStrand(
+                    segment.start,
+                    segment.end,
+                    sequenceLength,
+                    sourceDisplayStrand,
+                    resolvedDisplayStrand,
+                );
+
+                return {
+                    name: segments.length > 1 ? `${feature.name} [${index + 1}/${segments.length}]` : feature.name,
+                    start: displayRange.start,
+                    end: displayRange.end,
+                    direction: transformDirectionForDisplayStrand(feature.strand, sourceDisplayStrand, resolvedDisplayStrand),
+                    color: feature.color || "#3b82f6",
+                    type: feature.type,
+                    id: segments.length > 1 ? `${feature.id}::segment:${index}` : feature.id,
+                };
+            });
         });
-    }, [sequenceData.features]);
+    }, [resolvedDisplayStrand, sequenceData.features, sequenceLength, sourceDisplayStrand]);
 
     // Build annotations array based on visibility toggles
     const annotations = useMemo(() => {
@@ -229,20 +263,30 @@ export function SequenceViewer({
         }
 
         if (visibility.primers && sequenceData.primers) {
-            result.push(...sequenceData.primers.map(p => ({
-                name: p.tm
-                    ? `${p.name} (Tm: ${p.tm.toFixed(1)}°C)`
-                    : p.name,
-                start: p.start,
-                end: p.end,
-                direction: p.strand,
-                color: getTmColor(p.tm),
-                type: "primer"
-            })));
+            result.push(...sequenceData.primers.map(p => {
+                const displayRange = transformRangeForDisplayStrand(
+                    p.start,
+                    p.end,
+                    sequenceLength,
+                    sourceDisplayStrand,
+                    resolvedDisplayStrand,
+                );
+
+                return {
+                    name: p.tm
+                        ? `${p.name} (Tm: ${p.tm.toFixed(1)}°C)`
+                        : p.name,
+                    start: displayRange.start,
+                    end: displayRange.end,
+                    direction: transformDirectionForDisplayStrand(p.strand, sourceDisplayStrand, resolvedDisplayStrand),
+                    color: getTmColor(p.tm),
+                    type: "primer"
+                };
+            }));
         }
 
         return result;
-    }, [featureAnnotations, sequenceData.primers, visibility.features, visibility.primers]);
+    }, [featureAnnotations, resolvedDisplayStrand, sequenceData.primers, sequenceLength, sourceDisplayStrand, visibility.features, visibility.primers]);
 
     // Build translations array if visible - filter by selected reading frames
     // Also filter overlapping ORFs to prevent visual chaos
@@ -281,23 +325,90 @@ export function SequenceViewer({
             }
         }
 
-        return nonOverlapping.map((t, i) => ({
-            name: `ORF ${i + 1}`,
-            start: t.start,
-            end: t.end,
-            direction: t.strand
-        }));
-    }, [sequenceData.translations, visibility.translations, visibleFrames]);
+        return nonOverlapping.map((t, i) => {
+            const displayRange = transformRangeForDisplayStrand(
+                t.start,
+                t.end,
+                sequenceLength,
+                sourceDisplayStrand,
+                resolvedDisplayStrand,
+            );
 
-    // Handle RNA display - convert T → U
+            return {
+                name: `ORF ${i + 1}`,
+                start: displayRange.start,
+                end: displayRange.end,
+                direction: transformDirectionForDisplayStrand(t.strand, sourceDisplayStrand, resolvedDisplayStrand)
+            };
+        });
+    }, [resolvedDisplayStrand, sequenceData.translations, sequenceLength, sourceDisplayStrand, visibility.translations, visibleFrames]);
+
+    // Build the sequence that SeqViz should render for the selected display strand.
+    // Stored coordinates remain in the imported/source strand; display-only reverse
+    // complementation is handled here and selection/annotation coordinates are
+    // transformed at the viewer boundary.
     const displaySequence = useMemo(() => {
-        if (sequenceData.sequenceType === 'rna') {
-            return sequenceData.sequence.replace(/T/gi, 'U');
+        if (sequenceData.sequenceType === 'protein') {
+            return sequenceData.sequence;
         }
-        return sequenceData.sequence;
-    }, [sequenceData.sequence, sequenceData.sequenceType]);
+
+        return sequenceForDisplayStrand(
+            sequenceData.sequence,
+            nucleotideSequenceType,
+            sourceDisplayStrand,
+            resolvedDisplayStrand,
+        );
+    }, [nucleotideSequenceType, resolvedDisplayStrand, sequenceData.sequence, sequenceData.sequenceType, sourceDisplayStrand]);
 
     const viewerRef = useRef<HTMLDivElement | null>(null);
+    const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
+
+    const seqVizSelection = useMemo(() => {
+        if (!selection) {
+            return undefined;
+        }
+
+        const displaySelectionRange = transformRangeForDisplayStrand(
+            selection.start,
+            selection.end,
+            sequenceLength,
+            sourceDisplayStrand,
+            resolvedDisplayStrand,
+        );
+
+        return {
+            start: displaySelectionRange.start,
+            end: displaySelectionRange.end,
+            clockwise: selection.clockwise ?? true,
+            // SeqViz treats externally controlled selections without a type as
+            // programmatic and scrolls the linear viewer on every update. Keeping
+            // a SEQ marker makes mouse-drag selection behave like native SeqViz
+            // user selection instead of fighting the drag gesture.
+            type: selection.type || 'SEQ',
+        } as unknown as { start: number; end: number; clockwise?: boolean };
+    }, [resolvedDisplayStrand, selection, sequenceLength, sourceDisplayStrand]);
+
+    const displayHighlightedRegions = useMemo(() => {
+        if (!highlightedRegions || highlightedRegions.length === 0) {
+            return highlightedRegions;
+        }
+
+        return highlightedRegions.map((region) => {
+            const displayRange = transformRangeForDisplayStrand(
+                region.start,
+                region.end,
+                sequenceLength,
+                sourceDisplayStrand,
+                resolvedDisplayStrand,
+            );
+            return {
+                ...region,
+                start: displayRange.start,
+                end: displayRange.end,
+            };
+        });
+    }, [highlightedRegions, resolvedDisplayStrand, sequenceLength, sourceDisplayStrand]);
+
     const touchBridgeEnabled = useMemo(() => {
         if (typeof navigator === 'undefined') {
             return false;
@@ -314,6 +425,14 @@ export function SequenceViewer({
     }, []);
 
     const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
+    const seqVizSeqType = sequenceData.sequenceType === 'protein' ? 'aa' : sequenceData.sequenceType;
+    const viewerSequenceKey = useMemo(() => {
+        const head = displaySequence.slice(0, 24);
+        const tail = displaySequence.slice(-24);
+        const topology = sequenceData.circular ? 'circular' : 'linear';
+        const viewerStrand = `${sourceDisplayStrand}->${resolvedDisplayStrand}`;
+        return `${sequenceData.name}:${sequenceData.sequenceType}:${sequenceData.moleculeLabel || ''}:${topology}:${viewerStrand}:${displaySequence.length}:${head}:${tail}:${resolvedViewerMode}:${colorPalette}`;
+    }, [colorPalette, displaySequence, resolvedDisplayStrand, resolvedViewerMode, sequenceData.circular, sequenceData.moleculeLabel, sequenceData.name, sequenceData.sequenceType, sourceDisplayStrand]);
     const showTouchRotationControls = touchBridgeEnabled
         && sequenceData.circular
         && resolvedViewerMode !== 'linear';
@@ -371,8 +490,10 @@ export function SequenceViewer({
                 </div>
             )}
             <SeqViz
+                key={viewerSequenceKey}
                 name={sequenceData.name}
                 seq={displaySequence}
+                seqType={seqVizSeqType}
                 annotations={annotations}
                 translations={translations}
                 enzymes={visibility.cutsites ? selectedEnzymes : []}
@@ -383,22 +504,23 @@ export function SequenceViewer({
                 zoom={{ linear: 62 }}
 
                 // Base pair colors from selected palette
-                bpColors={COLOR_PALETTES[colorPalette].colors as Record<string, string>}
+                bpColors={activePaletteColors}
 
-                selection={selection
-                    ? {
-                        start: selection.start,
-                        end: selection.end,
-                        clockwise: selection.clockwise,
-                    }
-                    : undefined}
+                selection={seqVizSelection}
 
                 // Selection handling with type info
                 onSelection={(sel) => {
                     if (onSelection && sel && typeof sel.start === 'number' && typeof sel.end === 'number') {
+                        const sourceRange = transformRangeForDisplayStrand(
+                            sel.start,
+                            sel.end,
+                            sequenceLength,
+                            resolvedDisplayStrand,
+                            sourceDisplayStrand,
+                        );
                         onSelection({
-                            start: sel.start,
-                            end: sel.end,
+                            start: sourceRange.start,
+                            end: sourceRange.end,
                             clockwise: sel.clockwise,
                             type: sel.type,
                             name: sel.name,
@@ -411,7 +533,7 @@ export function SequenceViewer({
                 search={searchQuery ? { query: searchQuery, mismatch: 0 } : undefined}
                 onSearch={onSearch}
 
-                highlights={highlightedRegions}
+                highlights={displayHighlightedRegions}
 
                 // Styling - seqviz needs explicit height
                 style={{ height: "100%", width: "100%" }}
