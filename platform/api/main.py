@@ -14,7 +14,7 @@ import logging
 
 from database import init_db, async_session
 from services.assay_analytical_store import init_analytical_store
-from routers import analyses, analytics, assay_analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, assay_analytics, bioxp, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, ont_devices, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from services.analysis_worker import AnalysisWorker
 from services.gpu_orchestrator import GPUOrchestrator
@@ -182,6 +182,7 @@ app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentr
 app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
 app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
 app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
+app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
