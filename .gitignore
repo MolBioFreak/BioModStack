@@ -1,210 +1,49 @@
+# Local editor / assistant state
+.vscode/
+.hermes/
 
-# Python
+# Local GPU/runtime state
+.gpu_*.json
+.gpu_*.lock
+
+# Local scratch/search artifacts
+.protenix_cache
+.protenix_anchor_root/
+text_*.json
+tmp_bioxp_*.py
+tmp_bioxp_*.sh
+platform/api/tmp_*.py
+platform/api/*.log
+
+# Python/runtime caches
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-!platform/frontend/src/lib/
-!platform/frontend/src/lib/molstar-loader.ts
-!scripts/lib/
-scripts/lib/*
-!scripts/lib/local_msa/
-!scripts/lib/local_msa/**
-scripts/lib/local_msa/**/__pycache__/
-scripts/lib/local_msa/**/*.py[cod]
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+.pytest_cache/
 
-# Nextflow
+# Node/build caches
+node_modules/
+node_modules/.tmp/
+dist/
+
+# Databases, backups, and local runtime outputs
+*.db
+*.db-shm
+*.db-wal
+backups/
+bms_results
+molbio_toolkit.db*
+biomodstack_runtime.db*
+output/
+rcsb/
+docs/evidence/
+lib/NO_*
+
+# Nextflow/local run artifacts
 .nextflow/
 .nextflow.log*
 work/
-workdir/
-
-# Project Data
-bms_results/
-biomodstack.db
-test_*/
-data/
-outputs/
-*.pdb
-*.cif
-*.sdf
-*.jsonl
-*.npy
-rcsb/
-
-# IDE
-.idea/
-.vscode/
-.hermes/
-*.swp
-*.swo
-
-# Node
-node_modules/
-dist-frontend/
-
-# System
-.DS_Store
-Thumbs.db
-
-# Temp
 tmp/
-temp/
-.score.npy
-.p.npy
-.so3_*.npy
 
-# Large Data & Models
-models/
-!platform/api/config/models/
-platform/api/config/models/*
-!platform/api/config/models/nanopore.yaml
-!platform/api/config/models/boltz_cp_experimental.yaml
-!platform/api/config/models/confornets_experimental.yaml
-# Critical structure-prediction model configs
-!platform/api/config/models/protein_cad_experimental.yaml
-!apptainer/
-apptainer/*
-!apptainer/disco.def
-!apptainer/laproteina.def
-*.sif
-*.pt
-*.ckpt
-*.npz
-*.tar
-
-# Environment
-.venv/
-gpu_debug.log
-.env
-.env.*
-!.env.example
-!.env.*.example
-*.local.env
-*.secret
-*.secrets
-*.secret.*
-*.secrets.*
-*.credentials
-*.credentials.*
-*.pem
-*.key
-id_rsa
-id_dsa
-id_ecdsa
-id_ed25519
-.ssh/
-ssh_config*
-
-# BioXP / robot-local linkage and credentials (local only)
-bioxp_linkage_url
-*bioxp*.env
-*bioxp*.local.*
-*bioxp*secret*
-*bioxp*credential*
-*bioxp*private_key*
-*bioxp*ssh_key*
-*bioxp*id_rsa*
-*bioxp*id_ecdsa*
-*bioxp*id_ed25519*
-*bioxp*ssh_config*
-*bioxp*known_hosts*
-config/bioxp.local.*
-config/bioxp.secrets.*
-platform/api/bioxp_linkage_url
-
-# Additional runtime files
-api.log
-completion_log.txt
-submission_log.txt
-/screening_summary.json
-/rfantibody_screening_summary.csv
-NO_MSA
-verify_parsing.nf
-*.db
-*.db-wal
-*.db-shm
-!*.db.example
-
-# GPU state files (transient)
-.gpu_*.json
-.gpu_*.lock
-.cctv.generated.json
-*.lock
-
-# Debug outputs
-config_check*.txt
-definitions.txt
-
-# Uvicorn logs
-platform/api/uvicorn*.log
-
-# Temp workflow files
-body.nf
-body_new.nf
-header.nf
-header_old.nf
-main_clean.nf
-main_old.nf
-main_test.nf
-test.nf
-
-# Debug scripts
-debug_confidence.py
-
-# Build logs
-*.log
-apptainer/*.log
-
-# Turbo cache
-.turbo/
-
-# Backup folders
-.backup/
-
-# Large demo/test data (should not be in repo)
-packages/bio-parsers/test/testData/**/*.dna
-work
-GPU orchestration*.md
-bms_results
-
-# RFDpoly large assets (local only)
-containers/rfdpoly.sif
-tools/RFDpoly/
-
-# Protenix model cache (large, local only)
-.protenix_cache/
-.protenix_anchor_root/
-*.pdf
-img/
-backups/
-
-# Transient local directories
-output/
-platform/api/inputs/
-
-# Scratch test scripts
-test_*.nf
-spawn_result.json
-platform/api/tmp_import_*.py
-
-# Recovery artifacts (local only)
-inputs/recovered_rfantibody/
-*.trb
+# Large local container images
+apptainer/*.sif
+apptainer/*.sif.*
