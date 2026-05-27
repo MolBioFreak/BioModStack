@@ -92,6 +92,31 @@ def test_runtime_state_endpoint_defaults_to_container_when_runtime_omitted(monke
     assert response.json()["runtime_mode"] == "container"
 
 
+def test_runtime_state_marks_current_api_ready_and_derives_container_status(monkeypatch) -> None:
+    descriptor = {
+        "runtime_mode": "container",
+        "runtime_active": False,
+        "health": {"adapter_ready": True, "api_ready": False, "frontend_ready": True},
+        "services": [
+            {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": False},
+            {"name": system.CORE_RUNTIME_SERVICE, "active": False},
+        ],
+    }
+    monkeypatch.setattr(system, "runtime_descriptor", lambda project_root=None, runtime_mode=None: descriptor, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/runtime-state", params={"runtime": "container"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health"]["api_ready"] is True
+    assert payload["runtime_active"] is True
+    assert payload["services"] == [
+        {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": True, "active_source": "http-health"},
+        {"name": system.CORE_RUNTIME_SERVICE, "active": True, "active_source": "http-health"},
+    ]
+
+
 def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
     saved_payloads: list[dict[str, object]] = []
 
