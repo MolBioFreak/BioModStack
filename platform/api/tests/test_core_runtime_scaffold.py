@@ -172,6 +172,17 @@ def test_vite_config_uses_reproducible_stable_pdbe_alias_and_browser_safe_buffer
     assert "node_modules/safe-buffer/index.js" in vite_config
 
 
+def test_vite_config_uses_uid_scoped_cache_dir_outside_repo_node_modules() -> None:
+    vite_config = (REPO_ROOT / "platform" / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
+
+    assert "function resolveViteCacheDir" in vite_config
+    assert "cacheDir: resolveViteCacheDir()" in vite_config
+    assert "BMS_VITE_CACHE_DIR" in vite_config
+    assert "process.getuid" in vite_config
+    assert "os.tmpdir()" in vite_config
+    assert "node_modules/.vite" not in vite_config
+
+
 def test_frontend_router_uses_vite_base_url_for_subpath_deployments() -> None:
     main_tsx = (REPO_ROOT / "platform" / "frontend" / "src" / "main.tsx").read_text(encoding="utf-8")
 
