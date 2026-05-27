@@ -50,6 +50,7 @@ from .boltz_cp_shard_plans import (
     largest_square_divisor as boltz_cp_largest_square_divisor,
 )
 from .gpu_config import read_scheduler_config
+from .ont_ngs_contract import normalize_ont_launch_params, resolve_ont_workflow_alias
 from .workflow_adapter import (
     cancel_via_workflow_adapter,
     get_adapter_running_jobs,
@@ -60,6 +61,46 @@ from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
+
+DEFAULT_WORKFLOW_ENTRYPOINT = "main.nf"
+
+# Workflow/product-specific Nextflow entrypoints that have been intentionally
+# migrated away from the legacy global main.nf router. Keep this keyed by the
+# resolved BioModStack workflow/profile identity, not by shared engine names
+# alone: profiles such as "boltz" are reused by standalone prediction,
+# antibody validation, PPiFlow, mutagenesis, and core protein-design contexts.
+WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
+    "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
+    "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
+    "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
+    "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
+    "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
+    "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
+    "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "protein_local_redesign": "workflows/protein_local_redesign.nf",
+    "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
+    "caliby_experimental": "workflows/caliby_experimental.nf",
+    "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
+    "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
+    "confornets_experimental": "workflows/confornets_experimental.nf",
+}
+
+
+def resolve_nextflow_entrypoint(
+    *,
+    effective_profile: str,
+    model_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return the workflow-specific Nextflow entrypoint for a launch.
+
+    `model_id`, `mode`, and `params` are accepted now so future migrations can
+    key off product/workflow intent when a shared backend profile is ambiguous.
+    The current safe behavior is intentionally conservative: only profiles in
+    WORKFLOW_ENTRYPOINTS leave the legacy main.nf router.
+    """
+    return WORKFLOW_ENTRYPOINTS.get(effective_profile, DEFAULT_WORKFLOW_ENTRYPOINT)
 
 
 def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -> Optional[str]:
@@ -2284,8 +2325,15 @@ def build_nextflow_command(
         ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         ('confornets_experimental', 'design'): 'confornets_experimental',
-        # Nanopore basecalling + methylation analysis
-        ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
+        # Nanopore/ONT product workflows: live device control is outside Nextflow;
+        # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
+        ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
+        ('nanopore', 'basecall_rna'): 'ont_basecall_rna',
+        ('nanopore', 'plasmid_qc'): 'ont_plasmid_qc',
+        ('nanopore', 'construct_screening'): 'ont_construct_screening',
+        ('nanopore', 'methylation_analysis'): 'ont_methylation_analysis',
+        ('nanopore', 'fastq_qc'): 'ont_fastq_qc',
+        ('nanopore', 'nanopore_methylation'): 'ont_methylation_analysis',
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
@@ -2325,6 +2373,10 @@ def build_nextflow_command(
         effective_profile = mode
 
     effective_profile = resolve_antibody_validation_profile(effective_profile)
+
+    if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
+        effective_profile = resolve_ont_workflow_alias(effective_profile)
+        params = normalize_ont_launch_params(effective_profile, params)
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
@@ -2347,8 +2399,12 @@ def build_nextflow_command(
     if model_id == 'boltzgen':
         profile = "boltzgen,workstation_ryzen7960x"
 
-    # Resolve runtime roots explicitly so Nextflow doesn't fall back to stale defaults.
-    workflow_entrypoint = "ngs.nf" if effective_profile == "nanopore_methylation" else "main.nf"
+    workflow_entrypoint = resolve_nextflow_entrypoint(
+        effective_profile=effective_profile,
+        model_id=model_id,
+        mode=mode,
+        params=params,
+    )
 
     explicit_data_root = params.get("data_root")
     if not explicit_data_root:

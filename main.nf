@@ -37,12 +37,6 @@ include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
 
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
-include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
-include { PROTEIN_CAD_EXPERIMENTAL } from './workflows/protein_cad_experimental.nf'
-include { CALIBY_EXPERIMENTAL } from './workflows/caliby_experimental.nf'
-include { PROTEIN_HUNTER_EXPERIMENTAL } from './workflows/protein_hunter_experimental.nf'
-include { BOLTZ_CP_EXPERIMENTAL } from './workflows/boltz_cp_experimental.nf'
-include { CONFORNETS_EXPERIMENTAL } from './workflows/confornets_experimental.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -175,84 +169,6 @@ workflow {
             target_pdb
         )
 
-        return null
-    }
-
-    if (params.rfd_mode == 'protein_local_redesign') {
-        println("Running Protein Local Redesign (RFD3 + constrained sequence design)")
-        println("* Input PDB: ${params.plr_input_pdb}")
-        println("* Design chain: ${params.plr_design_chains}")
-        println("* Region mode: ${params.plr_region_mode ?: 'manual_ranges'}")
-        println("* Sequence method: ${params.plr_seq_method ?: 'fampnn'}")
-        println("* Boltz validation: ${params.plr_run_boltz_validation != false}")
-
-        if (!params.plr_input_pdb) {
-            error("Input PDB required for protein_local_redesign mode")
-        }
-        if (!params.plr_design_chains) {
-            error("Design chain required for protein_local_redesign mode")
-        }
-
-        PROTEIN_LOCAL_REDESIGN()
-        return null
-    }
-
-    if (params.rfd_mode == 'protein_cad_experimental') {
-        println("Running Protein CAD Experimental Workflow")
-        println("* Backend: ${params.pcad_backend}")
-        println("* Task: ${params.pcad_task}")
-        println("* Num designs: ${params.pcad_num_designs}")
-        println("* Target lengths: ${params.pcad_target_lengths}")
-
-        PROTEIN_CAD_EXPERIMENTAL()
-        return null
-    }
-
-    if (params.rfd_mode == 'caliby_experimental') {
-        println("Running Caliby Experimental Workflow")
-        println("* Task: ${params.caliby_task}")
-        println("* Model: ${params.caliby_model_name}")
-        println("* Num seqs/structure: ${params.caliby_num_seqs_per_pdb}")
-
-        CALIBY_EXPERIMENTAL()
-        return null
-    }
-
-    if (params.rfd_mode == 'protein_hunter_experimental') {
-        println("Running Protein Hunter Experimental Workflow")
-        println("* Backend: ${params.ph_backend}")
-        println("* Task: ${params.ph_task}")
-        println("* Num designs: ${params.ph_num_designs}")
-        println("* Num cycles: ${params.ph_num_cycles}")
-
-        PROTEIN_HUNTER_EXPERIMENTAL()
-        return null
-    }
-
-    if (params.rfd_mode == 'boltz_cp_experimental') {
-        def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')
-        println("Running Boltz-CP Experimental Workflow")
-        println("* Input path: ${params.get('bcp_input_path', '')}")
-        println("* GPU IDs: ${params.get('bcp_gpu_ids', params.get('gpu_id', ''))}")
-        println("* Context parallel size: ${params.get('bcp_size_cp', 4)}")
-        println("* Backend: ${bcpBackend}")
-        println("* Data-plane: true-distributed-context-parallel launches torch.distributed DTensor CP prediction; shared-cache backends remain legacy serial full-prediction/output-tiling only")
-        println("* Input format: ${params.get('bcp_input_format', 'config_files')}")
-        println("* Sampling steps: ${params.get('bcp_sampling_steps', 200)}")
-
-        BOLTZ_CP_EXPERIMENTAL()
-        return null
-    }
-
-    if (params.rfd_mode == 'confornets_experimental') {
-        println("Running ConforNets Experimental Workflow")
-        println("* Task: ${params.cn_task}")
-        println("* Benchmark: ${params.cn_benchmark_name}")
-        println("* Test case: ${params.cn_test_case_name}")
-        println("* Samples per state: ${params.cn_num_samples}")
-        println("* Runs/seeds: ${params.cn_num_runs}")
-
-        CONFORNETS_EXPERIMENTAL()
         return null
     }
 

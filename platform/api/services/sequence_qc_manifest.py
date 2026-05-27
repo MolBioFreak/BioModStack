@@ -18,6 +18,9 @@ SCHEMA_BY_KIND = {
     "summary": "sequence_qc.summary.v1",
     "alignment_stats": "sequence_qc.alignment_stats.v1",
     "coverage": "sequence_qc.coverage_depth.v1",
+    "raw_reads": "sequence_qc.raw_reads.v1",
+    "basecall_reads": "sequence_qc.basecall_reads.v1",
+    "read_qc_summary": "sequence_qc.read_qc_summary.v1",
     "per_base_support": "sequence_qc.per_base_support.v1",
     "consensus": "sequence_qc.consensus_fasta.v1",
     "consensus_index": "sequence_qc.fasta_index.v1",
@@ -32,6 +35,8 @@ SCHEMA_BY_KIND = {
     "modified_bases": "sequence_qc.modified_bases.v1",
     "modkit_summary": "sequence_qc.modkit_summary.v1",
     "methylation_bed": "sequence_qc.methylation_bed.v1",
+    "plasmid_qc_summary": "sequence_qc.plasmid_qc_summary.v1",
+    "construct_screening_summary": "sequence_qc.construct_screening_summary.v1",
 }
 
 ARTIFACT_STATES = {
