@@ -242,6 +242,10 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/rehome": True,
     "/motion/oem/initialize_motion": True,
     "/motion/range/status": True,
+    "/motion/interlock/prepare": True,
+    "/motion/interlock/override": True,
+    "/motion/arm/strict_startup": True,
+    "/motion/hard_reset": True,
     "/motion/reference/status": True,
     "/motion/reference/mark_referenced": True,
     "/motion/reference/mark_desynced": True,
@@ -278,6 +282,7 @@ BMS_PROXIED_ROUTES: Dict[str, bool] = {
 }
 COMMISSIONING_ONLY_ROUTES: Dict[str, bool] = {
     "/motion/interlock/prepare": True,
+    "/motion/interlock/override": True,
     **MANUAL_MOTION_ROUTES,
     **DIRECT_LIQUID_COMMAND_ROUTES,
 }
@@ -306,6 +311,205 @@ OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
     "prepare_to_run_job_readiness": ["/oem/runtime/readiness/prepare-to-run-job/dry-run"],
 }
 
+OEM_IDLE_STANDBY_CURRENT = 10
+OEM_MAX_RUN_CURRENT = 31
+REFERENCE_OK_STATES = {"referenced", "synced", "known"}
+GANTRY_CURRENT_AXES = {"x", "y", "z"}
+MOTION_GUARDED_AXES = {"x", "y", "z", "g", "door"}
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _axis_from_payload(payload: Dict[str, Any]) -> str:
+    axis = str(payload.get("axis") or "").lower().strip()
+    if axis not in MOTION_GUARDED_AXES:
+        raise HTTPException(status_code=400, detail=f"axis must be one of {sorted(MOTION_GUARDED_AXES)}")
+    return axis
+
+
+def _truthy_override(payload: Dict[str, Any], *names: str) -> bool:
+    return any(bool(payload.get(name)) for name in names)
+
+
+def _extract_row(payload: Any, axis: str) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("rows")
+    if isinstance(rows, dict) and isinstance(rows.get(axis), dict):
+        return rows[axis]
+    axes = payload.get("axes")
+    if isinstance(axes, dict) and isinstance(axes.get(axis), dict):
+        return axes[axis]
+    if isinstance(payload.get(axis), dict):
+        return payload[axis]
+    return {}
+
+
+def _extract_position(row: Dict[str, Any]) -> Optional[int]:
+    for key in ("position", "position_steps", "current_position", "current_position_steps"):
+        value = _coerce_int(row.get(key))
+        if value is not None:
+            return value
+    status = row.get("status")
+    if isinstance(status, dict):
+        position = status.get("position")
+        if isinstance(position, dict):
+            value = _coerce_int(position.get("position") or position.get("steps"))
+            if value is not None:
+                return value
+    return None
+
+
+def _first_present(mapping: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+
+def _extract_limits(row: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    limits = row.get("limits")
+    if isinstance(limits, dict):
+        min_value = _coerce_int(_first_present(limits, "min", "min_steps", "lower"))
+        max_value = _coerce_int(_first_present(limits, "max", "max_steps", "upper"))
+        if min_value is not None or max_value is not None:
+            return min_value, max_value
+    min_value = _coerce_int(_first_present(row, "min", "min_steps", "absolute_min", "lower"))
+    max_value = _coerce_int(_first_present(row, "max", "max_steps", "absolute_max", "upper"))
+    return min_value, max_value
+
+
+def _is_axis_referenced(row: Dict[str, Any]) -> bool:
+    state = str(row.get("state") or row.get("reference_state") or "unknown").lower()
+    return state in REFERENCE_OK_STATES or bool(row.get("referenced"))
+
+
+async def _motion_reference_row(axis: str) -> Dict[str, Any]:
+    payload = await proxy_request("GET", "/motion/reference/status", timeout=20.0)
+    return _extract_row(payload, axis)
+
+
+async def _motion_range_row(axis: str) -> Dict[str, Any]:
+    payload = await proxy_request("GET", "/motion/range/status", timeout=20.0)
+    return _extract_row(payload, axis)
+
+
+async def _validate_absolute_motion_payload(payload: Dict[str, Any]) -> None:
+    axis = _axis_from_payload(payload)
+    target = _coerce_int(_first_present(payload, "position_steps", "target_position", "position"))
+    if target is None:
+        raise HTTPException(status_code=400, detail="position_steps must be an integer")
+    reference_row = await _motion_reference_row(axis)
+    if not _is_axis_referenced(reference_row):
+        state = str(reference_row.get("state") or reference_row.get("reference_state") or "unknown")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Refusing absolute {axis.upper()} move: reference state is {state}; mark/verify reference before absolute travel.",
+        )
+    range_row = await _motion_range_row(axis)
+    min_steps, max_steps = _extract_limits(range_row)
+    if min_steps is None or max_steps is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Refusing absolute {axis.upper()} move: configured range is unavailable from robot-local /motion/range/status.",
+        )
+    lower, upper = sorted((min_steps, max_steps))
+    if not lower <= target <= upper:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Refusing absolute {axis.upper()} move: target {target} is outside runtime range {lower}..{upper}.",
+        )
+
+
+async def _validate_relative_motion_payload(payload: Dict[str, Any]) -> None:
+    axis = _axis_from_payload(payload)
+    steps = _coerce_int(_first_present(payload, "steps", "delta_steps"))
+    if steps is None:
+        raise HTTPException(status_code=400, detail="steps must be an integer")
+    reference_row = await _motion_reference_row(axis)
+    range_row = await _motion_range_row(axis)
+    current_position = _extract_position(range_row)
+    min_steps, max_steps = _extract_limits(range_row)
+    referenced = _is_axis_referenced(reference_row)
+    if axis == "z" and steps > 0 and not referenced and current_position is not None and current_position < 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Z positive/down move blocked while reference is unknown and controller position is negative; lift Z with a safe negative/up recovery path first.",
+        )
+    if axis == "door" and (min_steps is None or max_steps is None):
+        raise HTTPException(
+            status_code=409,
+            detail="Refusing door relative move: configured range is unavailable from robot-local /motion/range/status.",
+        )
+    if current_position is not None and min_steps is not None and max_steps is not None:
+        target = current_position + steps
+        lower, upper = sorted((min_steps, max_steps))
+        if not lower <= target <= upper:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Refusing relative {axis.upper()} move: target {target} is outside runtime range {lower}..{upper}.",
+            )
+
+
+def _validate_home_payload(payload: Dict[str, Any]) -> None:
+    _axis_from_payload(payload)
+    if not payload.get("capture_bundle"):
+        raise HTTPException(
+            status_code=400,
+            detail="Switch-search home requires capture_bundle=true plus an operator_note describing native before/after camera/operator confirmation.",
+        )
+    note = str(payload.get("operator_note") or "").strip()
+    if not note:
+        raise HTTPException(
+            status_code=400,
+            detail="Switch-search home requires operator_note with before/after camera/operator confirmation context.",
+        )
+
+
+def _validated_axes_current_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    axes_value = payload.get("axes") or ["x", "y", "z"]
+    if isinstance(axes_value, str):
+        axes = [axis.strip().lower() for axis in axes_value.split(",") if axis.strip()]
+    elif isinstance(axes_value, list):
+        axes = [str(axis).lower().strip() for axis in axes_value]
+    else:
+        raise HTTPException(status_code=400, detail="axes must be a list or comma-separated string")
+    invalid_axes = sorted(set(axes) - GANTRY_CURRENT_AXES)
+    if invalid_axes:
+        raise HTTPException(status_code=400, detail=f"axes current route is limited to gantry axes {sorted(GANTRY_CURRENT_AXES)}; invalid={invalid_axes}")
+    run_current = _coerce_int(payload.get("run_current"))
+    if run_current is None:
+        run_current = OEM_IDLE_STANDBY_CURRENT
+    standby_current = _coerce_int(payload.get("standby_current"))
+    if standby_current is None:
+        standby_current = OEM_IDLE_STANDBY_CURRENT
+    for name, value in {"run_current": run_current, "standby_current": standby_current}.items():
+        if not 0 <= value <= OEM_MAX_RUN_CURRENT:
+            raise HTTPException(status_code=400, detail=f"{name} must be within TMCL current bounds 0..{OEM_MAX_RUN_CURRENT}")
+    if standby_current > OEM_IDLE_STANDBY_CURRENT and not (
+        _operator_ack(payload) and _truthy_override(payload, "commissioning_override", "allow_hot_standby_current")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"standby_current above OEM idle {OEM_IDLE_STANDBY_CURRENT} requires operator_ack=true and commissioning_override=true.",
+        )
+    sanitized = dict(payload)
+    sanitized.update({"axes": axes, "run_current": run_current, "standby_current": standby_current})
+    return sanitized
+
 
 def _runtime_status_payload(
     *,
@@ -314,8 +518,13 @@ def _runtime_status_payload(
     hardware_connected: bool,
     detail: str,
     proxy_error: Optional[Dict[str, Any]] = None,
+    runtime_url: Optional[str] = None,
+    linkage_active: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    runtime_url = _GLOBAL_LINKAGE_URL if linkage_configured else None
+    if runtime_url is None and linkage_configured:
+        runtime_url = _GLOBAL_LINKAGE_URL
+    if linkage_active is None:
+        linkage_active = bool(_GLOBAL_LINKAGE_URL)
     return {
         "running": linked_runtime_reachable,
         "healthy": linked_runtime_reachable,
@@ -324,6 +533,7 @@ def _runtime_status_payload(
         "port": ROBOT_DAEMON_PORT,
         "runtime_url": runtime_url,
         "linkage_configured": linkage_configured,
+        "linkage_active": linkage_active,
         "linked_runtime_reachable": linked_runtime_reachable,
         "hardware_connected": hardware_connected,
         "admin_control_available": False,
@@ -514,11 +724,25 @@ async def disconnect_linkage():
 async def daemon_status():
     """Report linked BioXP runtime reachability without SSH/process inspection."""
     if not _GLOBAL_LINKAGE_URL:
+        profile = bioxp_interlink.load_profile()
+        if profile:
+            return _runtime_status_payload(
+                linkage_configured=True,
+                linkage_active=False,
+                linked_runtime_reachable=False,
+                hardware_connected=False,
+                runtime_url=profile.get("robot_api_url"),
+                detail=(
+                    "BioXP interlink profile is saved but inactive. Press Connect to activate the BMS proxy; "
+                    "no robot polling runs until then."
+                ),
+            )
         return _runtime_status_payload(
             linkage_configured=False,
+            linkage_active=False,
             linked_runtime_reachable=False,
             hardware_connected=False,
-            detail="No BioXP linkage is configured yet. Connect BMS to the robot-local runtime URL first.",
+            detail="No BioXP interlink profile is saved. Enter the robot API URL and Save settings or Connect.",
         )
 
     try:
@@ -828,8 +1052,58 @@ async def reconnect_runtime():
     return await proxy_request("POST", "/reconnect")
 
 
+async def robot_capabilities() -> Dict[str, Any]:
+    openapi_paths: Dict[str, bool] = {}
+    openapi_error: Optional[Dict[str, Any]] = None
+    if _GLOBAL_LINKAGE_URL:
+        try:
+            openapi = await proxy_request("GET", "/openapi.json", timeout=12.0)
+            raw_paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
+            if isinstance(raw_paths, dict):
+                openapi_paths = {str(path): True for path in raw_paths.keys()}
+        except HTTPException as exc:
+            openapi_error = {"status_code": exc.status_code, "detail": exc.detail}
+    supported_expected = {
+        path: bool(openapi_paths.get(path))
+        for path in sorted(ROBOT_LOCAL_EXPECTED_ROUTES)
+    }
+    missing_expected = {
+        path: True
+        for path, expected in sorted(ROBOT_LOCAL_EXPECTED_ROUTES.items())
+        if expected and openapi_paths and not openapi_paths.get(path)
+    }
+    unexpected_supported = {
+        path: True
+        for path in sorted(openapi_paths)
+        if path not in ROBOT_LOCAL_EXPECTED_ROUTES and path != "/openapi.json"
+    }
+    return {
+        "schema_version": "bioxp.robot_capabilities.v1",
+        "linkage_url": _GLOBAL_LINKAGE_URL,
+        "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
+        "recommended_url": _recommended_linkage_url(),
+        "robot_openapi_reachable": bool(openapi_paths),
+        "openapi_error": openapi_error,
+        "supported_routes": supported_expected,
+        "missing_expected_routes": missing_expected,
+        "unexpected_robot_routes": unexpected_supported,
+        "bms_proxy_routes": dict(sorted(BMS_PROXIED_ROUTES.items())),
+        "notes": [
+            "This is a route-diff control-plane check against the linked robot-local API.",
+            "The raw FastAPI port may live inside Docker; BMS clients should use named /api/bioxp proxy routes, not container-internal ports.",
+            "Route support does not prove hardware readiness or physical motion.",
+        ],
+    }
+
+
+@router.get("/robot/capabilities")
+async def get_robot_capabilities():
+    return await robot_capabilities()
+
+
 @router.get("/capabilities")
 async def bioxp_capabilities():
+    robot_diff = await robot_capabilities()
     return {
         "linkage_url": _GLOBAL_LINKAGE_URL,
         "linkage_configured": bool(_GLOBAL_LINKAGE_URL),
@@ -838,6 +1112,7 @@ async def bioxp_capabilities():
         "truth_source": "robot_local_oem_compat_layer",
         "bms_role": "thin_operator_surface",
         "robot_local_expected_routes": dict(sorted(ROBOT_LOCAL_EXPECTED_ROUTES.items())),
+        "robot_capability_diff": robot_diff,
         "bms_proxy_routes": dict(sorted(BMS_PROXIED_ROUTES.items())),
         "default_operator_routes": dict(sorted({
             path: enabled
@@ -1267,6 +1542,22 @@ async def get_axes_status(axes: str = "x,y,z"):
 async def prepare_interlock():
     return await proxy_request("POST", "/motion/interlock/prepare")
 
+@router.get("/motion/interlock/override")
+async def motion_interlock_override_status():
+    return await proxy_request("GET", "/motion/interlock/override", timeout=35.0)
+
+@router.post("/motion/interlock/override")
+async def motion_interlock_override(request: Request):
+    payload = await _request_json_or_empty(request)
+    if str(payload.get("operator_ack") or "") != "INTERLOCK_OVERRIDE":
+        raise HTTPException(
+            status_code=409,
+            detail="Interlock override requires operator_ack exactly INTERLOCK_OVERRIDE. This bypasses latch/24V sense only for commissioning.",
+        )
+    if payload.get("enabled") is True and not str(payload.get("reason") or "").strip():
+        raise HTTPException(status_code=400, detail="Enabling interlock override requires a non-empty reason.")
+    return await proxy_request("POST", "/motion/interlock/override", payload, timeout=35.0)
+
 @router.get("/motion/power/status")
 async def motion_power_status():
     return await proxy_request("GET", "/motion/power/status", timeout=30.0)
@@ -1281,7 +1572,8 @@ async def motion_power_diag():
 
 @router.post("/motion/axes/current")
 async def motion_axes_current(request: Request):
-    return await proxy_request("POST", "/motion/axes/current", await request.json(), timeout=35.0)
+    payload = _validated_axes_current_payload(await _request_json_or_empty(request))
+    return await proxy_request("POST", "/motion/axes/current", payload, timeout=35.0)
 
 @router.post("/motion/arm/strict_startup")
 async def motion_arm_strict_startup(request: Request):
@@ -1325,11 +1617,15 @@ async def led_rgb(request: Request):
 
 @router.post("/motion/axis/relative")
 async def move_axis_relative(request: Request):
-    return await proxy_request("POST", "/motion/axis/relative", await request.json())
+    payload = await _request_json_or_empty(request)
+    await _validate_relative_motion_payload(payload)
+    return await proxy_request("POST", "/motion/axis/relative", payload)
 
 @router.post("/motion/axis/absolute")
 async def move_axis_absolute(request: Request):
-    return await proxy_request("POST", "/motion/axis/absolute", await request.json())
+    payload = await _request_json_or_empty(request)
+    await _validate_absolute_motion_payload(payload)
+    return await proxy_request("POST", "/motion/axis/absolute", payload)
 
 @router.post("/motion/axis/zero")
 async def move_axis_zero(request: Request):
@@ -1338,6 +1634,7 @@ async def move_axis_zero(request: Request):
 @router.post("/motion/axis/home")
 async def home_axis(request: Request):
     payload = await _request_json_or_empty(request)
+    _validate_home_payload(payload)
     # BMS is only the reachable proxy here; robot-local FastAPI owns the actual
     # homing implementation and must return the motion/audit evidence. Keep this
     # route separate from /motion/axis/zero so Home is never silently rewritten to

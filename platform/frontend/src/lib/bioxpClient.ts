@@ -170,6 +170,34 @@ export interface MotionPowerStatus {
     latch_override?: Record<string, UntypedApiValue> | null;
 }
 
+export interface MotionInterlockOverrideState {
+    enabled: boolean;
+    override_latch_sensor?: boolean;
+    override_rail_24v?: boolean;
+    reason?: string;
+    note?: string;
+    seq?: number;
+    updated_ms?: number;
+}
+
+export interface MotionInterlockOverrideResponse {
+    state: MotionInterlockOverrideState;
+    gate?: Record<string, UntypedApiValue> | null;
+    motion_arm?: Record<string, UntypedApiValue> | null;
+    warning?: string;
+}
+
+export interface MotionInterlockOverridePayload {
+    enabled: boolean;
+    override_latch?: boolean;
+    override_24v?: boolean;
+    override_latch_sensor?: boolean;
+    override_rail_24v?: boolean;
+    reason: string;
+    operator_ack: 'INTERLOCK_OVERRIDE';
+    operator?: string;
+}
+
 export type GantryAxisName = Extract<AxisName, 'x' | 'y' | 'z'>;
 
 export interface MotionAxisCurrentPayload {
@@ -464,7 +492,10 @@ export const useBioXpInterlinkState = (probe = false, refetchIntervalMs: number 
     useQuery<BioXpInterlinkState, Error>({
         queryKey: ['bioxp', 'interlink', 'state', probe],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/interlink/state', { params: probe ? { probe: true } : undefined });
+            const res = await api.get('/api/bioxp/interlink/state', {
+                params: probe ? { probe: true } : undefined,
+                timeout: probe ? 8000 : 5000,
+            });
             return res.data;
         },
         refetchInterval: refetchIntervalMs,
@@ -560,7 +591,7 @@ export const useRuntimeStatus = () =>
     useQuery<RuntimeStatus, Error>({
         queryKey: ['bioxp', 'runtime'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/runtime/status');
+            const res = await api.get('/api/bioxp/runtime/status', { timeout: 8000 });
             return res.data;
         },
         // Robot-local status probes use the same serialized runtime path as live
@@ -576,7 +607,7 @@ export const useBioXpStatus = (enabled = true, refetchIntervalMs: number | false
     useQuery<BioXpStatus, Error>({
         queryKey: ['bioxp', 'status'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/status');
+            const res = await api.get('/api/bioxp/status', { timeout: 8000 });
             return res.data;
         },
         enabled,
@@ -588,7 +619,7 @@ export const useBioXpCapabilities = (enabled = true) =>
     useQuery<BioXpCapabilities, Error>({
         queryKey: ['bioxp', 'capabilities'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/capabilities');
+            const res = await api.get('/api/bioxp/capabilities', { timeout: 8000 });
             return res.data;
         },
         enabled,
@@ -600,7 +631,7 @@ export const useBioXpOperationCapabilities = (enabled = true) =>
     useQuery<BioXpOperationCapabilities, Error>({
         queryKey: ['bioxp', 'operations', 'capabilities'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/operations/capabilities');
+            const res = await api.get('/api/bioxp/operations/capabilities', { timeout: 8000 });
             return res.data;
         },
         enabled,
@@ -612,7 +643,7 @@ export const useBioXpOperationReadiness = (enabled = true, refetchIntervalMs: nu
     useQuery<BioXpOperationReadiness, Error>({
         queryKey: ['bioxp', 'operations', 'readiness'],
         queryFn: async () => {
-            const res = await api.get('/api/bioxp/operations/readiness');
+            const res = await api.get('/api/bioxp/operations/readiness', { timeout: 8000 });
             return res.data;
         },
         enabled,
@@ -970,6 +1001,30 @@ export const usePrepareInterlock = () => {
     });
 };
 
+export const useMotionInterlockOverrideStatus = (enabled = true, refetchIntervalMs: number | false = 8000) =>
+    useQuery<MotionInterlockOverrideResponse, Error>({
+        queryKey: ['bioxp', 'motion', 'interlock', 'override'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/interlock/override', { timeout: 8000 });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchIntervalMs : false,
+        retry: false,
+    });
+
+export const useSetMotionInterlockOverride = () => {
+    const queryClient = useQueryClient();
+    return useMutation<MotionInterlockOverrideResponse, Error, MotionInterlockOverridePayload>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'interlock', 'override'),
+        mutationFn: async (payload) => {
+            const res = await api.post('/api/bioxp/motion/interlock/override', payload, { timeout: 12000 });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
 export const useMotionPowerStatus = (enabled = true, refetchIntervalMs: number | false = 8000) =>
     useQuery<MotionPowerStatus, Error>({
         queryKey: ['bioxp', 'motion', 'power', 'status'],
@@ -1011,11 +1066,11 @@ export const useSetMotionAxesCurrent = () => {
     return useMutation<MotionAxisCurrentResponse, Error, MotionAxisCurrentPayload | undefined>({
         mutationKey: bioxpHardwareMutationKey('motion', 'axes', 'current'),
         mutationFn: async (payload = {}) => {
-            const runCurrent = payload.run_current ?? 31;
+            const runCurrent = payload.run_current ?? 10;
             const res = await api.post('/api/bioxp/motion/axes/current', {
                 axes: payload.axes ?? ['x', 'y', 'z'],
                 run_current: runCurrent,
-                standby_current: payload.standby_current ?? runCurrent,
+                standby_current: payload.standby_current ?? 10,
             });
             return res.data;
         },
