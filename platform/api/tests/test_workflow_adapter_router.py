@@ -29,7 +29,9 @@ def test_workflow_adapter_start_runtime_target_invokes_host_service(monkeypatch)
     monkeypatch.setattr(
         workflow_adapter,
         "start_runtime_target",
-        lambda target=None: started.append(target or "missing"),
+        lambda target=None, skip_api_wait=False, skip_workflow_adapter_wait=False: started.append(
+            (target or "missing", skip_api_wait, skip_workflow_adapter_wait)
+        ),
         raising=False,
     )
 
@@ -38,7 +40,7 @@ def test_workflow_adapter_start_runtime_target_invokes_host_service(monkeypatch)
 
     assert response.status_code == 200
     assert response.json() == {"target": "dev", "control_mode": "host-adapter"}
-    assert started == ["dev"]
+    assert started == [("dev", True, True)]
 
 
 def test_workflow_adapter_start_runtime_target_accepts_query_param(monkeypatch) -> None:
@@ -46,7 +48,9 @@ def test_workflow_adapter_start_runtime_target_accepts_query_param(monkeypatch) 
     monkeypatch.setattr(
         workflow_adapter,
         "start_runtime_target",
-        lambda target=None: started.append(target or "missing"),
+        lambda target=None, skip_api_wait=False, skip_workflow_adapter_wait=False: started.append(
+            (target or "missing", skip_api_wait, skip_workflow_adapter_wait)
+        ),
         raising=False,
     )
 
@@ -55,7 +59,7 @@ def test_workflow_adapter_start_runtime_target_accepts_query_param(monkeypatch) 
 
     assert response.status_code == 200
     assert response.json() == {"target": "both", "control_mode": "host-adapter"}
-    assert started == ["both"]
+    assert started == [("both", True, True)]
 
 
 def test_workflow_adapter_runtime_control_rejects_nonlocal_clients() -> None:
