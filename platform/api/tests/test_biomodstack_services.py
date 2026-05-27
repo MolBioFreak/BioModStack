@@ -251,14 +251,25 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
 
 def test_start_runtime_target_supports_dev_prod_and_both_without_collapsing_channels(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
-    calls: list[str] = []
-    monkeypatch.setattr(services, "start_all", lambda project_root=None, runtime_mode=None: calls.append(runtime_mode or "missing"))
+    calls: list[tuple[str, bool, bool]] = []
+    monkeypatch.setattr(
+        services,
+        "start_all",
+        lambda project_root=None, runtime_mode=None, skip_api_wait=False, skip_workflow_adapter_wait=False: calls.append(
+            (runtime_mode or "missing", skip_api_wait, skip_workflow_adapter_wait)
+        ),
+    )
 
     services.start_runtime_target("dev", project_root=project_root)
     services.start_runtime_target("prod", project_root=project_root)
-    services.start_runtime_target("both", project_root=project_root)
+    services.start_runtime_target("both", project_root=project_root, skip_api_wait=True, skip_workflow_adapter_wait=True)
 
-    assert calls == ["dev", "container", "container", "dev"]
+    assert calls == [
+        ("dev", False, False),
+        ("container", False, False),
+        ("container", True, True),
+        ("dev", True, True),
+    ]
 
 
 def test_runtime_descriptor_requires_all_expected_runtime_services_for_runtime_active(tmp_path: Path, monkeypatch) -> None:

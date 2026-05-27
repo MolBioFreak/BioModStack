@@ -894,7 +894,13 @@ def runtime_http_wait_timeout_seconds(runtime_mode: str | None = None) -> float:
     return DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS
 
 
-def start_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
+def start_all(
+    project_root: Path | None = None,
+    runtime_mode: str | None = None,
+    *,
+    skip_api_wait: bool = False,
+    skip_workflow_adapter_wait: bool = False,
+) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode, project_root=root)
@@ -910,7 +916,8 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
             cleanup_legacy_listener("frontend", root)
         services_to_start.append(FRONTEND_SERVICE)
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
-        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        if not skip_api_wait:
+            wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
         return
 
@@ -921,22 +928,34 @@ def start_all(project_root: Path | None = None, runtime_mode: str | None = None)
     if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
         cleanup_legacy_listener("api", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
-    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    if not skip_workflow_adapter_wait:
+        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    if not skip_api_wait:
+        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
 
-def start_runtime_target(target: str | None = None, project_root: Path | None = None) -> None:
+def start_runtime_target(
+    target: str | None = None,
+    project_root: Path | None = None,
+    *,
+    skip_api_wait: bool = False,
+    skip_workflow_adapter_wait: bool = False,
+) -> None:
     normalized = str(target or "prod").strip().lower()
+    wait_kwargs = {
+        "skip_api_wait": skip_api_wait,
+        "skip_workflow_adapter_wait": skip_workflow_adapter_wait,
+    }
     if normalized in {"prod", "production", "stable", CONTAINER_RUNTIME_MODE}:
-        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE)
+        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE, **wait_kwargs)
         return
     if normalized == DEV_RUNTIME_MODE:
-        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE)
+        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE, **wait_kwargs)
         return
     if normalized == "both":
-        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE)
-        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE)
+        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE, **wait_kwargs)
+        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE, **wait_kwargs)
         return
     raise ServiceManagerError("Unknown BioModStack runtime target '{target}'. Expected dev, prod, or both".format(target=target))
 
