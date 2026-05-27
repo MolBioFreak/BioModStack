@@ -119,7 +119,7 @@ def test_boltz_cp_experimental_preview_accepts_yaml_input(tmp_path: Path) -> Non
 
     result = _run_nextflow(
         "run",
-        "main.nf",
+        "workflows/boltz_cp_experimental.nf",
         "-preview",
         "-offline",
         "-profile",
