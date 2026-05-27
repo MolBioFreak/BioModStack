@@ -8,6 +8,7 @@ const clientSource = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cockpitSource = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const panelPath = resolve('src/components/BioXpInterlinkControlPanel.tsx');
 const panelSource = existsSync(panelPath) ? readFileSync(panelPath, 'utf8') : '';
+const interlinkStatusSource = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
 
 test('BIOXP LINK topbar menu exists and matches existing utility-menu pattern', () => {
     assert.ok(existsSync(panelPath), 'BioXpInterlinkControlPanel.tsx must exist');
@@ -22,6 +23,8 @@ test('interlink panel exposes governed connection, diagnostics, logs, and button
     for (const marker of [
         'Status:',
         'Endpoint:',
+        'deriveBioXpInterlinkMenuStatus',
+        'useBioXpInterlinkState(false, isOpen ? 5000 : 15000)',
         'maskEndpointForDisplay',
         'xxx.xxx',
         'Profile settings',
@@ -86,6 +89,26 @@ test('interlink panel exposes governed connection, diagnostics, logs, and button
     }
 });
 
+test('interlink status helper fails closed on unknown, stale, or timed-out robot probes', () => {
+    for (const marker of [
+        'BIOXP_INTERLINK_FRESH_PROBE_WINDOW_MS',
+        "unreachable: 'UNREACHABLE'",
+        "unverified: 'UNVERIFIED'",
+        "stale: 'STALE'",
+        "linked: 'LINKED'",
+        'Robot API unreachable',
+        'Active, not yet verified',
+        'Last robot probe is stale',
+        'hardware state unknown',
+        "state === 'linked'",
+    ]) {
+        assert.match(interlinkStatusSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+
+    assert.doesNotMatch(panelSource, /reachable === false\s*\?\s*'DEGRADED'\s*:\s*'LINKED'/);
+    assert.doesNotMatch(panelSource, /Connected, not reachable/);
+});
+
 test('frontend client exposes interlink hooks and only the BMS proxy route family', () => {
     for (const marker of [
         'export interface BioXpInterlinkState',
@@ -100,6 +123,9 @@ test('frontend client exposes interlink hooks and only the BMS proxy route famil
         'export const useBioXpRuntimeReset',
         'export const useBioXpRobotReboot',
         'export const useBioXpInterlinkLogs',
+        'export interface MotionInterlockOverridePayload',
+        'export const useMotionInterlockOverrideStatus',
+        'export const useSetMotionInterlockOverride',
         '/api/bioxp/interlink/state',
         '/api/bioxp/interlink/settings',
         '/api/bioxp/interlink/connect',
@@ -108,10 +134,61 @@ test('frontend client exposes interlink hooks and only the BMS proxy route famil
         '/api/bioxp/interlink/runtime-reset',
         '/api/bioxp/interlink/robot-reboot',
         '/api/bioxp/interlink/logs',
+        '/api/bioxp/motion/interlock/override',
     ]) {
         assert.match(clientSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.doesNotMatch(panelSource, /8123\/status/);
+});
+
+test('BioXP cockpit exposes latch/24V interlock override as explicit commissioning-only control', () => {
+    for (const marker of [
+        'Commissioning latch + 24V interlock override',
+        'Default off. This bypasses the latch/mag sensor and 24V sense gate',
+        'Operator observation is still authoritative',
+        'Enable Latch+24V Override',
+        'Disable Override',
+        "operator_ack: 'INTERLOCK_OVERRIDE'",
+        'override_latch: true',
+        'override_24v: true',
+        'Reason required before enable',
+    ]) {
+        assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+});
+
+test('BioXP cockpit fails closed when robot API/control-plane evidence is absent', () => {
+    for (const marker of [
+        'robotApiReachable',
+        'robotApiExplicitlyUnreachable',
+        "operationCapabilities.data?.robot_openapi_reachable === true",
+        'ROBOT UNREACHABLE',
+        'BIOXP ROBOT UNREACHABLE',
+        'Robot API/status probes failed or timed out',
+        'CHECKING...',
+    ]) {
+        assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+
+    assert.doesNotMatch(cockpitSource, /robot_openapi_reachable\s*!==\s*false/);
+    assert.doesNotMatch(cockpitSource, /interlinkActive\s*&&\s*\(statusIsError\s*\|\|\s*runtimeStatusIsError/);
+    assert.doesNotMatch(cockpitSource, /PINGING\.\.\./);
+    assert.doesNotMatch(cockpitSource, /hasRecentHardwareContact/);
+});
+
+test('BioXP cockpit treats fresh positive robot evidence as reachable even after a stale failed status probe', () => {
+    for (const marker of [
+        'bioXpInterlink.data?.reachable === true',
+        'runtimeStatus?.linked_runtime_reachable === true',
+        'operationCapabilities.data?.robot_openapi_reachable === true',
+        'statusReportsHardwareConnected',
+        'runtimeReportsHardwareConnected',
+        'interlinkReportsHardwareConnected',
+        '!robotApiReachable &&',
+        "? 'API ONLY'",
+    ]) {
+        assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
 });
 
 test('BioXP cockpit is gated by active interlink state and does not own reset lifecycle', () => {
