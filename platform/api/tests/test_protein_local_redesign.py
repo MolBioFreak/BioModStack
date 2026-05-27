@@ -12,20 +12,18 @@ REPO_ROOT = API_ROOT.parent.parent
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from model_registry import ModelRegistry
 from services.nextflow import build_nextflow_command
 
 
-def test_model_registry_loads_protein_local_redesign() -> None:
-    registry = ModelRegistry()
+def test_protein_local_redesign_is_experimental_tab_workflow_not_generic_model_yaml() -> None:
+    frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
+    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
 
-    model = registry.get_model("protein_local_redesign")
-
-    assert model is not None
-    assert model.name == "Protein Local Redesign"
-    assert any(mode.id == "local_redesign" for mode in model.modes)
-    assert any(param.name == "input_pdb" for param in model.params)
-    assert any(param.name == "design_chains" for param in model.params)
+    assert "id: 'protein_local_redesign'" in frontend_text
+    assert "name: 'Protein Local Redesign'" in frontend_text
+    assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
+    assert "workflow {" in workflow_text
+    assert "PROTEIN_LOCAL_REDESIGN()" in workflow_text
 
 
 def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
@@ -59,7 +57,7 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "main.nf", "-profile"]
+    assert cmd[:4] == ["nextflow", "run", "workflows/protein_local_redesign.nf", "-profile"]
     assert "protein_local_redesign,workstation_ryzen7960x" in cmd
     assert "--plr_input_pdb /tmp/input.pdb" in joined
     assert "--plr_design_chains A" in joined
