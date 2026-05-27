@@ -227,7 +227,7 @@ def test_build_nextflow_command_maps_confornets_params_to_cn_namespace(tmp_path:
         job_id="job-cn-1",
     )
 
-    assert cmd[:4] == ["nextflow", "run", "main.nf", "-profile"]
+    assert cmd[:4] == ["nextflow", "run", "workflows/confornets_experimental.nf", "-profile"]
     assert "confornets_experimental,workstation_ryzen7960x" in cmd
     assert _flag_value(cmd, "--rfd_mode") == "confornets_experimental"
     assert _flag_value(cmd, "--cn_task") == "diversity"
@@ -260,14 +260,16 @@ def test_build_nextflow_command_maps_confornets_params_to_cn_namespace(tmp_path:
 
 
 def test_confornets_nextflow_static_contract_is_wired_without_stub_outputs() -> None:
+    workflow_path = REPO_ROOT / "workflows" / "confornets_experimental.nf"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
     main_text = (REPO_ROOT / "main.nf").read_text(encoding="utf-8")
     config_text = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
-    workflow_path = REPO_ROOT / "workflows" / "confornets_experimental.nf"
     module_path = REPO_ROOT / "modules" / "confornets_experimental.nf"
 
-    assert "include { CONFORNETS_EXPERIMENTAL } from './workflows/confornets_experimental.nf'" in main_text
-    assert "params.rfd_mode == 'confornets_experimental'" in main_text
-    assert "CONFORNETS_EXPERIMENTAL()" in main_text
+    assert "workflow CONFORNETS_EXPERIMENTAL" in workflow_text
+    assert "workflow {" in workflow_text
+    assert "CONFORNETS_EXPERIMENTAL()" in workflow_text
+    assert "confornets_experimental" not in main_text
 
     assert "confornets_experimental {" in config_text
     assert "rfd_mode = 'confornets_experimental'" in config_text
