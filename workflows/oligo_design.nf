@@ -57,3 +57,42 @@ workflow OLIGO_DESIGNER {
     rfdpoly_metrics = OLIGO_DESIGN.out.metrics
     boltz_logs = boltz_logs
 }
+
+workflow {
+    def noiseSchedule = params.containsKey('rfdpoly_noise_schedule') ? params.rfdpoly_noise_schedule : 'linear'
+    def bindingGuidance = params.containsKey('binding_guidance') ? params.binding_guidance : false
+    def scaffoldPdb = params.containsKey('scaffold_pdb') ? params.scaffold_pdb : null
+    def rfdpolyInputPdb = params.containsKey('rfdpoly_input_pdb') ? params.rfdpoly_input_pdb : null
+    def targetPdb = params.containsKey('target_pdb') ? params.target_pdb : null
+    def designId = params.containsKey('design_id') && params.design_id ? params.design_id : 'oligo_design'
+
+    println("Running Oligo Designer (RFDpoly + Boltz-2)")
+    println("* Contigs: ${params.rfdpoly_contigs}")
+    println("* Polymer chains: ${params.rfdpoly_polymer_chains}")
+    println("* Num designs: ${params.rfdpoly_num_designs}")
+    println("* Checkpoint: ${params.rfdpoly_checkpoint}")
+    println("* Noise schedule: ${noiseSchedule}")
+    println("* Binding guidance: ${bindingGuidance}")
+    println("* Validate with Boltz: ${params.oligo_validate_boltz}")
+    if (targetPdb) {
+        println("* Target PDB: ${targetPdb}")
+    }
+
+    def input_pdb = scaffoldPdb
+        ? channel.fromPath(scaffoldPdb)
+        : (rfdpolyInputPdb
+            ? channel.fromPath(rfdpolyInputPdb)
+            : channel.of(file("${params.code_root}/NO_FILE")))
+
+    def target_pdb = targetPdb
+        ? channel.fromPath(targetPdb)
+        : channel.of(file("${params.code_root}/NO_FILE"))
+
+    OLIGO_DESIGNER(
+        channel.of(designId),
+        channel.of(params.rfdpoly_contigs),
+        channel.of(params.rfdpoly_polymer_chains),
+        input_pdb,
+        target_pdb
+    )
+}

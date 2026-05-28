@@ -70,6 +70,7 @@ DEFAULT_WORKFLOW_ENTRYPOINT = "main.nf"
 # alone: profiles such as "boltz" are reused by standalone prediction,
 # antibody validation, PPiFlow, mutagenesis, and core protein-design contexts.
 WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
+    "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
