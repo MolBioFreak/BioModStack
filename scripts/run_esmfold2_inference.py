@@ -20,6 +20,7 @@ from typing import Any, Iterable, Sequence
 AMINO_ACID_RE = re.compile(r"^[A-Z]+$")
 DNA_RE = re.compile(r"^[ACGTN]+$")
 RNA_RE = re.compile(r"^[ACGUN]+$")
+MMCIF_DATA_BLOCK_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 DEFAULT_FAST_MODEL = "biohub/ESMFold2-Fast"
 DEFAULT_FULL_MODEL = "biohub/ESMFold2"
 
@@ -135,6 +136,34 @@ def normalize_component_sequence(sequence: str, molecule_type: str) -> str:
             raise ESMFold2InputError("RNA sequence must contain only A/C/G/U/N bases")
         return normalized
     raise ESMFold2InputError(f"unsupported molecule type {molecule_type!r}")
+
+
+def sanitize_mmcif_data_block_id(value: object, fallback: str = "esmfold2_prediction") -> str:
+    """Return a single-token mmCIF data block id.
+
+    Biohub ESMFold2 uses ``complex_id`` as the mmCIF ``data_`` block name.
+    UI labels such as ``RCSB: 3KTQ`` are valid display names but invalid mmCIF
+    block identifiers because whitespace creates an extra token. Mol*/PDBe then
+    fails parsing before any model/structure reaches the viewer.
+    """
+    text = str(value or "").strip() or fallback
+    safe = MMCIF_DATA_BLOCK_SAFE_RE.sub("_", text).strip("._-")
+    if not safe:
+        safe = fallback
+    if not re.match(r"^[A-Za-z0-9]", safe):
+        safe = f"{fallback}_{safe}"
+    return safe[:120]
+
+
+def ensure_safe_mmcif_data_block(mmcif_text: str, data_block_id: object) -> str:
+    """Replace the leading mmCIF data block line with a parser-safe token."""
+    safe_id = sanitize_mmcif_data_block_id(data_block_id)
+    lines = mmcif_text.splitlines()
+    if lines and lines[0].startswith("data_"):
+        lines[0] = f"data_{safe_id}"
+        suffix = "\n" if mmcif_text.endswith("\n") else ""
+        return "\n".join(lines) + suffix
+    return f"data_{safe_id}\n{mmcif_text}"
 
 
 def default_model_for_variant(variant: str) -> str:
@@ -688,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
             f"cache or local path is missing/incomplete for {model_id_or_path!r}: {exc}"
         ) from exc
 
+    mmcif_complex_id = sanitize_mmcif_data_block_id(args.sequence_name)
     result = ESMFold2InputBuilder().fold(
         model,
         spi,
@@ -695,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
         num_sampling_steps=args.num_sampling_steps,
         num_diffusion_samples=args.num_diffusion_samples,
         seed=args.seed,
-        complex_id=args.sequence_name,
+        complex_id=mmcif_complex_id,
     )
 
     samples = []
@@ -703,7 +733,8 @@ def main(argv: list[str] | None = None) -> int:
         sample_id = f"{args.sequence_name}_{index:03d}"
         cif_name = f"{sample_id}.cif"
         cif_path = output_dir / cif_name
-        cif_path.write_text(sample.complex.to_mmcif(), encoding="utf-8")
+        cif_text = ensure_safe_mmcif_data_block(sample.complex.to_mmcif(), sample_id)
+        cif_path.write_text(cif_text, encoding="utf-8")
         metrics = {
             "sample_id": sample_id,
             "sequence_name": args.sequence_name,
