@@ -467,8 +467,8 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(source, /fallbackChainId:\s*conforNetsDefaultChainId/);
     assert.match(source, /scalarPlddtFallback:\s*conforNetsScalarPlddt/);
     assert.match(source, /preferScalarFallback:\s*conforNetsUsesScalarPlddtFallback/);
-    assert.match(source, /Mol\* residue coloring uses the same/);
-    assert.match(source, /scalar pLDDT fallback is active/);
+    assert.match(source, /overlay ready: \$\{bfactorLabel\} residue\/chain map/);
+    assert.match(source, /Uniform scalar pLDDT/);
     assert.match(source, /residueColors=\{/);
     assert.match(source, /plddtResidueColors/);
     assert.match(molstarSource, /overlayStructures/);

@@ -57,7 +57,7 @@ interface DbServiceControlPanelProps {
 export function DbServiceControlPanel({
     embeddedContext = 'assay-db-debug',
     title = 'BMS DB',
-    subtitle = 'Optional DB runtime: start/restart, health, logs.',
+    subtitle = 'DB state, actions, logs.',
     className = '',
     autoRefresh = true,
 }: DbServiceControlPanelProps) {
@@ -265,7 +265,7 @@ export function DbServiceMenu() {
                         <DbServiceControlPanel
                             embeddedContext="topbar-control-panel"
                             title="BMS DB"
-                            subtitle="Optional DB runtime: start/restart, health, logs."
+                            subtitle="DB state, actions, logs."
                             autoRefresh={isOpen}
                         />
                     </div>

@@ -17,6 +17,8 @@ test('Data Viewer landing keeps import/open surfaces concise', () => {
     const source = readSource('src', 'components', 'DataViewerLanding.tsx');
 
     for (const snippet of [
+        'Choose file → preview fields → import completed dataset, or open existing jobs.',
+        'Drop a dataset file to auto-detect ProteinBase, JSONL, or CSV/TSV.',
         'Structure metrics map into existing design analytics fields.',
         'Columns auto-detected; sequence / pLDDT / structure hints are shown when present.',
         'Recent jobs and imported datasets appear here.',
@@ -28,8 +30,67 @@ test('Data Viewer landing keeps import/open surfaces concise', () => {
         'Boltz-2 / ESMFold metrics such as pLDDT, iPSAE, iPTM, pTM, and complex confidence values flow into existing design analytics fields.',
         'Tabular columns were auto-detected so the viewer can expose sequence / pLDDT / structure mapping hints instead of dropping you into a blank state.',
         'The viewer still uses the existing job/design pipeline. Recent jobs appear here so you can jump in without hunting through the header dropdown.',
+        'Start from a real import surface instead of the tiny job dropdown',
+        'Drop in a dataset file and this page will auto-detect whether it looks like a ProteinBase bundle',
     ]) {
         rejectSnippet(source, stale);
+    }
+});
+
+test('Stats Toolkit landing keeps tabs/status copy compact', () => {
+    const source = readSource('src', 'components', 'AssayAnalytics.tsx');
+
+    for (const snippet of [
+        'Curves, recovery, replicate QC, ΔCq/ΔΔCq.',
+        'Empower imports, peaks, calibration, recovery, isoforms.',
+        'QC, DOE/RSM, SPC, capability, tests, Plotly.',
+        'qPCR, chromatography, DOE/statistics, runtime',
+        'Stats runtime actions + logs.',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
+        'Standard curves, spike recovery, replicate QC, ΔCq, ΔΔCq, fold-change, and MIQE-style qPCR metrics.',
+        'Manual analytical QC, DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
+        'BMS-native analysis for QuantStudio, StepOnePlus, Waters Empower3',
+        'Container lifecycle control panel for optional assay/statistics runtime packages.',
+    ]) {
+        rejectSnippet(source, stale);
+    }
+});
+
+test('Stats Toolkit sub-workbenches keep import/QC copy compact', () => {
+    const qpcrSource = readSource('src', 'components', 'qpcr', 'index.tsx')
+        + readSource('src', 'components', 'qpcr', 'RawDataImport.tsx');
+    const hplcSource = readSource('src', 'components', 'hplc', 'index.tsx')
+        + readSource('src', 'components', 'hplc', 'EmpowerImport.tsx');
+    const statsSource = readSource('src', 'components', 'statistics', 'index.tsx')
+        + readSource('src', 'components', 'assay', 'AnalyticalQcWorkbench.tsx');
+    const combined = qpcrSource + hplcSource + statsSource;
+
+    for (const snippet of [
+        'Instrument exports or pasted Cq tables; no built-in rows.',
+        'Plate, well QC, curves, standards, rows. Focus:',
+        'A-H × 1-12 visible. Click wells; Ctrl/Shift builds groups.',
+        'Empower AIA/ARW/CSV exports, chromatograms, calibration, plasmid isoforms.',
+        'AIA/ARW/ZIP/CSV imports; injections, peaks, SST, plasmid logs.',
+        'DOE, RSM/regression, SPC, capability, tests, Plotly.',
+        'Paste rows → map columns → clean/exclude/bunch → QC stats.',
+    ]) {
+        requireSnippet(combined, snippet);
+    }
+
+    for (const stale of [
+        'Import actual instrument exports or paste explicit Cq tables for standard curves',
+        'BMS keeps the parsed QuantStudio/StepOnePlus import visible as a single scientific workbench',
+        'Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible',
+        'Work from real Empower 3 AIA .cdf, ARW chromatogram text, ZIP batches',
+        'AIA .cdf provides raw chromatograms and native peak tables',
+        'Generate DOE layouts, fit RSM/regression models, run SPC/capability',
+        'Paste real assay rows, map value/run/group/sample columns',
+    ]) {
+        rejectSnippet(combined, stale);
     }
 });
 
@@ -40,7 +101,7 @@ test('structure-prediction batch/target copy stays short and operator-focused', 
         'Paste FASTA or one sequence per line; target imports become shared binder screens.',
         'Shared target:',
         'Imported target is staged for conditioned/frozen complex prediction; keep the primary chain sequence unchanged.',
-        'Physics/FK steering; use batching for high sample counts.',
+        'physics/FK steering potentials; use batching for high sample counts.',
         'Target conditioning needs a shared target or complex component.',
         'Shards EnvDB for balanced/maximum runs. Fast screens quickly; Off is rollback/debug.',
     ]) {
@@ -78,6 +139,67 @@ test('protein-local-redesign source/review surfaces do not carry explainer parag
         'Use the existing structure-source system rather than typing file paths by hand.',
         'The workflow will derive editable residues on chain',
         'Match the RFA interaction pattern: pause at a chosen checkpoint',
+    ]) {
+        rejectSnippet(source, stale);
+    }
+});
+
+test('Results, structure viewer, and quality settings avoid explainer paragraphs', () => {
+    const source = readSource('src', 'components', 'ResultsViewer.tsx')
+        + readSource('src', 'components', 'StructureViewerPane.tsx')
+        + readSource('src', 'components', 'QualitySettingsPanel.tsx');
+
+    for (const snippet of [
+        'Added ${result.uniqueCount.toLocaleString()} / ${result.totalCount.toLocaleString()} BoltzGen reps',
+        'Filter/promote outputs, then continue the paused PLR workflow.',
+        'RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.',
+        'Any-Target: whole target. Epitope: selected residues.',
+        'BoltzGen candidates: triage by conf_score, affinity priors, size.',
+        'Uniform scalar pLDDT ${formatMetricValue(conforNetsScalarPlddt, 1)}; no residue tensor.',
+        'Pre-sequence: anchor scoring on; zero-anchor rejection off.',
+        'MSA controls for Protenix validation. Provider/runtime only.',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
+        'RF headline distances here are using',
+        'The RF review cards below are showing',
+        'nearest binder CA to the full target surface',
+        'BoltzGen generator cohorts should be read as de novo candidates first',
+        'ConforNets scalar pLDDT fallback is active',
+        'Mol* residue coloring uses the displayed scalar pLDDT',
+        'Stage-optimized pre-sequence refinement still scores anchors',
+        'Shared MSA controls for the Protenix validator path',
+        'filtered designs using ${clusterLabel} clustering',
+        'Filter the paused review table, promote the outputs you want to keep',
+    ]) {
+        rejectSnippet(source, stale);
+    }
+});
+
+test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs', () => {
+    const source = readSource('src', 'components', 'BioXpCockpit.tsx');
+
+    for (const snippet of [
+        'Runtime link, motion, jobs, recipes, camera.',
+        'Live axes: X/Y/Z + grabber. Zero ≠ switch-home.',
+        'Limits: step',
+        'Switch Home disabled here; use supervised OEM recipe.',
+        'Lifecycle: BIOXP LINK. Interlocks: Commissioning Motion.',
+        'Default view: interlink, protocol, handler readback.',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
+        'OEM/liquid-handler-first BMS proxy for the robot-local BioXP runtime',
+        'Operator-readable gantry/grabber controls: arm first',
+        'X/Y/Z plus Grabber are live axis controls. Speed/acc inputs are per card.',
+        'Payloads are clamped before send; robot API still applies its own normalization.',
+        'Switch Home requires capture_bundle=true and operator_note evidence',
+        'Runtime lifecycle actions are governed by the top-right BIOXP LINK panel.',
+        'Default live testing uses Governed Interlink, Protocol Operator, and Handler Controls.',
     ]) {
         rejectSnippet(source, stale);
     }

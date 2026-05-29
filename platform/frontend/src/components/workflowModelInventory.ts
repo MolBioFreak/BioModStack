@@ -115,6 +115,18 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         ],
     },
     {
+        workflowId: 'esmfold2_experimental',
+        label: 'ESMFold2 Experimental',
+        modelTopics: ['esmfold2'],
+        sourceFiles: [
+            'platform/api/config/models/esmfold2_experimental.yaml',
+            'platform/api/config/templates/esmfold2_experimental.yaml',
+            'workflows/esmfold2_experimental.nf',
+            'modules/esmfold2_experimental.nf',
+            'nextflow.config',
+        ],
+    },
+    {
         workflowId: 'caliby_experimental',
         label: 'Caliby Experimental',
         modelTopics: ['caliby'],

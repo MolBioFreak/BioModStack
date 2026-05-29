@@ -158,14 +158,29 @@ def _mark_current_api_ready(payload: dict[str, object]) -> dict[str, object]:
         health["api_ready"] = True
     normalized["health"] = health
 
+    services_raw = normalized.get("services")
     if normalized.get("runtime_mode") != "container":
+        if isinstance(services_raw, list) and services_raw and all(isinstance(service, dict) for service in services_raw):
+            services: list[object] = []
+            for service in services_raw:
+                item = dict(service)
+                name = str(item.get("name") or "")
+                if name == "biomodstack-frontend.service":
+                    systemd_active = bool(item.get("active"))
+                    http_ready = bool(health.get("frontend_ready"))
+                    item["systemd_active"] = systemd_active
+                    item["active"] = http_ready
+                    item["active_source"] = "http-health" if http_ready else "http-health-failed"
+                services.append(item)
+            normalized["services"] = services
+            normalized["runtime_ready"] = all(bool(value) for value in health.values())
+            normalized["runtime_active"] = all(bool(service.get("active")) for service in services if isinstance(service, dict)) and bool(normalized["runtime_ready"])
         return normalized
 
-    services_raw = normalized.get("services")
     if not isinstance(services_raw, list):
         return normalized
 
-    derived_active = {
+    derived_ready = {
         WORKFLOW_ADAPTER_SERVICE: bool(health.get("adapter_ready")),
         CORE_RUNTIME_SERVICE: bool(health.get("api_ready") and health.get("frontend_ready")),
     }
@@ -176,14 +191,17 @@ def _mark_current_api_ready(payload: dict[str, object]) -> dict[str, object]:
             continue
         item = dict(service)
         name = str(item.get("name") or "")
-        if name in derived_active:
-            item["active"] = bool(item.get("active")) or derived_active[name]
-            if derived_active[name] and not service.get("active"):
-                item["active_source"] = "http-health"
+        if name in derived_ready:
+            systemd_active = bool(item.get("active"))
+            http_ready = bool(derived_ready[name])
+            item["systemd_active"] = systemd_active
+            item["active"] = http_ready
+            item["active_source"] = "http-health" if http_ready else "http-health-failed"
         services.append(item)
     normalized["services"] = services
     if services and all(isinstance(service, dict) for service in services):
         normalized["runtime_active"] = all(bool(service.get("active")) for service in services if isinstance(service, dict))
+        normalized["runtime_ready"] = normalized["runtime_active"]
     return normalized
 
 
@@ -198,18 +216,52 @@ def _start_runtime_target_via_workflow_adapter(target: str) -> dict[str, object]
     return {"target": target, "control_mode": "host-adapter"}
 
 
+def _runtime_target_for_mode(runtime_mode: str) -> str:
+    return "dev" if runtime_mode == "dev" else "prod"
+
+
+def _runtime_state_via_workflow_adapter(runtime_mode: str) -> dict[str, object]:
+    response = request_via_workflow_adapter(
+        "GET",
+        f"/api/workflow-adapter/runtime/state?runtime={runtime_mode}",
+    )
+    if isinstance(response, dict):
+        return response
+    return {"runtime_mode": runtime_mode, "control_mode": "host-adapter"}
+
+
+def _runtime_action_via_workflow_adapter(action_name: str, runtime_mode: str) -> dict[str, object]:
+    if action_name == "start":
+        return _start_runtime_target_via_workflow_adapter(_runtime_target_for_mode(runtime_mode))
+    response = request_via_workflow_adapter(
+        "POST",
+        f"/api/workflow-adapter/runtime/{action_name}",
+        {"runtime": runtime_mode},
+    )
+    if isinstance(response, dict):
+        return response
+    return {"runtime_mode": runtime_mode, "action": action_name, "control_mode": "host-adapter"}
+
+
 def _run_runtime_action(
     request: Request,
     runtime: str | None,
+    action_name: str,
     action: Callable[..., None],
 ) -> dict[str, object]:
     _require_local_admin(request)
     runtime_mode = _resolve_runtime(runtime)
     try:
+        if _system_control_should_proxy_to_workflow_adapter():
+            return _mark_current_api_ready(_runtime_action_via_workflow_adapter(action_name, runtime_mode))
         action(runtime_mode=runtime_mode)
         return _mark_current_api_ready(runtime_descriptor(runtime_mode=runtime_mode))
+    except WorkflowAdapterRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/stats-tools")
@@ -275,19 +327,29 @@ async def get_runtime_state(request: Request, runtime: str | None = None):
     _require_local_admin(request)
     runtime_mode = _resolve_runtime(runtime)
     try:
+        if _system_control_should_proxy_to_workflow_adapter():
+            try:
+                return _mark_current_api_ready(_runtime_state_via_workflow_adapter(runtime_mode))
+            except WorkflowAdapterRequestError as exc:
+                if exc.status_code != 404:
+                    raise
+            except RuntimeError:
+                pass
         return _mark_current_api_ready(runtime_descriptor(runtime_mode=runtime_mode))
+    except WorkflowAdapterRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/runtime/start")
 async def start_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, start_all)
+    return _run_runtime_action(request, runtime, "start", start_all)
 
 
 @router.post("/runtime/start-api")
 async def start_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, start_api)
+    return _run_runtime_action(request, runtime, "start-api", start_api)
 
 
 @router.post("/runtime/start-target")
@@ -313,22 +375,22 @@ async def start_runtime_target_route(
 
 @router.post("/runtime/stop")
 async def stop_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, stop_all)
+    return _run_runtime_action(request, runtime, "stop", stop_all)
 
 
 @router.post("/runtime/stop-api")
 async def stop_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, stop_api)
+    return _run_runtime_action(request, runtime, "stop-api", stop_api)
 
 
 @router.post("/runtime/restart")
 async def restart_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, restart_all)
+    return _run_runtime_action(request, runtime, "restart", restart_all)
 
 
 @router.post("/runtime/restart-api")
 async def restart_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, restart_api)
+    return _run_runtime_action(request, runtime, "restart-api", restart_api)
 
 
 @router.get("/install-profile")

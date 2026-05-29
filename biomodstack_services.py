@@ -63,6 +63,54 @@ API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 WORKFLOW_ADAPTER_LOG = LOG_DIR / "workflow-adapter.log"
 CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
+DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_LOG_BACKUP_COUNT = 5
+
+
+def runtime_log_max_bytes() -> int:
+    raw = os.getenv("BMS_RUNTIME_LOG_MAX_BYTES")
+    if raw is None:
+        return DEFAULT_LOG_MAX_BYTES
+    try:
+        return max(1024 * 1024, int(raw))
+    except ValueError:
+        return DEFAULT_LOG_MAX_BYTES
+
+
+def runtime_log_backup_count() -> int:
+    raw = os.getenv("BMS_RUNTIME_LOG_BACKUP_COUNT")
+    if raw is None:
+        return DEFAULT_LOG_BACKUP_COUNT
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_LOG_BACKUP_COUNT
+
+
+def rotate_log_file(path: Path, *, max_bytes: int | None = None, backup_count: int | None = None) -> bool:
+    max_size = max_bytes if max_bytes is not None else runtime_log_max_bytes()
+    backups = backup_count if backup_count is not None else runtime_log_backup_count()
+    try:
+        if not path.exists() or path.stat().st_size <= max_size:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        oldest = path.with_name(f"{path.name}.{backups}")
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(backups - 1, 0, -1):
+            current = path.with_name(f"{path.name}.{index}")
+            if current.exists():
+                current.replace(path.with_name(f"{path.name}.{index + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+        path.touch()
+        return True
+    except OSError:
+        return False
+
+
+def rotate_runtime_logs() -> None:
+    for path in (API_LOG, FRONTEND_LOG, WORKFLOW_ADAPTER_LOG, CORE_RUNTIME_LOG):
+        rotate_log_file(path)
 
 
 def get_biomodstack_config_dir() -> Path:
@@ -326,6 +374,44 @@ def runtime_service_descriptors(project_root: Path | None = None, runtime_mode: 
     ]
 
 
+def runtime_api_listener_ownership(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, object]:
+    root = (project_root or get_project_root()).resolve()
+    mode = resolve_runtime_mode(runtime_mode)
+    pids = listener_pids(API_PORT)
+    listeners: list[dict[str, object]] = []
+    ok = True
+    for pid in pids:
+        owner = "foreign"
+        matched_chain: list[int] = []
+        if pid_is_biomodstack_runtime_container(pid, "api", root):
+            owner = "managed-container-api"
+        else:
+            matched_chain = matching_process_chain(pid, is_biomodstack_api_process, root)
+            if matched_chain:
+                owner = "legacy-dev-api"
+        if mode == CONTAINER_RUNTIME_MODE and owner != "managed-container-api":
+            ok = False
+        if mode == DEV_RUNTIME_MODE and owner == "managed-container-api":
+            ok = False
+        listeners.append({"pid": pid, "owner": owner, "matched_chain": matched_chain})
+
+    if not pids:
+        return {
+            "port": API_PORT,
+            "checked": True,
+            "ok": None,
+            "status": "no-listener",
+            "listeners": [],
+        }
+    return {
+        "port": API_PORT,
+        "checked": True,
+        "ok": ok,
+        "status": "ok" if ok else "wrong-owner",
+        "listeners": listeners,
+    }
+
+
 def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, object]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -337,8 +423,12 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
     resolved_paths = install_profile.get("resolved", {})
     if not isinstance(resolved_paths, Mapping):
         resolved_paths = {}
+    api_http_ready = url_is_ready(API_HEALTH_URL)
+    api_ownership = runtime_api_listener_ownership(root, mode)
+    api_owner_ok = api_ownership.get("ok")
+    api_ready = api_http_ready and (api_owner_ok is not False)
     health = {
-        "api_ready": url_is_ready(API_HEALTH_URL),
+        "api_ready": api_ready,
         "frontend_ready": url_is_ready(frontend_url),
     }
     if mode == CONTAINER_RUNTIME_MODE:
@@ -346,9 +436,11 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
             "adapter_ready": url_is_ready(WORKFLOW_ADAPTER_HEALTH_URL),
             **health,
         }
+    http_ready = all(bool(value) for value in health.values())
     return {
         "runtime_mode": mode,
-        "runtime_active": all(service["active"] for service in services),
+        "runtime_active": all(bool(service["active"]) for service in services) and http_ready,
+        "runtime_ready": http_ready,
         "runtime_manager": "systemd-user",
         "api_url": f"http://127.0.0.1:{API_PORT}",
         "frontend_origin": runtime_frontend_origin(mode, project_root=root),
@@ -358,6 +450,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "supported_launch_surfaces": list(SUPPORTED_LAUNCH_SURFACES),
         "launch_preferences": load_launch_preferences(),
         "health": health,
+        "runtime_ownership": {"api": api_ownership},
         "services": services,
         "logs": runtime_log_descriptors(mode),
         "install_profile": dict(install_profile),
@@ -407,6 +500,7 @@ def url_is_ready(url: str, timeout_seconds: float = 2.0) -> bool:
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
+    log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
@@ -423,6 +517,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
+            ExecStartPre=/usr/bin/env python3 {log_rotator}
             ExecStart={adapter_runner}
             Restart=on-failure
             RestartSec=2
@@ -448,6 +543,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             RemainAfterExit=yes
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
+            ExecStartPre=/usr/bin/env python3 {log_rotator}
             ExecStart={core_runner}
             ExecStop={core_runner} down
             Restart=on-failure
@@ -498,6 +594,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_API_MODE=dev
         Environment=BMS_CPU_POWER_STRICT=0
         Environment=PYTHONUNBUFFERED=1
+        ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={api_runner}
         Restart=on-failure
         RestartSec=2
@@ -525,6 +622,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_FRONTEND_MODE=dev
         Environment=BMS_DEV_WEB_HOST_PORT={dev_web_host_port}
+        ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={frontend_runner}
         Restart=on-failure
         RestartSec=2
@@ -597,6 +695,7 @@ def daemon_reload(project_root: Path | None = None) -> None:
 
 def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    rotate_runtime_logs()
     API_LOG.touch(exist_ok=True)
     FRONTEND_LOG.touch(exist_ok=True)
     WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
@@ -694,6 +793,18 @@ def _docker_container_labels(container_id: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in labels.items()}
 
 
+def _truthy_env(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def current_process_is_core_runtime_api() -> bool:
+    return _truthy_env(os.getenv("BMS_CORE_RUNTIME_MODE")) or os.getenv("BMS_RUNTIME_MODE") == CONTAINER_RUNTIME_MODE
+
+
+def pid_is_current_core_runtime_api(pid: int) -> bool:
+    return pid == os.getpid() and current_process_is_core_runtime_api()
+
+
 def pid_is_biomodstack_runtime_container(pid: int, kind: str, project_root: Path | None = None) -> bool:
     root = (project_root or get_project_root()).resolve()
     expected_service = {
@@ -702,6 +813,12 @@ def pid_is_biomodstack_runtime_container(pid: int, kind: str, project_root: Path
     }.get(kind)
     if expected_service is None:
         raise ValueError(f"Unknown listener kind: {kind}")
+
+    if kind == "api" and pid_is_current_core_runtime_api(pid):
+        # Inside the host-networked API container, PID/cgroup namespace visibility
+        # may not expose the Docker container id. The process environment is the
+        # authoritative ownership marker for the currently serving API.
+        return True
 
     container_id = _docker_container_id_for_pid(pid)
     if not container_id:
@@ -758,7 +875,52 @@ def listener_pids(port: int) -> list[int]:
     except FileNotFoundError:
         pass
 
+    pids = _listener_pids_from_proc(port)
+    if pids:
+        return pids
+
     return []
+
+
+def _listener_pids_from_proc(port: int) -> list[int]:
+    listen_inodes: set[str] = set()
+    for proc_net in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+        try:
+            lines = proc_net.read_text(encoding="utf-8").splitlines()[1:]
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 10:
+                continue
+            local_address, state, inode = parts[1], parts[3], parts[9]
+            try:
+                local_port = int(local_address.rsplit(":", 1)[1], 16)
+            except (IndexError, ValueError):
+                continue
+            if local_port == port and state == "0A":
+                listen_inodes.add(inode)
+    if not listen_inodes:
+        return []
+
+    pids: list[int] = []
+    for pid_dir in Path("/proc").iterdir():
+        if not pid_dir.name.isdigit():
+            continue
+        fd_dir = pid_dir / "fd"
+        try:
+            fds = list(fd_dir.iterdir())
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                continue
+            if target.startswith("socket:[") and target[8:-1] in listen_inodes:
+                pids.append(int(pid_dir.name))
+                break
+    return sorted(set(pids))
 
 
 def read_pid_ppid(pid: int) -> int | None:
@@ -927,7 +1089,11 @@ def start_all(
         run_systemctl("stop", *incompatible_services, check=False, project_root=root)
     if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
         cleanup_legacy_listener("api", root)
-    run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
+    runtime_services_active = all(service_is_active(name, project_root=root) for name in runtime_service_names(mode))
+    if runtime_services_active and not (url_is_ready(API_HEALTH_URL) and url_is_ready(frontend_url)):
+        run_core_runtime_script("up", "bms-api", "bms-web", project_root=root)
+    else:
+        run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     if not skip_workflow_adapter_wait:
         wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     if not skip_api_wait:
@@ -964,10 +1130,23 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     ensure_user_units(root, runtime_mode=mode)
-    run_systemctl("stop", TARGET_UNIT, DEV_TARGET_UNIT, check=False, project_root=root)
-    run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
-    cleanup_legacy_listener("api", root)
+
+    if mode == CONTAINER_RUNTIME_MODE:
+        run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
+        run_systemctl(
+            "stop",
+            WORKFLOW_ADAPTER_SERVICE,
+            CORE_RUNTIME_SERVICE,
+            check=False,
+            project_root=root,
+        )
+        return
+
+    run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
     cleanup_legacy_listener("frontend", root)
+    if service_is_active(API_SERVICE, project_root=root):
+        run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+        cleanup_legacy_listener("api", root)
 
 
 def restart_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -1081,9 +1260,10 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
         ]
 
     services_by_name = {item["name"]: item["active"] for item in descriptor["services"]}
+    frontend_unit_state = "unit active" if services_by_name.get(FRONTEND_SERVICE, False) else "unit inactive"
     return [
         f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
-        f"Frontend: {'active' if services_by_name.get(FRONTEND_SERVICE, False) else 'inactive'} ({FRONTEND_SERVICE}; {descriptor['frontend_url']})",
+        f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({FRONTEND_SERVICE} {frontend_unit_state}; {descriptor['frontend_url']})",
         f"API log: {API_LOG}",
         f"Frontend log: {FRONTEND_LOG}",
     ]
