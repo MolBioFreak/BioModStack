@@ -68,7 +68,7 @@ test('qPCR raw import plate map is fit-to-panel and cannot create the horizontal
   assert.match(rawImportSource, /gridTemplateColumns: '1rem repeat\(12, minmax\(0, 1fr\)\)'/);
   assert.match(rawImportSource, /min-\[1320px\]:grid-cols-\[minmax\(320px,430px\)_minmax\(0,1fr\)\]/);
   assert.match(rawImportSource, /aspect-square w-full max-w-\[1\.72rem\] min-w-0 flex-col items-center justify-center overflow-hidden/);
-  assert.match(rawImportSource, /Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible with no horizontal slider/);
+  assert.match(rawImportSource, /A-H × 1-12 visible\. Click wells; Ctrl\/Shift builds groups/);
   assert.doesNotMatch(rawImportSource, /overflow-x-auto/);
   assert.doesNotMatch(rawImportSource, /min-w-\[520px\]/);
   assert.doesNotMatch(rawImportSource, /grid-cols-\[1\.35rem_repeat\(12,2\.38rem\)\]/);
@@ -134,7 +134,7 @@ test('qPCR raw import reloads persisted datasets from BMS DB service, not browse
   assert.match(source, /listAnalyticalDatasets\('qpcr', 25\)/);
   assert.match(source, /loadAnalyticalDataset\(selectedDatasetId\)/);
   assert.match(source, /Saved qPCR import to BMS DB service dataset/);
-  assert.match(source, /BMS DB service analytical store, not browser cache/);
+  assert.match(source, /Loads selected qPCR rows from BMS DB/);
   assert.match(source, /Persisted qPCR imports/);
   assert.doesNotMatch(source, /QPCR_RAW_IMPORT_CACHE_KEY/);
   assert.doesNotMatch(source, /loadAssaySnapshot/);

@@ -247,8 +247,7 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/arm/strict_startup": True,
     "/motion/hard_reset": True,
     "/motion/reference/status": True,
-    "/motion/reference/mark_referenced": True,
-    "/motion/reference/mark_desynced": True,
+
     "/motion/axes/current": True,
     "/liquid/status": True,
     "/liquid/init": True,
@@ -306,7 +305,7 @@ OPERATION_REQUIRED_ROUTES: Dict[str, list[str]] = {
     "head_clear_lock": ["/motion/axis/{axis}/status", "/motion/clear_lock"],
     "head_lift_increment": ["/motion/axis/{axis}/status", "/motion/axis/relative"],
     "micro_move_proof": ["/motion/axis/{axis}/status", "/motion/axis/relative"],
-    "reference_mark": ["/motion/reference/status", "/motion/reference/mark_referenced", "/motion/reference/mark_desynced"],
+
     "emergency_stop": ["/oem/runtime/emergency_stop"],
     "prepare_to_run_job_readiness": ["/oem/runtime/readiness/prepare-to-run-job/dry-run"],
 }
@@ -1492,13 +1491,19 @@ async def motion_reference_status(axes: str = "x,y,z,g,door"):
 
 
 @router.post("/motion/reference/mark_referenced")
-async def motion_reference_mark_referenced(request: Request):
-    return await proxy_request("POST", "/motion/reference/mark_referenced", await request.json(), timeout=30.0)
+async def motion_reference_mark_referenced():
+    raise HTTPException(
+        status_code=410,
+        detail="BMS reference marking is disabled. Controller reference state is robot-local and must be changed only by OEM/reference routes on the robot.",
+    )
 
 
 @router.post("/motion/reference/mark_desynced")
-async def motion_reference_mark_desynced(request: Request):
-    return await proxy_request("POST", "/motion/reference/mark_desynced", await request.json(), timeout=30.0)
+async def motion_reference_mark_desynced():
+    raise HTTPException(
+        status_code=410,
+        detail="BMS reference marking is disabled. Controller reference state is robot-local and must be changed only by OEM/reference routes on the robot.",
+    )
 
 
 @router.get("/liquid/status")

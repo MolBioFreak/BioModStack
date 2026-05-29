@@ -15,6 +15,7 @@ RUN apt-get update \
         docker.io \
         docker-compose \
         git \
+        openssh-client \
         libcurl4-openssl-dev \
         libfontconfig1-dev \
         libfreetype6-dev \

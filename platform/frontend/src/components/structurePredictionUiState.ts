@@ -1,8 +1,8 @@
 export type StructurePredictionMode = 'predict' | 'complex';
-export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix';
+export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
 export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
-export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
+export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental' | 'esmfold2_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
@@ -53,7 +53,7 @@ export interface TargetPreviewSourceInput {
 
 export interface StructureLaunchConfig {
     variant: StructureLaunchVariant;
-    submitModelId: 'boltz2' | 'boltz_cp_experimental';
+    submitModelId: 'boltz2' | 'boltz_cp_experimental' | 'esmfold2_experimental';
     submitMode: 'predict' | 'design';
     allowPredictorSelection: boolean;
     showParallelJobs: boolean;
@@ -78,7 +78,7 @@ export interface BoltzCpShardPlanDefinition {
 }
 
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'rf3' | 'protenix' | 'boltz_cp_experimental';
+    modelId: 'boltz2' | 'rf3' | 'protenix' | 'boltz_cp_experimental' | 'esmfold2_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -189,7 +189,9 @@ const toStructureLaunchVariant = (initialValues?: StructureInitialValues | null)
         || initialValues?.model_id
         || ''
     ).trim().toLowerCase();
-    return normalized === 'boltz_cp_experimental' ? 'boltz_cp_experimental' : 'default';
+    if (normalized === 'boltz_cp_experimental') return 'boltz_cp_experimental';
+    if (normalized === 'esmfold2_experimental') return 'esmfold2_experimental';
+    return 'default';
 };
 
 export const parseBoltzCpGpuIds = (value: unknown): number[] => {
@@ -250,6 +252,19 @@ export const resolveStructureLaunchConfig = (initialValues?: StructureInitialVal
         };
     }
 
+    if (variant === 'esmfold2_experimental') {
+        return {
+            variant,
+            submitModelId: 'esmfold2_experimental',
+            submitMode: 'predict',
+            allowPredictorSelection: false,
+            showParallelJobs: false,
+            showSequenceBatch: false,
+            showMsaControls: false,
+            forcedPredictor: 'esmfold2',
+        };
+    }
+
     return {
         variant: 'default',
         submitModelId: 'boltz2',
@@ -300,7 +315,7 @@ export const resolveStructureSubmitTarget = ({
     predictionMode,
     predictorSelection,
 }: ResolveStructureSubmitTargetInput): StructureSubmitTarget => {
-    if (launchConfig.variant === 'boltz_cp_experimental') {
+    if (launchConfig.variant !== 'default') {
         return {
             modelId: launchConfig.submitModelId,
             mode: launchConfig.submitMode,
@@ -393,7 +408,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'rf3' || normalized === 'protenix' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
+    if (normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
         return normalized;
     }
     return 'boltz';
@@ -417,6 +432,14 @@ export const resolveStructurePredictorSelection = (
                 families: [],
                 valid: false,
                 error: COMPLEX_RF3_DISABLED_REASON,
+            };
+        }
+        if (requestedSelection === 'esmfold2') {
+            return {
+                requestedSelection,
+                canonicalSelection: 'esmfold2',
+                families: ['esmfold2'],
+                valid: true,
             };
         }
         if (requestedSelection === 'both' || requestedSelection === 'all' || requestedSelection === 'boltz_protenix') {
@@ -472,6 +495,14 @@ export const resolveStructurePredictorSelection = (
             requestedSelection,
             canonicalSelection: 'rf3',
             families: ['rf3'],
+            valid: true,
+        };
+    }
+    if (requestedSelection === 'esmfold2') {
+        return {
+            requestedSelection,
+            canonicalSelection: 'esmfold2',
+            families: ['esmfold2'],
             valid: true,
         };
     }

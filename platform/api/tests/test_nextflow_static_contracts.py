@@ -12,7 +12,7 @@ INCLUDE_RE = re.compile(
     re.S,
 )
 
-MIGRATED_ENTRYPOINTS = {
+DIRECT_ENTRYPOINTS = {
     "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
@@ -27,6 +27,19 @@ MIGRATED_ENTRYPOINTS = {
     "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
+    "esmfold2_experimental": "workflows/esmfold2_experimental.nf",
+    "protein_design": "workflows/protein_design.nf",
+    "structure_prediction": "workflows/structure_prediction.nf",
+    "complex_prediction": "workflows/complex_prediction.nf",
+    "bindcraft_design": "workflows/bindcraft_design.nf",
+    "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
+    "boltzgen_design": "workflows/boltzgen_design.nf",
+    "docking": "workflows/docking.nf",
+    "antibody_denovo": "workflows/antibody_denovo.nf",
+    "antibody_child": "workflows/antibody_child.nf",
+    "rfantibody_backbone": "workflows/rfantibody_backbone.nf",
+    "fampnn_child": "workflows/fampnn_child.nf",
+    "maturation_child": "workflows/maturation_child.nf",
 }
 
 MIGRATED_SYMBOLS = (
@@ -37,6 +50,18 @@ MIGRATED_SYMBOLS = (
     "PROTEIN_HUNTER_EXPERIMENTAL",
     "BOLTZ_CP_EXPERIMENTAL",
     "CONFORNETS_EXPERIMENTAL",
+    "ESMFOLD2_EXPERIMENTAL",
+    "STRUCTURE_PREDICTION",
+    "COMPLEX_PREDICTION",
+    "BINDCRAFT_DESIGN",
+    "PPIFLOW_GENERATOR_DESIGN",
+    "BOLTZGEN_DESIGN",
+    "DOCKING",
+    "ANTIBODY_DENOVO",
+    "ANTIBODY_CHILD",
+    "RFANTIBODY_BACKBONE",
+    "FAMPNN_CHILD",
+    "MATURATION_CHILD",
 )
 
 FORBIDDEN_MAIN_NGS_TERMS = (
@@ -49,6 +74,19 @@ FORBIDDEN_MAIN_NGS_TERMS = (
     "bam_path",
     "reference_fasta",
     "ngs.nf",
+)
+
+FORBIDDEN_MAIN_WORKFLOW_TERMS = (
+    "params.rfd_mode",
+    "RunBoltz",
+    "RunRF3",
+    "RunDiffDock",
+    "RunUniDock",
+    "RunBoltzGen",
+    "RFANTIBODY",
+    "FAMPNN_CHILD",
+    "ANTIBODY_DENOVO",
+    "BINDCRAFT_DESIGN",
 )
 
 
@@ -104,29 +142,40 @@ def test_nextflow_include_targets_and_symbols_resolve() -> None:
     assert missing_symbols == []
 
 
-def test_migrated_workflow_entrypoints_exist_and_aggregate_bucket_is_absent() -> None:
+def test_direct_workflow_entrypoints_exist_and_aggregate_bucket_is_absent() -> None:
     assert not (REPO_ROOT / "experimental.nf").exists()
-    for workflow_id, rel_path in MIGRATED_ENTRYPOINTS.items():
+    for workflow_id, rel_path in DIRECT_ENTRYPOINTS.items():
         assert (REPO_ROOT / rel_path).exists(), f"{workflow_id} -> {rel_path}"
 
 
-def test_main_entrypoint_has_no_migrated_experimental_or_ngs_dispatch() -> None:
+def test_main_entrypoint_is_only_a_thin_compatibility_wrapper() -> None:
     main_text = (REPO_ROOT / "main.nf").read_text(encoding="utf-8")
     main_lower = main_text.lower()
 
-    for workflow_id in MIGRATED_ENTRYPOINTS:
-        if workflow_id != "nanopore_methylation":
-            assert f"params.rfd_mode == '{workflow_id}'" not in main_text
-            assert workflow_id not in main_text
+    assert len(main_text.splitlines()) <= 12
+    assert "include { PROTEIN_DESIGN } from './workflows/protein_design.nf'" in main_text
+    assert "workflow {" in main_text
+    assert "PROTEIN_DESIGN()" in main_text
 
     for symbol in MIGRATED_SYMBOLS:
         assert symbol not in main_text
-
     for term in FORBIDDEN_MAIN_NGS_TERMS:
         assert term not in main_lower
+    for term in FORBIDDEN_MAIN_WORKFLOW_TERMS:
+        assert term not in main_text
+
+
+def test_core_protein_design_is_direct_entrypoint_not_root_main() -> None:
+    protein_design_text = (REPO_ROOT / "workflows" / "protein_design.nf").read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )
+    assert re.search(r"(?m)^\s*workflow\s+PROTEIN_DESIGN\s*\{", protein_design_text)
+    assert re.search(r"(?m)^\s*workflow\s*\{", protein_design_text)
+    assert "include { PROTEIN_DESIGN }" not in protein_design_text
 
 
 def test_direct_workflow_entrypoints_expose_unnamed_workflows() -> None:
-    for workflow_id, rel_path in MIGRATED_ENTRYPOINTS.items():
+    for workflow_id, rel_path in DIRECT_ENTRYPOINTS.items():
         entrypoint_text = (REPO_ROOT / rel_path).read_text(encoding="utf-8", errors="ignore")
         assert re.search(r"(?m)^\s*workflow\s*\{", entrypoint_text), workflow_id

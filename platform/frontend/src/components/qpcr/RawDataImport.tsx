@@ -384,7 +384,7 @@ export function RawDataImport() {
                     <div className="border border-border-primary p-4 bg-bg-secondary">
                         <label className="block text-sm font-medium text-text-primary mb-2">QuantStudio .eds / StepOnePlus exports</label>
                         <p className="text-xs text-text-muted mb-3">
-                            Upload QuantStudio .eds, StepOnePlus/QuantStudio Excel, or real instrument CSV. Large uploads are allowed through the BMS nginx proxy.
+                            Upload EDS, Excel, or instrument CSV.
                         </p>
 
                         <input
@@ -436,7 +436,7 @@ export function RawDataImport() {
                         >
                             {loadingDataset ? 'Loading persisted qPCR dataset...' : 'Load selected persisted qPCR import'}
                         </button>
-                        <p className="text-xs text-text-muted">Reloads durable qPCR result rows from the BMS DB service analytical store, not browser cache.</p>
+                        <p className="text-xs text-text-muted">Loads selected qPCR rows from BMS DB.</p>
                     </div>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
@@ -522,7 +522,7 @@ export function RawDataImport() {
                                         <div className="text-xs font-semibold uppercase tracking-[0.24em] text-accent-primary">qPCR instrument review workbench</div>
                                         <h4 className="mt-1 text-xl font-black text-text-primary">Plate, amplification, curve QC, and result rows in one review surface</h4>
                                         <p className="mt-1 text-xs leading-5 text-text-secondary">
-                                            BMS keeps the parsed QuantStudio/StepOnePlus import visible as a single scientific workbench: the compact 96-well plate, selected-well QC, amplification curves, standard curve, and raw result rows stay available without mode-tab hunting. Suggested upload focus: {activeReviewFocusLabel}.
+                                            Plate, well QC, curves, standards, rows. Focus: {activeReviewFocusLabel}.
                                         </p>
                                     </div>
                                 </div>
@@ -562,7 +562,7 @@ export function RawDataImport() {
                                         <div>
                                             <div className="text-base font-semibold text-text-primary">96-well Plate Map</div>
                                             <div className="text-xs text-text-muted">
-                                                Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible with no horizontal slider. Click a well to inspect labels; Ctrl/Shift-click wells to build manual triplicate groups and compute selected-well mean/SD/CV/recovery analytics.
+                                                A-H × 1-12 visible. Click wells; Ctrl/Shift builds groups.
                                             </div>
                                         </div>
                                         {plateTargetOptions.length > 0 && (

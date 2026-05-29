@@ -40,6 +40,11 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'DISCO GitHub', href: 'https://github.com/DISCO-design/DISCO' },
         { label: 'DISCO arXiv', href: 'https://arxiv.org/abs/2604.05181' },
     ],
+    esmfold2: [
+        { label: 'Biohub ESM GitHub', href: 'https://github.com/Biohub/esm' },
+        { label: 'ESMFold2-Fast HF', href: 'https://huggingface.co/biohub/ESMFold2-Fast' },
+        { label: 'ESM protein paper', href: 'https://biohub.ai/papers/esm_protein.pdf' },
+    ],
     fampnn: [
         { label: 'FAMPNN GitHub', href: 'https://github.com/richardshuai/fampnn' },
         { label: 'FAMPNN preprint DOI', href: 'https://doi.org/10.1101/2025.02.13.637498' },
