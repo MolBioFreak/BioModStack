@@ -396,3 +396,9 @@ def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(t
     assert module.normalize_sequence(" mqifvkt ") == "MQIFVKT"
     assert module.normalize_component_sequence("acgu", "rna") == "ACGU"
     assert module.normalize_component_sequence("acgu", "dna") == "ACGT"
+    assert module.sanitize_mmcif_data_block_id("RCSB: 3KTQ") == "RCSB_3KTQ"
+    assert module.sanitize_mmcif_data_block_id("  weird label / with spaces ") == "weird_label_with_spaces"
+    unsafe_cif = "data_RCSB: 3KTQ\n#\nloop_\n_atom_site.id\n1\n"
+    safe_cif = module.ensure_safe_mmcif_data_block(unsafe_cif, "RCSB: 3KTQ_000")
+    assert safe_cif.splitlines()[0] == "data_RCSB_3KTQ_000"
+    assert "data_RCSB: 3KTQ" not in safe_cif
