@@ -161,6 +161,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
     const launchConfig = resolveStructureLaunchConfig(initialValues);
     const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
+    const isEsmFold2Launch = launchConfig.variant === 'esmfold2_experimental';
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
     const initialBoltzCpShardPlanId = normalizeBoltzCpShardPlanId(
         initialValues?.bcp_shard_plan_id ?? initialValues?.shard_plan_id ?? inferBoltzCpShardPlanId(initialBoltzCpSizeCp)
@@ -169,7 +170,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
     // Core state
     const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
-    const [jobName, setJobName] = useState(initialValues?.name || 'structure_prediction');
+    const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || (isEsmFold2Launch ? 'esmfold2_prediction' : 'structure_prediction'));
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
     const clearGpuPinning = () => {
@@ -255,6 +256,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         || DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS
     );
     const [bcpSeed, setBcpSeed] = useState(initialBoltzCpSeed != null ? String(initialBoltzCpSeed) : '');
+
+    // ESMFold2-specific settings intentionally stay compact; inputs reuse the standard structure surface.
+    const [esmfold2Variant, setEsmfold2Variant] = useState<'fast' | 'full'>(
+        initialValues?.model_variant === 'full' || initialValues?.esmf_model_variant === 'full' ? 'full' : 'fast'
+    );
 
     // Error handling
     const [allowRetries, setAllowRetries] = useState(initialValues?.allow_retries ?? false);
@@ -584,6 +590,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const usesBoltz = predictorFamilies.includes('boltz');
     const usesRf3 = predictorFamilies.includes('rf3');
     const usesProtenix = predictorFamilies.includes('protenix');
+    const usesEsmFold2 = predictorFamilies.includes('esmfold2') || isEsmFold2Launch;
     const msaNeeded =
         (usesBoltz && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
@@ -645,6 +652,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
             }));
+        }
+
+        if (isEsmFold2Launch) {
+            params.structure_launch_variant = 'esmfold2_experimental';
+            params.model_variant = esmfold2Variant;
+            params.local_files_only = true;
         }
 
         if (usesBoltz) {
@@ -737,7 +750,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, isEsmFold2Launch, esmfold2Variant, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -910,6 +923,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
             }));
+        }
+
+        if (isEsmFold2Launch) {
+            params.structure_launch_variant = 'esmfold2_experimental';
+            params.model_variant = esmfold2Variant;
+            params.local_files_only = true;
         }
 
         // Boltz-2 parameters
@@ -1186,14 +1205,21 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const showBoltzParams = usesBoltz;
     const showRf3Params = usesRf3;
     const showProtenixParams = usesProtenix;
+    const showEsmFold2Params = usesEsmFold2;
+    const structureTemplateBaseId = isBoltzCpLaunch
+        ? 'boltz_cp_experimental'
+        : isEsmFold2Launch
+            ? 'esmfold2_experimental'
+            : 'structure_prediction';
     const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {
         if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];
+        if (isEsmFold2Launch) return ['esmfold2'];
         const topics: ModelDocumentationTopic[] = [];
         if (usesBoltz) topics.push('boltz2');
         if (usesRf3) topics.push('rf3');
         if (usesProtenix) topics.push('protenix');
         return topics.length > 0 ? topics : ['boltz2'];
-    }, [isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix]);
+    }, [isBoltzCpLaunch, isEsmFold2Launch, usesBoltz, usesRf3, usesProtenix]);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1207,8 +1233,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-lg font-semibold text-slate-200">Structure Prediction</h2>
-                        <p className="text-sm text-slate-500">Predict 3D structure from amino acid sequence</p>
+                        <h2 className="text-lg font-semibold text-slate-200">{isEsmFold2Launch ? 'ESMFold2 Experimental' : 'Structure Prediction'}</h2>
+                        <p className="text-sm text-slate-500">{isEsmFold2Launch ? 'Structure launcher inputs; ESMFold2 local runtime.' : 'Predict 3D structure from amino acid sequence'}</p>
                     </div>
                 </div>
                 {onOpenTemplateManager && (
@@ -1218,7 +1244,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             onClick={() => onOpenTemplateManager({
                                 currentModelId: submitTarget.modelId,
                                 currentMode: submitTarget.mode,
-                                baseTemplateId: isBoltzCpLaunch ? 'boltz_cp_experimental' : 'structure_prediction',
+                                baseTemplateId: structureTemplateBaseId,
                             })}
                             className="rounded-lg border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
                         >
@@ -1230,7 +1256,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 currentParams: currentTemplateParams,
                                 currentModelId: submitTarget.modelId,
                                 currentMode: submitTarget.mode,
-                                baseTemplateId: isBoltzCpLaunch ? 'boltz_cp_experimental' : 'structure_prediction',
+                                baseTemplateId: structureTemplateBaseId,
                             })}
                             className="rounded-lg border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
                         >
@@ -1347,9 +1373,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         </div>
                     ) : (
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : 'Fixed predictor'}</div>
+                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : isEsmFold2Launch ? 'ESMFold2 Experimental' : 'Fixed predictor'}</div>
                             <div className="mt-1 text-xs text-orange-100/80">
-                                Single-fold Boltz launcher with Fold-CP runtime controls below.
+                                {isBoltzCpLaunch
+                                    ? 'Single-fold Boltz launcher with Fold-CP runtime controls below.'
+                                    : isEsmFold2Launch
+                                        ? 'Uses this structure launcher for sequence, PDB import, and complex components.'
+                                        : 'Fixed predictor variant.'}
                             </div>
                         </div>
                     )}
@@ -1641,7 +1671,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             />
                             <label htmlFor="boltz-potentials" className="cursor-pointer">
                                 <span className="text-slate-200 font-medium">Use Potentials (Boltz-2x)</span>
-                                <p className="text-xs text-slate-500">Physics/FK steering; use batching for high sample counts.</p>
+                                <p className="text-xs text-slate-500">physics/FK steering potentials; use batching for high sample counts.</p>
                             </label>
                         </div>
 
@@ -1874,6 +1904,39 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 <option value="afdb">AlphaFold DB</option>
                                 <option value="boltz-1">Boltz-1</option>
                             </select>
+                        </div>
+                    </div>
+                )}
+
+                {/* ESMFold2 Parameters */}
+                {showEsmFold2Params && (
+                    <div className="border border-cyan-500/30 bg-cyan-500/5 rounded-lg p-4 space-y-4" data-bms-esmfold2-structure-variant="true">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-cyan-300">ESMFold2 Settings</h3>
+                            <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-medium text-cyan-200">
+                                Local-only
+                            </span>
+                        </div>
+                        <ModelDocumentationLinks
+                            topics={structureDocumentationTopics}
+                            summary="Docs linked; structure inputs stay in this launcher."
+                            compact
+                        />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Model Variant</label>
+                                <select
+                                    value={esmfold2Variant}
+                                    onChange={(e) => setEsmfold2Variant(e.target.value === 'full' ? 'full' : 'fast')}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    <option value="fast">Fast</option>
+                                    <option value="full">Full</option>
+                                </select>
+                            </div>
+                            <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+                                PDB import supplies sequence; DNA/RNA/ligands use Complex Components below. PDB coordinates are not structural templates.
+                            </div>
                         </div>
                     </div>
                 )}
@@ -2430,7 +2493,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         disabled={!sequence.trim() || submitMutation.isPending}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
-                        {submitMutation.isPending ? 'Submitting...' : 'Launch Prediction'}
+                        {submitMutation.isPending ? 'Submitting...' : isEsmFold2Launch ? 'Launch ESMFold2' : 'Launch Prediction'}
                     </button>
                 </div>
             </div>

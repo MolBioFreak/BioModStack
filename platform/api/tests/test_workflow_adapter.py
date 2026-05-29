@@ -229,6 +229,94 @@ def test_workflow_adapter_app_exposes_gpu_routes() -> None:
     assert "/api/gpu/scheduler-config" in routes
 
 
+def test_workflow_adapter_exposes_runtime_state_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import workflow_adapter as workflow_adapter_router
+
+    monkeypatch.setattr(
+        workflow_adapter_router,
+        "runtime_descriptor",
+        lambda runtime_mode=None: {"runtime_mode": runtime_mode, "runtime_active": True},
+    )
+
+    client = TestClient(workflow_adapter_app.app)
+    response = client.get("/api/workflow-adapter/runtime/state", params={"runtime": "dev"})
+
+    assert response.status_code == 200
+    assert response.json() == {"runtime_mode": "dev", "runtime_active": True, "control_mode": "host-adapter"}
+
+
+def test_workflow_adapter_runtime_state_marks_current_adapter_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import workflow_adapter as workflow_adapter_router
+
+    monkeypatch.setattr(
+        workflow_adapter_router,
+        "runtime_descriptor",
+        lambda runtime_mode=None: {
+            "runtime_mode": "container",
+            "runtime_active": False,
+            "runtime_ready": False,
+            "health": {"adapter_ready": False, "api_ready": True, "frontend_ready": True},
+            "services": [
+                {"name": workflow_adapter_router.WORKFLOW_ADAPTER_SERVICE, "active": False},
+                {"name": workflow_adapter_router.CORE_RUNTIME_SERVICE, "active": True},
+            ],
+        },
+    )
+
+    client = TestClient(workflow_adapter_app.app)
+    response = client.get("/api/workflow-adapter/runtime/state", params={"runtime": "container"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health"] == {"adapter_ready": True, "api_ready": True, "frontend_ready": True}
+    assert payload["runtime_ready"] is True
+    assert payload["runtime_active"] is True
+    assert payload["services"][0] == {
+        "name": workflow_adapter_router.WORKFLOW_ADAPTER_SERVICE,
+        "active": True,
+        "active_source": "current-adapter-process",
+    }
+    assert payload["control_mode"] == "host-adapter"
+
+
+def test_workflow_adapter_runtime_action_invokes_mode_scoped_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import workflow_adapter as workflow_adapter_router
+
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(workflow_adapter_router, "stop_all", lambda runtime_mode=None: calls.append(("stop", runtime_mode)))
+    monkeypatch.setattr(
+        workflow_adapter_router,
+        "runtime_descriptor",
+        lambda runtime_mode=None: {"runtime_mode": runtime_mode, "runtime_active": False},
+    )
+
+    client = TestClient(workflow_adapter_app.app)
+    response = client.post("/api/workflow-adapter/runtime/stop", json={"runtime": "dev"})
+
+    assert response.status_code == 200
+    assert calls == [("stop", "dev")]
+    assert response.json()["control_mode"] == "host-adapter"
+    assert response.json()["action"] == "stop"
+
+
+def test_workflow_adapter_container_restart_returns_before_self_killing_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import workflow_adapter as workflow_adapter_router
+
+    delayed: list[object] = []
+    monkeypatch.setattr(workflow_adapter_router, "_run_delayed", lambda action: delayed.append(action))
+
+    client = TestClient(workflow_adapter_app.app)
+    response = client.post("/api/workflow-adapter/runtime/restart", json={"runtime": "container"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["background"] is True
+    assert payload["action"] == "restart"
+    assert payload["control_mode"] == "host-adapter"
+    assert len(delayed) == 1
+
+
 def test_nextflow_command_uses_authoritative_data_root_for_fresh_work_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo-on-os-drive"
     nvme_root = tmp_path / "BMS-4TB-NVME"

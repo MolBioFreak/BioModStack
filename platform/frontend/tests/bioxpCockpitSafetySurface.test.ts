@@ -18,7 +18,7 @@ test('saved-but-inactive BioXP link is not mislabeled as hardware offline', () =
     assert.match(cockpitSource, /const linkInactive = linkageConfigured && !interlinkActive/);
     assert.match(cockpitSource, /const hardwareBadgeLabel = linkInactive\s*\? 'LINK INACTIVE'/);
     assert.match(cockpitSource, /BIOXP LINK INACTIVE/);
-    assert.match(cockpitSource, /Saved robot profile is present but inactive/);
+    assert.match(cockpitSource, /Saved profile inactive\. BIOXP LINK → Connect/);
 });
 
 test('default connection tab does not expose old motor interlock/lock-clear buttons', () => {
@@ -26,7 +26,7 @@ test('default connection tab does not expose old motor interlock/lock-clear butt
 
     assert.doesNotMatch(connectionTab, />\s*Prepare Motion Interlock\s*</);
     assert.doesNotMatch(connectionTab, />\s*Clear Head Lock\s*</);
-    assert.match(connectionTab, /Motion interlock and lock-clear actions are commissioning-only/);
+    assert.match(connectionTab, /Lifecycle: BIOXP LINK\. Interlocks: Commissioning Motion/);
 });
 
 test('motion power actions are gated behind the commissioning toggle without motor reset controls', () => {
@@ -37,7 +37,7 @@ test('motion power actions are gated behind the commissioning toggle without mot
     assert.match(motionPowerPanel, /Prepare Interlock/);
     assert.doesNotMatch(motionPowerPanel, /Hard Reset/);
     assert.doesNotMatch(motionPowerPanel, /motionHardReset/);
-    assert.match(motionPowerPanel, /Actuating power, interlock, and lock-clear buttons are hidden/);
+    assert.match(motionPowerPanel, /Power\/interlock actions are commissioning-only/);
 });
 
 test('commissioning motion keeps axis controls while default handler restores gripper', () => {
@@ -46,7 +46,7 @@ test('commissioning motion keeps axis controls while default handler restores gr
 
     assert.match(tabList, /showCommissioningControls \? \[\{ key: 'manual', label: 'Commissioning Motion' \}\]/);
     assert.match(manualTab, /Commissioning Motion — Axis Controls/);
-    assert.match(manualTab, /Commissioning-only axis surface for raw\/recovery contexts/);
+    assert.match(manualTab, /Commissioning-only axis surface/);
     assert.doesNotMatch(manualTab, /Direct OEM homing modes/);
     assert.match(manualTab, /<AxisControls axis="x" label="Gantry X"/);
     assert.match(manualTab, /<AxisControls axis="y" label="Gantry Y"/);
@@ -61,7 +61,8 @@ test('commissioning motion keeps axis controls while default handler restores gr
     assert.match(cockpitSource, /type="number"/);
     assert.match(cockpitSource, /inputMode="numeric"/);
     assert.match(cockpitSource, /Absolute target/);
-    assert.match(cockpitSource, /Payloads are clamped before send/);
+    assert.match(cockpitSource, /Limits: step/);
+    assert.match(cockpitSource, /clamped before send/);
     assert.match(cockpitSource, /stepMax: 15000/);
     assert.doesNotMatch(cockpitSource, /Capture validation bundle/);
     assert.doesNotMatch(cockpitSource, /Dry-run bundle only/);
@@ -69,7 +70,7 @@ test('commissioning motion keeps axis controls while default handler restores gr
     assert.doesNotMatch(cockpitSource, /Snapshot refs or image paths/);
     assert.doesNotMatch(cockpitSource, /These controls can physically move the robot/);
     assert.match(cockpitSource, />\s*Switch Home\s*</);
-    assert.match(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.match(cockpitSource, /Supervised OEM homing modes/);
     assert.match(cockpitSource, /OEM HomeXY/);
     assert.match(cockpitSource, /InitializeMotion ACK/);
     assert.equal(cockpitSource.match(/Arm Motors No Homing/g)?.length ?? 0, 1);
@@ -83,7 +84,7 @@ test('camera overlaid jog controls are commissioning-only', () => {
 
     assert.match(cameraMotionPanel, /showCommissioningControls \? \(/);
     assert.match(cameraMotionPanel, /<CameraHoldJogPad enabled=\{isConnected\} \/>/);
-    assert.match(cameraMotionPanel, /Camera-overlaid jog controls are commissioning-only/);
+    assert.match(cameraMotionPanel, /Camera jog is commissioning-only/);
 });
 
 test('default handler controls preserve readback and thermal surfaces while direct liquid commands are commissioning-only', () => {
@@ -120,8 +121,8 @@ test('OEM readback panel keeps new supervised OEM mode controls in one place', (
     assert.match(oemReadbackPanel, /PrepareToRunJob Readiness \/ No Motion/);
     assert.match(oemReadbackPanel, /EMERGENCY STOP/);
     assert.doesNotMatch(oemReadbackPanel, /Arm Motors No Homing/);
-    assert.match(oemReadbackPanel, /Direct OEM homing modes for supervised testing/);
-    assert.match(oemReadbackPanel, /route success is not physical proof/);
+    assert.match(oemReadbackPanel, /Supervised OEM homing modes/);
+    assert.match(oemReadbackPanel, /API success is not physical proof/);
     assert.match(oemReadbackPanel, /OEM HomeXY/);
     assert.match(oemReadbackPanel, />\s*Rehome Diagnostic \/ No Homing\s*</);
     assert.match(oemReadbackPanel, /OEM Rehome ACK/);
@@ -171,7 +172,7 @@ test('raw motion current defaults stay OEM-safe and manual axis controls use liv
     assert.match(axisControls, /const axisReferenced = referenceState === 'referenced'/);
     assert.match(axisControls, /const absoluteMoveBlocked = !axisReferenced \|\| !axisRangeAvailable/);
     assert.match(axisControls, /const switchHomeBlocked = true/);
-    assert.match(axisControls, /Switch Home requires capture_bundle=true/);
+    assert.match(axisControls, /Switch Home disabled here; use supervised OEM recipe/);
     assert.match(axisControls, /negativeMoveBlocked = directionGuard\.negativeBlocked/);
     assert.match(axisControls, /positiveMoveBlocked = directionGuard\.positiveBlocked/);
 });

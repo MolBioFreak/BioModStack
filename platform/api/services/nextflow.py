@@ -62,13 +62,17 @@ from runtime_policy import assert_workflow_launch_allowed
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
 
-DEFAULT_WORKFLOW_ENTRYPOINT = "main.nf"
+LEGACY_MAIN_ENTRYPOINT = "main.nf"
+DEFAULT_WORKFLOW_ENTRYPOINT = "workflows/protein_design.nf"
+COMPLEX_PREDICTION_ENTRYPOINT = "workflows/complex_prediction.nf"
+STRUCTURE_PREDICTION_ENTRYPOINT = "workflows/structure_prediction.nf"
 
 # Workflow/product-specific Nextflow entrypoints that have been intentionally
 # migrated away from the legacy global main.nf router. Keep this keyed by the
-# resolved BioModStack workflow/profile identity, not by shared engine names
-# alone: profiles such as "boltz" are reused by standalone prediction,
-# antibody validation, PPiFlow, mutagenesis, and core protein-design contexts.
+# resolved BioModStack workflow/profile identity only when the profile is not a
+# shared engine. Profiles such as "boltz" and "protenix" are reused by ordinary
+# structure prediction, antibody validation, PPiFlow, mutagenesis, and core
+# protein-design contexts; those route through MODEL_MODE_WORKFLOW_ENTRYPOINTS.
 WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
@@ -84,7 +88,59 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
+    "esmfold2_experimental": "workflows/esmfold2_experimental.nf",
+    "boltzgen": "workflows/boltzgen_design.nf",
+    "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
+    "antibody_child": "workflows/antibody_child.nf",
+    "antibody_backbone": "workflows/rfantibody_backbone.nf",
+    "maturation_child": "workflows/maturation_child.nf",
+    "bindcraft_child": "workflows/bindcraft_design.nf",
+    "docking": "workflows/docking.nf",
+    "unidock": "workflows/docking.nf",
+    "dual_docking": "workflows/docking.nf",
 }
+
+MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ("boltz2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("rf3", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
+    ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
+    ("bindcraft", "minibinder"): "workflows/bindcraft_design.nf",
+    ("bindcraft", "peptide"): "workflows/bindcraft_design.nf",
+    ("bindcraft", "bindcraft_child"): "workflows/bindcraft_design.nf",
+    ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
+    ("boltzgen", "design"): "workflows/boltzgen_design.nf",
+    ("diffdock", "dock"): "workflows/docking.nf",
+    ("diffdock", "ntp_dock"): "workflows/docking.nf",
+    ("unidock", "dock"): "workflows/docking.nf",
+    ("unidock", "ntp_dock"): "workflows/docking.nf",
+    ("docking", "compare"): "workflows/docking.nf",
+    ("docking", "consensus"): "workflows/docking.nf",
+    ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
+    ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
+    ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", "default"): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", "maturation_child"): "workflows/maturation_child.nf",
+    ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
+    ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
+    ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+}
+
+
+def _params_request_complex_prediction(params: Optional[Dict[str, Any]]) -> bool:
+    if not params:
+        return False
+    return any(
+        params.get(key)
+        for key in (
+            "complex_components",
+            "complex_json_path",
+            "complex_batch_dir",
+        )
+    )
 
 
 def resolve_nextflow_entrypoint(
@@ -96,11 +152,20 @@ def resolve_nextflow_entrypoint(
 ) -> str:
     """Return the workflow-specific Nextflow entrypoint for a launch.
 
-    `model_id`, `mode`, and `params` are accepted now so future migrations can
-    key off product/workflow intent when a shared backend profile is ambiguous.
-    The current safe behavior is intentionally conservative: only profiles in
-    WORKFLOW_ENTRYPOINTS leave the legacy main.nf router.
+    Entrypoint selection is by product/workflow intent, not by shared engine
+    profile alone. Unknown legacy protein-design modes route to
+    workflows/protein_design.nf; main.nf is only a thin CLI compatibility wrapper.
     """
+    normalized_model_id = str(model_id or "").strip()
+    normalized_mode = str(mode or "").strip()
+
+    if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
+        return COMPLEX_PREDICTION_ENTRYPOINT
+
+    model_mode_entrypoint = MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((normalized_model_id, normalized_mode))
+    if model_mode_entrypoint:
+        return model_mode_entrypoint
+
     return WORKFLOW_ENTRYPOINTS.get(effective_profile, DEFAULT_WORKFLOW_ENTRYPOINT)
 
 
@@ -2272,7 +2337,7 @@ def build_nextflow_command(
     if 'complex_components' in params:
         logger.info(f"complex_components found with {len(params['complex_components'])} items")
     else:
-        logger.warning("complex_components NOT in params - ligands will not be used!")
+        logger.debug("complex_components not present; treating launch as sequence-only unless model-specific preprocessing adds complex inputs")
 
     def resolve_structure_prediction_profile(pred_method: object) -> str:
         normalized = str(pred_method or 'boltz').strip().lower()
@@ -2299,9 +2364,10 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
-        # BindCraft API modes route to the binder profile; workflow is selected via rfd_mode
+        # BindCraft API modes route to the binder profile; workflow is selected by product intent.
         ('bindcraft', 'minibinder'): 'binder_denovo',
         ('bindcraft', 'peptide'): 'binder_denovo',
+        ('bindcraft', 'bindcraft_child'): 'binder_denovo',
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
         # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
@@ -2326,6 +2392,7 @@ def build_nextflow_command(
         ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         ('confornets_experimental', 'design'): 'confornets_experimental',
+        ('esmfold2_experimental', 'predict'): 'esmfold2_experimental',
         # Nanopore/ONT product workflows: live device control is outside Nextflow;
         # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
         ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
@@ -2728,15 +2795,19 @@ def build_nextflow_command(
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
     if model_id == 'unidock':
+        params.setdefault('docking_engine', 'unidock')
         # For Uni-Dock: ntp_type -> unidock_ntp_type, ligand_smiles -> unidock_ligand_smiles
         if 'ntp_type' in params:
             params['unidock_ntp_type'] = params.pop('ntp_type')
         if 'ligand_smiles' in params and 'unidock_ligand_smiles' not in params:
             params['unidock_ligand_smiles'] = params.pop('ligand_smiles')
     elif model_id == 'diffdock':
+        params.setdefault('docking_engine', 'diffdock')
         # For DiffDock: ntp_type -> diffdock_ntp_type
         if 'ntp_type' in params:
             params['diffdock_ntp_type'] = params.pop('ntp_type')
+    elif model_id == 'docking':
+        params.setdefault('docking_engine', 'dual')
     elif model_id == 'boltzgen':
         # For BoltzGen: Apply all BoltzGen-specific parameter mappings
         # These were previously in global param_mapping and broke other workflows!
@@ -3101,6 +3172,104 @@ def build_nextflow_command(
 
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'
+    elif model_id == 'esmfold2_experimental':
+        esmfold2_quality_presets = {
+            'smoke': {'num_loops': 1, 'num_sampling_steps': 25, 'num_diffusion_samples': 1},
+            'standard': {'num_loops': 3, 'num_sampling_steps': 50, 'num_diffusion_samples': 1},
+            'thorough': {'num_loops': 5, 'num_sampling_steps': 100, 'num_diffusion_samples': 2},
+        }
+        quality_preset = str(params.pop('quality_preset', '') or '').strip().lower()
+        if quality_preset in esmfold2_quality_presets:
+            for preset_key, preset_value in esmfold2_quality_presets[quality_preset].items():
+                params.setdefault(preset_key, preset_value)
+        if not params.get('pdb_chain_ids') and params.get('target_chain'):
+            # Generic StructureInput writes target_chain; ESMFold2's PDB source
+            # expects pdb_chain_ids.
+            params['pdb_chain_ids'] = params.get('target_chain')
+        params.pop('target_chain', None)
+        esmfold2_mappings = {
+            'sequence': 'esmf_sequence',
+            'sequence_name': 'esmf_sequence_name',
+            'chain_id': 'esmf_chain_id',
+            'pdb_sequence_path': 'esmf_pdb_sequence_path',
+            'pdb_chain_ids': 'esmf_pdb_chain_ids',
+            'pdb_include_dna_rna': 'esmf_pdb_include_dna_rna',
+            'msa_path': 'esmf_msa_path',
+            'msa_format': 'esmf_msa_format',
+            'msa_max_sequences': 'esmf_msa_max_sequences',
+            'msa_remove_insertions': 'esmf_msa_remove_insertions',
+            'dna_sequence': 'esmf_dna_sequence',
+            'dna_chain_id': 'esmf_dna_chain_id',
+            'rna_sequence': 'esmf_rna_sequence',
+            'rna_chain_id': 'esmf_rna_chain_id',
+            'ligand_smiles': 'esmf_ligand_smiles',
+            'ligand_ccd': 'esmf_ligand_ccd',
+            'ligand_chain_id': 'esmf_ligand_chain_id',
+            'complex_components_json': 'esmf_complex_components_json',
+            'complex_components_file': 'esmf_complex_components_file',
+            'model_variant': 'esmf_model_variant',
+            'model_id_or_path': 'esmf_model_id_or_path',
+            'local_files_only': 'esmf_local_files_only',
+            'num_loops': 'esmf_num_loops',
+            'num_sampling_steps': 'esmf_num_sampling_steps',
+            'num_diffusion_samples': 'esmf_num_diffusion_samples',
+            'seed': 'esmf_seed',
+            'device': 'esmf_device',
+        }
+        ui_model_variant_present = 'model_variant' in params
+        ui_model_path_present = 'model_id_or_path' in params
+        for src_key, dest_key in esmfold2_mappings.items():
+            if src_key in params:
+                # Visible UI keys must win over stale prefixed defaults that may still
+                # exist on old templates or cloned launch payloads.
+                params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        variant = str(params.get('esmf_model_variant') or 'fast').strip().lower()
+        if variant not in {'fast', 'full'}:
+            variant = 'fast'
+        params['esmf_model_variant'] = variant
+        default_model_id = 'biohub/ESMFold2' if variant == 'full' else 'biohub/ESMFold2-Fast'
+        current_model_id = str(params.get('esmf_model_id_or_path') or '').strip()
+        if (
+            not current_model_id
+            or (
+                ui_model_variant_present
+                and not ui_model_path_present
+                and current_model_id in {'biohub/ESMFold2-Fast', 'biohub/ESMFold2'}
+                and current_model_id != default_model_id
+            )
+        ):
+            params['esmf_model_id_or_path'] = default_model_id
+        if complex_components:
+            esmfold2_complex_path = Path(output_dir) / "esmfold2_complex_components.json"
+            esmfold2_complex_path.parent.mkdir(parents=True, exist_ok=True)
+            with esmfold2_complex_path.open("w", encoding="utf-8") as handle:
+                json.dump({"components": complex_components}, handle, indent=2)
+            params['esmf_complex_components_file'] = str(esmfold2_complex_path)
+            # The canonical structure launcher includes the primary protein in complex_components.
+            # Passing both --esmf_sequence and a components file would duplicate chain IDs in the
+            # ESMFold2 runner, so component-file launches own the full input system.
+            params.pop('esmf_sequence', None)
+            params.pop('sequence', None)
+            complex_components = None
+        for stale_key in ('pred_method', 'primary_chain_id', 'target_chains', 'binder_chains'):
+            params.pop(stale_key, None)
+        params.setdefault('esmf_local_files_only', True)
+        params.setdefault('esmf_chain_id', 'A')
+        params.setdefault('esmf_pdb_chain_ids', '')
+        params.setdefault('esmf_pdb_include_dna_rna', True)
+        params.setdefault('esmf_msa_format', 'auto')
+        params.setdefault('esmf_msa_remove_insertions', True)
+        params.setdefault('esmf_dna_chain_id', 'C')
+        params.setdefault('esmf_rna_chain_id', 'D')
+        params.setdefault('esmf_ligand_chain_id', 'L')
+        params.setdefault('esmf_num_loops', 3)
+        params.setdefault('esmf_num_sampling_steps', 50)
+        params.setdefault('esmf_num_diffusion_samples', 1)
+        params.setdefault('esmf_device', 'auto')
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'esmfold2_experimental'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {

@@ -800,12 +800,12 @@ export default function StructureViewerPane({
     const stageGuidance =
         designLens === 'rfantibody'
             ? (hasResidueConfidence
-                ? 'RF confidence here is stage-native RFantibody output, not a downstream validator score.'
-                : 'RFantibody backbones do not carry validator-style pLDDT or PAE. The viewer is using stage-native chain coloring and engagement metrics.')
+                ? 'RF confidence: stage-native output.'
+                : 'RFantibody: stage-native coloring + engagement metrics.')
             : designLens === 'boltzgen'
-                ? 'BoltzGen generator cohorts should be read as de novo candidates first: conf_score, affinity priors, and binder size are the main triage signals before downstream refinement.'
+                ? 'BoltzGen candidates: triage by conf_score, affinity priors, size.'
                 : designLens === 'fampnn'
-                    ? 'FA-MPNN pSCE is an angstrom-scale expected sidechain error. Lower is better, and the worst-residue readout catches local outliers the average can hide.'
+                    ? 'FA-MPNN pSCE: lower is better; worst residue flags outliers.'
                     : null;
 
     const structureMetricCards = (() => {
@@ -961,8 +961,8 @@ export default function StructureViewerPane({
         ? plddtProfile.length
         : Object.values(chainMetrics).reduce((sum, metric) => sum + (metric?.length || 0), 0);
     const confidenceOverlayReadyCopy = conforNetsUsesScalarPlddtFallback
-        ? `ConforNets scalar pLDDT fallback is active: Mol* residue coloring uses the displayed scalar pLDDT (${formatMetricValue(conforNetsScalarPlddt, 1)}) uniformly because no per-residue confidence tensor is present.`
-        : `${headlineConfidenceLabel} overlays are ready. Mol* residue coloring uses the same ${bfactorLabel} residue/chain map shown in this panel.`;
+        ? `Uniform scalar pLDDT ${formatMetricValue(conforNetsScalarPlddt, 1)}; no residue tensor.`
+        : `${headlineConfidenceLabel} overlay ready: ${bfactorLabel} residue/chain map.`;
     const interfacePairScoreCount = ipsaeInterface?.pair_scores?.length ?? 0;
     const chainPairIptmChainCount = chainPairIptm?.chain_ids?.length ?? 0;
 

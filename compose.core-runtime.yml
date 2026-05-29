@@ -1,8 +1,15 @@
+x-bms-json-logging: &bms-json-logging
+  driver: json-file
+  options:
+    max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}
+    max-file: "${BMS_DOCKER_LOG_MAX_FILE:-5}"
+
 services:
   bms-analytical-postgres:
     image: postgres:16-alpine
     container_name: biomodstack-analytical-postgres
     restart: unless-stopped
+    logging: *bms-json-logging
     labels:
       org.biomodstack.service_id: bms-db-service
       org.biomodstack.component: db-service
@@ -30,6 +37,7 @@ services:
       target: api-runtime
     container_name: biomodstack-api
     restart: unless-stopped
+    logging: *bms-json-logging
     network_mode: host
     environment:
       BMS_HOME: /app
@@ -88,6 +96,7 @@ services:
       target: api-runtime
     container_name: biomodstack-cpu-power
     restart: unless-stopped
+    logging: *bms-json-logging
     network_mode: host
     user: "0:0"
     environment:
@@ -121,6 +130,7 @@ services:
       target: stats-tools-runtime
     container_name: biomodstack-stats-tools
     restart: unless-stopped
+    logging: *bms-json-logging
     labels:
       org.biomodstack.service_id: bms-stats-tools
       org.biomodstack.component: stats-tools
@@ -150,6 +160,7 @@ services:
       dockerfile: docker/web.Dockerfile
     container_name: biomodstack-web
     restart: unless-stopped
+    logging: *bms-json-logging
     network_mode: host
     environment:
       BMS_WEB_HOST_PORT: ${BMS_WEB_HOST_PORT:-18080}

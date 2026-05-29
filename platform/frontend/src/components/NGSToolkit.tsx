@@ -3801,7 +3801,7 @@ export function NGSToolkit() {
             <header className="space-y-2">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Data Visualization Toolkit</h1>
+                        <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Toolkit</h1>
                     </div>
                     <div className="flex items-center gap-2">
                         <button

@@ -146,6 +146,12 @@ const compactUiCopy = (value: unknown, maxLength = 118): string => {
     return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 };
 
+const ESMFOLD2_QUALITY_PRESETS: Record<string, { num_loops: number; num_sampling_steps: number; num_diffusion_samples: number }> = {
+    smoke: { num_loops: 1, num_sampling_steps: 25, num_diffusion_samples: 1 },
+    standard: { num_loops: 3, num_sampling_steps: 50, num_diffusion_samples: 1 },
+    thorough: { num_loops: 5, num_sampling_steps: 100, num_diffusion_samples: 2 },
+};
+
 // Reusable param field component for grouped rendering
 function ParamField({
     param,
@@ -166,13 +172,21 @@ function ParamField({
     setSequenceToSave?: (sequence: { sequence: string; name?: string } | null) => void;
     ligandPresets: UntypedApiValue[];
 }) {
-    const isSequenceField = param.preset_type === 'sequence' || param.name === 'sequence' || param.type === 'text';
+    const isTextareaField = param.type === 'textarea' || param.ui_control === 'textarea' || param.preset_type === 'json';
+    const isSequenceField = ['sequence', 'dna', 'rna'].includes(String(param.preset_type || '')) || param.name === 'sequence' || (param.type === 'text' && !isTextareaField);
     const isContigField = typeof param.name === 'string' && param.name.includes('contig');
     const isPdbPresetField = param.preset_type === 'pdb';
     const isPathField = param.type === 'file' || param.type === 'directory';
     const isNumericField = param.type === 'integer' || param.type === 'number';
     const isSliderField = param.ui_control === 'slider' && isNumericField && param.minimum !== undefined && param.maximum !== undefined;
-    const isWide = isSequenceField || isPathField || param.preset_type === 'ligand' || isSliderField;
+    const isWide = isTextareaField || isSequenceField || isPathField || param.preset_type === 'ligand';
+    const sequenceUnit = param.preset_type === 'dna' ? 'bp' : param.preset_type === 'rna' ? 'nt' : 'aa';
+    const normalizeSequenceInput = (raw: string) => {
+        const upper = raw.toUpperCase().replace(/\s+/g, '');
+        if (param.preset_type === 'dna') return upper.replace(/U/g, 'T').replace(/[^ACGTN]/g, '');
+        if (param.preset_type === 'rna') return upper.replace(/T/g, 'U').replace(/[^ACGUN]/g, '');
+        return upper.replace(/[^A-Z]/g, '');
+    };
     const label = param.label || param.name;
     const description = compactUiCopy(param.description, 112);
     const value = params[param.name] ?? param.default ?? (param.type === 'boolean' ? false : '');
@@ -230,9 +244,13 @@ function ParamField({
                     placeholder={param.ui_placeholder || param.placeholder || "Select a contig preset..."}
                 />
             ) : isSliderField ? (
-                <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 p-3 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm text-slate-200 font-medium">{numericValue}</span>
+                <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 p-2.5 space-y-2" data-bms-template-slider="compact">
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span>Default {param.default ?? '—'}</span>
+                        {param.recommended_range && <span>Typical {param.recommended_range}</span>}
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-10 text-sm text-slate-200 font-medium">{numericValue}</span>
                         <input
                             type="number"
                             value={numericValue}
@@ -240,7 +258,7 @@ function ParamField({
                             min={param.minimum}
                             max={param.maximum}
                             step={numericStep}
-                            className="w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white text-sm text-right"
+                            className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white text-sm text-right"
                         />
                     </div>
                     <input
@@ -256,14 +274,26 @@ function ParamField({
                         <span>{param.minimum}</span>
                         <span>{param.maximum}</span>
                     </div>
+                    {param.default_source && (
+                        <div className="text-[11px] text-slate-500">{param.default_source}</div>
+                    )}
                 </div>
+            ) : isTextareaField ? (
+                <textarea
+                    value={value || ''}
+                    onChange={(e) => updateParam(param.name, e.target.value)}
+                    rows={6}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder={param.ui_placeholder || param.placeholder || ''}
+                    data-bms-template-textarea="raw"
+                />
             ) : isPdbPresetField ? (
                 <StructureInput
                     value={value || ''}
                     onChange={(v) => updateParam(param.name, v)}
                     onBrowse={() => setShowFileBrowser(param.name)}
-                    targetChain={params['target_chain'] || params['chain_id'] || ''}
-                    onTargetChainChange={(c) => updateParam('target_chain', c)}
+                    targetChain={params[param.name === 'pdb_sequence_path' ? 'pdb_chain_ids' : 'target_chain'] || params['chain_id'] || ''}
+                    onTargetChainChange={(c) => updateParam(param.name === 'pdb_sequence_path' ? 'pdb_chain_ids' : 'target_chain', c)}
                     enableMultiSelect={false}
                     enableDirectory={param.type === 'directory'}
                 />
@@ -304,7 +334,7 @@ function ParamField({
                             Sequence Library
                         </button>
                         <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
-                            {String(value || '').length} aa
+                            {String(value || '').length} {sequenceUnit}
                         </span>
                         {String(value || '').length > 0 && setSequenceToSave && (
                             <button
@@ -332,7 +362,7 @@ function ParamField({
                     </div>
                     <textarea
                         value={value || ''}
-                        onChange={(e) => updateParam(param.name, e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                        onChange={(e) => updateParam(param.name, normalizeSequenceInput(e.target.value))}
                         rows={6}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
                         placeholder={param.ui_placeholder || param.placeholder || 'Enter amino acid sequence...'}
@@ -378,6 +408,7 @@ const getTemplateDocumentationTopics = (template: UntypedApiValue | null | undef
     const identity = `${template?.id || ''} ${template?.model_id || ''} ${template?.name || ''}`.toLowerCase();
     if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
     if (identity.includes('confornets')) return ['confornets'];
+    if (identity.includes('esmfold2')) return ['esmfold2'];
     if (identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
     if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
     if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix'];
@@ -393,6 +424,7 @@ const getModelDocumentationTopics = (model: UntypedApiValue | null | undefined):
     const identity = `${model?.id || ''} ${model?.name || ''} ${model?.category || ''}`.toLowerCase();
     if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
     if (identity.includes('confornets')) return ['confornets'];
+    if (identity.includes('esmfold2')) return ['esmfold2'];
     if (identity.includes('protenix')) return ['protenix'];
     if (identity.includes('rf3') || identity.includes('rosettafold')) return ['rf3'];
     if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
@@ -414,6 +446,8 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
             return 'Experimental single-chain conformer landscape workflow.';
+        case 'esmfold2_experimental':
+            return 'Standalone ESMFold2 protein/complex fold.';
         case 'mutagenesis':
             return 'Build variant libraries and predict structures.';
         case 'oligo_design':
@@ -431,6 +465,8 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
             return 'Experimental Fold-CP large-protein path.';
         case 'confornets_experimental':
             return 'Experimental monomer conformer sampling.';
+        case 'esmfold2_experimental':
+            return 'Standalone ESMFold2 folding alpha.';
         case 'antibody_denovo':
             return 'Nanobody generation and refinement toolkit.';
         case 'rfdiffusion':
@@ -441,7 +477,8 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
 };
 
 const getExperimentalStatusSummary = (template: UntypedApiValue): string => {
-    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; real upstream wrapper, compact controls.';
+    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; compact controls.';
+    if (template.id === 'esmfold2_experimental') return 'Local-only protein/complex alpha; PDB sequence-source, MSA, DNA/RNA, ligand controls.';
     if (template.id === 'boltz_cp_experimental') return 'Alpha data-plane; logical shard plan plus current GPU bridge.';
     return template.status_short || 'Active alpha; backend wired, review carefully.';
 };
@@ -544,7 +581,18 @@ export function JobSubmission() {
                         structure_launch_variant: data.params?.structure_launch_variant || 'boltz_cp_experimental',
                     });
                 }
-                // 4. Manual Mode
+                // 4. ESMFold2 experimental reuses the structure-prediction template with a fixed launch variant.
+                else if (data.model_id === 'esmfold2_experimental') {
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('esmfold2_experimental');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        template_model_id: 'esmfold2_experimental',
+                        structure_launch_variant: data.params?.structure_launch_variant || 'esmfold2_experimental',
+                    });
+                }
+                // 5. Manual Mode
                 else {
                     setWizardMode('manual');
                     setSelectedModelId(data.model_id);
@@ -577,6 +625,7 @@ export function JobSubmission() {
         bindcraft: 'bindcraft',
         protein_local_redesign: 'protein_local_redesign',
         boltz_cp_experimental: 'boltz_cp_experimental',
+        esmfold2_experimental: 'esmfold2_experimental',
     };
     const hardcodedWorkflowTemplates = useMemo(() => [
         {
@@ -620,7 +669,7 @@ export function JobSubmission() {
         {
             id: 'bindcraft',
             name: 'BindCraft',
-            description: 'Design minibinders and peptides via AF2 hallucination, ProteinMPNN sequence optimization, and PyRosetta filtering.',
+            description: 'Minibinders/peptides: AF2 + MPNN + filters.',
             icon: 'binder',
             color: '#10B981',
             stages: [{ tool: 'AF2 Hallucination' }, { tool: 'MPNN' }, { tool: 'Filtering' }],
@@ -674,7 +723,7 @@ export function JobSubmission() {
         if (dedicatedTemplateId) {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
             const templateModelId = template.model_id || template.params?.template_model_id;
-            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
+            setWizardMode(['boltz_cp_experimental', 'esmfold2_experimental'].includes(dedicatedTemplateId) ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
             setDedicatedTemplateVersion((prev) => prev + 1);
             setClonedValues({
@@ -684,7 +733,9 @@ export function JobSubmission() {
                 template_model_id: templateModelId,
                 structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
                     ? (template.params?.structure_launch_variant || 'boltz_cp_experimental')
-                    : template.params?.structure_launch_variant,
+                    : dedicatedTemplateId === 'esmfold2_experimental'
+                        ? (template.params?.structure_launch_variant || 'esmfold2_experimental')
+                        : template.params?.structure_launch_variant,
             });
             setJobName(loadedJobName);
             setSelectedModelId(null);
@@ -733,7 +784,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'esmfold2_experimental'].includes(model.id));
     const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
 
@@ -756,8 +807,12 @@ export function JobSubmission() {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             setParams(defaults);
+            const defaultTemplateName = defaults.job_name || defaults.sequence_name || templateDetail.name || selectedTemplateId || '';
+            if (defaultTemplateName) {
+                setJobName(prev => prev.trim() ? prev : String(defaultTemplateName));
+            }
         }
-    }, [templateDetail]);
+    }, [templateDetail, selectedTemplateId]);
 
     useEffect(() => {
         if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId)) {
@@ -771,7 +826,24 @@ export function JobSubmission() {
 
     // Handle param change
     const updateParam = (key: string, value: UntypedApiValue) => {
-        setParams(prev => ({ ...prev, [key]: value }));
+        setParams(prev => {
+            const next = { ...prev, [key]: value };
+            if (selectedTemplateId === 'esmfold2_experimental' && key === 'quality_preset') {
+                const preset = ESMFOLD2_QUALITY_PRESETS[String(value)] || null;
+                if (preset) {
+                    next.num_loops = preset.num_loops;
+                    next.num_sampling_steps = preset.num_sampling_steps;
+                    next.num_diffusion_samples = preset.num_diffusion_samples;
+                }
+            } else if (
+                selectedTemplateId === 'esmfold2_experimental' &&
+                ['num_loops', 'num_sampling_steps', 'num_diffusion_samples'].includes(key) &&
+                next.quality_preset !== 'custom'
+            ) {
+                next.quality_preset = 'custom';
+            }
+            return next;
+        });
     };
 
     const getTemplateIconLabel = (template: UntypedApiValue) => {
@@ -780,6 +852,7 @@ export function JobSubmission() {
         if (template.id === 'protein_hunter_experimental') return 'PH';
         if (template.id === 'boltz_cp_experimental') return 'CP';
         if (template.id === 'confornets_experimental') return 'CN';
+        if (template.id === 'esmfold2_experimental') return 'EF';
         return template.icon === 'target' ? 'TG'
             : template.icon === 'flask' ? 'RF'
                 : template.icon === 'dna' ? 'MU'
@@ -910,10 +983,38 @@ export function JobSubmission() {
 
     // Check if ready to submit - works for both template mode and manual mode
     const isTemplateMode = wizardMode === 'templates' || wizardMode === 'experimental';
-    const isReady = jobName && (
-        (isTemplateMode && selectedTemplateId) ||
-        (wizardMode === 'manual' && selectedModelId && selectedModeId)
+    const templateLaunchName = String(jobName || params.job_name || params.sequence_name || templateDetail?.name || selectedTemplateId || '').trim();
+    const missingRequiredTemplateParams = isTemplateMode && templateDetail?.user_params
+        ? templateDetail.user_params
+            .filter((param: UntypedApiValue) => param.required)
+            .filter((param: UntypedApiValue) => {
+                const value = params[param.name] ?? param.default;
+                return value === undefined || value === null || String(value).trim() === '';
+            })
+            .map((param: UntypedApiValue) => param.label || param.name)
+        : [];
+    const esmfold2HasInputSource = selectedTemplateId === 'esmfold2_experimental'
+        ? Boolean(
+            String(params.sequence || '').trim() ||
+            String(params.pdb_sequence_path || '').trim() ||
+            String(params.complex_components_json || '').trim()
+        )
+        : true;
+    const allMissingRequiredTemplateParams = [
+        ...missingRequiredTemplateParams,
+        ...(selectedTemplateId === 'esmfold2_experimental' && !esmfold2HasInputSource
+            ? ['Protein Sequence, PDB Sequence Source, or Components JSON']
+            : []),
+    ];
+    const isReady = Boolean(
+        (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
+        (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
+    const launchBlockedReason = !isReady
+        ? (isTemplateMode && selectedTemplateId && allMissingRequiredTemplateParams.length > 0
+            ? `Required: ${allMissingRequiredTemplateParams.join(', ')}`
+            : 'Select a workflow and complete required fields')
+        : '';
 
     const handleSubmit = () => {
         if (!isReady) return;
@@ -982,7 +1083,7 @@ export function JobSubmission() {
             console.log('DEBUG num_parallel_jobs from params:', params.num_parallel_jobs);
             console.log('DEBUG mergedParams:', mergedParams);
             console.log('DEBUG num_parallel_jobs from mergedParams:', mergedParams.num_parallel_jobs);
-            console.log('Submitting job:', { name: jobName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
+            console.log('Submitting job:', { name: templateLaunchName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
 
             // Add complex_components if ligands are selected
             const finalParams = ligands.length > 0 ? {
@@ -994,7 +1095,7 @@ export function JobSubmission() {
             } : mergedParams;
 
             submitMutation.mutate({
-                name: jobName,
+                name: templateLaunchName,
                 model_id: effectiveModelId,
                 mode: nextflowProfile,
                 params: finalParams,
@@ -1043,7 +1144,7 @@ export function JobSubmission() {
     };
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'esmfold2_experimental', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
@@ -1161,7 +1262,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' ? (
+                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' || selectedTemplateId === 'esmfold2_experimental' ? (
                                 <StructurePredictionTemplate
                                     key={`${selectedTemplateId}:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
@@ -1172,7 +1273,13 @@ export function JobSubmission() {
                                             ...(templateDetail?.preset_params || {}),
                                             ...(clonedValues || {}),
                                         }
-                                        : clonedValues}
+                                        : selectedTemplateId === 'esmfold2_experimental'
+                                            ? {
+                                                ...(getDedicatedTemplateInitialValues('esmfold2_experimental') || {}),
+                                                ...(templateDetail?.preset_params || {}),
+                                                ...(clonedValues || {}),
+                                            }
+                                            : clonedValues}
                                 />
                             ) : selectedTemplateId === 'boltzgen_design' ? (
                                 <BoltzGenTemplate
@@ -1198,12 +1305,12 @@ export function JobSubmission() {
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">
                                         {wizardMode === 'experimental'
-                                            ? 'Choose an active alpha workflow:'
-                                            : 'Choose a preset workflow for your experiment goal:'}
+                                            ? 'Choose active alpha:'
+                                            : 'Choose workflow:'}
                                     </p>
                                     {wizardMode === 'experimental' && (
                                         <div className="rounded-xl border border-orange-400/20 bg-orange-500/8 px-4 py-3 text-sm text-orange-100">
-                                            <span className="font-semibold text-orange-200">Alpha:</span> real launchers, concise cards, method detail in docs.
+                                            <span className="font-semibold text-orange-200">Alpha:</span> launch controls here; method docs linked.
                                         </div>
                                     )}
                                     <div className="grid grid-cols-2 gap-3">
@@ -1289,7 +1396,7 @@ export function JobSubmission() {
                                     </div>
                                     <ModelDocumentationLinks
                                         topics={getTemplateDocumentationTopics(templateDetail)}
-                                        summary="Method detail lives in maintained docs, not inline launcher prose."
+                                        summary="Docs carry method detail."
                                         compact
                                     />
                                 </div>
@@ -1297,7 +1404,7 @@ export function JobSubmission() {
 
                             {/* Stage Explanation */}
                             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
-                                <p className="text-sm text-slate-400 mb-3">This template runs the following stages:</p>
+                                <p className="text-sm text-slate-400 mb-3">Stages:</p>
                                 <div className="flex flex-wrap items-center gap-2">
                                     {templateDetail.stages.map((stage: UntypedApiValue, idx: number) => (
                                         <div key={idx} className="flex items-center">
@@ -1371,7 +1478,7 @@ export function JobSubmission() {
 
                             <ModelDocumentationLinks
                                 topics={getModelDocumentationTopics(selectedModel)}
-                                summary="Method background is linked out; this panel stays focused on launch controls."
+                                summary="Docs linked; launch controls here."
                                 compact
                                 className="mb-6"
                             />
@@ -1483,6 +1590,7 @@ export function JobSubmission() {
                         <button
                             onClick={handleSubmit}
                             disabled={!isReady || submitMutation.isPending}
+                            title={!isReady ? launchBlockedReason : undefined}
                             className={`inline-flex min-w-[12rem] items-center justify-center rounded-xl border px-6 py-3.5 text-sm font-semibold transition-all ${isReady
                                 ? 'border-blue-500/40 bg-blue-500/15 text-blue-200 hover:bg-blue-500/20'
                                 : 'border-slate-700 bg-slate-900/60 text-slate-500 cursor-not-allowed'
@@ -1490,6 +1598,9 @@ export function JobSubmission() {
                         >
                             {submitMutation.isPending ? 'Launching Job...' : 'Launch Experiment'}
                         </button>
+                        {!isReady && launchBlockedReason && selectedTemplateId && (
+                            <div className="self-center text-xs text-slate-500">{launchBlockedReason}</div>
+                        )}
                     </div>
                 )}
             </main>

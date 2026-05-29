@@ -111,9 +111,66 @@ def test_runtime_state_marks_current_api_ready_and_derives_container_status(monk
     payload = response.json()
     assert payload["health"]["api_ready"] is True
     assert payload["runtime_active"] is True
+    assert payload["runtime_ready"] is True
     assert payload["services"] == [
-        {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": True, "active_source": "http-health"},
-        {"name": system.CORE_RUNTIME_SERVICE, "active": True, "active_source": "http-health"},
+        {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": True, "systemd_active": False, "active_source": "http-health"},
+        {"name": system.CORE_RUNTIME_SERVICE, "active": True, "systemd_active": False, "active_source": "http-health"},
+    ]
+
+
+def test_runtime_state_recomputes_dev_active_after_marking_current_api_ready(monkeypatch) -> None:
+    descriptor = {
+        "runtime_mode": "dev",
+        "runtime_active": False,
+        "runtime_ready": False,
+        "health": {"api_ready": False, "frontend_ready": True},
+        "services": [
+            {"name": "biomodstack-frontend.service", "active": True},
+        ],
+    }
+    monkeypatch.setattr(system, "runtime_descriptor", lambda project_root=None, runtime_mode=None: descriptor, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/runtime-state", params={"runtime": "dev"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health"] == {"api_ready": True, "frontend_ready": True}
+    assert payload["runtime_ready"] is True
+    assert payload["runtime_active"] is True
+    assert payload["services"] == [
+        {
+            "name": "biomodstack-frontend.service",
+            "active": True,
+            "systemd_active": True,
+            "active_source": "http-health",
+        },
+    ]
+
+
+def test_runtime_state_does_not_keep_container_active_when_http_health_fails(monkeypatch) -> None:
+    descriptor = {
+        "runtime_mode": "container",
+        "runtime_active": True,
+        "runtime_ready": False,
+        "health": {"adapter_ready": True, "api_ready": True, "frontend_ready": False},
+        "services": [
+            {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": True},
+            {"name": system.CORE_RUNTIME_SERVICE, "active": True},
+        ],
+    }
+    monkeypatch.setattr(system, "runtime_descriptor", lambda project_root=None, runtime_mode=None: descriptor, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/runtime-state", params={"runtime": "container"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runtime_active"] is False
+    assert payload["runtime_ready"] is False
+    assert payload["services"] == [
+        {"name": system.WORKFLOW_ADAPTER_SERVICE, "active": True, "systemd_active": True, "active_source": "http-health"},
+        {"name": system.CORE_RUNTIME_SERVICE, "active": False, "systemd_active": True, "active_source": "http-health-failed"},
     ]
 
 
@@ -229,6 +286,116 @@ def test_start_runtime_target_endpoint_proxies_from_core_runtime_to_host_adapter
     assert adapter_calls == [
         ("POST", "/api/workflow-adapter/runtime/start-target", {"target": "both"}),
     ]
+
+
+def test_runtime_start_endpoint_proxies_from_core_runtime_to_existing_start_target_route(monkeypatch) -> None:
+    adapter_calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fail_local_start(**_kwargs):
+        raise AssertionError("container API must not call host systemctl directly")
+
+    def fake_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        adapter_calls.append((method, path, payload))
+        return {"target": payload["target"] if payload else "missing", "control_mode": "host-adapter"}
+
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setattr(system, "start_all", fail_local_start, raising=False)
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fake_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start", params={"runtime": "container"})
+
+    assert response.status_code == 200
+    assert response.json() == {"target": "prod", "control_mode": "host-adapter"}
+    assert adapter_calls == [
+        ("POST", "/api/workflow-adapter/runtime/start-target", {"target": "prod"}),
+    ]
+
+
+def test_runtime_restart_endpoint_proxies_from_core_runtime_to_host_adapter(monkeypatch) -> None:
+    adapter_calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fail_local_restart(**_kwargs):
+        raise AssertionError("container API must not call host systemctl directly")
+
+    def fake_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        adapter_calls.append((method, path, payload))
+        return {"runtime_mode": payload["runtime"] if payload else "missing", "action": "restart", "control_mode": "host-adapter"}
+
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setattr(system, "restart_all", fail_local_restart, raising=False)
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fake_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/restart", params={"runtime": "dev"})
+
+    assert response.status_code == 200
+    assert response.json() == {"runtime_mode": "dev", "action": "restart", "control_mode": "host-adapter"}
+    assert adapter_calls == [
+        ("POST", "/api/workflow-adapter/runtime/restart", {"runtime": "dev"}),
+    ]
+
+
+def test_runtime_action_proxy_marks_current_api_ready(monkeypatch) -> None:
+    def fake_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        return {
+            "runtime_mode": "dev",
+            "runtime_active": False,
+            "runtime_ready": False,
+            "health": {"api_ready": False, "frontend_ready": True},
+            "services": [{"name": "biomodstack-frontend.service", "active": True}],
+            "action": "stop",
+            "control_mode": "host-adapter",
+        }
+
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fake_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/stop", params={"runtime": "dev"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health"] == {"api_ready": True, "frontend_ready": True}
+    assert payload["runtime_ready"] is True
+    assert payload["runtime_active"] is True
+    assert payload["control_mode"] == "host-adapter"
+
+
+def test_runtime_state_uses_host_adapter_descriptor_when_available(monkeypatch) -> None:
+    adapter_calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fail_local_descriptor(**_kwargs):
+        raise AssertionError("container API must not use container-local systemctl for hosted status")
+
+    def fake_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        adapter_calls.append((method, path, payload))
+        return {
+            "runtime_mode": "dev",
+            "runtime_active": True,
+            "runtime_ready": True,
+            "health": {"api_ready": False, "frontend_ready": True},
+            "services": [{"name": "biomodstack-frontend.service", "active": True}],
+            "control_mode": "host-adapter",
+        }
+
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setattr(system, "runtime_descriptor", fail_local_descriptor, raising=False)
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fake_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/runtime-state", params={"runtime": "dev"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["control_mode"] == "host-adapter"
+    assert payload["runtime_active"] is True
+    assert payload["health"]["api_ready"] is True
+    assert adapter_calls == [("GET", "/api/workflow-adapter/runtime/state?runtime=dev", None)]
 
 
 def test_start_runtime_target_endpoint_service_errors_remain_500(monkeypatch) -> None:

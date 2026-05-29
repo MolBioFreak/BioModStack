@@ -21,31 +21,31 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'empower',
         label: 'Empower AIA/ARW/CSV Import',
         status: 'Waters chromatogram review',
-        description: 'Import real Empower AIA .cdf, ARW chromatogram text, ZIP batches, or CSV/ASCII peak-table exports; review chromatograms, peaks, SST summaries, and plasmid tracking logs.',
+        description: 'AIA/ARW/ZIP/CSV imports; chromatograms, peaks, SST.',
     },
     {
         id: 'qc',
         label: 'Manual QC + Cross-run Stats',
         status: 'Clean, bunch, compare',
-        description: 'Paste or export real assay rows, sanitize numeric values, manually exclude bad rows, bunch labels, and compute group/run/cross-run QC statistics.',
+        description: 'Clean rows, exclude, bunch, compare runs.',
     },
     {
         id: 'chromatogram',
         label: 'Chromatogram Analysis',
         status: 'Signal + peak picking',
-        description: 'Analyze real time/signal arrays with baseline correction, peak detection, integration, and Plotly traces.',
+        description: 'Baseline, peaks, integration, Plotly traces.',
     },
     {
         id: 'calibration',
         label: 'Calibration Curve',
         status: 'Explicit standards',
-        description: 'Fit concentration versus area from pasted standard levels with optional through-origin regression.',
+        description: 'Concentration vs area; optional through-origin fit.',
     },
     {
         id: 'quantify',
         label: 'Sample Quantification',
         status: 'Sample IDs required',
-        description: 'Quantify real sample peak areas against a calibration series; each unknown must carry a real identifier.',
+        description: 'Peak areas against calibration; sample IDs required.',
     },
 ];
 
@@ -74,7 +74,7 @@ export function HplcPage() {
             <AssayWorkbenchIntro
                 eyebrow="BMS Chromatography Workbench"
                 title="Waters / Empower chromatography and plasmid isoform review"
-                description="Work from real Empower 3 AIA .cdf, ARW chromatogram text, ZIP batches, CSV/ASCII exports, or pasted chromatogram/calibration data. Proprietary Empower database/RAW containers still require an Empower-side export to AIA .cdf/.arw or CSV/ASCII before BMS analysis."
+                description="Empower AIA/ARW/CSV exports, chromatograms, calibration, plasmid isoforms."
             >
                 <AssayStatusStrip items={statusItems} />
             </AssayWorkbenchIntro>

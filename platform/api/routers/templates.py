@@ -75,6 +75,14 @@ async def get_template(template_id: str):
                 "enum_labels": p.enum_labels,
                 "minimum": p.minimum,
                 "maximum": p.maximum,
+                "step": p.step,
+                "ui_control": p.ui_control,
+                "ui_placeholder": p.ui_placeholder,
+                "placeholder": p.placeholder,
+                "preset_type": p.preset_type,
+                "file_type": p.file_type,
+                "recommended_range": p.recommended_range,
+                "default_source": p.default_source,
                 "condition": p.condition,  # Include condition for conditional visibility
             }
             for p in template.user_params

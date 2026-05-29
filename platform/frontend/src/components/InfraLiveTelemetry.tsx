@@ -1212,7 +1212,7 @@ function CpuPanel({
         `Freq scale ${(frequencyScale / 1000).toFixed(2)}GHz`,
     ].filter(Boolean).join(' · ');
     const cpuPowerSubtitle = cpuPowerTelemetry && !cpuPowerTelemetry.available
-        ? `CPU package power unavailable: ${cpuPowerTelemetry.message}`
+        ? `CPU power n/a: ${cpuPowerTelemetry.message}`
         : scaleSubtitle;
     const cpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
     const cpuFreqTrace = buildGapAwareTraceData(
