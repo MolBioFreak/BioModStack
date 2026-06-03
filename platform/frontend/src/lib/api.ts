@@ -719,6 +719,32 @@ export type RfLoopMetrics = Record<string, RfLoopMetric | RfLoopScreeningSummary
     _screening?: RfLoopScreeningSummary;
 };
 
+export interface RfaModifiableResidue {
+    chain_id: string;
+    residue_number: number;
+    insertion_code?: string | null;
+    loop_id?: string | null;
+    label?: string | null;
+}
+
+export interface RfaModifiableRange {
+    chain_id: string;
+    start_residue_number: number;
+    end_residue_number: number;
+    label?: string | null;
+}
+
+export interface RfaConfidenceScope {
+    metric_family?: string | null;
+    primary_scope: 'modifiable_residues' | 'all_residues' | 'unknown' | string;
+    source?: string | null;
+    modifiable_residues?: RfaModifiableResidue[] | null;
+    modifiable_ranges?: RfaModifiableRange[] | null;
+    counts?: Record<string, number> | null;
+    plddt?: Record<string, number | null> | null;
+    status?: string | null;
+}
+
 export interface Design {
     id: string;
     job_id: string;
@@ -820,6 +846,15 @@ export interface Design {
     rfa_plddt_delta?: number | null;
     rfa_plddt_selected?: number | null;
     rfa_plddt_nonselected?: number | null;
+    rfa_plddt_primary?: number | null;
+    rfa_plddt_modifiable?: number | null;
+    rfa_plddt_all_residue?: number | null;
+    rfa_plddt_nonmodifiable?: number | null;
+    rfa_plddt_framework?: number | null;
+    rfa_plddt_target?: number | null;
+    rfa_modifiable_residues?: RfaModifiableResidue[] | null;
+    rfa_modifiable_ranges?: RfaModifiableRange[] | null;
+    rfa_confidence_scope?: RfaConfidenceScope | null;
     rfa_design_loops?: string[] | null;
     rfa_hotspots?: string[] | null;
     // Antibody annotation

@@ -41,6 +41,7 @@ import {
     type StructureViewerQuickViewSpec,
     type StructureViewerSectionId,
     type StructureViewerSummaryCardSpec,
+    type PlddtResidueMaskPoint,
 } from './structureViewerSemantics.js';
 import { resolveStructureViewerFullscreenAnalyticsLayout, resolveStructureViewerLayout } from './structureViewerLayout.js';
 
@@ -181,6 +182,9 @@ function getDesignOriginLabel(design: Design | null | undefined): string | null 
     }
     if (source === 'fampnn') {
         return 'FAMPNN Candidate';
+    }
+    if (source === 'esmfold2') {
+        return 'ESMFold2 Prediction';
     }
     if (source === 'rfantibody') {
         return 'RFantibody Backbone';
@@ -438,6 +442,33 @@ export default function StructureViewerPane({
     const effectiveRfMetricScope = rfMetricScope ?? preferredRfMetricScope;
     const rfMetricLabels = RF_SCOPE_LABELS[effectiveRfMetricScope];
     const rfLoopEntries = getRfLoopEntries(selectedDesign ?? null);
+    const rfaConfidenceScope = useMemo(() => {
+        if (!selectedDesign || designLens !== 'rfantibody') return null;
+        const directScope = asRecord(selectedDesign.rfa_confidence_scope);
+        if (directScope) return directScope;
+        const confidenceMetrics = asRecord(selectedDesign.confidence_metrics);
+        const nestedRfa = asRecord(confidenceMetrics?.rfantibody);
+        const nestedScope = asRecord(nestedRfa?.confidence_scope);
+        if (nestedScope) return nestedScope;
+        return asRecord(confidenceMetrics?.confidence_scope);
+    }, [designLens, selectedDesign]);
+    const rfaModifiableResidueMask = useMemo<PlddtResidueMaskPoint[] | null>(() => {
+        if (rfaConfidenceScope?.primary_scope !== 'modifiable_residues') return null;
+        const rawResidues = Array.isArray(rfaConfidenceScope.modifiable_residues)
+            ? rfaConfidenceScope.modifiable_residues
+            : [];
+        const residues = rawResidues
+            .map((residue) => {
+                const record = asRecord(residue);
+                const chainId = String(record?.chain_id ?? '').trim();
+                const residueNumber = typeof record?.residue_number === 'number' ? record.residue_number : Number(record?.residue_number);
+                return chainId && Number.isFinite(residueNumber)
+                    ? { chain_id: chainId, residue_number: residueNumber }
+                    : null;
+            })
+            .filter((residue): residue is PlddtResidueMaskPoint => residue !== null);
+        return residues.length > 0 ? residues : null;
+    }, [rfaConfidenceScope]);
     const confidenceSemantics = useMemo(
         () => resolveStructureViewerConfidenceSemantics({
             activeJobModelId: activeJob?.model_id,
@@ -445,8 +476,8 @@ export default function StructureViewerPane({
         }),
         [activeJob?.model_id, designLens],
     );
-    const bfactorLabel = confidenceSemantics.shortLabel;
-    const headlineConfidenceLabel = confidenceSemantics.headlineLabel;
+    const bfactorLabel = rfaModifiableResidueMask ? 'RFA Mod pLDDT' : confidenceSemantics.shortLabel;
+    const headlineConfidenceLabel = rfaModifiableResidueMask ? 'RFA Modifiable pLDDT' : confidenceSemantics.headlineLabel;
     const structureAnalysisRun = viewerAnalyses?.structureAnalysisRun ?? null;
     const structureAnalysis = viewerAnalyses?.structureAnalysis ?? null;
     const structureAnalysisBusy = viewerAnalyses?.structureAnalysisBusy ?? false;
@@ -982,9 +1013,11 @@ export default function StructureViewerPane({
             fallbackChainId: conforNetsDefaultChainId,
             scalarPlddtFallback: conforNetsScalarPlddt,
             preferScalarFallback: conforNetsUsesScalarPlddtFallback,
+            residueMask: rfaModifiableResidueMask,
+            maskMode: rfaModifiableResidueMask ? 'include_only' : 'none',
             colorForValue: plddtColor,
         });
-    }, [chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, conforNetsUsesScalarPlddtFallback, effectiveColorMode, plddtProfile, residueMetricNumbers]);
+    }, [chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, conforNetsUsesScalarPlddtFallback, effectiveColorMode, plddtProfile, residueMetricNumbers, rfaModifiableResidueMask]);
 
     const frustrationResidueColors = (() => {
         if (effectiveColorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
