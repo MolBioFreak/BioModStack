@@ -1052,6 +1052,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
             stage_mode = stage_mode or "maturation"
         elif "confornets" in model_id or "confornets" in mode:
             stage_family = "confornets"
+        elif "esmfold2" in model_id or "esmfold2" in mode:
+            stage_family = "esmfold2"
+            stage_mode = stage_mode or "predict"
         elif "caliby" in model_id:
             stage_family = "caliby"
         elif "protein_hunter" in model_id:
@@ -1506,6 +1509,19 @@ def _is_confornets_job(job: Optional[Job]) -> bool:
     return "confornets" in {model_id, mode, rfd_mode} or model_id == "confornets_experimental"
 
 
+def _is_esmfold2_job(job: Optional[Job]) -> bool:
+    if not job:
+        return False
+    params = _parse_job_params(job.params)
+    model_id = str(job.model_id or "").strip().lower()
+    mode = str(job.mode or "").strip().lower()
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    launch_variant = str(params.get("structure_launch_variant") or "").strip().lower()
+    template_model_id = str(params.get("template_model_id") or "").strip().lower()
+    tokens = {model_id, mode, rfd_mode, launch_variant, template_model_id}
+    return any("esmfold2" in token for token in tokens)
+
+
 def _load_json_any(path: Optional[Path]) -> Any:
     if not path or not path.exists():
         return None
@@ -1513,6 +1529,229 @@ def _load_json_any(path: Optional[Path]) -> Any:
         return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def _normalize_confidence_percent(value: Any) -> Optional[float]:
+    numeric = safe_float(value)
+    if numeric is None:
+        return None
+    if 0 <= numeric <= 1:
+        return numeric * 100.0
+    return numeric
+
+
+def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    return candidate if candidate.exists() else None
+
+
+def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
+    candidates = [
+        output_path / "final" / "esmfold2",
+        output_path / "esmfold2_results",
+        output_path,
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        manifest = _load_json_any(candidate / "manifest.json")
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() == "esmfold2_experimental":
+            return candidate
+        if any(candidate.glob("*.metrics.json")) and (
+            any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
+        ):
+            return candidate
+    return None
+
+
+def _esmfold2_sample_entries(final_root: Path, manifest_payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(manifest_payload, dict) and isinstance(manifest_payload.get("samples"), list):
+        return [entry for entry in manifest_payload["samples"] if isinstance(entry, dict)]
+
+    entries: List[Dict[str, Any]] = []
+    for metrics_path in sorted(final_root.glob("*.metrics.json")):
+        metrics = _load_json_payload(metrics_path) or {}
+        sample_id = str(metrics.get("sample_id") or metrics_path.name.removesuffix(".metrics.json")).strip()
+        entry = {"sample_id": sample_id, "metrics": metrics_path.name}
+        if metrics.get("cif"):
+            entry["cif"] = metrics["cif"]
+        elif (final_root / f"{sample_id}.cif").exists():
+            entry["cif"] = f"{sample_id}.cif"
+        elif (final_root / f"{sample_id}.mmcif").exists():
+            entry["cif"] = f"{sample_id}.mmcif"
+        elif (final_root / f"{sample_id}.pdb").exists():
+            entry["cif"] = f"{sample_id}.pdb"
+        entries.append(entry)
+    return entries
+
+
+def _filtered_esmfold2_record(payload: Dict[str, Any], *, manifest_path: Path, metrics_path: Optional[Path], structure_path: Path) -> Dict[str, Any]:
+    record_keys = {
+        "sample_id",
+        "sequence_name",
+        "sequence_length",
+        "total_polymer_residues",
+        "component_count",
+        "components",
+        "model_variant",
+        "model_id_or_path",
+        "local_files_only",
+        "num_loops",
+        "num_sampling_steps",
+        "num_diffusion_samples",
+        "seed",
+        "device",
+        "plddt_mean",
+        "ptm",
+        "iptm",
+        "cif",
+    }
+    record = {key: payload[key] for key in record_keys if key in payload}
+    record.update(
+        {
+            "schema": "esmfold2.result.v1",
+            "workflow": "esmfold2_experimental",
+            "manifest_json": str(manifest_path),
+            "metrics_json": str(metrics_path) if metrics_path else None,
+            "structure_path": str(structure_path),
+        }
+    )
+    return record
+
+
+async def ingest_esmfold2_results(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+    current_job: Optional[Job] = None,
+) -> int:
+    final_root = _resolve_esmfold2_final_root(output_path)
+    if final_root is None:
+        return 0
+
+    manifest_path = final_root / "manifest.json"
+    manifest_payload = _load_json_any(manifest_path)
+    if not isinstance(manifest_payload, dict):
+        manifest_payload = {}
+
+    existing_designs = (
+        await session.execute(
+            select(Design).where(
+                Design.job_id == job_id,
+                Design.source_stage.is_(None),
+            )
+        )
+    ).scalars().all()
+    existing_by_name = {design.name: design for design in existing_designs}
+
+    job_context = _job_stage_context(current_job)
+    created = 0
+    seen_names: set[str] = set()
+    for entry in _esmfold2_sample_entries(final_root, manifest_payload):
+        sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
+        metrics_path = _resolve_existing_child_path(final_root, entry.get("metrics"))
+        metrics_payload = _load_json_payload(metrics_path) if metrics_path else None
+        combined_payload: Dict[str, Any] = {}
+        combined_payload.update(manifest_payload)
+        combined_payload.update(entry)
+        if isinstance(metrics_payload, dict):
+            combined_payload.update(metrics_payload)
+        if not sample_id:
+            sample_id = str(combined_payload.get("sample_id") or "").strip()
+
+        structure_path = (
+            _resolve_existing_child_path(final_root, combined_payload.get("cif"))
+            or _resolve_existing_child_path(final_root, combined_payload.get("structure_path"))
+            or (final_root / f"{sample_id}.cif" if sample_id and (final_root / f"{sample_id}.cif").exists() else None)
+            or (final_root / f"{sample_id}.mmcif" if sample_id and (final_root / f"{sample_id}.mmcif").exists() else None)
+            or (final_root / f"{sample_id}.pdb" if sample_id and (final_root / f"{sample_id}.pdb").exists() else None)
+        )
+        if structure_path is None:
+            print(f"[Ingester] No ESMFold2 structure found for sample {sample_id or '<unknown>'}")
+            continue
+
+        design_name = sample_id or structure_path.stem
+        if design_name in seen_names:
+            continue
+        seen_names.add(design_name)
+
+        structure_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+        plddt_candidates = [
+            _normalize_confidence_percent(combined_payload.get("plddt_mean")),
+            _normalize_confidence_percent(combined_payload.get("mean_plddt")),
+            _normalize_confidence_percent(combined_payload.get("plddt")),
+            _normalize_confidence_percent(structure_plddt),
+        ]
+        plddt_overall = next((value for value in plddt_candidates if value is not None), None)
+        esmfold2_record = _filtered_esmfold2_record(
+            combined_payload,
+            manifest_path=manifest_path,
+            metrics_path=metrics_path,
+            structure_path=structure_path,
+        )
+        confidence_metrics = {
+            "esmfold2": esmfold2_record,
+            "esmfold2_components": combined_payload.get("components"),
+        }
+        model_variant = str(combined_payload.get("model_variant") or manifest_payload.get("model_variant") or "").strip() or None
+        model_id_or_path = str(combined_payload.get("model_id_or_path") or manifest_payload.get("model_id_or_path") or "").strip() or None
+        provenance = {
+            **job_context.get("provenance", {}),
+            "artifact_group": "esmfold2",
+            "stage_family": "esmfold2",
+            "stage_mode": job_context.get("stage_mode") or "predict",
+            "model_variant": model_variant,
+            "model_id_or_path": model_id_or_path,
+            "local_files_only": combined_payload.get("local_files_only", manifest_payload.get("local_files_only")),
+            "sample_id": design_name,
+            "structure_path": str(structure_path),
+            "manifest_json": str(manifest_path),
+            "metrics_json": str(metrics_path) if metrics_path else None,
+            "esmfold2": esmfold2_record,
+        }
+
+        design_fields = {
+            "pdb_path": str(structure_path),
+            "json_path": str(metrics_path) if metrics_path else (str(manifest_path) if manifest_path.exists() else None),
+            "stage_family": "esmfold2",
+            "stage_mode": job_context.get("stage_mode") or "predict",
+            "artifact_group": "esmfold2",
+            "artifact_class": "structure_prediction",
+            "provenance": provenance,
+            "confidence_metrics": confidence_metrics,
+            "plddt_overall": plddt_overall,
+            "residue_plddt": residue_plddt,
+            "ptm": safe_float(combined_payload.get("ptm")),
+            "iptm": safe_float(combined_payload.get("iptm")),
+            "mpnn_score": None,
+            "fampnn_psce": None,
+        }
+        existing_design = existing_by_name.get(design_name)
+        if existing_design is not None:
+            for field_name, field_value in design_fields.items():
+                setattr(existing_design, field_name, field_value)
+            flag_modified(existing_design, "provenance")
+            flag_modified(existing_design, "confidence_metrics")
+        else:
+            session.add(Design(
+                id=str(uuid.uuid4()),
+                job_id=job_id,
+                name=design_name,
+                **design_fields,
+                is_favorite=False,
+                created_at=datetime.utcnow(),
+            ))
+        created += 1
+
+    if created > 0:
+        await session.commit()
+        print(f"[Ingester] Ingested {created} ESMFold2 designs for job {job_id}")
+    return created
 
 
 def _resolve_confornets_final_root(output_path: Path) -> Optional[Path]:
@@ -2188,6 +2427,9 @@ async def ingest_job_results(
 
     if _is_confornets_job(current_job):
         return await ingest_confornets_results(job_id, output_path, session, current_job)
+
+    if _is_esmfold2_job(current_job):
+        return await ingest_esmfold2_results(job_id, output_path, session, current_job)
     
     # Only try to process CSV if it exists
     if csv_path.exists():

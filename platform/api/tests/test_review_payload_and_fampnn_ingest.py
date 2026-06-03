@@ -331,6 +331,44 @@ def test_repair_job_for_response_marks_err_history_job_failed_without_gate(tmp_p
     assert job.completed_at is not None
 
 
+def test_repair_job_for_response_preserves_terminal_closeout_completion_on_err_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "ERR")
+    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+
+    (tmp_path / "terminal_closeout_report.json").write_text(
+        '{"status":"complete","total_terminal_designs":50}',
+        encoding="utf-8",
+    )
+    (tmp_path / "final_designs.txt").write_text("\n".join(f"design_{idx}.pdb" for idx in range(50)), encoding="utf-8")
+
+    job = SimpleNamespace(
+        output_dir=str(tmp_path),
+        awaiting_stage=None,
+        awaiting_payload={},
+        awaiting_input=False,
+        error_message="Reconciled as failed: terminal .nextflow/history status ERR",
+        status="failed",
+        queue_status="failed",
+        current_stage="Complete",
+        stage_progress=None,
+        completed_at="already-completed",
+        parent_job_id=None,
+        child_stage=None,
+    )
+
+    changed = _repair_job_for_response(job)
+
+    assert changed is True
+    assert job.status == "completed"
+    assert job.queue_status == "completed"
+    assert job.current_stage == "Complete"
+    assert job.error_message is None
+
+
 def test_looks_like_antibody_job_accepts_boltzgen_nanobody_runs() -> None:
     job = SimpleNamespace(
         model_id="boltzgen",
