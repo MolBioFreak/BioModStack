@@ -1,4 +1,4 @@
-export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'confornets' | 'validation' | 'imported';
+export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'confornets' | 'esmfold2' | 'validation' | 'imported';
 export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'frustrampnn' | 'protenix';
 
 type OutputSourceDesign = {
@@ -132,6 +132,31 @@ const isConforNetsOutputDesign = (design: OutputSourceDesign): boolean => {
         || path.includes('/confornets/');
 };
 
+const isEsmFold2OutputDesign = (design: OutputSourceDesign): boolean => {
+    const metrics = asRecord(design.confidence_metrics);
+    const provenance = asRecord(design.provenance);
+    const path = String(design.pdb_path || '').toLowerCase();
+    const artifactGroup = String(design.artifact_group || '').toLowerCase();
+    const stageFamily = String(design.stage_family || '').toLowerCase();
+    const sourceStageFamily = String(design.source_stage_family || '').toLowerCase();
+    const provenanceArtifactGroup = String(provenance?.artifact_group || '').toLowerCase();
+    const provenanceStageFamily = String(provenance?.stage_family || '').toLowerCase();
+    const provenanceModelId = String(provenance?.model_id || '').toLowerCase();
+
+    return artifactGroup === 'esmfold2'
+        || stageFamily === 'esmfold2'
+        || sourceStageFamily === 'esmfold2'
+        || provenanceArtifactGroup === 'esmfold2'
+        || provenanceStageFamily === 'esmfold2'
+        || provenanceModelId.includes('esmfold2')
+        || Boolean(asRecord(metrics?.esmfold2))
+        || Boolean(asRecord(metrics?.esmfold2_artifact_manifest))
+        || Boolean(asRecord(metrics?.esmfold2_manifest))
+        || path.includes('/final/esmfold2/')
+        || path.includes('/run/esmfold2/')
+        || path.includes('/esmfold2_results/');
+};
+
 export const getValidationOutputLabel = (design: OutputSourceDesign): string => {
     const stageFamily = String(design.stage_family || '').toLowerCase();
     const provenance = asRecord(design.provenance);
@@ -178,6 +203,18 @@ export const inferJobOutputSource = (job: OutputSourceJob | null | undefined): O
         isImportedSourceMarker(provenance?.import_source)
     ) {
         return 'imported';
+    }
+
+    if (
+        modelId.includes('esmfold2') ||
+        mode.includes('esmfold2') ||
+        stageFamily.includes('esmfold2') ||
+        stageMode.includes('esmfold2') ||
+        String(params.rfd_mode || '').toLowerCase().includes('esmfold2') ||
+        String(params.structure_launch_variant || '').toLowerCase() === 'esmfold2_experimental' ||
+        String(params.template_model_id || '').toLowerCase() === 'esmfold2_experimental'
+    ) {
+        return 'esmfold2';
     }
 
     if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
@@ -298,6 +335,10 @@ export const inferDesignOutputSource = (design: OutputSourceDesign): OutputSourc
 
     if (isConforNetsOutputDesign(design)) {
         return 'confornets';
+    }
+
+    if (isEsmFold2OutputDesign(design)) {
+        return 'esmfold2';
     }
 
     if (
@@ -438,6 +479,10 @@ export const inferDesignAnalysisLens = (design: AnalysisLensDesign): AnalysisLen
         return null;
     }
 
+    if (isEsmFold2OutputDesign(design)) {
+        return 'validation';
+    }
+
     if (
         containsAny(path, ['/ppiflow/', '/ppiflow_maturation/', '/ppiflow_backbone/', '/ppiflow_repair/', '/maturation/']) ||
         hasMetricKeys(design, ['maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd'])
@@ -490,6 +535,17 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
 
     if (isProteinLocalRedesign && stage === 'post_rfantibody') {
         return null;
+    }
+
+    if (
+        modelId.includes('esmfold2') ||
+        mode.includes('esmfold2') ||
+        stageFamily.includes('esmfold2') ||
+        stageMode.includes('esmfold2') ||
+        String(params.structure_launch_variant || '').toLowerCase() === 'esmfold2_experimental' ||
+        String(params.template_model_id || '').toLowerCase() === 'esmfold2_experimental'
+    ) {
+        return 'validation';
     }
 
     if (
@@ -623,6 +679,7 @@ export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
     if (source === 'boltzgen') return 'BoltzGen';
     if (source === 'ppiflow') return 'PPIFlow';
     if (source === 'confornets') return 'ConforNets';
+    if (source === 'esmfold2') return 'ESMFold2';
     if (source === 'fampnn') return 'FAMPNN';
     if (source === 'caliby') return 'Caliby';
     if (source === 'rfantibody') return 'RFantibody';
@@ -636,6 +693,7 @@ export const getOutputSourceBadgeClass = (source: OutputSourceFilter): string =>
     if (source === 'caliby') return 'border-teal-500/40 bg-teal-500/10 text-teal-200';
     if (source === 'ppiflow') return 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200';
     if (source === 'confornets') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
+    if (source === 'esmfold2') return 'border-blue-500/40 bg-blue-500/10 text-blue-200';
     if (source === 'imported') return 'border-sky-500/40 bg-sky-500/10 text-sky-200';
     if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
     return 'border-slate-600/40 bg-slate-700/30 text-slate-300';

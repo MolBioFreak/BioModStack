@@ -293,6 +293,28 @@ test('pLDDT color map prefers chain-resolved metrics when available', () => {
     ]);
 });
 
+test('RFA pLDDT color map only colors modifiable residue mask', () => {
+    const colorForValue = (value: number) => ({ r: Math.round(value), g: 0, b: 0 });
+    const colorMap = buildPlddtResidueColorMap({
+        chainMetrics: {
+            H: { plddt: [100, 91, 92, 100], residue_numbers: [1, 2, 3, 4] },
+            T: { plddt: [100, 100], residue_numbers: [1, 2] },
+        },
+        residueMask: [
+            { chain_id: 'H', residue_number: 2 },
+            { chain_id: 'H', residue_number: 3 },
+        ],
+        maskMode: 'include_only',
+        colorForValue,
+    });
+
+    assert.ok(colorMap);
+    assert.deepEqual(Array.from(colorMap.entries()).sort(([left], [right]) => left.localeCompare(right)), [
+        ['H:2', { r: 91, g: 0, b: 0 }],
+        ['H:3', { r: 92, g: 0, b: 0 }],
+    ]);
+});
+
 test('ConforNets chain id is extracted from request metadata for residue color fallback', () => {
     assert.equal(
         getConforNetsDefaultChainId({
@@ -464,6 +486,9 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(source, /buildPlddtResidueColorMap/);
     assert.match(source, /getConforNetsScalarPlddt/);
     assert.match(source, /residueNumbers:\s*residueMetricNumbers/);
+    assert.match(source, /rfaModifiableResidueMask/);
+    assert.match(source, /maskMode:\s*rfaModifiableResidueMask \? 'include_only' : 'none'/);
+    assert.match(source, /RFA Modifiable pLDDT/);
     assert.match(source, /fallbackChainId:\s*conforNetsDefaultChainId/);
     assert.match(source, /scalarPlddtFallback:\s*conforNetsScalarPlddt/);
     assert.match(source, /preferScalarFallback:\s*conforNetsUsesScalarPlddtFallback/);

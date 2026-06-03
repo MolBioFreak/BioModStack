@@ -53,3 +53,28 @@ test('primary navigation rail is separate from utility menus so dropdowns are no
     assert.ok(!railBlock.includes('data-bms-topbar-utilities="true"'), 'utility controls must not be nested inside the overflow-x nav rail');
     assert.ok(!railBlock.includes('ThemeSelector'), 'theme/debug/service menus must stay out of the nav scroll rail');
 });
+
+test('top-bar utility menus stay compact and action-first', () => {
+    const source = layoutSource();
+
+    for (const marker of [
+        'Surface + API',
+        'Switch + start',
+        'CoolerControl active.',
+        'Per-GPU channel control.',
+        'Default GPU for MSA controls.',
+        'POWER LIMITS',
+        'MSA SERVER',
+    ]) {
+        assert.ok(source.includes(marker), `missing compact topbar copy marker: ${marker}`);
+    }
+
+    for (const stale of [
+        'CoolerControl device backend active.',
+        'Fan mode and target changes apply per GPU through CoolerControl channel settings.',
+        'Sets the default GPU for MSA server status, start, and stop actions. Leave on auto to use scheduler preference.',
+        'Open diagnostics to collect surface details and explain the current app/runtime configuration.',
+    ]) {
+        assert.ok(!source.includes(stale), `stale explainer text still present: ${stale}`);
+    }
+});
