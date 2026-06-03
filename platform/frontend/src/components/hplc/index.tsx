@@ -19,33 +19,33 @@ type AnalysisType = 'empower' | 'qc' | 'chromatogram' | 'calibration' | 'quantif
 const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
     {
         id: 'empower',
-        label: 'Empower AIA/ARW/CSV Import',
-        status: 'Waters chromatogram review',
-        description: 'AIA/ARW/ZIP/CSV imports; chromatograms, peaks, SST.',
+        label: 'Empower Import',
+        status: 'Waters / Empower',
+        description: 'AIA/ARW/ZIP/CSV, peaks, SST.',
     },
     {
         id: 'qc',
-        label: 'Manual QC + Cross-run Stats',
-        status: 'Clean, bunch, compare',
-        description: 'Clean rows, exclude, bunch, compare runs.',
+        label: 'QC + Cross-run Stats',
+        status: 'Clean + compare',
+        description: 'Clean, group, compare.',
     },
     {
         id: 'chromatogram',
         label: 'Chromatogram Analysis',
         status: 'Signal + peak picking',
-        description: 'Baseline, peaks, integration, Plotly traces.',
+        description: 'Baseline, peaks, integration.',
     },
     {
         id: 'calibration',
         label: 'Calibration Curve',
         status: 'Explicit standards',
-        description: 'Concentration vs area; optional through-origin fit.',
+        description: 'Concentration vs area.',
     },
     {
         id: 'quantify',
         label: 'Sample Quantification',
         status: 'Sample IDs required',
-        description: 'Peak areas against calibration; sample IDs required.',
+        description: 'Peak areas vs calibration.',
     },
 ];
 
@@ -56,13 +56,13 @@ const statusItems = [
         tone: 'accent' as const,
     },
     {
-        title: 'Unsupported containers',
-        value: 'Proprietary Empower DB/RAW files: export AIA .cdf/.arw or CSV/ASCII first',
+        title: 'Empower DB/RAW',
+        value: 'Export AIA .cdf/.arw or CSV/ASCII first',
         tone: 'warning' as const,
     },
     {
         title: 'Visualization',
-        value: 'Plotly chromatograms, calibration fits, SST and isoform tables',
+        value: 'Chromatograms, calibration, SST, isoforms',
     },
 ];
 
@@ -73,8 +73,8 @@ export function HplcPage() {
         <div className="space-y-6 p-6">
             <AssayWorkbenchIntro
                 eyebrow="BMS Chromatography Workbench"
-                title="Waters / Empower chromatography and plasmid isoform review"
-                description="Empower AIA/ARW/CSV exports, chromatograms, calibration, plasmid isoforms."
+                title="Waters / Empower chromatography"
+                description="Imports, peaks, calibration, isoforms."
             >
                 <AssayStatusStrip items={statusItems} />
             </AssayWorkbenchIntro>
