@@ -803,7 +803,7 @@ export function RawDataImport() {
                                             <div>
                                                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-accent-primary">Always-visible amplification curves</div>
                                                 <h4 className="text-base font-semibold text-text-primary">Amplification curve review</h4>
-                                                <div className="mt-1 text-xs text-text-muted">The clicked well traces are brightened while other amplification traces are dimmed for rapid IPC/target curve review.</div>
+                                                <div className="mt-1 text-xs text-text-muted">Clicked well bright; other traces dim.</div>
                                             </div>
                                             <span className="text-xs text-text-muted">{r.amplification_plotly_json?.data?.length ?? 0} traces</span>
                                         </div>
@@ -832,7 +832,7 @@ export function RawDataImport() {
                                         <div className="mb-3 border border-border-primary bg-bg-tertiary/70 p-3">
                                             <div className="text-sm font-black text-text-primary">Standard curve fit + sample quantity calls</div>
                                             <p className="mt-1 text-xs leading-5 text-text-secondary">
-                                                Polished Plotly review surface for real STANDARD wells, target-specific fit lines, experimental projections, efficiency, R², residual spread, and QC flags. Selected well spot is overlaid on the active target standard curve when the clicked well has a quantity call.
+                                                Fit, projections, efficiency, R², residuals, flags. Selected well overlays the matching standard curve.
                                             </p>
                                         </div>
                                         {r.standard_curve_plotly_json ? (

@@ -45,10 +45,10 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   const layoutSource = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'Layout.tsx'), 'utf8');
 
   assert.match(layoutSource, /<DiagnosticsMenu/);
-  assert.match(layoutSource, /Diagnostics\/About/);
-  assert.match(layoutSource, /Live surface \+ API status/);
+  assert.match(layoutSource, /Diagnostics/);
+  assert.match(layoutSource, /Surface \+ API/);
   assert.match(layoutSource, /Runtime channel/);
-  assert.match(layoutSource, /Channel switch \+ start/);
+  assert.match(layoutSource, /Switch \+ start/);
   assert.match(layoutSource, /Switch to Vite dev/);
   assert.match(layoutSource, /Switch to stable \/bms\//);
   assert.match(layoutSource, /navigator\.clipboard\.writeText/);

@@ -29,7 +29,7 @@ test('Empower import reloads persisted batch reviews from BMS DB service, not br
   assert.match(source, /listAnalyticalDatasets\('chromatography', 25\)/);
   assert.match(source, /loadAnalyticalDataset\(selectedDatasetId\)/);
   assert.match(source, /Saved Empower import to BMS DB service dataset/);
-  assert.match(source, /BMS DB service analytical store, not browser cache/);
+  assert.match(source, /Reload from BMS DB/);
   assert.match(source, /Clear current Empower review/);
   assert.doesNotMatch(source, /EMPOWER_IMPORT_CACHE_KEY/);
   assert.doesNotMatch(source, /loadAssaySnapshot/);
