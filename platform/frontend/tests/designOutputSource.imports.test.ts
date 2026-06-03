@@ -139,6 +139,38 @@ test('keeps fold-cp prediction rows tagged as boltz-2 validation even when pSCE 
     assert.equal(getOutputSourceLabel(foldCpPredictionDesign), 'Boltz-2');
 });
 
+test('classifies ESMFold2 experimental rows from provenance rather than FA-MPNN-looking fallback metrics', () => {
+    const esmfold2Design = {
+        name: 'rnaseh_000',
+        pdb_path: '/mnt/BioModStack/bms_results/rnaseh/final/esmfold2/rnaseh_000.cif',
+        stage_family: 'esmfold2',
+        stage_mode: 'predict',
+        artifact_group: 'esmfold2',
+        confidence_metrics: {
+            esmfold2: {
+                model_variant: 'full',
+                model_id_or_path: 'biohub/ESMFold2',
+                ptm: 0.748,
+                iptm: 0.159,
+            },
+            // Defensive case for old/bad rows: provenance must beat metric-shaped noise.
+            fampnn: {
+                fampnn_avg_psce: 71.1,
+            },
+        },
+        provenance: {
+            model_id: 'esmfold2_experimental',
+            artifact_group: 'esmfold2',
+            stage_family: 'esmfold2',
+        },
+        fampnn_psce: 71.1,
+    };
+
+    assert.equal(inferDesignOutputSource(esmfold2Design), 'esmfold2');
+    assert.equal(inferDesignAnalysisLens(esmfold2Design), 'validation');
+    assert.equal(getOutputSourceLabel(esmfold2Design), 'ESMFold2');
+});
+
 test('classifies ConforNets conformer rows as ConforNets instead of generic designs', () => {
     const confornetsDesigns = [
         { name: 'cn_00000_sample_0', artifact_group: 'confornets' },
