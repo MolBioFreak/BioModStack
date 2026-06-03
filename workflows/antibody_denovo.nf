@@ -1834,7 +1834,9 @@ process FinalizeTerminalAntibodyOutputs {
     #!/bin/bash
     set -euo pipefail
 
-    cp "${terminal_pdb_list_file}" terminal_pdbs.list
+    if [ ! -e terminal_pdbs.list ] || [ ! "${terminal_pdb_list_file}" -ef terminal_pdbs.list ]; then
+        cp "${terminal_pdb_list_file}" terminal_pdbs.list
+    fi
 
     TOTAL_PDBS=\$(grep -c . terminal_pdbs.list || true)
 

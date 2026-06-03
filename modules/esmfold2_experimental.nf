@@ -18,11 +18,13 @@ process RunESMFold2Experimental {
 
     publishDir "${params.out_dir}/final/esmfold2", mode: 'copy', pattern: 'esmfold2_results/**/*', saveAs: { filename -> filename.replace('esmfold2_results/', '') }
     publishDir "${params.out_dir}/run/esmfold2", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/run/telemetry", mode: 'copy', pattern: 'bms_run_telemetry_*.json'
 
     output:
     path 'esmfold2_results', emit: results_dir
     path 'esmfold2_results/*.cif', emit: cifs, optional: true
     path 'esmfold2_results/*.json', emit: jsons, optional: true
+    path 'bms_run_telemetry_*.json', emit: telemetry, optional: true
     path '*.log'
 
     script:
@@ -58,7 +60,10 @@ process RunESMFold2Experimental {
     def outDir = shellQuote(params.out_dir)
     """
     set -euo pipefail
-    python3 /scripts/run_esmfold2_inference.py \
+    python3 /scripts/bms_gpu_run_telemetry.py \
+        --label RunESMFold2Experimental \
+        --output-json bms_run_telemetry_RunESMFold2Experimental.json \
+        -- python3 /scripts/run_esmfold2_inference.py \
         --sequence ${sequence} \
         --sequence-name ${sequenceName} \
         --chain-id ${chainId} \
