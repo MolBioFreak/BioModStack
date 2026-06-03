@@ -88,11 +88,16 @@ class InstallProfilePayload(BaseModel):
     workflow_adapter_url: str | None = None
     compose_project_name: str | None = None
     core_runtime_mode: bool | None = None
+    features: dict[str, bool] | None = None
 
 
 class RuntimePortsPayload(BaseModel):
     dev_web_host_port: int | None = None
     prod_web_host_port: int | None = None
+
+
+class InstallFeaturesPayload(BaseModel):
+    features: dict[str, bool]
 
 
 class RuntimeStartTargetPayload(BaseModel):
@@ -397,6 +402,33 @@ async def restart_runtime_api(request: Request, runtime: str | None = None):
 async def get_install_profile(request: Request):
     _require_local_admin(request)
     return _install_profile_response()
+
+
+@router.get("/features")
+async def get_install_features(request: Request):
+    _require_local_admin(request)
+    snapshot = _install_profile_response()
+    resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
+    features = resolved.get("features") if isinstance(resolved, Mapping) else None
+    return {"features": features or {}}
+
+
+@router.put("/features")
+async def put_install_features(request: Request, payload: InstallFeaturesPayload):
+    _require_local_admin(request)
+    snapshot = _install_profile_response()
+    profile = dict(snapshot.get("profile") or {}) if isinstance(snapshot, Mapping) else {}
+    current_features = dict(profile.get("features") or {}) if isinstance(profile.get("features"), Mapping) else {}
+    current_features.update(payload.features)
+    profile["features"] = current_features
+    try:
+        saved_profile = save_install_profile(profile)
+    except (TypeError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = _install_profile_response(saved_profile)
+    resolved = updated.get("resolved") if isinstance(updated, Mapping) else {}
+    features = resolved.get("features") if isinstance(resolved, Mapping) else None
+    return {"features": features or {}}
 
 
 @router.get("/runtime-ports")
