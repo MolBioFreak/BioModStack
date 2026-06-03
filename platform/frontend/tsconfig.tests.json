@@ -26,6 +26,7 @@
     "src/components/qpcr/plotHelpers.ts",
     "src/components/qpcr/plateMap.ts",
     "src/components/assay/analyticalQc.ts",
+    "src/runtime/installFeatures.ts",
     "src/runtime/navigation.ts",
     "src/runtime/runtimeSwitch.ts",
     "src/runtime/uiDiagnostics.ts",
