@@ -28,8 +28,9 @@ SERVICES: dict[str, dict[str, Any]] = {
         "service_id": "bms-db-service",
         "component": "db-service",
         "display_name": "BMS DB service",
-        "service_name": "bms-analytical-postgres",
+        "service_name": "bms-db",
         "container_names": ["biomodstack-db", "biomodstack-analytical-postgres"],
+        "legacy_service_names": ["bms-analytical-postgres"],
         "optional_at_boot": True,
         "offline_message": "db_service_offline — use BMS DB service → Start",
         "commands": [
@@ -202,13 +203,15 @@ def inspect_state(service: dict[str, Any], inspected: dict[str, Any] | None, con
     runtime_available = running and health in {"healthy", "running"}
     runtime_note = None if runtime_available else (f"{service['service_id']} container running but health={health}" if running else service["offline_message"])
     labels = ((inspected.get("Config") or {}).get("Labels") or {}) if isinstance(inspected, dict) else {}
+    implementation_service_name = labels.get("com.docker.compose.service") or service.get("service_name")
     return {
         "container_name": container_name,
         "state": normalized_state,
         "health": health,
         "runtime_available": runtime_available,
         "runtime_note": runtime_note,
-        "service_name": labels.get("com.docker.compose.service") or service.get("service_name"),
+        "service_name": service.get("service_name"),
+        "implementation_service_name": implementation_service_name,
     }
 
 
@@ -236,7 +239,8 @@ def descriptor(service_id: str, *, tail: int = 120, include_logs: bool = False) 
     payload = {
         "component": service["component"],
         "service_id": service["service_id"],
-        "service_name": state.get("service_name") or service.get("service_name"),
+        "service_name": service.get("service_name"),
+        "implementation_service_name": state.get("implementation_service_name"),
         "container_name": resolved_container,
         "state": state["state"],
         "health": state["health"],

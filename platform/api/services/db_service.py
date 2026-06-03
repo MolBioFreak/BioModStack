@@ -26,8 +26,10 @@ DB_SERVICE_COMPONENT = "db-service"
 DB_SERVICE_DISPLAY_NAME = "BMS DB service"
 DB_SERVICE_SHORT_NAME = "BMS DB"
 OFFLINE_MESSAGE = "db_service_offline — use BMS DB service → Start"
-DEFAULT_TRANSITIONAL_SERVICE_NAMES = ("bms-db", "bms-analytical-postgres")
-DEFAULT_TRANSITIONAL_CONTAINER_NAMES = ("biomodstack-db", "biomodstack-analytical-postgres")
+DEFAULT_DB_SERVICE_NAMES = ("bms-db",)
+DEFAULT_DB_CONTAINER_NAMES = ("biomodstack-db",)
+LEGACY_DB_SERVICE_NAMES = ("bms-analytical-postgres",)
+LEGACY_DB_CONTAINER_NAMES = ("biomodstack-analytical-postgres",)
 SUPPORTED_ACTIONS = {"status", "health", "logs", "start", "restart", "stop"}
 COMMANDS = [
     "bms db-service status",
@@ -48,11 +50,29 @@ def _split_csv_env(*names: str, defaults: tuple[str, ...]) -> list[str]:
 
 
 def _configured_service_names() -> list[str]:
-    return _split_csv_env("BMS_DB_COMPOSE_SERVICE", "BMS_DB_COMPOSE_SERVICES", defaults=DEFAULT_TRANSITIONAL_SERVICE_NAMES)
+    return _split_csv_env("BMS_DB_COMPOSE_SERVICE", "BMS_DB_COMPOSE_SERVICES", defaults=DEFAULT_DB_SERVICE_NAMES)
 
 
 def _configured_container_names() -> list[str]:
-    return _split_csv_env("BMS_DB_CONTAINER_NAME", "BMS_DB_CONTAINER_NAMES", defaults=DEFAULT_TRANSITIONAL_CONTAINER_NAMES)
+    return _split_csv_env("BMS_DB_CONTAINER_NAME", "BMS_DB_CONTAINER_NAMES", defaults=DEFAULT_DB_CONTAINER_NAMES)
+
+
+def _legacy_service_names() -> list[str]:
+    return _split_csv_env("BMS_DB_LEGACY_COMPOSE_SERVICE", "BMS_DB_LEGACY_COMPOSE_SERVICES", defaults=LEGACY_DB_SERVICE_NAMES)
+
+
+def _legacy_container_names() -> list[str]:
+    return _split_csv_env("BMS_DB_LEGACY_CONTAINER_NAME", "BMS_DB_LEGACY_CONTAINER_NAMES", defaults=LEGACY_DB_CONTAINER_NAMES)
+
+
+def _primary_service_name() -> str:
+    service_names = _configured_service_names()
+    return service_names[0] if service_names else DB_SERVICE_ID
+
+
+def _primary_container_name() -> str:
+    container_names = _configured_container_names()
+    return container_names[0] if container_names else "biomodstack-db"
 
 
 def _bounded_tail(tail: int | str | None) -> int:
@@ -167,11 +187,13 @@ def _container_from_name(container_name: str) -> dict[str, Any] | None:
     except (IndexError, json.JSONDecodeError, TypeError):
         payload = {}
     labels = ((payload.get("Config") or {}).get("Labels") or {}) if isinstance(payload, dict) else {}
-    service_name = labels.get("com.docker.compose.service") or labels.get("org.biomodstack.compose_service")
-    if not service_name:
-        service_names = _configured_service_names()
-        service_name = service_names[0] if service_names else None
-    return {"service_name": service_name, "container_name": container_name, "source": "configured-name"}
+    implementation_service_name = labels.get("com.docker.compose.service") or labels.get("org.biomodstack.compose_service")
+    return {
+        "service_name": _primary_service_name(),
+        "implementation_service_name": implementation_service_name,
+        "container_name": container_name,
+        "source": "configured-name",
+    }
 
 
 def _find_container_by_label_or_name() -> dict[str, Any] | None:
@@ -190,9 +212,13 @@ def _find_container_by_label_or_name() -> dict[str, Any] | None:
                 continue
             name = row.get("Names") or row.get("Name")
             if name:
-                return {"service_name": row.get("Label") or _configured_service_names()[0], "container_name": str(name).split(",")[0], "source": "docker-label"}
+                return {"service_name": _primary_service_name(), "container_name": str(name).split(",")[0], "source": "docker-label"}
 
     for name in _configured_container_names():
+        found = _container_from_name(name)
+        if found is not None:
+            return found
+    for name in _legacy_container_names():
         found = _container_from_name(name)
         if found is not None:
             return found
@@ -294,8 +320,6 @@ def _logical_database_statuses() -> list[dict[str, Any]]:
 
 
 def _missing_descriptor(tail: int, *, runtime_note: str | None = None, control_mode: str = "docker-direct-transitional") -> dict[str, Any]:
-    service_names = _configured_service_names()
-    container_names = _configured_container_names()
     return {
         "component": DB_SERVICE_COMPONENT,
         "service_id": DB_SERVICE_ID,
@@ -305,8 +329,8 @@ def _missing_descriptor(tail: int, *, runtime_note: str | None = None, control_m
         "runtime_available": False,
         "optional_at_boot": True,
         "control_mode": control_mode,
-        "service_name": service_names[0] if service_names else None,
-        "container_name": container_names[0] if container_names else None,
+        "service_name": _primary_service_name(),
+        "container_name": _primary_container_name(),
         "host_agent_available": False,
         "runtime_note": runtime_note or OFFLINE_MESSAGE,
         "offline_message": OFFLINE_MESSAGE,
@@ -337,8 +361,6 @@ def _normalize_host_agent_payload(
     *,
     last_action: str | None = None,
 ) -> dict[str, Any]:
-    service_names = _configured_service_names()
-    container_names = _configured_container_names()
     normalized: dict[str, Any] = {
         "component": DB_SERVICE_COMPONENT,
         "service_id": DB_SERVICE_ID,
@@ -348,8 +370,8 @@ def _normalize_host_agent_payload(
         "runtime_available": False,
         "optional_at_boot": True,
         "control_mode": "host-agent",
-        "service_name": service_names[0] if service_names else None,
-        "container_name": container_names[0] if container_names else None,
+        "service_name": _primary_service_name(),
+        "container_name": _primary_container_name(),
         "host_agent_available": True,
         "runtime_note": None,
         "offline_message": OFFLINE_MESSAGE,
@@ -359,6 +381,11 @@ def _normalize_host_agent_payload(
         "logs_tail": tail,
     }
     normalized.update(payload)
+    payload_service_name = payload.get("service_name")
+    if payload_service_name and payload_service_name != _primary_service_name():
+        normalized["implementation_service_name"] = payload_service_name
+    normalized["service_name"] = _primary_service_name()
+    normalized["container_name"] = normalized.get("container_name") or _primary_container_name()
     normalized["component"] = str(normalized.get("component") or DB_SERVICE_COMPONENT)
     normalized["service_id"] = str(normalized.get("service_id") or DB_SERVICE_ID)
     normalized["display_name"] = str(normalized.get("display_name") or DB_SERVICE_DISPLAY_NAME)
@@ -390,7 +417,7 @@ def describe_db_service(tail: int = 120) -> dict[str, Any]:
     if container is None:
         return _redact_value(_missing_descriptor(bounded_tail))
 
-    container_name = str(container.get("container_name") or _configured_container_names()[0])
+    container_name = str(container.get("container_name") or _primary_container_name())
     inspected = _inspect_container(container_name)
     payload = {
         "component": DB_SERVICE_COMPONENT,
@@ -401,7 +428,8 @@ def describe_db_service(tail: int = 120) -> dict[str, Any]:
         "runtime_available": bool(inspected.get("runtime_available")),
         "optional_at_boot": True,
         "control_mode": "docker-direct-transitional",
-        "service_name": container.get("service_name") or _configured_service_names()[0],
+        "service_name": _primary_service_name(),
+        "implementation_service_name": container.get("implementation_service_name") or container.get("service_name"),
         "container_name": container_name,
         "host_agent_available": False,
         "runtime_note": inspected.get("runtime_note"),
@@ -452,7 +480,7 @@ def run_db_service_action(action: str, tail: int = 120, *, advanced: bool = Fals
             descriptor = describe_db_service(tail=bounded_tail)
             descriptor["last_action"] = "logs"
             return descriptor
-        container_name = str(container.get("container_name") or _configured_container_names()[0])
+        container_name = str(container.get("container_name") or _primary_container_name())
         result = _run_docker(["logs", "--tail", str(bounded_tail), container_name], timeout=30)
         descriptor = describe_db_service(tail=bounded_tail)
         descriptor["logs"] = _redact_text(_tail_text((result.stdout or result.stderr or "").strip()))
@@ -467,7 +495,7 @@ def run_db_service_action(action: str, tail: int = 120, *, advanced: bool = Fals
         raise ValueError("unsupported db-service action: stop requires --i-know-this-disables-db-backed-features")
 
     if container is not None:
-        container_name = str(container.get("container_name") or _configured_container_names()[0])
+        container_name = str(container.get("container_name") or _primary_container_name())
         docker_action = "stop" if normalized == "stop" else "restart" if normalized == "restart" else "start"
         result = _run_docker([docker_action, container_name], timeout=90)
     else:
@@ -477,7 +505,7 @@ def run_db_service_action(action: str, tail: int = 120, *, advanced: bool = Fals
             descriptor["last_action"] = normalized
             descriptor["runtime_note"] = compose_note
             return descriptor
-        service_name = _configured_service_names()[-1]
+        service_name = _primary_service_name()
         result = _run_compose(["up", "-d", "--no-build", service_name], timeout=180)
 
     descriptor = describe_db_service(tail=bounded_tail)

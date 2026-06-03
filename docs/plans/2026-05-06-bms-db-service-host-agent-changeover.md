@@ -72,10 +72,12 @@ Clean target after migration:
 ```text
 compose service: bms-db
 container: biomodstack-db
-volume: bms_db_data
+volume: bms_db_service_data
 ```
 
 Do not make the UI say `analytical-postgres` once the operator-facing panel exists; that name is a transitional implementation detail.
+
+As of the 2026-05-30 naming cleanup, source-level compose and UI names use `bms-db` / `biomodstack-db` / **BMS DB service**. Existing live deployments may still have the old `bms-analytical-postgres` container until the stateful DB is explicitly migrated or recreated from backup; discovery may tolerate that legacy name, but operator-facing status must not present it as the product name.
 
 ---
 
