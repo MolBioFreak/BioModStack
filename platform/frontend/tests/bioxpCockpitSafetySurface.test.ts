@@ -169,7 +169,7 @@ test('raw motion current defaults stay OEM-safe and manual axis controls use liv
     assert.match(clientSource, /standby_current: payload\.standby_current \?\? 10/);
     assert.match(axisControls, /useMotionReferenceStatus\(enabled, \[axis\]/);
     assert.match(axisControls, /useMotionRangeStatus\(enabled/);
-    assert.match(axisControls, /const axisReferenced = referenceState === 'referenced'/);
+    assert.match(axisControls, /const axisReferenced = isAxisReferenceTrusted\(referenceState\)/);
     assert.match(axisControls, /const absoluteMoveBlocked = !axisReferenced \|\| !axisRangeAvailable/);
     assert.match(axisControls, /const switchHomeBlocked = true/);
     assert.match(axisControls, /Switch Home disabled here; use supervised OEM recipe/);
@@ -180,6 +180,7 @@ test('raw motion current defaults stay OEM-safe and manual axis controls use liv
 
 test('raw telemetry payloads are debug disclosures rather than default operator panels', () => {
     assert.match(cockpitSource, /<details className="rounded border border-border-primary bg-surface\/40 p-2">/);
-    assert.match(cockpitSource, /Debug payload/);
+    assert.match(cockpitSource, /<summary className="cursor-pointer text-xs font-semibold text-content-muted hover:text-content transition-colors">/);
+    assert.match(cockpitSource, /<JsonBlock title="Telemetry Payload"|<JsonBlock title="Status JSON"/);
     assert.doesNotMatch(cockpitSource, /<pre className="text-\[10px\] font-mono text-content-muted p-3 bg-\[#000000\]/);
 });
