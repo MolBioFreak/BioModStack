@@ -51,7 +51,7 @@ test('diagnostics menu exposes button-first install add-on toggles', () => {
         "setBmsFeature('bioxp'",
         "setBmsFeature('stats_tools'",
         "setBmsFeature('assay_db'",
-        'restart API/web to change backend route registration',
+        'restart required',
     ]) {
         assert.match(debugBlock, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
