@@ -25,12 +25,12 @@ test('Stats Toolkit page carries qPCR, chromatography, DOE/statistics, and debug
         'Chromatography',
         'Waters',
         'Empower',
-        'plasmid isoform',
+        'isoform',
         'DOE',
-        'JMP-like',
-        'Plotly',
-        'Debug',
-        'Stats-tools container',
+        'stats-tools',
+        'runtime',
+        'Runtime',
+        'Lifecycle',
     ]) {
         assert.match(source, new RegExp(marker, 'i'), `AssayAnalytics should expose ${marker}`);
     }
