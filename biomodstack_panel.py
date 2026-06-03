@@ -22,7 +22,7 @@ import sqlite3
 import shutil
 import webbrowser
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -279,6 +279,19 @@ def get_bioxp_interlink_state(probe: bool = False, timeout: float = 3.0) -> dict
     return call_local_api_json("GET", f"/api/bioxp/interlink/state{query}", timeout=timeout)
 
 
+def _bioxp_probe_is_fresh(last_probe_at: object, window_seconds: int = 60) -> bool:
+    if not last_probe_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(last_probe_at).replace("Z", "+00:00"))
+    except Exception:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    return 0 <= age_seconds <= window_seconds
+
+
 def summarize_bioxp_interlink_state(state: dict) -> str:
     if not state:
         return "BMS API unavailable"
@@ -286,8 +299,19 @@ def summarize_bioxp_interlink_state(state: dict) -> str:
     configured = bool(state.get("configured"))
     reachable = state.get("reachable")
     hardware = state.get("hardware_connected")
+    probe_stale = bool(state.get("probe_stale"))
+    if not probe_stale and active and state.get("last_probe_reachable") is True and reachable is not False:
+        window = int(state.get("probe_fresh_window_seconds") or 60)
+        probe_stale = not _bioxp_probe_is_fresh(state.get("last_probe_at"), window)
     if active:
-        label = "LINKED" if reachable is not False else "DEGRADED"
+        if reachable is False:
+            label = "UNREACHABLE"
+        elif probe_stale:
+            label = "STALE"
+        elif reachable is True:
+            label = "LINKED"
+        else:
+            label = "UNVERIFIED"
     elif configured:
         label = "SAVED / inactive"
     else:
@@ -295,8 +319,12 @@ def summarize_bioxp_interlink_state(state: dict) -> str:
     parts = [label]
     if reachable is not None:
         parts.append(f"reachable={'yes' if reachable else 'no'}")
+    elif probe_stale:
+        parts.append("reachable=stale")
     if hardware is not None:
         parts.append(f"hardware={'yes' if hardware else 'no'}")
+    elif probe_stale:
+        parts.append("hardware=unknown")
     url = state.get("robot_api_url") or state.get("recommended_url")
     if url:
         parts.append(str(url))
