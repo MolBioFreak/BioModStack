@@ -9,6 +9,7 @@ cache is absent. It never creates demo structures.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -710,7 +711,9 @@ def main(argv: list[str] | None = None) -> int:
         model = ESMFold2Model.from_pretrained(
             model_id_or_path,
             local_files_only=args.local_files_only,
-        ).to(device).eval()
+        )
+        model = model.to(device)
+        model = model.eval()
     except Exception as exc:  # pragma: no cover - depends on local HF cache
         raise SystemExit(
             "ESMFold2 model load failed. No download was attempted when local_files_only=true; "
@@ -718,15 +721,21 @@ def main(argv: list[str] | None = None) -> int:
         ) from exc
 
     mmcif_complex_id = sanitize_mmcif_data_block_id(args.sequence_name)
-    result = ESMFold2InputBuilder().fold(
-        model,
-        spi,
-        num_loops=args.num_loops,
-        num_sampling_steps=args.num_sampling_steps,
-        num_diffusion_samples=args.num_diffusion_samples,
-        seed=args.seed,
-        complex_id=mmcif_complex_id,
+    fold_context = (
+        torch.autocast(device_type="cpu", dtype=torch.bfloat16)
+        if device == "cpu"
+        else contextlib.nullcontext()
     )
+    with fold_context:
+        result = ESMFold2InputBuilder().fold(
+            model,
+            spi,
+            num_loops=args.num_loops,
+            num_sampling_steps=args.num_sampling_steps,
+            num_diffusion_samples=args.num_diffusion_samples,
+            seed=args.seed,
+            complex_id=mmcif_complex_id,
+        )
 
     samples = []
     for index, sample in enumerate(as_results_iter(result)):
