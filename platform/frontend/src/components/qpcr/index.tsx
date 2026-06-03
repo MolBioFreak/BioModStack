@@ -21,19 +21,19 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'import',
         label: 'Instrument Import',
         status: 'QuantStudio / StepOnePlus',
-        description: 'Import EDS/Excel/CSV; plate, curve, replicate QC.',
+        description: 'EDS/Excel/CSV, curves, QC.',
     },
     {
         id: 'deltacq',
         label: 'ΔCq Analysis',
         status: 'Reference-normalized',
-        description: 'Cq rows + explicit reference/target genes.',
+        description: 'Cq rows, reference, targets.',
     },
     {
         id: 'deltadeltacq',
         label: 'ΔΔCq & Fold Change',
         status: 'Control-group required',
-        description: 'Control/treatment groups → fold-change.',
+        description: 'Groups → fold-change.',
     },
     {
         id: 'stdcurve',
@@ -45,7 +45,7 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'quantify',
         label: 'Absolute Quantification',
         status: 'Sample IDs required',
-        description: 'Unknowns against standards; sample IDs required.',
+        description: 'Unknowns vs standards.',
     },
     {
         id: 'anova',
@@ -67,7 +67,7 @@ const statusItems = [
     },
     {
         title: 'Visualization',
-        value: 'Plotly plate maps, curves, standard curves, and QC tables',
+        value: 'Plate maps, curves, standards, QC',
     },
     {
         title: 'Data policy',
@@ -83,8 +83,8 @@ export function QpcrPage() {
         <div className="space-y-6 p-6">
             <AssayWorkbenchIntro
                 eyebrow="BMS qPCR Workbench"
-                title="QuantStudio / StepOnePlus analysis on real assay data"
-                description="Instrument exports or pasted Cq tables; no built-in rows."
+                title="QuantStudio / StepOnePlus qPCR"
+                description="Instrument exports or pasted Cq tables."
             >
                 <AssayStatusStrip items={statusItems} columnsClass="sm:grid-cols-2 xl:grid-cols-4" />
             </AssayWorkbenchIntro>
