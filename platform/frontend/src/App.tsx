@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
+import { useBmsFeatures } from './runtime/installFeatures';
 
 const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
 const JobSubmission = lazy(() => import('./components/JobSubmission').then((module) => ({ default: module.JobSubmission })));
@@ -22,6 +23,8 @@ function RouteLoadingFallback() {
 }
 
 function App() {
+  const bmsFeatures = useBmsFeatures();
+
   return (
     <HotkeysProvider>
       <Layout>
@@ -42,7 +45,9 @@ function App() {
             {/* Infra Monitor - native workstation telemetry surface */}
             <Route path="/infra" element={<InfraMonitorPage />} />
             {/* BioXP Handler Controls */}
-            <Route path="/bioxp" element={<BioXpCockpit />} />
+            {bmsFeatures.bioxp && (
+              <Route path="/bioxp" element={<BioXpCockpit />} />
+            )}
           </Routes>
         </Suspense>
       </Layout>
