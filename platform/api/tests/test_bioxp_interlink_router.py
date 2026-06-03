@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -182,7 +183,46 @@ def test_connect_uses_targeted_power_when_status_probe_is_conservative(monkeypat
     assert payload["hardware_connected"] is True
     assert payload["last_status"]["hardware_connected"] is True
     assert payload["last_status"]["hardware_connected_inferred_via"] == "/motion/power/status"
-    assert calls == [("GET", "/status", 18.0), ("GET", "/motion/power/status", 45.0)]
+    assert calls == [("GET", "/status", 18.0), ("GET", "/motion/power/status", 5.0)]
+
+
+def test_stale_successful_interlink_probe_does_not_expose_live_reachable(monkeypatch, tmp_path: Path) -> None:
+    reset_interlink(monkeypatch, tmp_path)
+    bioxp_interlink.save_profile({"robot_api_url": "http://robot:8123", "robot_ssh_host": "robot"})
+    monkeypatch.setattr(bioxp, "_GLOBAL_LINKAGE_URL", "http://robot:8123", raising=False)
+    bioxp_interlink.activate_session("http://robot:8123")
+    stale_probe_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    bioxp_interlink._SESSION.update(  # noqa: SLF001 - regression covers exposed state contract
+        {
+            "reachable": True,
+            "hardware_connected": True,
+            "last_probe_at": stale_probe_at,
+            "last_status": {"status": "ok", "hardware_connected": True},
+            "last_error": None,
+        }
+    )
+    proxy_calls: list[tuple[str, str]] = []
+
+    async def fail_proxy_request(method: str, path: str, **_: object) -> dict:
+        proxy_calls.append((method, path))
+        raise AssertionError("passive stale-state read must not probe the robot")
+
+    monkeypatch.setattr(bioxp, "proxy_request", fail_proxy_request)
+
+    with build_client() as client:
+        response = client.get("/api/bioxp/interlink/state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active"] is True
+    assert payload["reachable"] is None
+    assert payload["hardware_connected"] is None
+    assert payload["last_probe_reachable"] is True
+    assert payload["last_probe_hardware_connected"] is True
+    assert payload["probe_fresh"] is False
+    assert payload["probe_stale"] is True
+    assert "stale" in payload["runtime_note"].lower()
+    assert proxy_calls == []
 
 
 def test_disconnect_deactivates_session_but_keeps_saved_profile(monkeypatch, tmp_path: Path) -> None:

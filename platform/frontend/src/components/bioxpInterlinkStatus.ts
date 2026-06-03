@@ -5,6 +5,8 @@ export interface BioXpInterlinkStatusInput {
     configured?: boolean | null;
     reachable?: boolean | null;
     lastProbeAt?: string | null;
+    probeFailed?: boolean | null;
+    probeStale?: boolean | null;
     runtimeNote?: string | null;
     nowMs?: number;
     freshProbeWindowMs?: number;
@@ -41,6 +43,43 @@ export const isFreshBioXpProbe = ({
     return nowMs - probeMs >= 0 && nowMs - probeMs <= freshProbeWindowMs;
 };
 
+export const isFreshBioXpQueryData = ({
+    dataUpdatedAt,
+    nowMs = Date.now(),
+    freshWindowMs = BIOXP_INTERLINK_FRESH_PROBE_WINDOW_MS,
+}: {
+    dataUpdatedAt?: number;
+    nowMs?: number;
+    freshWindowMs?: number;
+}) => {
+    if (!dataUpdatedAt || !Number.isFinite(dataUpdatedAt)) return false;
+    return nowMs - dataUpdatedAt >= 0 && nowMs - dataUpdatedAt <= freshWindowMs;
+};
+
+export const isFreshPositiveBioXpSignal = ({
+    value,
+    isFetchedAfterMount,
+    isError,
+    dataUpdatedAt,
+    nowMs,
+    freshWindowMs,
+    blocked = false,
+}: {
+    value?: boolean | null;
+    isFetchedAfterMount?: boolean;
+    isError?: boolean;
+    dataUpdatedAt?: number;
+    nowMs?: number;
+    freshWindowMs?: number;
+    blocked?: boolean;
+}) => Boolean(
+    !blocked &&
+    value === true &&
+    isFetchedAfterMount &&
+    !isError &&
+    isFreshBioXpQueryData({ dataUpdatedAt, nowMs, freshWindowMs })
+);
+
 const INTERLINK_INDICATOR_CLASS: Record<BioXpInterlinkStatusState, string> = {
     quiet: 'bg-slate-600',
     saved: 'bg-sky-400',
@@ -55,6 +94,8 @@ export const deriveBioXpInterlinkMenuStatus = ({
     configured,
     reachable,
     lastProbeAt,
+    probeFailed,
+    probeStale,
     nowMs,
     freshProbeWindowMs,
 }: BioXpInterlinkStatusInput): BioXpInterlinkMenuStatus => {
@@ -65,11 +106,11 @@ export const deriveBioXpInterlinkMenuStatus = ({
     let state: BioXpInterlinkStatusState;
     if (!activeLink) {
         state = savedProfile ? 'saved' : 'quiet';
-    } else if (reachable === false) {
+    } else if (probeFailed || reachable === false) {
         state = 'unreachable';
     } else if (reachable === true && freshProbe) {
         state = 'linked';
-    } else if (reachable === true) {
+    } else if (probeStale || reachable === true) {
         state = 'stale';
     } else {
         state = 'unverified';
