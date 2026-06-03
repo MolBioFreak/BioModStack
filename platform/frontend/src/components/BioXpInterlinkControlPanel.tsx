@@ -60,13 +60,6 @@ const maskEndpointForDisplay = (value?: string | null) => {
     }
 };
 
-const BIOXP_INTERLINK_DOC_LINKS = [
-    { label: 'BMS interlink spec', href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-05-08-bioxp-workstation-interlink-control-panel-spec.md' },
-    { label: 'BioXP vendor', href: 'https://telesisbio.com/products/bioxp-system/' },
-    { label: 'PyUSB GitHub', href: 'https://github.com/pyusb/pyusb' },
-    { label: 'FastAPI docs', href: 'https://fastapi.tiangolo.com/' },
-] as const;
-
 export function BioXpInterlinkMenu() {
     const [isOpen, setIsOpen] = useState(false);
     const state = useBioXpInterlinkState(true, isOpen ? 5000 : 30000);
@@ -106,6 +99,8 @@ export function BioXpInterlinkMenu() {
         configured,
         reachable,
         lastProbeAt: state.data?.last_probe_at,
+        probeFailed: state.isError,
+        probeStale: state.data?.probe_stale === true,
     });
     const { indicatorClass, statusLabel, humanStatusLabel, reachabilityText } = interlinkStatus;
     const endpointForDisplay = state.data?.active
@@ -146,7 +141,7 @@ export function BioXpInterlinkMenu() {
                 type="button"
                 onClick={() => setIsOpen((value) => !value)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
-                title="BioXP robot interlink"
+                title="BIOXP LINK"
             >
                 <span className={`w-2 h-2 rounded-full ${indicatorClass}`} />
                 BIOXP LINK
@@ -161,7 +156,7 @@ export function BioXpInterlinkMenu() {
                         data-bms-drag-scroll-ignore="true"
                     >
                         <div className="flex items-center justify-between border-b border-slate-700 pb-2">
-                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">BioXP robot interlink</p>
+                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">BIOXP LINK</p>
                             <button
                                 type="button"
                                 onClick={() => state.refetch()}
@@ -180,23 +175,6 @@ export function BioXpInterlinkMenu() {
                             </div>
                             <div className="mt-1 break-all font-mono text-slate-400">
                                 Endpoint: <span className="text-cyan-300">{maskEndpointForDisplay(endpointForDisplay)}</span>
-                            </div>
-                        </div>
-
-                        <div className="rounded border border-slate-700 bg-slate-900/40 p-2">
-                            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Documentation</p>
-                            <div className="flex flex-wrap gap-2">
-                                {BIOXP_INTERLINK_DOC_LINKS.map((link) => (
-                                    <a
-                                        key={link.href}
-                                        href={link.href}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="rounded border border-slate-600 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:border-cyan-500/70 hover:bg-cyan-500/10"
-                                    >
-                                        {link.label}
-                                    </a>
-                                ))}
                             </div>
                         </div>
 
