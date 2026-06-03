@@ -132,6 +132,7 @@ test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw r
 test('Zero and Switch Home controls are separate while live guardrails block risky raw motion', () => {
     const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
     const cameraAxisControls = sourceBetween(cockpitSource, 'const CameraAxisQuickControls = ({', 'type CameraHoldJogCommand = {');
+    const cameraHoldJogPad = sourceBetween(cockpitSource, 'const CameraHoldJogPad = ({', 'const CameraSettingControl = ({');
     const axisDirectionHelper = sourceBetween(cockpitSource, 'const getAxisDirectionState = (', 'const hasMutationKeyPrefix =');
 
     assert.match(clientSource, /\/api\/bioxp\/motion\/axis\/zero/);
@@ -143,9 +144,14 @@ test('Zero and Switch Home controls are separate while live guardrails block ris
     assert.match(clientSource, /export const useOemInitializeMotion/);
     assert.match(axisDirectionHelper, /negativeBlocked = conflictingSwitches \|\| \(leftActive && !leftMasked\)/);
     assert.match(axisDirectionHelper, /positiveBlocked = conflictingSwitches \|\| \(rightActive && !rightMasked\)/);
+    assert.match(axisDirectionHelper, /AXIS_REFERENCE_OK_STATES = new Set\(\['referenced', 'synced', 'known'\]\)/);
+    assert.match(axisDirectionHelper, /isZPositiveDownReferenceGuardBlocked/);
+    assert.match(axisDirectionHelper, /position == null \|\| position < 0/);
     assert.match(axisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
     assert.match(axisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked \|\| zPositiveDownBlocked/);
-    assert.match(axisControls, /const zPositiveDownBlocked = axis === 'z' && !axisReferenced/);
+    assert.match(axisControls, /const zPositiveDownBlocked = isZPositiveDownReferenceGuardBlocked\(axis, referenceState, displayPosition\)/);
+    assert.match(axisControls, /const negativeButtonLabel = axis === 'z' \? 'UP\/-Z' : '◄'/);
+    assert.match(axisControls, /const positiveButtonLabel = axis === 'z' \? 'DN\/\+Z' : '►'/);
     assert.match(axisControls, /const zeroToControllerBlocked = !axisReferenced \|\| !axisRangeAvailable/);
     assert.match(axisControls, /const switchHomeBlocked = true/);
     assert.match(axisControls, /Zero → 0/);
@@ -154,9 +160,14 @@ test('Zero and Switch Home controls are separate while live guardrails block ris
     assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
     assert.match(axisControls, /Switch Home disabled here; use supervised OEM recipe/);
     assert.match(cameraAxisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
-    assert.match(cameraAxisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked/);
+    assert.match(cameraAxisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked \|\| zPositiveDownBlocked/);
+    assert.match(cameraAxisControls, /useMotionReferenceStatus\(enabled, \[axis\]/);
+    assert.match(cameraAxisControls, /Z DN\/\+Z blocked until reference\/position is trusted/);
     assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| negativeMoveBlocked\}/);
     assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| positiveMoveBlocked\}/);
+    assert.match(cameraHoldJogPad, /useMotionReferenceStatus\(enabled, \[\.\.\.CAMERA_HOLD_JOG_AXES\]/);
+    assert.match(cameraHoldJogPad, /command\.axis === 'z' && command\.steps > 0 && zPositiveDownBlocked/);
+    assert.match(cameraHoldJogPad, /zPositive\.blocked \|\| zPositiveDownBlocked/);
     assert.match(cameraAxisControls, /motion buttons blocked until telemetry clears/);
     assert.match(cockpitSource, /UP\/-Z/);
     assert.match(cockpitSource, /DN\/\+Z/);
