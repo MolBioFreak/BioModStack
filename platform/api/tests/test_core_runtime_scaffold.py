@@ -55,7 +55,7 @@ def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 
-    assert set(compose["services"]) == {"bms-api", "bms-analytical-postgres", "bms-cpu-power", "bms-stats-tools", "bms-web"}
+    assert set(compose["services"]) == {"bms-api", "bms-db", "bms-cpu-power", "bms-stats-tools", "bms-web"}
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -73,6 +73,11 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
     assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
     assert api["environment"]["BMS_ANALYTICAL_INIT_ON_STARTUP"] == "${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}"
+    assert api["environment"]["BMS_DB_DISPLAY_NAME"] == "${BMS_DB_DISPLAY_NAME:-BMS DB service}"
+    assert api["environment"]["BMS_DB_COMPOSE_SERVICES"] == "${BMS_DB_COMPOSE_SERVICES:-bms-db}"
+    assert api["environment"]["BMS_DB_CONTAINER_NAMES"] == "${BMS_DB_CONTAINER_NAMES:-biomodstack-db}"
+    assert api["environment"]["BMS_DB_LEGACY_COMPOSE_SERVICES"] == "${BMS_DB_LEGACY_COMPOSE_SERVICES:-bms-analytical-postgres}"
+    assert api["environment"]["BMS_DB_LEGACY_CONTAINER_NAMES"] == "${BMS_DB_LEGACY_CONTAINER_NAMES:-biomodstack-analytical-postgres}"
     assert api["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "${BMS_STATS_TOOLS_EXTERNALIZED:-1}"
     assert api["environment"]["BMS_STATS_TOOLS_COMPOSE_FILE"] == "/app/compose.core-runtime.yml"
     assert api["environment"]["BMS_DOCKER_COMPOSE_PROJECT"] == "${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
@@ -89,20 +94,21 @@ def test_compose_core_runtime_contract() -> None:
         for volume in api.get("volumes", [])
     )
 
-    analytical_db = compose["services"]["bms-analytical-postgres"]
-    assert analytical_db["image"] == "postgres:16-alpine"
-    assert analytical_db["container_name"] == "biomodstack-analytical-postgres"
-    assert analytical_db["ports"] == ["127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"]
-    assert analytical_db["environment"]["POSTGRES_DB"] == "bms_analytical_data"
-    assert analytical_db["environment"]["POSTGRES_USER"] == "bms_assay"
-    assert analytical_db["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}"
-    assert analytical_db["volumes"] == ["bms_analytical_postgres_data:/var/lib/postgresql/data"]
-    assert analytical_db["labels"]["org.biomodstack.service_id"] == "bms-db-service"
-    assert analytical_db["labels"]["org.biomodstack.component"] == "db-service"
-    assert analytical_db["labels"]["org.biomodstack.display_name"] == "BMS DB service"
-    assert analytical_db["labels"]["org.biomodstack.optional_at_boot"] == "true"
-    assert "healthcheck" in analytical_db
-    assert "bms-analytical-postgres" not in api.get("depends_on", {})
+    db_service = compose["services"]["bms-db"]
+    assert db_service["image"] == "postgres:16-alpine"
+    assert db_service["container_name"] == "biomodstack-db"
+    assert db_service["ports"] == ["127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"]
+    assert db_service["environment"]["POSTGRES_DB"] == "bms_analytical_data"
+    assert db_service["environment"]["POSTGRES_USER"] == "bms_assay"
+    assert db_service["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}"
+    assert db_service["volumes"] == ["bms_db_service_data:/var/lib/postgresql/data"]
+    assert db_service["networks"]["default"]["aliases"] == ["bms-analytical-postgres"]
+    assert db_service["labels"]["org.biomodstack.service_id"] == "bms-db-service"
+    assert db_service["labels"]["org.biomodstack.component"] == "db-service"
+    assert db_service["labels"]["org.biomodstack.display_name"] == "BMS DB service"
+    assert db_service["labels"]["org.biomodstack.optional_at_boot"] == "true"
+    assert "healthcheck" in db_service
+    assert "bms-db" not in api.get("depends_on", {})
 
     cpu_power = compose["services"]["bms-cpu-power"]
     assert cpu_power["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -123,7 +129,8 @@ def test_compose_core_runtime_contract() -> None:
     assert stats_tools["build"]["target"] == "stats-tools-runtime"
     assert stats_tools["container_name"] == "biomodstack-stats-tools"
     assert stats_tools["environment"]["BMS_STATS_TOOLS_EXTERNALIZED"] == "1"
-    assert "bms-analytical-postgres" not in stats_tools.get("depends_on", {})
+    assert "bms-db" not in stats_tools.get("depends_on", {})
+    assert stats_tools["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@bms-db:5432/bms_analytical_data}"
     assert stats_tools["labels"]["org.biomodstack.service_id"] == "bms-stats-tools"
     assert stats_tools["labels"]["org.biomodstack.component"] == "stats-tools"
     assert stats_tools["labels"]["org.biomodstack.optional_at_boot"] == "true"
@@ -138,7 +145,8 @@ def test_compose_core_runtime_contract() -> None:
     assert web["depends_on"]["bms-api"]["condition"] == "service_healthy"
     assert web["environment"]["BMS_WEB_HOST_PORT"] == "${BMS_WEB_HOST_PORT:-18080}"
     assert web["healthcheck"]["test"] == ["CMD-SHELL", 'wget -qO- "http://127.0.0.1:${BMS_WEB_HOST_PORT:-18080}/bms/"']
-    assert "bms_analytical_postgres_data" in compose["volumes"]
+    assert "bms_db_service_data" in compose["volumes"]
+    assert compose["volumes"]["bms_db_service_data"]["name"] == "${BMS_DB_VOLUME_NAME:-biomodstack-core-runtime_bms_analytical_postgres_data}"
 
 
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
@@ -212,8 +220,11 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_STATS_TOOLS_EXTERNALIZED=1",
         "BMS_DB_SERVICE_ID=bms-db-service",
         "BMS_DB_DISPLAY_NAME=\"BMS DB service\"",
-        "BMS_DB_COMPOSE_SERVICES=bms-db,bms-analytical-postgres",
-        "BMS_DB_CONTAINER_NAMES=biomodstack-db,biomodstack-analytical-postgres",
+        "BMS_DB_COMPOSE_SERVICES=bms-db",
+        "BMS_DB_CONTAINER_NAMES=biomodstack-db",
+        "BMS_DB_VOLUME_NAME=biomodstack-core-runtime_bms_analytical_postgres_data",
+        "BMS_DB_LEGACY_COMPOSE_SERVICES=bms-analytical-postgres",
+        "BMS_DB_LEGACY_CONTAINER_NAMES=biomodstack-analytical-postgres",
         "BMS_CORE_DB_NAME=bms_core_runtime",
         "BMS_ANALYTICAL_DB_NAME=bms_analytical_data",
         "BMS_HOST_AGENT_URL=http://127.0.0.1:8798",
@@ -249,7 +260,8 @@ def test_db_service_cli_uses_core_runtime_project_env_and_python_service_with_gu
 
     assert "db-service" in cli
     assert "BMS_DB_SERVICE_ID=\"${BMS_DB_SERVICE_ID:-bms-db-service}\"" in cli
-    assert "BMS_DB_CONTAINER_NAMES=\"${BMS_DB_CONTAINER_NAMES:-biomodstack-db,biomodstack-analytical-postgres}\"" in cli
+    assert "BMS_DB_CONTAINER_NAMES=\"${BMS_DB_CONTAINER_NAMES:-biomodstack-db}\"" in cli
+    assert "BMS_DB_LEGACY_CONTAINER_NAMES=\"${BMS_DB_LEGACY_CONTAINER_NAMES:-biomodstack-analytical-postgres}\"" in cli
     assert "status|health|logs|start|restart|stop" in cli
     assert "--i-know-this-disables-db-backed-features" in cli
     assert "-m services.db_service" in cli
