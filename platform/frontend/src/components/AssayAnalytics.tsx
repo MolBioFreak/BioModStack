@@ -20,25 +20,25 @@ const tabs: Array<AssayNavItem<AssayTab>> = [
         id: 'qpcr',
         label: 'qPCR',
         eyebrow: 'QuantStudio / StepOnePlus',
-        description: 'Curves, recovery, replicate QC, ΔCq/ΔΔCq.',
+        description: 'Curves, QC, ΔCq/ΔΔCq.',
     },
     {
         id: 'chromatography',
         label: 'Chromatography',
         eyebrow: 'Waters / Empower3',
-        description: 'Empower imports, peaks, calibration, recovery, isoforms.',
+        description: 'Empower, peaks, calibration, isoforms.',
     },
     {
         id: 'statistics',
         label: 'DOE + Statistics',
         eyebrow: 'JMP-like workbench',
-        description: 'QC, DOE/RSM, SPC, capability, tests, Plotly.',
+        description: 'QC, DOE/RSM, SPC, capability.',
     },
     {
         id: 'debug',
-        label: 'Debug',
-        eyebrow: 'Stats-tools container',
-        description: 'stats-tools lifecycle, health, logs, CLI.',
+        label: 'Runtime',
+        eyebrow: 'stats-tools',
+        description: 'Lifecycle, health, logs.',
     },
 ];
 
@@ -65,8 +65,8 @@ export function AssayAnalytics() {
         <AssayPageShell contentClassName="max-w-[1840px]">
             <AssayPageHeader
                 eyebrow="Stats Toolkit"
-                title="qPCR, chromatography, DOE/statistics, runtime"
-                description="QuantStudio, StepOnePlus, Empower3, plasmid isoforms, DOE/statistics, Plotly."
+                title="qPCR · chromatography · DOE/statistics"
+                description="Instrument data, QC, plots, runtime."
             />
 
             <AssayStatusStrip items={assayStatus} />
@@ -86,8 +86,8 @@ export function AssayAnalytics() {
                 <div hidden={activeTab !== 'debug'}>
                     <StatsToolsControlPanel
                         embeddedContext="stats-toolkit-debug"
-                        title="Stats Toolkit debug / stats-tools container"
-                        subtitle="Stats runtime actions + logs."
+                        title="Stats Tools"
+                        subtitle="Actions + logs."
                     />
                 </div>
             </AssayPanel>
