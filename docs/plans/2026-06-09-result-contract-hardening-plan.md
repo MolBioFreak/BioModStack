@@ -29,7 +29,7 @@
    - FA-MPNN pSCE = sidechain QC, not binding evidence
    - BMS PPIFlow objective = local heuristic, not paper rank
    - Rosetta InterfaceAnalyzer score = raw REU/sign convention explicit
-   - DockQ/template-free refold = optional completeness input, not faked
+   - DockQ/template-free refold = omitted from core contract unless explicitly added later as a reference-backed comparison artifact
    - AF3Score is not planned because it is bugged/unreliable
 
 ---
@@ -349,19 +349,19 @@ cd platform/frontend && ./node_modules/.bin/tsc -p tsconfig.tests.json && node -
 
 **Commit:** `feat(maturation): expose Rosetta interface analyzer metrics`
 
-### Task 4.2: Decide DockQ/refold semantics before implementation
+### Task 4.2: Omit DockQ/refold from core PPIFlow completeness
 
-**Objective:** Avoid fake DockQ support.
+**Objective:** Avoid fake or stale DockQ support.
 
 **Files:**
-- Create or modify: `docs/metrics/ppiflow_metrics.md`
-- Optional test: `tests/test_reconcile_ppiflow_ranking.py`
+- `docs/metrics/ppiflow_metrics.md`
+- `platform/api/services/design_metrics.py`
 
-**Decision note:** DockQ is only meaningful when there is a valid reference/native or a defined template-free refold comparison. If we do not have that reference/refold artifact, completeness should keep reporting `ppiflow_dockq_or_template_free_refold` missing.
+**Decision note:** DockQ is old/reference-dependent and is not part of the core BMS de novo PPIFlow reporting contract. Do not report `ppiflow_dockq_or_template_free_refold` as a missing core metric; only add a future DockQ/refold field if a workflow explicitly creates a reference-backed comparison artifact.
 
-**Acceptance:** docs and completeness tests state that DockQ/refold is optional and unavailable unless explicitly computed.
+**Acceptance:** docs and completeness tests state that DockQ/refold is omitted from the core contract.
 
-**Commit:** `docs(metrics): define DockQ and refold completeness semantics`
+**Commit:** `docs(metrics): omit DockQ from core PPIFlow completeness`
 
 ---
 
@@ -462,7 +462,7 @@ cd platform/frontend && rm -rf node_modules/.tmp/frontend-tests && ./node_module
 
 1. Phase 1 + Phase 2 first: backend registry + regression matrix.
 2. Phase 3 second: frontend capability gating.
-3. Phase 4 third: Rosetta metric completion and DockQ/refold docs.
+3. Phase 4 third: Rosetta metric completion and DockQ/refold omission docs.
 4. Phase 5 last: live API/UI validation evidence.
 5. Phase 6: narrow commit/push only after all targeted checks pass.
 
