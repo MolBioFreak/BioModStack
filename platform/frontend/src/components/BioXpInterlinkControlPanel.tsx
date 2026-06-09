@@ -102,7 +102,7 @@ export function BioXpInterlinkMenu() {
         probeFailed: state.isError,
         probeStale: state.data?.probe_stale === true,
     });
-    const { indicatorClass, statusLabel, humanStatusLabel, reachabilityText } = interlinkStatus;
+    const { indicatorClass, humanStatusLabel, reachabilityText } = interlinkStatus;
     const endpointForDisplay = state.data?.active
         ? state.data.robot_api_url
         : state.data?.robot_api_url || settings.robot_api_url || state.data?.recommended_url;
@@ -141,11 +141,10 @@ export function BioXpInterlinkMenu() {
                 type="button"
                 onClick={() => setIsOpen((value) => !value)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
-                title="BIOXP LINK"
+                title="BioXP"
             >
                 <span className={`w-2 h-2 rounded-full ${indicatorClass}`} />
-                BIOXP LINK
-                <span className="text-[10px] text-slate-500">{statusLabel}</span>
+                BioXP
             </button>
 
             {isOpen && (
@@ -156,7 +155,7 @@ export function BioXpInterlinkMenu() {
                         data-bms-drag-scroll-ignore="true"
                     >
                         <div className="flex items-center justify-between border-b border-slate-700 pb-2">
-                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">BIOXP LINK</p>
+                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">BioXP</p>
                             <button
                                 type="button"
                                 onClick={() => state.refetch()}

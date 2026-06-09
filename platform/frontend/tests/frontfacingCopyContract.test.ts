@@ -45,7 +45,6 @@ test('Stats Toolkit landing keeps tabs/status copy compact', () => {
         'Empower, peaks, calibration, isoforms.',
         'QC, DOE/RSM, SPC, capability.',
         'qPCR · chromatography · DOE/statistics',
-        'Actions + logs.',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -55,6 +54,32 @@ test('Stats Toolkit landing keeps tabs/status copy compact', () => {
         'Manual analytical QC, DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
         'BMS-native analysis for QuantStudio, StepOnePlus, Waters Empower3',
         'Container lifecycle control panel for optional assay/statistics runtime packages.',
+        'Actions + logs.',
+    ]) {
+        rejectSnippet(source, stale);
+    }
+});
+
+test('top-bar add-on controls avoid explainer subtitles', () => {
+    const source = readSource('src', 'components', 'StatsToolsControlPanel.tsx')
+        + readSource('src', 'components', 'DbServiceControlPanel.tsx')
+        + readSource('src', 'components', 'BioXpInterlinkControlPanel.tsx');
+
+    for (const snippet of [
+        'Stats Tools',
+        'BMS DB',
+        'BioXP',
+        'Start',
+        'Start DB',
+        'Diagnostics',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
+        'Actions + logs.',
+        'State, actions, logs.',
+        'BIOXP LINK',
     ]) {
         rejectSnippet(source, stale);
     }
