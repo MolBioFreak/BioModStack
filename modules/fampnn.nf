@@ -80,6 +80,8 @@ process RunFAMPNN {
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/run/fampnn/sample_pkls", mode: 'copy', pattern: "fampnn_output/sample_pkls/*.pkl", saveAs: { fn -> fn.replace('fampnn_output/sample_pkls/', '') }
+    publishDir "${params.out_dir}/run/fampnn/seq_prob_metrics", mode: 'copy', pattern: "fampnn_seq_prob_metrics_*.jsonl"
     // Additional publishDir for child job collection - CollectFAMPNNOutputs looks in pdb_files
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
@@ -91,6 +93,7 @@ process RunFAMPNN {
     output:
     tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons
     path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq
+    path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true
     path "*.log"
 
     script:
@@ -144,6 +147,15 @@ process RunFAMPNN {
     # Combine metadata to jsonl file
     python /scripts/metadata_converter.py --input_dir results --input_ext ".json" \\
         --converter fampnn --output_file "fampnn_metadata_${batch_id}.jsonl"
+
+    if [ -d "fampnn_output/sample_pkls" ]; then
+        python /scripts/analyse_fampnn_seq_probs.py \\
+            --sample-pkl-dir "fampnn_output/sample_pkls" \\
+            --out-jsonl "fampnn_seq_prob_metrics_${batch_id}.jsonl" \\
+            --out-csv "fampnn_seq_prob_metrics_${batch_id}.csv"
+    else
+        printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
+    fi
     
     # EXPLICIT SYNC: Ensure files are written to output dir even if publishDir fails
     # This is a fallback for orchestrator-spawned child jobs where Nextflow may not complete publishDir
@@ -151,6 +163,10 @@ process RunFAMPNN {
         mkdir -p "${params.out_dir}/pdb_files" 2>/dev/null || true
         cp results/*.pdb "${params.out_dir}/pdb_files/" 2>/dev/null || true
         cp results/*.json "${params.out_dir}/pdb_files/" 2>/dev/null || true
+        mkdir -p "${params.out_dir}/run/fampnn/sample_pkls" "${params.out_dir}/run/fampnn/seq_prob_metrics" 2>/dev/null || true
+        cp fampnn_output/sample_pkls/*.pkl "${params.out_dir}/run/fampnn/sample_pkls/" 2>/dev/null || true
+        cp fampnn_seq_prob_metrics_${batch_id}.jsonl "${params.out_dir}/run/fampnn/seq_prob_metrics/" 2>/dev/null || true
+        cp fampnn_seq_prob_metrics_${batch_id}.csv "${params.out_dir}/run/fampnn/seq_prob_metrics/" 2>/dev/null || true
         echo "FAMPNN outputs synced to ${params.out_dir}/pdb_files/"
     fi
     

@@ -634,6 +634,28 @@ def test_extract_fampnn_metrics_reads_sidecar_payload() -> None:
     assert metrics["sequence"] == payload["sequence"]
 
 
+def test_extract_fampnn_metrics_preserves_seq_prob_confidence_payload() -> None:
+    payload = {
+        "fampnn_avg_psce": 0.19,
+        "fampnn_seq_probs_available": True,
+        "fampnn_mean_sampled_prob": 0.77,
+        "fampnn_min_sampled_prob": 0.42,
+        "fampnn_mean_sampled_log_prob": -0.31,
+        "fampnn_total_sampled_log_prob": -12.4,
+        "fampnn_mean_entropy": 0.58,
+        "fampnn_max_entropy": 1.8,
+        "fampnn_low_confidence_positions": [{"chain_index": 0, "residue_index": 101, "aa": "Y"}],
+    }
+
+    metrics = _extract_fampnn_metrics(payload)
+
+    assert metrics["seq_probs_available"] is True
+    assert metrics["mean_sampled_prob"] == 0.77
+    assert metrics["mean_sampled_log_prob"] == -0.31
+    assert metrics["mean_entropy"] == 0.58
+    assert metrics["low_confidence_positions"][0]["residue_index"] == 101
+
+
 def test_candidate_source_design_ids_extracts_upstream_design_ids() -> None:
     assert _candidate_source_design_ids("job0_001_3c29fb38-2865-423d-a7a9-5beae79751cf_seq_0") == [
         "3c29fb38-2865-423d-a7a9-5beae79751cf",
