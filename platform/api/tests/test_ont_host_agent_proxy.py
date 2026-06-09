@@ -103,3 +103,46 @@ def test_host_agent_ont_routes_return_discovery_payload(monkeypatch) -> None:
         "fake_or_demo_devices": False,
     }
     assert bms_host_agent.ont_route_payload("/ont/positions/missing") is None
+
+
+def test_host_agent_protocol_options_route_returns_truthful_preflight(monkeypatch) -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        bms_host_agent,
+        "discover_ont_status",
+        lambda: {
+            "implementation_status": "configured",
+            "live_devices": [
+                {
+                    "position": "X1",
+                    "running": False,
+                    "flow_cell": {"present": True, "product_code": "FLO-MIN114"},
+                }
+            ],
+            "fake_or_demo_devices": False,
+        },
+    )
+    monkeypatch.setattr(
+        bms_host_agent,
+        "discover_ont_protocol_options",
+        lambda position, kit=None, basecalling_enabled=True, status=None: {
+            "position": position,
+            "kit": kit,
+            "can_start": True,
+            "blockers": [],
+            "basecalling_enabled": basecalling_enabled,
+            "fake_or_demo_devices": False,
+        },
+    )
+
+    payload = bms_host_agent.ont_route_payload("/ont/positions/X1/protocol-options?kit=SQK-LSK114")
+
+    assert payload == {
+        "position": "X1",
+        "kit": "SQK-LSK114",
+        "can_start": True,
+        "blockers": [],
+        "basecalling_enabled": True,
+        "fake_or_demo_devices": False,
+    }
