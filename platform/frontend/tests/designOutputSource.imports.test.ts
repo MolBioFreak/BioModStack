@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     inferDesignAnalysisLens,
+    inferDesignResultSet,
     getOutputSourceLabel,
     inferDesignOutputSource,
     inferJobOutputSource,
@@ -183,4 +184,30 @@ test('classifies ConforNets conformer rows as ConforNets instead of generic desi
         assert.equal(inferDesignOutputSource(design), 'confornets');
         assert.equal(getOutputSourceLabel(design), 'ConforNets');
     }
+});
+
+
+test('infers selectable sequence and ppiflow result sets from durable stage contract', () => {
+    assert.equal(inferDesignResultSet({
+        name: 'fampnn_seq_001',
+        artifact_class: 'sequence_designed_complex',
+        stage_family: 'fampnn',
+        stage_mode: 'post_fampnn',
+    }), 'sequence_designs');
+
+    assert.equal(inferDesignResultSet({
+        name: 'fampnn_seq_001_ppiflow_sample0',
+        artifact_class: 'sequence_designed_complex',
+        stage_family: 'ppiflow',
+        stage_mode: 'maturation',
+        ppiflow_filter_passed: true,
+    }), 'ppiflow_passed');
+
+    assert.equal(inferDesignResultSet({
+        name: 'fampnn_seq_001_ppiflow_sample1',
+        artifact_class: 'sequence_designed_complex',
+        stage_family: 'ppiflow',
+        stage_mode: 'maturation',
+        ppiflow_filter_passed: false,
+    }), 'ppiflow_rejected');
 });
