@@ -75,6 +75,17 @@ export const METRIC_REGISTRY: MetricDescriptor[] = [
         caveat: 'Only available when validator iPTM and Rosetta interface score are present and formula/sign convention are recorded.',
         recommendedUse: 'Paper-style rerank',
     },
+    {
+        key: 'rosetta_interface_score',
+        aliases: ['rosetta_interface_dg'],
+        label: 'Rosetta interface score',
+        group: 'Rosetta/interface energetics',
+        unit: 'REU',
+        direction: 'more_negative_is_better',
+        source: 'rosetta_interface_analyzer',
+        caveat: 'Raw Rosetta InterfaceAnalyzerMover dG; more negative is better. Keep sign convention explicit before composite ranking.',
+        recommendedUse: 'Interface energetics and composite rerank input',
+    },
 ];
 
 const DESCRIPTOR_BY_KEY = new Map<string, MetricDescriptor>();

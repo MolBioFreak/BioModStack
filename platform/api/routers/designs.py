@@ -361,6 +361,17 @@ class DesignResponse(BaseModel):
     ppiflow_filter_passed: Optional[bool] = None
     ppiflow_filter_reason: Optional[str] = None
     ppiflow_loop_metrics: Optional[Dict[str, Any]] = None
+    rosetta_interface_score: Optional[float] = None
+    rosetta_interface_dg: Optional[float] = None
+    rosetta_interface_dsasa: Optional[float] = None
+    rosetta_interface_packstat: Optional[float] = None
+    rosetta_interface_shape_complementarity: Optional[float] = None
+    rosetta_interface_hbond_count: Optional[int] = None
+    rosetta_interface_id: Optional[str] = None
+    rosetta_interface_score_unit: Optional[str] = None
+    rosetta_interface_score_direction: Optional[str] = None
+    rosetta_interface_analyzer_used: Optional[bool] = None
+    rosetta_interface_warning: Optional[str] = None
     
     created_at: datetime
     
@@ -1806,6 +1817,17 @@ def _design_to_response(
         "ppiflow_filter_passed": ppiflow_filter.get("passed"),
         "ppiflow_filter_reason": ppiflow_filter.get("filter_reason"),
         "ppiflow_loop_metrics": ppiflow_score.get("loop_metrics"),
+        "rosetta_interface_score": ppiflow_score.get("rosetta_interface_score"),
+        "rosetta_interface_dg": ppiflow_score.get("rosetta_interface_dg"),
+        "rosetta_interface_dsasa": ppiflow_score.get("rosetta_interface_dsasa"),
+        "rosetta_interface_packstat": ppiflow_score.get("rosetta_interface_packstat"),
+        "rosetta_interface_shape_complementarity": ppiflow_score.get("rosetta_interface_shape_complementarity"),
+        "rosetta_interface_hbond_count": ppiflow_score.get("rosetta_interface_hbond_count"),
+        "rosetta_interface_id": ppiflow_score.get("rosetta_interface_id"),
+        "rosetta_interface_score_unit": ppiflow_score.get("rosetta_interface_score_unit"),
+        "rosetta_interface_score_direction": ppiflow_score.get("rosetta_interface_score_direction"),
+        "rosetta_interface_analyzer_used": ppiflow_score.get("rosetta_interface_analyzer_used"),
+        "rosetta_interface_warning": ppiflow_score.get("rosetta_interface_warning"),
     }
     for field_name, fallback_value in fallback_fields.items():
         if data.get(field_name) in (None, "", [], {}, ()):
