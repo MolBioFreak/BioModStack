@@ -6,11 +6,12 @@ import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
 import { NanoporeTemplate } from './NanoporeTemplate';
+import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 
-type ToolkitView = 'launch' | 'runs';
+type ToolkitView = 'launch' | 'instrument' | 'runs';
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
 type StageOutputsMap = Record<string, string[]>;
 
@@ -3819,7 +3820,17 @@ export function NGSToolkit() {
                                 }`}
                             style={view === 'launch' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
-                            Launch
+                            Analyze existing data
+                        </button>
+                        <button
+                            onClick={() => setView('instrument')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'instrument'
+                                ? 'text-white'
+                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
+                                }`}
+                            style={view === 'instrument' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
+                        >
+                            Start instrument run
                         </button>
                         <button
                             onClick={() => setView('runs')}
@@ -3856,6 +3867,8 @@ export function NGSToolkit() {
                     onBack={() => setView('runs')}
                     initialValues={initialValues}
                 />
+            ) : view === 'instrument' ? (
+                <OntInstrumentPanel onAnalyzeExistingData={() => setView('launch')} />
             ) : (
                 <section className="space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
