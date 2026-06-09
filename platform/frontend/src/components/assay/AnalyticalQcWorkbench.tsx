@@ -363,7 +363,7 @@ export function AnalyticalQcWorkbench() {
                 <div className="space-y-4">
                     <AssayOutputCard
                         title="QC Summary"
-                        description="Included/excluded row counts, clean values, cross-run variability, and grouped statistics appear after QC runs."
+                        description="Included/excluded rows, groups, runs."
                     >
                         {!result ? (
                             <AssayEmptyState
@@ -419,7 +419,7 @@ export function AnalyticalQcWorkbench() {
 
                     {result ? (
                         <>
-                            <AssayOutputCard title="Cross-run statistics" description="Run means are rolled up by final group/bunch to show between-run drift and precision.">
+                            <AssayOutputCard title="Cross-run statistics" description="Between-run drift and precision.">
                                 {result.crossRunStats.length ? (
                                     <div className="overflow-x-auto rounded-lg border border-[var(--border-primary)]">
                                         <table className="w-full text-xs">
@@ -452,18 +452,18 @@ export function AnalyticalQcWorkbench() {
                                         </table>
                                     </div>
                                 ) : (
-                                    <AssayEmptyState title="No cross-run rollup" description="Map a run/batch column and keep numeric rows included to compute cross-run statistics." />
+                                    <AssayEmptyState title="No cross-run rollup" description="Map run/batch + value columns first." />
                                 )}
                             </AssayOutputCard>
 
-                            <AssayOutputCard title="Grouped and bunched summaries" description="Within-group and group-by-run statistics use the cleaned included rows.">
+                            <AssayOutputCard title="Grouped and bunched summaries" description="Cleaned group/run stats.">
                                 <div className="space-y-4">
                                     <StatTable rows={result.groupStats} title="Group" />
                                     <StatTable rows={result.groupRunStats} title="Group / run" />
                                 </div>
                             </AssayOutputCard>
 
-                            <AssayOutputCard title="Cleaned row ledger" description="Manual decisions stay inspectable; export the sanitized row ledger for review or downstream analysis.">
+                            <AssayOutputCard title="Cleaned row ledger" description="Inspectable included/excluded rows.">
                                 <div className="mb-3 flex justify-end">
                                     <button
                                         type="button"
