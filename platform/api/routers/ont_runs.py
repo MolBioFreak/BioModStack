@@ -42,6 +42,16 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
 
 
+@router.post("/runs/{run_id}/handoff/plasmid-qc")
+async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return ont_run_control.build_plasmid_qc_handoff(run_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+
+
 @router.post("/runs/{run_id}/stop")
 async def ont_stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
