@@ -2715,6 +2715,7 @@ export interface OntLiveDevice {
     running?: boolean;
     available_for_run?: boolean;
     flow_cell?: OntFlowCellInfo;
+    fake_or_demo_device?: boolean;
 }
 
 export interface OntDeviceStatus {
@@ -2731,7 +2732,7 @@ export interface OntInstrumentRun {
     status: string;
     handoff_ready?: boolean;
     output_files?: Record<string, string[]>;
-    fake_or_demo_devices: false;
+    fake_or_demo_devices: boolean;
 }
 
 export interface OntProtocolOptions {
