@@ -2,6 +2,7 @@
  * SequenceHeader - Header bar with sequence metadata and actions
  */
 
+import { useCallback, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ExportDropdown } from './ExportDropdown';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
@@ -73,12 +74,88 @@ export function SequenceHeader({
     const gcContent = calculateGC(sequenceData.sequence);
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
     const moleculeLabel = sequenceData.moleculeLabel || sequenceData.sequenceType.toUpperCase();
+    const dragState = useRef<{
+        pointerId: number | null;
+        startX: number;
+        startScrollLeft: number;
+        didDrag: boolean;
+        suppressClickUntil: number;
+    }>({
+        pointerId: null,
+        startX: 0,
+        startScrollLeft: 0,
+        didDrag: false,
+        suppressClickUntil: 0,
+    });
+
+    const handleHeaderPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0 || event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) {
+            return;
+        }
+
+        dragState.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startScrollLeft: event.currentTarget.scrollLeft,
+            didDrag: false,
+            suppressClickUntil: dragState.current.suppressClickUntil,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+    }, []);
+
+    const handleHeaderPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        const state = dragState.current;
+        if (state.pointerId !== event.pointerId) {
+            return;
+        }
+
+        const deltaX = event.clientX - state.startX;
+        if (Math.abs(deltaX) > 3) {
+            state.didDrag = true;
+            event.preventDefault();
+        }
+        event.currentTarget.scrollLeft = state.startScrollLeft - deltaX;
+    }, []);
+
+    const releaseHeaderPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        const state = dragState.current;
+        if (state.pointerId !== event.pointerId) {
+            return;
+        }
+
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        dragState.current = {
+            ...state,
+            pointerId: null,
+            didDrag: false,
+            suppressClickUntil: state.didDrag ? performance.now() + 250 : state.suppressClickUntil,
+        };
+    }, []);
+
+    const handleHeaderClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+        if (performance.now() > dragState.current.suppressClickUntil) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        dragState.current.suppressClickUntil = 0;
+    }, []);
 
     return (
         <div className="sequence-header bg-slate-800 border-b border-slate-700">
             <div
                 data-sequence-header-scroll
-                className="overflow-x-auto px-4 py-2"
+                className="sequence-header-scroll overflow-x-auto px-4 py-2"
+                title="Drag left or right to reveal more sequence actions"
+                onPointerDown={handleHeaderPointerDown}
+                onPointerMove={handleHeaderPointerMove}
+                onPointerUp={releaseHeaderPointer}
+                onPointerCancel={releaseHeaderPointer}
+                onLostPointerCapture={releaseHeaderPointer}
+                onClickCapture={handleHeaderClickCapture}
             >
                 <div className="flex min-w-max items-center justify-between gap-4">
                     {/* Left: Sequence info */}
