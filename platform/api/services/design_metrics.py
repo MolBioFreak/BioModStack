@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
@@ -28,6 +29,30 @@ def _has_nonempty(subject: Any, *keys: str) -> bool:
         if value not in (None, "", [], {}):
             return True
     return False
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _first_numeric_value(subject: Any, *keys: str) -> Optional[float]:
+    for key in keys:
+        parsed = _safe_float(_value_from_subject(subject, key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _first_numeric_confidence(confidence: Mapping[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        parsed = _safe_float(confidence.get(key))
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def metric_record(
@@ -142,8 +167,88 @@ def build_ppiflow_local_objective_metric(
     )
 
 
+def build_rosetta_interface_metric(
+    *,
+    value: Optional[float],
+    artifact_path: Optional[str] = None,
+    interface_id: Optional[str] = None,
+    stage_mode: Optional[str] = "maturation",
+) -> Dict[str, Any]:
+    return metric_record(
+        metric_key="rosetta_interface_score",
+        display_name="Rosetta interface score",
+        value=value,
+        unit="REU",
+        direction="more_negative_is_better",
+        stage_family="ppiflow",
+        stage_mode=stage_mode,
+        metric_source="rosetta_interface_analyzer",
+        scoring_backend="pyrosetta_interface_analyzer_mover",
+        artifact_path=artifact_path,
+        formula="Rosetta InterfaceAnalyzerMover dG for antibody-vs-antigen chain groups",
+        scope="interface",
+        region_scope="antibody_antigen_interface",
+        is_model_native=False,
+        is_bms_derived=True,
+        is_validator_metric=False,
+        is_final_rank_metric=False,
+        confidence_level="physics_score",
+        notes="Raw Rosetta dG in REU; more negative is better. Preserve sign convention before combining with validator confidence.",
+        provenance={
+            "interface_id": interface_id,
+            "score_unit": "REU",
+            "score_direction": "more_negative_is_better",
+            "dockq_used": False,
+            "refold_comparison_used": False,
+        },
+    )
+
+
+def build_ppiflow_paper_rank_metric(
+    *,
+    validator_iptm: Optional[float],
+    rosetta_interface_score: Optional[float],
+    artifact_path: Optional[str] = None,
+    stage_mode: Optional[str] = "maturation",
+) -> Dict[str, Any]:
+    value = None
+    if validator_iptm is not None and rosetta_interface_score is not None:
+        value = round(100.0 * validator_iptm - rosetta_interface_score, 6)
+    return metric_record(
+        metric_key="ppiflow_paper_rank_score",
+        display_name="PPIFlow paper-style composite rank",
+        value=value,
+        unit="composite_score",
+        direction="higher_is_better",
+        stage_family="ppiflow",
+        stage_mode=stage_mode,
+        metric_source="validator_confidence_plus_rosetta_interface",
+        scoring_backend="biomodstack_metric_harmonization",
+        artifact_path=artifact_path,
+        formula="100 * validator_iptm - rosetta_interface_score",
+        scope="design",
+        region_scope="complex",
+        is_model_native=False,
+        is_bms_derived=True,
+        is_validator_metric=True,
+        is_final_rank_metric=True,
+        confidence_level="paper_style_composite_when_inputs_present",
+        notes="Paper-style PPIFlow rank is only valid when validator iPTM and raw Rosetta interface score are both present. DockQ/refold are intentionally excluded unless a reference-backed comparison workflow supplies them explicitly.",
+        provenance={
+            "validator_iptm": validator_iptm,
+            "rosetta_interface_score": rosetta_interface_score,
+            "rosetta_score_direction": "more_negative_is_better",
+            "dockq_used": False,
+            "refold_comparison_used": False,
+        },
+    )
+
+
 def build_design_metric_provenance(subject: Any) -> Dict[str, Any]:
     provenance: Dict[str, Any] = {"metrics": []}
+    confidence = _confidence_payload(subject)
+    artifact_path = _value_from_subject(subject, "json_path") or _value_from_subject(subject, "pdb_path")
+    stage_mode = _value_from_subject(subject, "stage_mode") or "maturation"
     fampnn_psce = _value_from_subject(subject, "fampnn_psce")
     if fampnn_psce is not None:
         provenance["metrics"].append(
@@ -161,6 +266,30 @@ def build_design_metric_provenance(subject: Any) -> Dict[str, Any]:
                 objective_mode=_value_from_subject(subject, "ppiflow_objective_mode"),
                 artifact_path=_value_from_subject(subject, "json_path"),
                 stage_mode=_value_from_subject(subject, "stage_mode") or "maturation",
+            )
+        )
+    rosetta_interface_score = _first_numeric_value(subject, "rosetta_interface_score", "rosetta_interface_dg")
+    if rosetta_interface_score is None:
+        rosetta_interface_score = _first_numeric_confidence(confidence, "rosetta_interface_score", "rosetta_interface_dg")
+    validator_iptm = _first_numeric_value(subject, "iptm", "ptm")
+    if validator_iptm is None:
+        validator_iptm = _first_numeric_confidence(confidence, "iptm", "ptm", "validator_iptm")
+    if rosetta_interface_score is not None:
+        provenance["metrics"].append(
+            build_rosetta_interface_metric(
+                value=rosetta_interface_score,
+                artifact_path=artifact_path,
+                interface_id=_value_from_subject(subject, "rosetta_interface_id"),
+                stage_mode=stage_mode,
+            )
+        )
+    if validator_iptm is not None and rosetta_interface_score is not None:
+        provenance["metrics"].append(
+            build_ppiflow_paper_rank_metric(
+                validator_iptm=validator_iptm,
+                rosetta_interface_score=rosetta_interface_score,
+                artifact_path=artifact_path,
+                stage_mode=stage_mode,
             )
         )
     return provenance
@@ -185,7 +314,7 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
         or _has_nonempty(subject, "pair_chains_iptm")
         or confidence.get("iptm") is not None
         or confidence.get("pair_chains_iptm") is not None
-        or confidence.get("validator_backend") in {"af3score", "boltz2", "protenix"}
+        or confidence.get("validator_backend") in {"boltz2", "protenix"}
     )
     has_rosetta = bool(
         _has_numeric(subject, "rosetta_interface_score")
