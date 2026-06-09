@@ -85,6 +85,40 @@ test('top-bar add-on controls avoid explainer subtitles', () => {
     }
 });
 
+test('analytics, BioXP USB, and assay QC panels keep copy terse', () => {
+    const source = readSource('src', 'components', 'AnalyticsDashboard.tsx')
+        + readSource('src', 'components', 'BioXpCockpit.tsx')
+        + readSource('src', 'components', 'QualitySettingsPanel.tsx')
+        + readSource('src', 'components', 'assay', 'AnalyticalQcWorkbench.tsx');
+
+    for (const snippet of [
+        'Backbone screen: target contacts, hotspot coverage, RFA quality.',
+        'Generator-native confidence, affinity priors, batch shape.',
+        'PAE matrix; chain bands when available.',
+        'Capture-only. No motion.',
+        'Stage presets tune start_t, samples, ranking, and anchor strictness.',
+        'Included/excluded rows, groups, runs.',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
+        'Orientation metrics will surface here automatically once they are persisted.',
+        'This view emphasizes generator-native confidence, affinity priors, and batch-shape signals.',
+        'RFA review should lead with contact geometry, hotspot coverage',
+        'This lens now drives the top-of-tab posture.',
+        'BMS/workstation side is staged now; handler-local endpoints own actual usbmon capture when powered.',
+        'What the handler-side implementation must return before we trust a run.',
+        'Stage-optimized mode follows the repo PPIFlow guidance for the selected stage.',
+        'Core partial-flow controls below are currently managed by the selected stage strategy.',
+        'Included/excluded row counts, clean values, cross-run variability, and grouped statistics appear after QC runs.',
+        'Run means are rolled up by final group/bunch to show between-run drift and precision.',
+        'Manual decisions stay inspectable; export the sanitized row ledger for review or downstream analysis.',
+    ]) {
+        rejectSnippet(source, stale);
+    }
+});
+
 test('Stats Toolkit sub-workbenches keep import/QC copy compact', () => {
     const qpcrSource = readSource('src', 'components', 'qpcr', 'index.tsx')
         + readSource('src', 'components', 'qpcr', 'RawDataImport.tsx');

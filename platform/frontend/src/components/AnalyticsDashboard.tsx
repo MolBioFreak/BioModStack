@@ -55,12 +55,12 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
     },
     rfantibody: {
         title: 'RFantibody Backbone Gate',
-        description: 'Backbone screening and target-contact metrics from the RFA review flow. Orientation metrics will surface here automatically once they are persisted.',
+        description: 'Backbone screen: target contacts, hotspot coverage, RFA quality.',
         accent: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
     },
     boltzgen: {
         title: 'BoltzGen Generator Batch',
-        description: 'All-atom de novo nanobody candidates before refinement. This view emphasizes generator-native confidence, affinity priors, and batch-shape signals.',
+        description: 'Generator-native confidence, affinity priors, batch shape.',
         accent: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
     },
     fampnn: {
@@ -852,10 +852,10 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     })();
     const lensPrimaryMetricDescription = (() => {
         if (resolvedAnalysisLens === 'rfantibody') {
-            return 'RFA review should lead with contact geometry, hotspot coverage, and RFA-native quality fields rather than validator-style per-residue traces.';
+            return 'Contact geometry, hotspot coverage, RFA-native quality.';
         }
         if (resolvedAnalysisLens === 'boltzgen') {
-            return 'BoltzGen batches should lead with generator-native confidence and affinity priors, then hand off shortlisted cohorts into refinement and validation.';
+            return 'Generator confidence, affinity priors, then shortlist.';
         }
         if (resolvedAnalysisLens === 'fampnn') {
             return 'Sequence triage should lead with PSCE and related sequence-quality summaries before structural validation exists.';
@@ -1529,7 +1529,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
 
                 <PlotCard
                     title="Predicted Aligned Error"
-                    description="PAE matrix for the selected design. Chain region bands are derived from the per-chain pLDDT payload when available."
+                    description="PAE matrix; chain bands when available."
                     hasData={!!paeMatrix}
                     emptyMessage="No cached PAE matrix is available for the selected design. Run PAE Matrix above to persist it."
                 >
@@ -1671,7 +1671,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                         <div className="text-sm font-semibold text-slate-100">Current Lens</div>
                         <p className="mt-2 text-sm text-slate-300">{focusMeta.title}</p>
                         <p className="mt-2 text-xs leading-5 text-slate-400">
-                            This lens now drives the top-of-tab posture. Non-validator stages no longer lead with generic per-residue confidence before their own native analytics.
+                            Lens-native metrics first.
                         </p>
                     </div>
                     <div className="rounded-2xl border border-slate-700/60 bg-slate-900/55 p-4 shadow-xl shadow-slate-950/20">
@@ -1726,9 +1726,9 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
 
                     <PlotCard
                         title="Validator RMSD vs Interface Agreement"
-                        description="Tracks structure agreement between sequence-filled outputs and the validator signal driving the downstream loop."
+                        description="Validator structure agreement."
                         hasData={!!validatorRmsdKey && !!validatorAgreementKey && buildScatter(validatorRmsdKey, validatorAgreementKey, 'plddt_overall').length > 0}
-                        emptyMessage="No paired RMSD and interface-agreement metrics were found. If ipSAE or validator RMSD starts being persisted, this card will populate automatically."
+                        emptyMessage="No paired RMSD/interface-agreement metrics yet."
                     >
                         {validatorRmsdKey && validatorAgreementKey ? (
                             <Plot
