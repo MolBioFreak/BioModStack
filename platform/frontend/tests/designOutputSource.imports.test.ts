@@ -187,6 +187,32 @@ test('classifies ConforNets conformer rows as ConforNets instead of generic desi
 });
 
 
+test('unknown models fail closed even when metric names resemble known analyzers', () => {
+    const unknownDesign = {
+        name: 'new_model_candidate_001',
+        artifact_class: 'novel_structure',
+        stage_family: 'new_public_model',
+        stage_mode: 'predict',
+        confidence_metrics: {
+            plddt: 81.2,
+            ranking_score: 0.93,
+            fampnn: {
+                fampnn_avg_psce: 0.7,
+            },
+        },
+        provenance: {
+            model_id: 'new_public_model',
+        },
+        fampnn_psce: 0.7,
+    };
+
+    assert.equal(inferDesignOutputSource(unknownDesign), 'all');
+    assert.equal(inferDesignAnalysisLens(unknownDesign), null);
+    assert.equal(inferDesignResultSet(unknownDesign), null);
+    assert.equal(getOutputSourceLabel(unknownDesign), 'Other');
+});
+
+
 test('infers selectable sequence and ppiflow result sets from durable stage contract', () => {
     assert.equal(inferDesignResultSet({
         name: 'fampnn_seq_001',
