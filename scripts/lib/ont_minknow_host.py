@@ -178,6 +178,40 @@ def build_manager(config: MinknowHostConfig):
     )
 
 
+def start_protocol(position: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Start a MinKNOW protocol for a position, or fail without fake run IDs.
+
+    Full MinKNOW protocol argument construction is intentionally conservative;
+    until protocol resolution is wired to a live Manager connection, this endpoint
+    returns an explicit non-implemented/error payload rather than fabricating a
+    run ID.
+    """
+    if not bool(payload.get("confirm_start")):
+        return 400, {"detail": "confirm_start=true is required before starting a MinKNOW run"}
+    status = discover_status()
+    if status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return 503, {
+            "detail": "MinKNOW is not configured/reachable from the BMS host-agent",
+            "implementation_status": status.get("implementation_status"),
+            "fake_or_demo_devices": False,
+        }
+    return 501, {
+        "detail": "MinKNOW protocol start is not implemented until protocol resolution is live-validated",
+        "position": position,
+        "fake_or_demo_devices": False,
+    }
+
+
+def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    if not bool(payload.get("confirm_stop")):
+        return 400, {"detail": "confirm_stop=true is required before stopping a MinKNOW run"}
+    return 501, {
+        "detail": "MinKNOW protocol stop is not implemented until live run-control wiring is validated",
+        "minknow_run_id": minknow_run_id,
+        "fake_or_demo_devices": False,
+    }
+
+
 def discover_status(
     *,
     config: MinknowHostConfig | None = None,
