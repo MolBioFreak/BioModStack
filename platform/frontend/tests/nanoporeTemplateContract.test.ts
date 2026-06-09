@@ -107,7 +107,7 @@ test('NGS instrument mode is separated from file-analysis launch', () => {
     assert.match(api, /fetchOntDeviceStatus/u);
     assert.match(api, /startOntInstrumentRun/u);
     assert.match(api, /stopOntInstrumentRun/u);
-    assert.match(panel, /No instrument run button is enabled without a real available position/u);
+    assert.match(panel, /Real starts remain disabled until a real available position is present/u);
     assert.match(panel, /Analyze existing data/u);
     assert.match(panel, /Start instrument run/u);
 });
@@ -124,5 +124,10 @@ test('NGS instrument panel exposes an explicit fake Mk1D test mode without claim
     assert.match(panel, /does not prove MinKNOW connectivity or start a real instrument run/u);
     assert.match(panel, /Start fake test run/u);
     assert.match(panel, /fake_or_demo_devices: true/u);
+    assert.match(panel, /Instrument positions/u);
+    assert.match(panel, /Run setup/u);
+    assert.match(panel, /Start packet/u);
+    assert.match(panel, /POD5 raw signal/u);
+    assert.match(panel, /Basecaller/u);
     assert.match(api, /fake_or_demo_device\?: boolean/u);
 });
