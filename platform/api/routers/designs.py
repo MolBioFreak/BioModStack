@@ -25,6 +25,7 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
 from services.result_contracts import resolve_result_contract
+from services.design_metrics import build_design_metric_completeness, build_design_metric_provenance
 from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
 
 
@@ -217,6 +218,8 @@ class DesignResponse(BaseModel):
     chains_ptm: Optional[Union[Dict[str, float], List[float]]] = None  # {"0":0.76} or [0.76, ...]
     pair_chains_iptm: Optional[Union[Dict[str, Dict[str, float]], List[List[float]]]] = None  # matrix
     confidence_metrics: Optional[Dict[str, Any]] = None
+    metric_provenance: Optional[Dict[str, Any]] = None
+    metric_completeness: Optional[Dict[str, Any]] = None
     ipsae: Optional[float] = None
     ipsae_binder_to_target: Optional[float] = None
     ipsae_target_to_binder: Optional[float] = None
@@ -1838,6 +1841,10 @@ def _design_to_response(
     )
     data["analysis_contract_id"] = contract.analysis_contract_id
     data["supported_analyzers"] = contract.supported_analyzers
+    if not isinstance(data.get("metric_provenance"), dict):
+        data["metric_provenance"] = build_design_metric_provenance({**data, "pdb_path": data.get("pdb_path")})
+    if not isinstance(data.get("metric_completeness"), dict):
+        data["metric_completeness"] = build_design_metric_completeness(data)
     data.update(_compute_import_metadata(design))
     return DesignResponse.model_validate(data)
 
