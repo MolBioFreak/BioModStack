@@ -120,3 +120,16 @@ def run_host_agent_service_action(
 ) -> dict[str, Any]:
     quoted_action = urllib.parse.quote(str(action), safe="")
     return _request_object("POST", _service_path(service_id, f"/{quoted_action}"), payload)
+
+
+def get_ont_status() -> dict[str, Any]:
+    return _request_object("GET", "/ont/status")
+
+
+def get_ont_positions() -> dict[str, Any]:
+    return _request_object("GET", "/ont/positions")
+
+
+def get_ont_position(position: str) -> dict[str, Any]:
+    quoted_position = urllib.parse.quote(str(position), safe="")
+    return _request_object("GET", f"/ont/positions/{quoted_position}")

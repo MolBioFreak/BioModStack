@@ -14,6 +14,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from routers import ont_devices  # noqa: E402
+from services import ont_device_control  # noqa: E402
 from services.ont_device_control import (  # noqa: E402
     DEVICE_CONTROL_STATUS_NOT_CONFIGURED,
     ONT_DEVICE_CONTROL_CAPABILITIES,
@@ -78,3 +79,26 @@ def test_ont_device_router_exposes_truthful_not_configured_status() -> None:
     assert payload["live_devices"] == []
     assert payload["fake_or_demo_devices"] is False
     assert payload["owner"] == "bms_service_api"
+
+
+def test_ont_device_status_can_delegate_to_minknow_adapter_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("BMS_ONT_MINKNOW_ENABLED", "1")
+    monkeypatch.setattr(
+        ont_device_control,
+        "discover_minknow_devices",
+        lambda: {
+            "implementation_status": "configured",
+            "minknow": {"host": "localhost", "manager_port": 9502},
+            "live_devices": [{"position": "X1", "device_type": "mk1d", "available_for_run": True}],
+            "fake_or_demo_devices": False,
+            "message": "fake adapter payload for unit test",
+        },
+    )
+
+    payload = get_device_control_status()
+
+    assert payload["owner"] == "bms_service_api"
+    assert payload["analysis_owner"] == "nextflow_analysis"
+    assert payload["implementation_status"] == "configured"
+    assert payload["live_devices"] == [{"position": "X1", "device_type": "mk1d", "available_for_run": True}]
+    assert payload["fake_or_demo_devices"] is False
