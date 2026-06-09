@@ -32,3 +32,9 @@ test('Results result-set filtering is based on contract fields, not filename-onl
     assert.match(outputSource, /ppiflow_filter_passed/);
     assert.doesNotMatch(outputSource, /result_set.*name\.includes/);
 });
+
+test('Results viewer labels visible rows by active result set instead of stale RF review set', () => {
+    assert.match(source, /activeResultSetLabel/);
+    assert.match(source, /visible in \$\{activeResultSetLabel\}/);
+    assert.doesNotMatch(source, /visible in \$\{loadedSavedReviewFilterSet \? `'/);
+});
