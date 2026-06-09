@@ -17,6 +17,7 @@ from services.ont_run_control import (  # noqa: E402
     reset_ont_run_store,
     start_instrument_run,
     stop_instrument_run,
+    refresh_instrument_run_status,
 )
 
 
@@ -165,3 +166,47 @@ def test_stop_instrument_run_requires_confirmation_and_uses_recorded_minknow_id(
 
     assert stopped["status"] == "stopped"
     assert calls[-1] == ("POST", "/ont/runs/MNK-RUN-002/stop", {"confirm_stop": True})
+
+
+def test_refresh_instrument_run_status_updates_real_output_readiness(monkeypatch, tmp_path: Path) -> None:
+    reset_ont_run_store()
+    fastq = tmp_path / "reads.fastq.gz"
+    fastq.write_text("@r1\nACGT\n+\n!!!!\n")
+
+    def fake_request(method, path, payload=None, *, query=None):
+        if path.endswith("/start"):
+            return {"minknow_run_id": "MNK-RUN-003", "status": "running", "position": "X1"}
+        return {
+            "status": "completed",
+            "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []},
+        }
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+    run = start_instrument_run("X1", {"kit": "SQK-LSK114", "confirm_start": True})
+
+    refreshed = refresh_instrument_run_status(run["id"])
+
+    assert refreshed["status"] == "completed"
+    assert refreshed["handoff_ready"] is True
+    assert refreshed["output_files"]["fastq"] == [str(fastq)]
+
+
+def test_refresh_instrument_run_status_does_not_mark_missing_outputs_ready(monkeypatch) -> None:
+    reset_ont_run_store()
+
+    def fake_request(method, path, payload=None, *, query=None):
+        if path.endswith("/start"):
+            return {"minknow_run_id": "MNK-RUN-004", "status": "running", "position": "X1"}
+        return {
+            "status": "completed",
+            "output_files": {"fastq": ["/missing/run.fastq.gz"], "pod5": [], "bam": []},
+        }
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+    run = start_instrument_run("X1", {"kit": "SQK-LSK114", "confirm_start": True})
+
+    refreshed = refresh_instrument_run_status(run["id"])
+
+    assert refreshed["status"] == "completed"
+    assert refreshed["handoff_ready"] is False
+    assert refreshed["output_files"]["fastq"] == []
