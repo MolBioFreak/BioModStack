@@ -7,6 +7,7 @@ import {
     useAxisStatusBatch,
     useBioXpCapabilities,
     useBioXpInterlinkState,
+    useBioXpOemPrograms,
     useBioXpOperationCapabilities,
     useBioXpOperationReadiness,
     useBioXpStatus,
@@ -1751,6 +1752,7 @@ export const BioXpCockpit = () => {
         isFetchedAfterMount: runtimeFetchedAfterMount,
         dataUpdatedAt: runtimeDataUpdatedAt,
     } = useRuntimeStatus(interlinkActive);
+    const oemPrograms = useBioXpOemPrograms(interlinkActive && ['controls', 'operator', 'service'].includes(activeTab));
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
     const motionArmStrictStartup = useMotionArmStrictStartup();
@@ -3510,6 +3512,33 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
                             {liveXyzMotionPanel}
+                            <SectionCard title="OEM Homing Parity — Source/Dry-Run Only">
+                                <div className="space-y-3 text-xs text-content-muted">
+                                    <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+                                        <span className="px-2 py-1 rounded bg-warning/10 text-warning border border-warning/20">LIVE HOMING BLOCKED</span>
+                                        <span className="px-2 py-1 rounded bg-accent/10 text-accent border border-accent/20">BMS THIN PROXY</span>
+                                        <span className="px-2 py-1 rounded bg-surface border border-border-secondary">USB/MOTION: {oemPrograms.data?.opened_usb === false && oemPrograms.data?.physical_motion === false ? 'NO' : 'UNKNOWN'}</span>
+                                    </div>
+                                    {oemPrograms.isLoading ? (
+                                        <div>Loading robot-local source/dry-run program inventory…</div>
+                                    ) : oemPrograms.isError ? (
+                                        <div className="text-error">{getErrorMessage(oemPrograms.error) ?? 'OEM program inventory unavailable.'}</div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                            {(oemPrograms.data?.programs ?? []).slice(0, 10).map((program) => (
+                                                <div key={program.name} className="rounded border border-border-secondary bg-surface/40 p-2">
+                                                    <div className="font-mono text-content">{program.name}</div>
+                                                    <div>source: {program.oem_symbol ?? 'unknown'}</div>
+                                                    <div>parity: {program.parity_label ?? 'not declared'}</div>
+                                                    <div>live default: {program.live_allowed_default === false ? 'blocked' : 'unknown'}</div>
+                                                    {program.blockers?.length ? <div>blockers: {program.blockers.join(', ')}</div> : null}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <JsonBlock title="OEM source/dry-run inventory payload" data={oemPrograms.data} fallback="No OEM program inventory loaded." />
+                                </div>
+                            </SectionCard>
                             {oemReadbackPanel}
                             <BioXpProtocolRunner
                                 linkageConfigured={runtimeSummary.linkageConfigured}
