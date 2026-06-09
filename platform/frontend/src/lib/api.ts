@@ -831,6 +831,11 @@ export interface Design {
     result_set_label?: string | null;
     analysis_contract_id?: string | null;
     supported_analyzers?: string[];
+    viewer_capabilities?: string[];
+    required_fields?: string[];
+    required_artifacts?: string[];
+    result_contract_schema_version?: number | null;
+    result_contract_source?: string | null;
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;
