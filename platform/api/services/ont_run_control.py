@@ -8,8 +8,19 @@ state supports it; it does not fabricate protocol options or device positions.
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from services.host_agent_client import get_ont_position, get_ont_status, request_host_agent
+
+_ONT_RUN_STORE: dict[str, dict[str, Any]] = {}
+
+
+def reset_ont_run_store() -> None:
+    _ONT_RUN_STORE.clear()
+
+
+def _new_run_id() -> str:
+    return f"ont-run-{uuid4().hex}"
 
 
 def _flowcell_present(position: dict[str, Any]) -> bool:
@@ -50,6 +61,51 @@ def build_start_preflight(
         "flow_cell": position.get("flow_cell") or {"present": False},
         "fake_or_demo_devices": False,
     }
+
+
+def start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Start an ONT instrument run through the host-agent and record its BMS ID."""
+    if not bool(payload.get("confirm_start")):
+        raise ValueError("confirm_start=true is required before starting a MinKNOW run")
+    host_payload = request_host_agent("POST", f"/ont/positions/{position}/start", payload)
+    if not isinstance(host_payload, dict):
+        raise RuntimeError(f"host-agent returned non-object start payload: {host_payload!r}")
+    minknow_run_id = str(host_payload.get("minknow_run_id") or host_payload.get("run_id") or "").strip()
+    if not minknow_run_id:
+        raise RuntimeError("host-agent start response did not include minknow_run_id")
+    run_id = _new_run_id()
+    record = {
+        "id": run_id,
+        "minknow_run_id": minknow_run_id,
+        "position": host_payload.get("position") or position,
+        "status": host_payload.get("status") or "starting",
+        "sample_id": payload.get("sample_id"),
+        "experiment_group": payload.get("experiment_group"),
+        "kit": payload.get("kit"),
+        "output_directories": host_payload.get("output_directories") or {},
+        "last_minknow_payload": host_payload,
+        "fake_or_demo_devices": False,
+    }
+    _ONT_RUN_STORE[run_id] = record
+    return dict(record)
+
+
+def get_instrument_run(run_id: str) -> dict[str, Any] | None:
+    record = _ONT_RUN_STORE.get(run_id)
+    return dict(record) if record else None
+
+
+def stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(payload.get("confirm_stop")):
+        raise ValueError("confirm_stop=true is required before stopping a MinKNOW run")
+    record = _ONT_RUN_STORE.get(run_id)
+    if record is None:
+        raise KeyError(run_id)
+    host_payload = request_host_agent("POST", f"/ont/runs/{record['minknow_run_id']}/stop", {"confirm_stop": True})
+    status = host_payload.get("status", "stopped") if isinstance(host_payload, dict) else "stopped"
+    record = {**record, "status": status, "last_minknow_payload": host_payload}
+    _ONT_RUN_STORE[run_id] = record
+    return dict(record)
 
 
 def get_position_protocol_options(

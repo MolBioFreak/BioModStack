@@ -12,7 +12,12 @@ if str(API_ROOT) not in sys.path:
 
 from routers import ont_runs  # noqa: E402
 from services import ont_run_control  # noqa: E402
-from services.ont_run_control import build_start_preflight  # noqa: E402
+from services.ont_run_control import (  # noqa: E402
+    build_start_preflight,
+    reset_ont_run_store,
+    start_instrument_run,
+    stop_instrument_run,
+)
 
 
 def test_start_preflight_blocks_missing_flowcell() -> None:
@@ -94,3 +99,69 @@ def test_protocol_options_endpoint_uses_host_agent_payload(monkeypatch) -> None:
     assert payload["position"] == "X1"
     assert payload["can_start"] is True
     assert payload["fake_or_demo_devices"] is False
+
+
+def test_start_instrument_run_requires_explicit_confirmation() -> None:
+    try:
+        start_instrument_run("X1", {"kit": "SQK-LSK114", "confirm_start": False})
+    except ValueError as exc:
+        assert "confirm_start" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("start should require explicit confirmation")
+
+
+def test_start_instrument_run_records_bms_and_minknow_ids(monkeypatch) -> None:
+    reset_ont_run_store()
+    monkeypatch.setattr(
+        ont_run_control,
+        "request_host_agent",
+        lambda method, path, payload=None, *, query=None: {
+            "minknow_run_id": "MNK-RUN-001",
+            "status": "running",
+            "position": "X1",
+            "output_directories": {"reads": "/data/minknow/run1"},
+        },
+    )
+
+    run = start_instrument_run(
+        "X1",
+        {
+            "sample_id": "plasmid_A12",
+            "experiment_group": "bms_plasmid_verification",
+            "kit": "SQK-LSK114",
+            "confirm_start": True,
+        },
+    )
+
+    assert run["id"].startswith("ont-run-")
+    assert run["minknow_run_id"] == "MNK-RUN-001"
+    assert run["position"] == "X1"
+    assert run["status"] == "running"
+    assert run["sample_id"] == "plasmid_A12"
+    assert run["fake_or_demo_devices"] is False
+
+
+def test_stop_instrument_run_requires_confirmation_and_uses_recorded_minknow_id(monkeypatch) -> None:
+    reset_ont_run_store()
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_request(method, path, payload=None, *, query=None):
+        calls.append((method, path, payload))
+        if path.endswith("/start"):
+            return {"minknow_run_id": "MNK-RUN-002", "status": "running", "position": "X1"}
+        return {"status": "stopped"}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+    run = start_instrument_run("X1", {"kit": "SQK-LSK114", "confirm_start": True})
+
+    try:
+        stop_instrument_run(run["id"], {"confirm_stop": False})
+    except ValueError as exc:
+        assert "confirm_stop" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("stop should require explicit confirmation")
+
+    stopped = stop_instrument_run(run["id"], {"confirm_stop": True})
+
+    assert stopped["status"] == "stopped"
+    assert calls[-1] == ("POST", "/ont/runs/MNK-RUN-002/stop", {"confirm_stop": True})
