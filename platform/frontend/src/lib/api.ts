@@ -2696,3 +2696,64 @@ export const deletePrimer = (id: string) =>
 
 export const togglePrimerFavorite = (id: string) =>
     api.post<Primer>(`/api/molbio/primers/${id}/toggle-favorite`);
+
+
+// ============================================================
+// ONT INSTRUMENT CONTROL API
+// ============================================================
+export interface OntFlowCellInfo {
+    present: boolean;
+    flow_cell_id?: string | null;
+    product_code?: string | null;
+    sample_rate?: number | null;
+}
+
+export interface OntLiveDevice {
+    position: string;
+    device_type?: 'mk1b' | 'mk1d' | string | null;
+    state?: string | null;
+    running?: boolean;
+    available_for_run?: boolean;
+    flow_cell?: OntFlowCellInfo;
+}
+
+export interface OntDeviceStatus {
+    implementation_status: string;
+    live_devices: OntLiveDevice[];
+    fake_or_demo_devices: false;
+    message?: string;
+}
+
+export interface OntInstrumentRun {
+    id: string;
+    minknow_run_id: string;
+    position: string;
+    status: string;
+    handoff_ready?: boolean;
+    output_files?: Record<string, string[]>;
+    fake_or_demo_devices: false;
+}
+
+export interface OntProtocolOptions {
+    position: string;
+    can_start: boolean;
+    blockers: string[];
+    protocol_id?: string | null;
+    output_directories?: Record<string, string>;
+    fake_or_demo_devices: false;
+}
+
+export const fetchOntDeviceStatus = () =>
+    api.get<OntDeviceStatus>('/api/ont/devices/status');
+
+export const fetchOntProtocolOptions = (position: string, kit?: string) =>
+    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, { params: { kit } });
+
+export const startOntInstrumentRun = (position: string, payload: Record<string, unknown>) =>
+    api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/start`, payload);
+
+export const fetchOntInstrumentRun = (runId: string) =>
+    api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
+
+export const stopOntInstrumentRun = (runId: string, payload: { confirm_stop: boolean }) =>
+    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, payload);
