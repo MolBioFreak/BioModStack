@@ -131,6 +131,35 @@ def refresh_instrument_run_status(run_id: str) -> dict[str, Any]:
     return dict(refreshed)
 
 
+def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    record = _ONT_RUN_STORE.get(run_id)
+    if record is None:
+        raise KeyError(run_id)
+    reference = Path(str(payload.get("reference_fasta") or "")).expanduser()
+    if not reference.is_file():
+        raise ValueError("reference_fasta must point to a readable file")
+    output_files = record.get("output_files") if isinstance(record.get("output_files"), dict) else {}
+    fastq_files = output_files.get("fastq") or []
+    if not fastq_files:
+        raise ValueError("instrument run has no readable FASTQ output for plasmid QC handoff")
+    return {
+        "model_id": "nanopore",
+        "mode": "plasmid_qc",
+        "params": {
+            "ont_workflow_id": "ont_plasmid_qc",
+            "fastq_path": fastq_files[0],
+            "reference_fasta": str(reference),
+            "run_fastq_qc": True,
+            "run_modkit": False,
+            "modified_bases": "none",
+            "fastq_minimap2_preset": "map-ont",
+            "source_instrument_run_id": run_id,
+            "source_minknow_run_id": record.get("minknow_run_id"),
+        },
+        "fake_or_demo_devices": False,
+    }
+
+
 def stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not bool(payload.get("confirm_stop")):
         raise ValueError("confirm_stop=true is required before stopping a MinKNOW run")
