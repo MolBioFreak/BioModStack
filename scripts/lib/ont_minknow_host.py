@@ -110,6 +110,62 @@ def normalize_position(position: Any) -> dict[str, Any]:
     }
 
 
+def build_protocol_options_preflight(
+    *,
+    position: dict[str, Any],
+    kit: str | None,
+    basecalling_enabled: bool = True,
+    output_directories: dict[str, Any] | None = None,
+    protocol_id: str | None = None,
+    basecalling_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    flow_cell = position.get("flow_cell") if isinstance(position, dict) else None
+    if not (isinstance(flow_cell, dict) and flow_cell.get("present")):
+        blockers.append("flowcell_absent")
+    if bool(position.get("running")):
+        blockers.append("position_already_running")
+    if not str(kit or "").strip():
+        blockers.append("kit_missing")
+    if basecalling_enabled and not (basecalling_options or {}).get("simplex_models"):
+        blockers.append("basecalling_model_missing")
+    if not output_directories:
+        blockers.append("output_directory_missing")
+    return {
+        "position": position.get("position"),
+        "kit": kit,
+        "can_start": not blockers,
+        "blockers": blockers,
+        "protocol_id": protocol_id,
+        "basecalling_enabled": bool(basecalling_enabled),
+        "basecalling_options": basecalling_options or {},
+        "output_directories": output_directories or {},
+        "flow_cell": flow_cell or {"present": False},
+        "fake_or_demo_devices": False,
+    }
+
+
+def protocol_options(
+    position: str,
+    *,
+    kit: str | None = None,
+    basecalling_enabled: bool = True,
+    status: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    status = status or discover_status()
+    devices = status.get("live_devices") if isinstance(status, dict) else []
+    for device in devices or []:
+        if str(device.get("position") or "") == str(position):
+            output_dirs = ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
+            return build_protocol_options_preflight(
+                position=device,
+                kit=kit,
+                basecalling_enabled=basecalling_enabled,
+                output_directories=output_dirs,
+            )
+    return None
+
+
 def build_manager(config: MinknowHostConfig):
     from minknow_api.manager import Manager  # type: ignore[import-not-found]
 

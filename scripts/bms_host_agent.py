@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from lib.ont_minknow_host import discover_status as discover_ont_status
+from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT = "biomodstack-core-runtime"
@@ -323,7 +324,8 @@ def run_action(service_id: str, action: str, *, tail: int = 120, advanced: bool 
 
 def ont_route_payload(path: str) -> dict[str, Any] | None:
     """Return host-agent ONT route payloads or None for unknown/not-found routes."""
-    route_path = urlparse(path).path.rstrip("/") or "/"
+    parsed = urlparse(path)
+    route_path = parsed.path.rstrip("/") or "/"
     if route_path not in {"/ont/status", "/ont/positions"} and not route_path.startswith("/ont/positions/"):
         return None
 
@@ -337,6 +339,19 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
         return status
     if route_path == "/ont/positions":
         return {**base, "positions": devices}
+
+    if route_path.endswith("/protocol-options"):
+        requested = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/protocol-options")).strip().rstrip("/")
+        query = parse_qs(parsed.query)
+        kit = (query.get("kit") or [None])[0]
+        basecalling_text = str((query.get("basecalling_enabled") or ["1"])[0]).strip().lower()
+        basecalling_enabled = basecalling_text not in {"0", "false", "no", "off"}
+        return discover_ont_protocol_options(
+            requested,
+            kit=kit,
+            basecalling_enabled=basecalling_enabled,
+            status=status,
+        )
 
     requested = unquote(route_path.removeprefix("/ont/positions/")).strip()
     for device in devices:
@@ -384,7 +399,7 @@ class HostAgentHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        ont_payload = ont_route_payload(parsed.path)
+        ont_payload = ont_route_payload(self.path)
         if ont_payload is not None:
             self._send_json(200, ont_payload)
             return
