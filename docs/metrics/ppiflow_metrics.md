@@ -46,4 +46,4 @@ while the preprint/notebook wording uses subtraction. If Rosetta interface energ
 
 Rows with only BMS-local PPIFlow objective are `local_triage_only` / `partial`.
 Rows with validator confidence plus Rosetta interface score can receive a paper-style composite rank.
-Rows without DockQ/template-free refold validation should still show that final validation is incomplete.
+DockQ/refold is intentionally omitted from the core completeness contract unless a future workflow explicitly adds a reference-backed comparison artifact.
