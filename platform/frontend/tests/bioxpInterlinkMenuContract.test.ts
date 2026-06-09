@@ -10,12 +10,13 @@ const panelPath = resolve('src/components/BioXpInterlinkControlPanel.tsx');
 const panelSource = existsSync(panelPath) ? readFileSync(panelPath, 'utf8') : '';
 const interlinkStatusSource = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
 
-test('BIOXP LINK topbar menu exists but is gated by the install feature flag', () => {
+test('BioXP topbar menu exists but is gated by the install feature flag', () => {
     assert.ok(existsSync(panelPath), 'BioXpInterlinkControlPanel.tsx must exist');
     assert.match(layoutSource, /BioXpInterlinkMenu/);
     assert.match(layoutSource, /bmsFeatures\.bioxp\s*&&\s*<BioXpInterlinkMenu \/>/);
     assert.match(panelSource, /data-bms-bioxp-interlink-menu="true"/);
-    assert.match(panelSource, /BIOXP LINK/);
+    assert.match(panelSource, /BioXP/);
+    assert.doesNotMatch(panelSource, /BIOXP LINK/);
     assert.doesNotMatch(panelSource, /BioXP robot interlink/);
 });
 
