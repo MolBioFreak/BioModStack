@@ -7,6 +7,7 @@ state supports it; it does not fabricate protocol options or device positions.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -93,6 +94,41 @@ def start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, An
 def get_instrument_run(run_id: str) -> dict[str, Any] | None:
     record = _ONT_RUN_STORE.get(run_id)
     return dict(record) if record else None
+
+
+def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {"fastq": [], "pod5": [], "bam": []}
+    if not isinstance(raw_files, dict):
+        return normalized
+    for kind in normalized:
+        values = raw_files.get(kind) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            path = Path(str(value)).expanduser()
+            if path.is_file():
+                normalized[kind].append(str(path))
+    return normalized
+
+
+def refresh_instrument_run_status(run_id: str) -> dict[str, Any]:
+    record = _ONT_RUN_STORE.get(run_id)
+    if record is None:
+        raise KeyError(run_id)
+    host_payload = request_host_agent("GET", f"/ont/runs/{record['minknow_run_id']}")
+    if not isinstance(host_payload, dict):
+        raise RuntimeError(f"host-agent returned non-object run status payload: {host_payload!r}")
+    output_files = _existing_output_files(host_payload.get("output_files"))
+    refreshed = {
+        **record,
+        "status": host_payload.get("status") or record.get("status") or "unknown",
+        "output_files": output_files,
+        "handoff_ready": bool(output_files["fastq"] or output_files["bam"]),
+        "last_minknow_payload": host_payload,
+        "fake_or_demo_devices": False,
+    }
+    _ONT_RUN_STORE[run_id] = refreshed
+    return dict(refreshed)
 
 
 def stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:

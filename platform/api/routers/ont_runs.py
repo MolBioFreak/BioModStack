@@ -36,10 +36,10 @@ async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> di
 
 @router.get("/runs/{run_id}")
 async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
-    record = ont_run_control.get_instrument_run(run_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
-    return record
+    try:
+        return ont_run_control.refresh_instrument_run_status(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
 
 
 @router.post("/runs/{run_id}/stop")
