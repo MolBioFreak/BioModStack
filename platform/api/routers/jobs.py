@@ -700,8 +700,8 @@ def _terminal_closeout_design_count(output_path: Path) -> int:
                 or report.get("final_design_count")
                 or report.get("design_count")
             )
-            if status in {"complete", "completed"}:
-                counts.append(report_count or 1)
+            if status in {"complete", "completed"} and report_count > 0:
+                counts.append(report_count)
         except Exception:
             pass
 
@@ -4546,13 +4546,14 @@ async def list_jobs(
     for job, design_count in rows:
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
         stage_outputs = dict(job.stage_outputs or {})
-        review_count = _review_candidate_count_cached(job)
-        if (design_count or 0) == 0 and review_count is not None:
-            design_count = review_count
-        if (design_count or 0) == 0:
-            child_design_count = child_design_count_by_parent.get(job.id)
-            if child_design_count:
-                design_count = child_design_count
+        if job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+            review_count = _review_candidate_count_cached(job)
+            if (design_count or 0) == 0 and review_count is not None:
+                design_count = review_count
+            if (design_count or 0) == 0:
+                child_design_count = child_design_count_by_parent.get(job.id)
+                if child_design_count:
+                    design_count = child_design_count
         
         job_responses.append(JobResponse(
             id=job.id,

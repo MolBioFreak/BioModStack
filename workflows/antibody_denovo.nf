@@ -809,14 +809,31 @@ process CollectFAMPNNOutputs {
     collected_pdbs = []
     collected_jsons = []
     
+    def candidate_output_dirs(raw_output_dir):
+        raw = str(raw_output_dir)
+        candidates = [Path(raw)]
+        if raw.startswith("/var/lib/biomodstack/"):
+            candidates.append(Path("/mnt/BioModStack") / raw.removeprefix("/var/lib/biomodstack/"))
+        if raw.startswith("/mnt/BioModStack/"):
+            candidates.append(Path("/var/lib/biomodstack") / raw.removeprefix("/mnt/BioModStack/"))
+        seen = set()
+        ordered = []
+        for candidate in candidates:
+            key = str(candidate)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(candidate)
+        return ordered
+
     for job_idx, output_dir in enumerate(output_dirs):
-        dir_path = Path(output_dir)
-        if not dir_path.exists():
-            print(f"Warning: Output dir not found: {output_dir}")
+        dir_candidates = candidate_output_dirs(output_dir)
+        dir_path = next((candidate for candidate in dir_candidates if candidate.exists()), None)
+        if dir_path is None:
+            print(f"Warning: Output dir not found: {output_dir} (checked: {[str(c) for c in dir_candidates]})")
             continue
         
         # Look for PDBs and JSONs in FAMPNN output locations
-        for subdir in ["run/fampnn/results", "fampnn_output/samples", "results", ""]:
+        for subdir in ["pdb_files", "collected/fampnn_filtered", "run/fampnn/results", "fampnn_output/samples", "results", ""]:
             search_path = dir_path / subdir if subdir else dir_path
             if not search_path.exists():
                 continue

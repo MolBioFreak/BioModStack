@@ -84,7 +84,16 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         "rog": [],
         "ligand_iptm": [],
         "affinity_score": [],
-        "binder_probability": []
+        "binder_probability": [],
+        "fampnn_psce": [],
+        "maturation_interface_score": [],
+        "maturation_rmsd": [],
+        "maturation_delta_interface": [],
+        "maturation_selected_interface_score": [],
+        "maturation_selected_rmsd": [],
+        "maturation_nonselected_rmsd": [],
+        "ppiflow_objective_score": [],
+        "ppiflow_primary_loop_rmsd": [],
     }
     
     for d in designs:
@@ -101,8 +110,38 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         if d.ligand_iptm is not None: metrics["ligand_iptm"].append(d.ligand_iptm)
         if d.affinity_score is not None: metrics["affinity_score"].append(d.affinity_score)
         if d.binder_probability is not None: metrics["binder_probability"].append(d.binder_probability)
+        if d.fampnn_psce is not None: metrics["fampnn_psce"].append(d.fampnn_psce)
+        if d.maturation_interface_score is not None: metrics["maturation_interface_score"].append(d.maturation_interface_score)
+        if d.maturation_rmsd is not None: metrics["maturation_rmsd"].append(d.maturation_rmsd)
+        if d.maturation_delta_interface is not None: metrics["maturation_delta_interface"].append(d.maturation_delta_interface)
+        if d.maturation_selected_interface_score is not None: metrics["maturation_selected_interface_score"].append(d.maturation_selected_interface_score)
+        if d.maturation_selected_rmsd is not None: metrics["maturation_selected_rmsd"].append(d.maturation_selected_rmsd)
+        if d.maturation_nonselected_rmsd is not None: metrics["maturation_nonselected_rmsd"].append(d.maturation_nonselected_rmsd)
+        if d.ppiflow_objective_score is not None: metrics["ppiflow_objective_score"].append(d.ppiflow_objective_score)
+        if d.ppiflow_primary_loop_rmsd is not None: metrics["ppiflow_primary_loop_rmsd"].append(d.ppiflow_primary_loop_rmsd)
             
     return metrics
+
+
+async def _load_designs_for_job(
+    session: AsyncSession,
+    job_id: str,
+    *,
+    include_children: bool = True,
+) -> List[Design]:
+    """Load designs for a job, including child-job designs for parent lineage views."""
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    job = job_result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_ids = [job_id]
+    if include_children:
+        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
+        job_ids.extend(str(child_id) for child_id in child_result.scalars().all())
+
+    result = await session.execute(select(Design).where(Design.job_id.in_(job_ids)))
+    return result.scalars().all()
 
 
 # --- Endpoints ---
@@ -110,13 +149,11 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
 @router.get("/job/{job_id}", response_model=JobAnalytics)
 async def get_job_analytics(
     job_id: str,
+    include_children: bool = Query(True, description="Include child-job designs for parent jobs"),
     session: AsyncSession = Depends(get_session)
 ):
     """Get aggregated analytics for a single job."""
-    # Fetch designs
-    query = select(Design).where(Design.job_id == job_id)
-    result = await session.execute(query)
-    designs = result.scalars().all()
+    designs = await _load_designs_for_job(session, job_id, include_children=include_children)
     
     if not designs:
         return JobAnalytics(
@@ -158,12 +195,11 @@ async def get_job_analytics(
 @router.get("/job/{job_id}/designs", response_model=List[DesignMetricPoint])
 async def get_job_design_metrics(
     job_id: str,
+    include_children: bool = Query(True, description="Include child-job designs for parent jobs"),
     session: AsyncSession = Depends(get_session)
 ):
     """Get raw metrics for all designs in a job (for custom client-side charting)."""
-    query = select(Design).where(Design.job_id == job_id)
-    result = await session.execute(query)
-    designs = result.scalars().all()
+    designs = await _load_designs_for_job(session, job_id, include_children=include_children)
     
     return [
         DesignMetricPoint(
@@ -173,7 +209,16 @@ async def get_job_design_metrics(
                 "plddt_overall": d.plddt_overall or 0,
                 "pae_overall": d.pae_overall or 0,
                 "ptm": d.ptm or 0,
-                "rmsd_binder": d.rmsd_binder or 0
+                "rmsd_binder": d.rmsd_binder or 0,
+                "fampnn_psce": d.fampnn_psce or 0,
+                "maturation_interface_score": d.maturation_interface_score or 0,
+                "maturation_rmsd": d.maturation_rmsd or 0,
+                "maturation_delta_interface": d.maturation_delta_interface or 0,
+                "maturation_selected_interface_score": d.maturation_selected_interface_score or 0,
+                "maturation_selected_rmsd": d.maturation_selected_rmsd or 0,
+                "maturation_nonselected_rmsd": d.maturation_nonselected_rmsd or 0,
+                "ppiflow_objective_score": d.ppiflow_objective_score or 0,
+                "ppiflow_primary_loop_rmsd": d.ppiflow_primary_loop_rmsd or 0
             }
         )
         for d in designs

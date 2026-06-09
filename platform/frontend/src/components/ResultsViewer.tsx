@@ -190,7 +190,7 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'maturation_rmsd', label: 'RMSD Global' },
     { value: 'maturation_selected_rmsd', label: 'RMSD Selected' },
     { value: 'maturation_nonselected_rmsd', label: 'RMSD Rest' },
-    { value: 'ppiflow_objective_score', label: 'PPIFlow Objective' },
+    { value: 'ppiflow_objective_score', label: 'BMS local PPIFlow objective' },
     { value: 'ppiflow_primary_loop', label: 'Primary Loop' },
     { value: 'ppiflow_primary_loop_rmsd', label: 'Primary Loop RMSD' },
     { value: 'ppiflow_primary_loop_target_contact_delta', label: 'Loop ΔTarget Cts' },
@@ -2945,6 +2945,7 @@ export function ResultsViewer() {
         : rfReviewSet
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
+    const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
     const activeBadgeLabel = useMemo(() => {
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
@@ -5266,7 +5267,7 @@ export function ResultsViewer() {
                                             <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-400">
                                                 {reviewSelectionRequired && isPostRFantibodyReview
                                                     ? 'No RF review source selected'
-                                                    : `${tableDesigns.length} visible in ${loadedSavedReviewFilterSet ? `'${loadedSavedReviewFilterSet.name}'` : activeReviewSetLabel}`}
+                                                    : `${tableDesigns.length} visible in ${activeResultSetLabel}`}
                                             </span>
                                             {loadedSavedReviewFilterSet && (
                                                 <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-100">

@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from pathlib import Path
 import math
+import re
 
 from database import get_session, Design, Job
 from paths import resolve_runtime_data_path, to_allowed_relative
@@ -1841,6 +1842,70 @@ def _design_to_response(
     return DesignResponse.model_validate(data)
 
 
+_SOURCE_UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+_INHERITED_SOURCE_METADATA_FIELDS = (
+    "binder_length",
+    "binder_sequence",
+    "antibody_type",
+    "cdr_h1",
+    "cdr_h2",
+    "cdr_h3",
+    "cdr_l1",
+    "cdr_l2",
+    "cdr_l3",
+    "cdr_h1_length",
+    "cdr_h2_length",
+    "cdr_h3_length",
+    "cdr_l1_length",
+    "cdr_l2_length",
+    "cdr_l3_length",
+)
+
+
+def _source_design_ids_from_child_name(name: Optional[str]) -> List[str]:
+    text = str(name or "")
+    return [match.group(0) for match in _SOURCE_UUID_PATTERN.finditer(text)]
+
+
+def _enrich_design_responses_from_sources(responses: List[DesignResponse]) -> None:
+    """Backfill child-stage display metadata from source designs in the same response.
+
+    Some older PPIFlow imported rows lost parent_design_id while retaining the
+    source design UUID in the child output name. The table should still show
+    source-level antibody metadata (binder length/CDR annotation) for those
+    children when the source row is included in the same lineage response.
+    """
+    by_id = {response.id: response for response in responses if response.id}
+    by_source_token: Dict[str, DesignResponse] = {}
+    for candidate in responses:
+        if candidate.result_set in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}:
+            continue
+        for candidate_id in _source_design_ids_from_child_name(candidate.name):
+            by_source_token.setdefault(candidate_id, candidate)
+    for response in responses:
+        if response.result_set not in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}:
+            continue
+        source: Optional[DesignResponse] = None
+        if response.parent_design_id:
+            source = by_id.get(response.parent_design_id)
+        if source is None:
+            for candidate_id in _source_design_ids_from_child_name(response.name):
+                candidate = by_id.get(candidate_id) or by_source_token.get(candidate_id)
+                if candidate is not None and candidate is not response:
+                    source = candidate
+                    break
+        if source is None:
+            continue
+        for field_name in _INHERITED_SOURCE_METADATA_FIELDS:
+            current = getattr(response, field_name, None)
+            if current not in (None, "", [], {}, ()):  # preserve child-specific metadata when present
+                continue
+            inherited = getattr(source, field_name, None)
+            if inherited in (None, "", [], {}, ()):
+                continue
+            setattr(response, field_name, inherited)
+
+
 async def _get_cached_design_analysis_payload(
     session: AsyncSession,
     design: Design,
@@ -2195,9 +2260,11 @@ async def list_designs(
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     designs = result.scalars().all()
+    responses = [_design_to_response(d) for d in designs]
+    _enrich_design_responses_from_sources(responses)
     
     return DesignList(
-        designs=[_design_to_response(d) for d in designs],
+        designs=responses,
         total=total
     )
 
@@ -2598,9 +2665,11 @@ async def get_designs_for_job(
     
     # Count total
     total = (await session.execute(count_query)).scalar()
+    responses = [_design_to_response(d) for d in designs]
+    _enrich_design_responses_from_sources(responses)
     
     return DesignList(
-        designs=[_design_to_response(d) for d in designs],
+        designs=responses,
         total=total
     )
 
