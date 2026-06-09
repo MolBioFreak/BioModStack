@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from lib.ont_minknow_host import discover_status as discover_ont_status
 from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
+from lib.ont_minknow_host import start_protocol as start_ont_protocol
+from lib.ont_minknow_host import stop_protocol as stop_ont_protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT = "biomodstack-core-runtime"
@@ -360,6 +362,17 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
     return None
 
 
+def ont_post_route_payload(path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]] | None:
+    route_path = urlparse(path).path.rstrip("/") or "/"
+    if route_path.startswith("/ont/positions/") and route_path.endswith("/start"):
+        position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/start")).strip().rstrip("/")
+        return start_ont_protocol(position, payload)
+    if route_path.startswith("/ont/runs/") and route_path.endswith("/stop"):
+        minknow_run_id = unquote(route_path.removeprefix("/ont/runs/").removesuffix("/stop")).strip().rstrip("/")
+        return stop_ont_protocol(minknow_run_id, payload)
+    return None
+
+
 class HostAgentHandler(BaseHTTPRequestHandler):
     server_version = "BMSHostAgent/0.1"
 
@@ -418,6 +431,16 @@ class HostAgentHandler(BaseHTTPRequestHandler):
         self._send_json(200, descriptor(service_id, tail=tail))
 
     def do_POST(self) -> None:  # noqa: N802
+        try:
+            payload = self._read_json()
+        except ValueError as exc:
+            self._send_json(400, {"detail": str(exc)})
+            return
+        ont_payload = ont_post_route_payload(self.path, payload)
+        if ont_payload is not None:
+            status, body = ont_payload
+            self._send_json(status, body)
+            return
         service_id, action = self._service_route()
         if service_id is None or action is None:
             self._send_json(404, {"detail": "not found"})
@@ -426,7 +449,6 @@ class HostAgentHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"detail": f"unknown service_id: {service_id}"})
             return
         try:
-            payload = self._read_json()
             tail = bounded_tail(payload.get("tail", 120))
             advanced = bool(payload.get("advanced", False))
             self._send_json(200, run_action(service_id, action, tail=tail, advanced=advanced))
