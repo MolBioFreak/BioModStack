@@ -169,7 +169,7 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'rfa_plddt_delta', label: 'RF pLDDT Δ' },
     { value: 'affinity_score', label: 'Affinity' },
     { value: 'binder_probability', label: 'Binder %' },
-    { value: 'fampnn_psce', label: 'pSCE' },
+    { value: 'fampnn_psce', label: 'FA-MPNN avg pSCE' },
     { value: 'ipsae', label: 'ipSAE' },
     { value: 'iptm', label: 'iPTM' },
     { value: 'ptm', label: 'pTM' },
