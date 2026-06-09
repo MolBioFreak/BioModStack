@@ -38,6 +38,12 @@ import {
     type ResultSetFilter,
 } from './designOutputSource';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
+import {
+    getUnsupportedResultReason,
+    isUnsupportedResult,
+    supportsAnalyzer,
+    supportsViewerCapability,
+} from '../lib/resultCapabilities';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -2378,6 +2384,12 @@ export function ResultsViewer() {
         staleTime: 30_000,
     });
     const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
+    const selectedDesignUnsupported = isUnsupportedResult(selectedDesign);
+    const selectedDesignUnsupportedReason = getUnsupportedResultReason(selectedDesign);
+    const selectedDesignSupportsStructureViewer = supportsViewerCapability(selectedDesign, 'structure_viewer');
+    const selectedDesignSupportsAntibodyAnalysis = supportsAnalyzer(selectedDesign, 'antibody_backbone_v1') || supportsViewerCapability(selectedDesign, 'antibody_backbone_metrics');
+    const selectedDesignSupportsPpiFlowAnalysis = supportsAnalyzer(selectedDesign, 'ppiflow_maturation_v1') || supportsViewerCapability(selectedDesign, 'ppiflow_maturation_metrics');
+    const selectedDesignSupportsSequenceAnalysis = supportsAnalyzer(selectedDesign, 'sequence_design_v1') || supportsViewerCapability(selectedDesign, 'sequence_design_metrics');
     const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
         if (selectedDesign) {
             return inferDesignAnalysisLens(selectedDesign as UntypedApiValue);
@@ -2504,7 +2516,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<StructureAnalysis>(selectedDesignId, 'structure_summary').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && (activeTab === 'structure' || activeTab === 'overview'),
+        enabled: !!selectedDesignId && selectedDesignSupportsStructureViewer && (activeTab === 'structure' || activeTab === 'overview'),
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<StructureAnalysis> | null | undefined)?.status;
             return status === 'queued' || status === 'running' ? 1500 : false;
@@ -2528,7 +2540,7 @@ export function ResultsViewer() {
     const structureAnalysisBusy = runStructureAnalysis.isPending
         || structureAnalysisRun?.status === 'queued'
         || structureAnalysisRun?.status === 'running';
-    const structureViewerAnalysisEnabled = !!selectedDesignId && (activeTab === 'overview' || activeTab === 'structure');
+    const structureViewerAnalysisEnabled = !!selectedDesignId && selectedDesignSupportsStructureViewer && (activeTab === 'overview' || activeTab === 'structure');
 
     const { data: antibodyAnalysisRun, error: antibodyAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'antibody_annotation_pack', selectedDesignId],
@@ -2537,7 +2549,7 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<AntibodyData>(selectedDesignId, 'antibody_annotation_pack').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && (activeTab === 'antibody' || activeTab === 'structure' || activeTab === 'overview'),
+        enabled: !!selectedDesignId && selectedDesignSupportsAntibodyAnalysis && (activeTab === 'antibody' || activeTab === 'structure' || activeTab === 'overview'),
         retry: false,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<AntibodyData> | null | undefined)?.status;
@@ -2574,12 +2586,12 @@ export function ResultsViewer() {
                     : 'Not computed';
     const autoTriggeredAntibodyAnalysisRef = useRef<Set<string>>(new Set());
     useEffect(() => {
-        if (activeTab !== 'antibody' || !selectedDesignId) return;
+        if (activeTab !== 'antibody' || !selectedDesignId || !selectedDesignSupportsAntibodyAnalysis) return;
         if (antibodyAnalysisStatus !== 'missing' || antibodyAnalysisBusy) return;
         if (autoTriggeredAntibodyAnalysisRef.current.has(selectedDesignId)) return;
         autoTriggeredAntibodyAnalysisRef.current.add(selectedDesignId);
         runAntibodyAnalysis.mutate();
-    }, [activeTab, selectedDesignId, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
+    }, [activeTab, selectedDesignId, selectedDesignSupportsAntibodyAnalysis, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
 
     const { data: chainMetricsAnalysisRun, error: chainMetricsAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
@@ -7037,6 +7049,29 @@ export function ResultsViewer() {
                                                                     Suggested redesign loops: {(selectedDesignRfLoopSummary.redesign_candidate_loops as string[]).join(', ')}
                                                                 </div>
                                                             )}
+                                                        </div>
+                                                    )}
+
+                                                    {selectedDesign && (
+                                                        <div className={`mb-4 rounded-xl border p-4 ${selectedDesignUnsupported ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-700/50 bg-slate-800/40'}`}>
+                                                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                                                <div>
+                                                                    <div className="text-[11px] uppercase tracking-wider text-slate-500">Result Contract</div>
+                                                                    <div className="mt-1 text-sm text-slate-200">
+                                                                        {selectedDesign.analysis_contract_id || 'Unsupported / raw result'}
+                                                                    </div>
+                                                                    {selectedDesignUnsupported && (
+                                                                        <div className="mt-1 text-xs text-amber-100">{selectedDesignUnsupportedReason}</div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex flex-wrap gap-2 text-[11px]">
+                                                                    {selectedDesignSupportsStructureViewer && <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-100">structure viewer</span>}
+                                                                    {selectedDesignSupportsAntibodyAnalysis && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-violet-100">antibody analysis</span>}
+                                                                    {selectedDesignSupportsSequenceAnalysis && <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-emerald-100">sequence metrics</span>}
+                                                                    {selectedDesignSupportsPpiFlowAnalysis && <span className="rounded-full border border-fuchsia-500/30 bg-fuchsia-500/10 px-2 py-1 text-fuchsia-100">PPIFlow maturation</span>}
+                                                                    {selectedDesignUnsupported && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-100">generic metadata only</span>}
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                     )}
 
