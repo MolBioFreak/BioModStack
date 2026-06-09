@@ -29,11 +29,13 @@ import {
     getOutputSourceBadgeClass,
     getOutputSourceLabel,
     inferDesignAnalysisLens,
+    inferDesignResultSet,
     inferDesignOutputSource,
     inferJobOutputSource,
     inferPreferredAnalysisLens,
     type AnalysisLens,
     type OutputSourceFilter,
+    type ResultSetFilter,
 } from './designOutputSource';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import MolstarViewer from './MolstarViewer';
@@ -479,13 +481,21 @@ const OUTPUT_SOURCE_BUTTON_LABELS: Array<[OutputSourceFilter, string]> = [
     ['all', 'All'],
     ['rfantibody', 'RFantibody'],
     ['boltzgen', 'BoltzGen'],
-    ['fampnn', 'FAMPNN'],
+    ['fampnn', 'FA-MPNN'],
     ['caliby', 'Caliby'],
     ['ppiflow', 'PPIFlow'],
     ['confornets', 'ConforNets'],
     ['esmfold2', 'ESMFold2'],
     ['imported', 'Imported'],
     ['validation', 'Validation'],
+];
+const RESULT_SET_BUTTON_LABELS: Array<[ResultSetFilter, string]> = [
+    ['all', 'All result sets'],
+    ['rfantibody_backbones', 'RFA/backbone'],
+    ['sequence_designs', 'Sequence designs'],
+    ['ppiflow_candidates', 'PPIFlow candidates'],
+    ['ppiflow_passed', 'PPIFlow passed'],
+    ['ppiflow_rejected', 'PPIFlow rejected'],
 ];
 type OutputSourceAnalysisLens = Extract<AnalysisLens, OutputSourceFilter>;
 
@@ -1619,6 +1629,7 @@ export function ResultsViewer() {
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
+    const [resultSetFilter, setResultSetFilter] = useState<ResultSetFilter>('all');
     const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
     const manualOutputSourceSelectionRef = useRef(false);
     const outputSourceSelectionJobRef = useRef<string | null>(jobId || null);
@@ -2279,16 +2290,14 @@ export function ResultsViewer() {
         return '';
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
-    const useClientSourcePagination = outputSourceFilter !== 'all';
+    const useClientSourcePagination = outputSourceFilter !== 'all' || resultSetFilter !== 'all';
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
     const forceBulkLoadForSorting = useClientSourcePagination || pageSize === 0 || requiresClientOnlySort;
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         job_id: selectedJobId,
-        include_children: !isReviewStageJob && Boolean(
-            activeJobHasDesignBearingChildren && !(activeJob?.design_count || 0)
-        ),
+        include_children: !isReviewStageJob,
         design_ids: activeSavedSubsetDesignIds,
         q: filterText.trim() || undefined,
         limit: forceBulkLoadForSorting ? MAX_BULK_SELECTION_DESIGNS : pageSize,
@@ -2864,10 +2873,23 @@ export function ResultsViewer() {
         return inferPreferredAnalysisLens(activeJob, designs as UntypedApiValue) ?? 'auto';
     }, [activeJob, antibodySourceFilter, designs, outputSourceFilter]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
+    const resultSetCounts = useMemo(() => {
+        const counts = new Map<ResultSetFilter, number>();
+        counts.set('all', orderedDesigns.length);
+        orderedDesigns.forEach((design) => {
+            const setId = inferDesignResultSet(design as UntypedApiValue);
+            if (!setId) return;
+            counts.set(setId, (counts.get(setId) || 0) + 1);
+        });
+        return counts;
+    }, [orderedDesigns]);
     const sourceScopedDesigns = useMemo(() => {
-        if (outputSourceFilter === 'all') return orderedDesigns;
-        return orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
-    }, [orderedDesigns, outputSourceFilter]);
+        const sourceFiltered = outputSourceFilter === 'all'
+            ? orderedDesigns
+            : orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
+        if (resultSetFilter === 'all') return sourceFiltered;
+        return sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
+    }, [orderedDesigns, outputSourceFilter, resultSetFilter]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -7857,6 +7879,7 @@ export function ResultsViewer() {
                                                             manualOutputSourceSelectionRef.current = true;
                                                             outputSourceSelectionJobRef.current = selectedJobId || null;
                                                             setOutputSourceFilter(value);
+                                                            setCurrentPage(1);
                                                         }}
                                                         className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${outputSourceFilter === value
                                                             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
@@ -7866,6 +7889,31 @@ export function ResultsViewer() {
                                                         {label}
                                                     </button>
                                                 ))}
+                                                <span className="mx-1 h-5 w-px bg-slate-700" aria-hidden="true" />
+                                                {RESULT_SET_BUTTON_LABELS.map(([value, label]) => {
+                                                    const count = value === 'all' ? orderedDesigns.length : (resultSetCounts.get(value) || 0);
+                                                    const disabled = value !== 'all' && count === 0;
+                                                    return (
+                                                        <button
+                                                            key={value}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                if (disabled) return;
+                                                                setResultSetFilter(value);
+                                                                setCurrentPage(1);
+                                                            }}
+                                                            disabled={disabled}
+                                                            className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${resultSetFilter === value
+                                                                ? 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200'
+                                                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-40'
+                                                                }`}
+                                                            title={`${label} (${count.toLocaleString()})`}
+                                                        >
+                                                            {label}
+                                                            {value !== 'all' ? ` · ${count.toLocaleString()}` : ''}
+                                                        </button>
+                                                    );
+                                                })}
                                                 <span className="text-xs text-slate-500">
                                                     {pageSize === 0
                                                         ? `${tableDesigns.length} rows in current output set`
