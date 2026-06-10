@@ -4480,9 +4480,17 @@ async def list_jobs(
     limit: int = 500,
     offset: int = 0,
     include_children: bool = False,  # New param: show child jobs if True
+    summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session)
 ):
-    """List all jobs with optional status filter and search query."""
+    """List jobs with optional filters.
+
+    Set ``summary=true`` for mobile/dashboard/list views. It preserves the fields
+    needed to render and select jobs while omitting heavyweight params,
+    provenance, review sets, stage outputs, and decision payloads that can make
+    the recent-jobs pane parse multi-megabyte responses before any row appears.
+    Full detail remains available from ``GET /api/jobs/{id}``.
+    """
     # Optimized query: fetch jobs and design counts in one go
     # This replaces the N+1 query loop with a single GROUP BY query
     query = (
@@ -4561,7 +4569,7 @@ async def list_jobs(
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params=job.params,
+            params={} if summary else job.params,
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
@@ -4579,23 +4587,23 @@ async def list_jobs(
             source_stage_job_id=job.source_stage_job_id,
             source_stage_family=job.source_stage_family,
             source_stage_mode=job.source_stage_mode,
-            source_selection_manifest_path=job.source_selection_manifest_path,
+            source_selection_manifest_path=None if summary else job.source_selection_manifest_path,
             source_selection_count=job.source_selection_count,
             selected_input_artifact_class=job.selected_input_artifact_class,
             selected_input_schema_version=job.selected_input_schema_version,
             selection_source_type=job.selection_source_type,
             selection_source_job_id=job.selection_source_job_id,
             selection_dataset_name=job.selection_dataset_name,
-            selected_loop_scope=job.selected_loop_scope,
-            provenance=job.provenance,
-            saved_selection_sets=_serialized_saved_review_filter_sets(job),
+            selected_loop_scope=None if summary else job.selected_loop_scope,
+            provenance=None if summary else job.provenance,
+            saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
-            stage_outputs=stage_outputs,
+            stage_outputs={} if summary else stage_outputs,
             awaiting_input=job.awaiting_input,
             awaiting_stage=job.awaiting_stage,
-            awaiting_payload=job.awaiting_payload,
-            decision_history=job.decision_history,
+            awaiting_payload={} if summary else job.awaiting_payload,
+            decision_history=[] if summary else job.decision_history,
         ))
     
     return JobList(jobs=job_responses, total=total)

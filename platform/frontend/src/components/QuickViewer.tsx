@@ -137,8 +137,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
 
     // Fetch jobs
     const { data: jobsData } = useQuery({
-        queryKey: ['jobs'],
-        queryFn: () => fetchJobs(),
+        queryKey: ['jobs', 'quick-viewer-summary'],
+        queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
         refetchInterval: 3000,
     });
 
