@@ -131,3 +131,21 @@ test('NGS instrument panel exposes an explicit fake Mk1D test mode without claim
     assert.match(panel, /Basecaller/u);
     assert.match(api, /fake_or_demo_device\?: boolean/u);
 });
+
+
+test('NGS instrument panel exposes live flow-cell scrutiny and safe reconnect controls', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+
+    assert.match(panel, /Selected position truth/u);
+    assert.match(panel, /Configuration test cell flag/u);
+    assert.match(panel, /Preflight blockers/u);
+    assert.match(panel, /Refresh\/reconnect position/u);
+    assert.match(panel, /Restart instrument unavailable/u);
+    assert.match(panel, /Real start disabled until MinKNOW reports a present sequencing flow cell/u);
+    assert.match(api, /refreshOntPosition/u);
+    assert.match(api, /restartOntPosition/u);
+    assert.match(api, /is_ctc\?: boolean/u);
+    assert.match(api, /channel_count\?: number/u);
+    assert.match(api, /output_directories\?: Record<string, string>/u);
+});
