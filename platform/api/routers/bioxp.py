@@ -261,6 +261,8 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/machine_config": True,
     "/motion/oem/position_table": True,
     "/motion/oem/position_table/plan": True,
+    "/motion/oem/pathing/default_parameters": True,
+    "/motion/oem/pathing/scriptmove_plan": True,
     "/motion/oem/shadow_readback": True,
     "/motion/oem/shadow_readback/capture": True,
     "/motion/range/status": True,
@@ -963,6 +965,84 @@ async def oem_position_table_plan(
         },
         timeout=12.0,
     )
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
+    return payload
+
+
+@router.get("/motion/oem/pathing/default_parameters")
+async def oem_pathing_default_parameters(
+    pseudo_z_home: Optional[int] = None,
+    force_high_home: bool = False,
+    tiploaded: Optional[str] = None,
+    plateloaded: Optional[str] = None,
+):
+    """Read-only proxy to robot-local OEM DefaultParameters dry-run state."""
+    params = {
+        "force_high_home": force_high_home,
+    }
+    if pseudo_z_home is not None:
+        params["pseudo_z_home"] = pseudo_z_home
+    if tiploaded is not None:
+        params["tiploaded"] = tiploaded
+    if plateloaded is not None:
+        params["plateloaded"] = plateloaded
+    payload = await proxy_request("GET", "/motion/oem/pathing/default_parameters", params=params, timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
+    return payload
+
+
+@router.get("/motion/oem/pathing/scriptmove_plan")
+async def oem_pathing_scriptmove_plan(
+    location_id: str,
+    current_loc: Optional[str] = None,
+    current_well: Optional[str] = None,
+    column: int = 0,
+    row: int = 0,
+    positionflag: int = 0,
+    current_x: int = 0,
+    current_y: int = 0,
+    current_z: int = 0,
+    tip_loaded: bool = False,
+    tip_dirty: bool = False,
+    tip_location: int = -1,
+    clean_path: bool = False,
+    device_type: str = "",
+    gripper_confirmed: bool = False,
+    pseudo_z_home: Optional[int] = None,
+    run_in_parallel: bool = True,
+):
+    """Read-only proxy to robot-local OEM scriptmoveTo path planner."""
+    params: Dict[str, Any] = {
+        "location_id": location_id,
+        "column": column,
+        "row": row,
+        "positionflag": positionflag,
+        "current_x": current_x,
+        "current_y": current_y,
+        "current_z": current_z,
+        "tip_loaded": tip_loaded,
+        "tip_dirty": tip_dirty,
+        "tip_location": tip_location,
+        "clean_path": clean_path,
+        "device_type": device_type,
+        "gripper_confirmed": gripper_confirmed,
+        "run_in_parallel": run_in_parallel,
+    }
+    if current_loc is not None:
+        params["current_loc"] = current_loc
+    if current_well is not None:
+        params["current_well"] = current_well
+    if pseudo_z_home is not None:
+        params["pseudo_z_home"] = pseudo_z_home
+    payload = await proxy_request("GET", "/motion/oem/pathing/scriptmove_plan", params=params, timeout=12.0)
     if isinstance(payload, dict):
         payload = dict(payload)
         payload["bms_role"] = "thin_proxy_only"
