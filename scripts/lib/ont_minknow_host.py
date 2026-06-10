@@ -363,7 +363,7 @@ def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[i
                     "fake_or_demo_devices": False,
                 }
             try:
-                manager = make_manager()
+                manager = build_manager(MinknowHostConfig.from_env())
                 target = next((p for p in manager.flow_cell_positions() if str(_safe_get(p, "name") or "") == str(position_name)), None)
                 if target is None:
                     return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
