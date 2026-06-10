@@ -5,10 +5,32 @@ from routers import bioxp
 
 @pytest.mark.asyncio
 async def test_oem_shadow_readback_routes_are_expected_and_proxied():
+    assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/machine_config"] is True
     assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/shadow_readback"] is True
     assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/shadow_readback/capture"] is True
+    assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/machine_config"] is True
     assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/shadow_readback"] is True
     assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/shadow_readback/capture"] is True
+
+
+@pytest.mark.asyncio
+async def test_oem_machine_config_is_thin_readonly_proxy(monkeypatch):
+    calls = []
+
+    async def fake_proxy(method, path, json_data=None, params=None, timeout=65.0):
+        calls.append({"method": method, "path": path, "json_data": json_data, "params": params, "timeout": timeout})
+        return {"ok": True, "machine_calibrated": True, "opened_usb": False, "physical_motion": False}
+
+    monkeypatch.setattr(bioxp, "proxy_request", fake_proxy)
+    payload = await bioxp.oem_machine_config()
+
+    assert payload["ok"] is True
+    assert payload["bms_role"] == "thin_proxy_only"
+    assert payload["live_homing"] == "blocked"
+    assert payload["usb_motion"] == "no"
+    assert payload["opened_usb"] is False
+    assert payload["physical_motion"] is False
+    assert calls == [{"method": "GET", "path": "/motion/oem/machine_config", "json_data": None, "params": None, "timeout": 12.0}]
 
 
 @pytest.mark.asyncio
