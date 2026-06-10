@@ -29,6 +29,10 @@ import {
     useHeadClearLockOperation,
     useHeadLiftIncrementOperation,
     useHomeAxis,
+    useGripperClear,
+    useGripperHome,
+    useGripperRestoreIdleCurrent,
+    useGripperStatus,
     useZeroAxis,
     useLatchLock,
     useLatchStatus,
@@ -1702,6 +1706,7 @@ export const BioXpCockpit = () => {
     const [headLiftSteps, setHeadLiftSteps] = useState(500);
     const [microMoveAxis, setMicroMoveAxis] = useState<AxisName>('x');
     const [microMoveSteps, setMicroMoveSteps] = useState(100);
+    const [gripperReason, setGripperReason] = useState('OEM gripper commissioning; operator watching instrument');
     const [interlockOverrideReason, setInterlockOverrideReason] = useState('mag/latch commissioning; operator watching instrument');
     const [usbSniffProfile, setUsbSniffProfile] = useState<UsbSniffProfile>('passive');
     const [usbSniffDurationS, setUsbSniffDurationS] = useState(300);
@@ -1832,6 +1837,10 @@ export const BioXpCockpit = () => {
     const visionInspect = useVisionInspect();
     const visionBarcodeRead = useVisionBarcodeRead();
     const motionPowerStatus = useMotionPowerStatus(controlsPollingEnabled, motionBusy ? false : 8000);
+    const gripperStatus = useGripperStatus(showCommissioningControls && interlinkActive && activeTab === 'manual', motionBusy ? false : 5000);
+    const gripperRestoreIdle = useGripperRestoreIdleCurrent();
+    const gripperClear = useGripperClear();
+    const gripperHome = useGripperHome();
 
     const latchStatus = useLatchStatus(connectionPollingEnabled);
     const latchLock = useLatchLock();
@@ -2556,8 +2565,8 @@ export const BioXpCockpit = () => {
 
     const liveXyzMotionPanel = (
         <SectionCard
-            title="Live X/Y/Z + Grabber Motion"
-            subtitle="Arm, set speed/acc, then move relative or zero. Operator watches instrument."
+            title="Live X/Y/Z Motion"
+            subtitle="Arm, set speed/acc, then move relative or zero. Gripper uses the OEM Gripper Contract below. Operator watches instrument."
         >
             <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2618,7 +2627,6 @@ export const BioXpCockpit = () => {
             </div>
             <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                <AxisControls axis="g" label="Grabber / Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                 <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                 <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
             </div>
@@ -3204,6 +3212,88 @@ export const BioXpCockpit = () => {
         </SectionCard>
     );
 
+    const gripperPanel = (
+        <SectionCard
+            title="OEM Gripper Contract"
+            subtitle="First-class MotorGrip controls; generic G jogs stay diagnostics-only."
+        >
+            <div className="space-y-3 text-xs text-content-muted">
+                <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+                    <span className={`px-2 py-1 rounded border ${gripperStatus.data?.switches?.both_effective_limits_active ? 'bg-error/10 text-error border-error/30' : 'bg-success/10 text-success border-success/30'}`}>
+                        G LIMITS: {gripperStatus.data?.switches?.both_effective_limits_active ? 'CONFLICT / BLOCKED' : gripperStatus.data ? 'SANE OR NOT BOTH-ACTIVE' : 'UNKNOWN'}
+                    </span>
+                    <span className={`px-2 py-1 rounded border ${gripperStatus.data?.current?.idle_safe === false ? 'bg-error/10 text-error border-error/30' : 'bg-success/10 text-success border-success/30'}`}>
+                        CURRENT: {gripperStatus.data?.current?.idle_safe === false ? 'HOT IDLE' : gripperStatus.data ? 'IDLE SAFE' : 'UNKNOWN'}
+                    </span>
+                    <span className="px-2 py-1 rounded bg-surface border border-border-secondary">
+                        OEM HOME: {gripperStatus.data?.oem_home_predicate?.oem_confirmed_home === true ? 'CONFIRMED' : gripperStatus.data ? 'NOT CONFIRMED' : 'UNKNOWN'}
+                    </span>
+                </div>
+                <div>
+                    Raw/effective switches and current stay visible. Clear/home require robot-side ack + reason; if both G limits are active, robot returns 409 before motion.
+                </div>
+                <label className="block space-y-1">
+                    <span className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Gripper action reason</span>
+                    <input
+                        value={gripperReason}
+                        onChange={(event) => setGripperReason(event.target.value)}
+                        className="w-full px-3 py-2 rounded bg-surface-tertiary border border-border-primary text-xs text-content"
+                    />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={() => gripperRestoreIdle.mutate(
+                            { reason: gripperReason || 'bms-cockpit restore gripper idle current' },
+                            {
+                                onSuccess: (data) => recordMotionInfraAction('gripper_restore_idle', data),
+                                onError: (error) => recordMotionInfraError('gripper_restore_idle', error),
+                            },
+                        )}
+                        disabled={gripperRestoreIdle.isPending}
+                        className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {gripperRestoreIdle.isPending ? 'RESTORING...' : 'Restore G idle current'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => gripperClear.mutate(
+                            { reason: gripperReason, timeout_s: 15.0 },
+                            {
+                                onSuccess: (data) => recordMotionInfraAction('gripper_clear', data),
+                                onError: (error) => recordMotionInfraError('gripper_clear', error),
+                            },
+                        )}
+                        disabled={gripperClear.isPending || !gripperReason.trim() || gripperStatus.data?.switches?.both_effective_limits_active === true}
+                        className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {gripperClear.isPending ? 'CLEARING...' : 'OEM Gripper Clear'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => gripperHome.mutate(
+                            { reason: gripperReason, timeout_s: 30.0 },
+                            {
+                                onSuccess: (data) => recordMotionInfraAction('gripper_home', data),
+                                onError: (error) => recordMotionInfraError('gripper_home', error),
+                            },
+                        )}
+                        disabled={gripperHome.isPending || !gripperReason.trim() || gripperStatus.data?.switches?.both_effective_limits_active === true}
+                        className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {gripperHome.isPending ? 'HOMING...' : 'OEM Gripper Home'}
+                    </button>
+                </div>
+                {(gripperStatus.isError || gripperRestoreIdle.isError || gripperClear.isError || gripperHome.isError) && (
+                    <div className="text-xs text-error">
+                        {getErrorMessage(gripperStatus.error) || getErrorMessage(gripperRestoreIdle.error) || getErrorMessage(gripperClear.error) || getErrorMessage(gripperHome.error)}
+                    </div>
+                )}
+                <JsonBlock title="OEM Gripper Status" data={gripperStatus.data} fallback="Gripper status pending." />
+            </div>
+        </SectionCard>
+    );
+
     return (
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
             <div className="flex justify-between items-start border-b border-border-secondary pb-4">
@@ -3479,9 +3569,12 @@ export const BioXpCockpit = () => {
                                     <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                                     <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                    <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                </div>
+                                <div className="mt-3 rounded border border-warning/20 bg-warning/5 px-3 py-2 text-[11px] text-warning">
+                                    Generic G jog controls are disabled here; use OEM Gripper Contract below so switch conflicts, current restore, and OEM predicate truth stay robot-side.
                                 </div>
                             </SectionCard>
+                            {gripperPanel}
                         </div>
                         <div className="space-y-6">
                             {motionPowerPanel}
@@ -3512,6 +3605,7 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
                             {liveXyzMotionPanel}
+                            {gripperPanel}
                             <SectionCard title="OEM Homing Parity — Source/Dry-Run Only">
                                 <div className="space-y-3 text-xs text-content-muted">
                                     <div className="flex flex-wrap gap-2 text-[11px] font-mono">
