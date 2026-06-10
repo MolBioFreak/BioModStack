@@ -279,6 +279,7 @@ export const fetchJobs = (params?: {
     limit?: number;
     offset?: number;
     include_children?: boolean;
+    summary?: boolean;
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
 export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
