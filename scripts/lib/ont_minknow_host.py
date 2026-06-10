@@ -117,6 +117,46 @@ def normalize_output_directories(output_dirs: Any) -> dict[str, str]:
     return normalized
 
 
+
+
+def _message_repeated(obj: Any, name: str) -> list[Any]:
+    values = _safe_get(obj, name, [])
+    try:
+        return list(values or [])
+    except TypeError:
+        return []
+
+
+def normalize_protocol_run(run: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in ("run_id", "protocol_id", "identifier", "state", "phase", "sample_id", "experiment_group", "user_info"):
+        value = _safe_get(run, key)
+        if value is not None:
+            result[key] = _string_or_none(value) or value
+    text = str(run)
+    if "hardware" in text.lower() or "flowcell_check" in text.lower() or "platform_qc" in text.lower():
+        result["hardware_check_like"] = True
+    return result or {"raw": text[:1200]}
+
+
+def normalize_protocol_runs(payload: Any) -> list[dict[str, Any]]:
+    runs = _message_repeated(payload, "protocol_runs") or _message_repeated(payload, "runs")
+    return [normalize_protocol_run(run) for run in runs]
+
+
+def normalize_acquisition_run(run: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in ("run_id", "state", "status", "start_time", "end_time"):
+        value = _safe_get(run, key)
+        if value is not None:
+            result[key] = _string_or_none(value) or value
+    return result or {"raw": str(run)[:1200]}
+
+
+def normalize_acquisition_runs(payload: Any) -> list[dict[str, Any]]:
+    runs = _message_repeated(payload, "acquisition_runs") or _message_repeated(payload, "runs")
+    return [normalize_acquisition_run(run) for run in runs]
+
 def normalize_current_protocol(protocol_run: Any) -> dict[str, Any] | None:
     if protocol_run is None:
         return None
@@ -174,6 +214,8 @@ def normalize_position(position: Any) -> dict[str, Any]:
     output_directories: dict[str, str] = {}
     acquisition_status: dict[str, Any] = {}
     current_protocol: dict[str, Any] | None = None
+    protocol_runs: list[dict[str, Any]] = []
+    acquisition_runs: list[dict[str, Any]] = []
     connection_error = None
     try:
         connection = position.connect()
@@ -187,6 +229,14 @@ def normalize_position(position: Any) -> dict[str, Any]:
             current_protocol = normalize_current_protocol(connection.protocol.get_current_protocol_run())
         except Exception:  # noqa: BLE001 - no current protocol is a normal MinKNOW state
             current_protocol = None
+        try:
+            protocol_runs = normalize_protocol_runs(connection.protocol.list_protocol_runs())
+        except Exception:  # noqa: BLE001 - history availability varies by MinKNOW version/state
+            protocol_runs = []
+        try:
+            acquisition_runs = normalize_acquisition_runs(connection.acquisition.list_acquisition_runs())
+        except Exception:  # noqa: BLE001 - history availability varies by MinKNOW version/state
+            acquisition_runs = []
     except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
         connection_error = str(exc)
 
@@ -211,6 +261,9 @@ def normalize_position(position: Any) -> dict[str, Any]:
         "output_directories": output_directories,
         "acquisition_status": acquisition_status,
         "current_protocol": current_protocol,
+        "protocol_runs": protocol_runs,
+        "acquisition_runs": acquisition_runs,
+        "hardware_check_runs": [run for run in protocol_runs if run.get("hardware_check_like")],
         "rpc_ports": {"secure": secure_port} if secure_port is not None else {},
         "connection_error": connection_error,
     }
@@ -284,6 +337,52 @@ def build_manager(config: MinknowHostConfig):
     )
 
 
+
+
+def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    if not bool(payload.get("confirm_hardware_check")):
+        return 400, {
+            "detail": "confirm_hardware_check=true is required before starting a MinKNOW hardware check",
+            "position": position_name,
+            "fake_or_demo_devices": False,
+        }
+    status = discover_status()
+    if status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return 503, {
+            "detail": "MinKNOW is not configured/reachable from the BMS host-agent",
+            "implementation_status": status.get("implementation_status"),
+            "fake_or_demo_devices": False,
+        }
+    for device in status.get("live_devices") or []:
+        if str(device.get("position") or "") == str(position_name):
+            if device.get("current_protocol"):
+                return 409, {
+                    "detail": "A MinKNOW protocol is already running on this position; hardware check was not started.",
+                    "position": position_name,
+                    "current_protocol": device.get("current_protocol"),
+                    "fake_or_demo_devices": False,
+                }
+            try:
+                manager = make_manager()
+                target = next((p for p in manager.flow_cell_positions() if str(_safe_get(p, "name") or "") == str(position_name)), None)
+                if target is None:
+                    return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
+                response = target.connect().protocol.begin_hardware_check()
+                run_id = _string_or_none(_safe_get(response, "run_id"))
+                return 202, {
+                    "action": "begin_hardware_check",
+                    "detail": "Started MinKNOW hardware check through BMS host-agent. This is a diagnostic check, not a sequencing run.",
+                    "position": position_name,
+                    "hardware_check_run_id": run_id,
+                    "fake_or_demo_devices": False,
+                }
+            except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
+                return 502, {
+                    "detail": f"MinKNOW hardware check failed to start: {exc}",
+                    "position": position_name,
+                    "fake_or_demo_devices": False,
+                }
+    return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
 
 def refresh_position(position_name: str) -> tuple[int, dict[str, Any]]:
     status = discover_status()

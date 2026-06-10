@@ -149,3 +149,17 @@ test('NGS instrument panel exposes live flow-cell scrutiny and safe reconnect co
     assert.match(api, /channel_count\?: number/u);
     assert.match(api, /output_directories\?: Record<string, string>/u);
 });
+
+
+test('NGS instrument panel exposes guarded MinKNOW hardware check controls', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+
+    assert.match(panel, /Run hardware check/u);
+    assert.match(panel, /window\.confirm\('Start a MinKNOW hardware check/u);
+    assert.match(panel, /Hardware checks in API history/u);
+    assert.match(panel, /Protocol runs in API history/u);
+    assert.match(api, /beginOntHardwareCheck/u);
+    assert.match(api, /confirm_hardware_check: true/u);
+    assert.match(api, /hardware_check_run_id\?: string/u);
+});
