@@ -87,7 +87,10 @@ def test_model_registry_loads_confornets_experimental_as_monomer_workflow() -> N
     model = registry.get_model("confornets_experimental")
 
     assert model is not None
-    assert model.name == "ConforNets Experimental"
+    assert model.name == "Conformational Mapping Experimental"
+    assert "ConforNets/OpenFold3" in model.description
+    assert "first implemented backend" in model.description
+    assert "memory is materially higher" in model.description
     assert model.experimental is True
     assert model.category == "structure_prediction"
     assert {mode.id for mode in model.modes} == {"design"}
@@ -147,11 +150,12 @@ def test_template_registry_loads_confornets_experimental_card_with_monomer_only_
     template = registry.get_template("confornets_experimental")
 
     assert template is not None
-    assert template.name == "ConforNets Experimental"
-    assert template.experimental is True
+    assert template.name == "Conformational Mapping Experimental"
+    assert template.experimental is False
     assert template.preset_params["template_model_id"] == "confornets_experimental"
     assert template.preset_params["template_mode_id"] == "design"
     assert template.preset_params["cn_task"] == "diversity"
+    assert template.preset_params["workflow_model_topic"] == "confornets"
 
     card_text = " ".join(
         [
@@ -163,6 +167,9 @@ def test_template_registry_loads_confornets_experimental_card_with_monomer_only_
     ).lower()
     assert "monomer" in card_text
     assert "single-chain" in card_text
+    assert "conformational mapping" in card_text
+    assert "first backend" in card_text or "first implemented backend" in card_text
+    assert "more gpu memory" in card_text
     assert "of3p2" in card_text or "openfold3" in card_text
     assert "two reference" in card_text or "2 reference" in card_text
 
@@ -222,6 +229,7 @@ def test_build_nextflow_command_maps_confornets_params_to_cn_namespace(tmp_path:
             "reference_name_1": "open_ref",
             "reference_pdb_2": "/tmp/ref_closed.cif",
             "reference_name_2": "closed_ref",
+            "workflow_model_topic": "confornets",
         },
         str(output_dir),
         job_id="job-cn-1",
@@ -255,6 +263,7 @@ def test_build_nextflow_command_maps_confornets_params_to_cn_namespace(tmp_path:
         "--confornets_repo_path",
         "--num_samples",
         "--skip_msa",
+        "--workflow_model_topic",
     ):
         assert _flag_absent(cmd, raw_flag)
 
