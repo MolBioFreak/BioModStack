@@ -292,3 +292,25 @@ def test_begin_hardware_check_reports_no_flowcell_as_operator_conflict(monkeypat
 
     assert status_code == 409
     assert payload["detail"] == "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."
+
+
+
+def test_normalize_minknow_run_id_histories_and_current_hardware_check() -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    class History:
+        run_ids = ["protocol-1", "protocol-2"]
+
+    class Current:
+        run_id = "hardware-run"
+        protocol_id = "checks/hardware_validation/hardware_check:CTC-MIN001"
+        state = "0"
+        phase = "0"
+
+    assert ont_minknow_host.normalize_protocol_runs(History()) == [
+        {"run_id": "protocol-1"},
+        {"run_id": "protocol-2"},
+    ]
+    current = ont_minknow_host.normalize_current_protocol(Current())
+    assert current["run_id"] == "hardware-run"
+    assert current["hardware_check_like"] is True
