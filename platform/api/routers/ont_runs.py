@@ -26,6 +26,15 @@ async def ont_position_protocol_options(
 
 
 
+
+@router.post("/positions/{position}/hardware-check")
+async def ont_begin_position_hardware_check(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Start a guarded MinKNOW hardware diagnostic check for a position."""
+    try:
+        return ont_run_control.begin_position_hardware_check(position, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @router.post("/positions/{position}/refresh")
 async def ont_refresh_position_state(position: str) -> dict[str, Any]:
     """Re-read MinKNOW state for a position without power-cycling the instrument."""
