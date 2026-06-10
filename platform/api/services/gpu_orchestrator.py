@@ -153,6 +153,10 @@ SCHEDULER_RESERVATION_PROFILES: Dict[str, Dict[str, int]] = {
         'startup_grace_seconds': 60,
     },
     'maturation_child': {
+        # PPIFlow children can sit at low VRAM before RunPartialFlow, then jump
+        # close to their peak estimate. Reserving only startup VRAM lets the
+        # scheduler overpack GPU0 and causes CUDA OOM once diffusion starts.
+        'reserve_peak': True,
         'startup_reserve_mb': 3200,
         'live_surge_mb': 3500,
         'startup_grace_seconds': 75,
@@ -823,6 +827,8 @@ def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str
     """
     profile = _scheduler_profile(job.model_type)
     peak_estimate = max(1, int(job.vram_estimate_mb or 1))
+    if profile.get("reserve_peak"):
+        return peak_estimate
     startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
     live_surge = int(profile.get("live_surge_mb", 0))
     observed = observed_live_by_model.get(job.model_type, [])
@@ -843,6 +849,8 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     """
     peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
     profile = _scheduler_profile(_effective_job_model_type(job))
+    if profile.get("reserve_peak"):
+        return peak_estimate
     startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
     live_surge = int(profile.get("live_surge_mb", 0))
     startup_grace = int(profile.get("startup_grace_seconds", 30))
