@@ -100,6 +100,13 @@ class InstallFeaturesPayload(BaseModel):
     features: dict[str, bool]
 
 
+DEV_INSTALL_FEATURES: dict[str, bool] = {
+    "bioxp": True,
+    "stats_tools": True,
+    "assay_db": True,
+}
+
+
 class RuntimeStartTargetPayload(BaseModel):
     target: str | None = None
 
@@ -410,7 +417,7 @@ async def get_install_features(request: Request):
     snapshot = _install_profile_response()
     resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
     features = resolved.get("features") if isinstance(resolved, Mapping) else None
-    return {"features": features or {}}
+    return {"features": features or {}, "dev_features": DEV_INSTALL_FEATURES}
 
 
 @router.put("/features")
@@ -428,7 +435,7 @@ async def put_install_features(request: Request, payload: InstallFeaturesPayload
     updated = _install_profile_response(saved_profile)
     resolved = updated.get("resolved") if isinstance(updated, Mapping) else {}
     features = resolved.get("features") if isinstance(resolved, Mapping) else None
-    return {"features": features or {}}
+    return {"features": features or {}, "dev_features": DEV_INSTALL_FEATURES}
 
 
 @router.get("/runtime-ports")
