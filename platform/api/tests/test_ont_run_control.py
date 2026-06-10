@@ -75,6 +75,82 @@ def test_start_preflight_allows_ready_position_with_requested_kit_and_output_dir
     assert payload["basecalling_options"]["simplex_models"] == ["dna_r10.4.1_e8.2_400bps_sup"]
 
 
+
+def test_start_preflight_exposes_flowcell_truth_and_output_directories_for_config_cell() -> None:
+    payload = build_start_preflight(
+        position={
+            "position": "MD-105428",
+            "running": True,
+            "flow_cell": {
+                "present": False,
+                "is_ctc": False,
+                "channel_count": 0,
+                "sample_rate": 10000,
+            },
+            "output_directories": {"reads": "/var/lib/minknow/data/"},
+        },
+        kit="SQK-LSK114",
+        basecalling_enabled=True,
+        output_directories={"reads": "/var/lib/minknow/data/"},
+    )
+
+    assert payload["can_start"] is False
+    assert payload["flow_cell"] == {
+        "present": False,
+        "is_ctc": False,
+        "channel_count": 0,
+        "sample_rate": 10000,
+    }
+    assert payload["output_directories"] == {"reads": "/var/lib/minknow/data/"}
+    assert "flowcell_absent" in payload["blockers"]
+    assert "position_already_running" in payload["blockers"]
+    assert "output_directory_missing" not in payload["blockers"]
+
+
+def test_refresh_position_state_proxies_host_agent_without_claiming_restart(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ont_run_control,
+        "request_host_agent",
+        lambda method, path, payload=None, *, query=None: {
+            "action": "refresh",
+            "detail": "Reopened the MinKNOW position connection and reread device/flow-cell state; this does not power-cycle the instrument.",
+            "position": {"position": "MD-105428"},
+            "fake_or_demo_devices": False,
+        },
+    )
+
+    payload = ont_run_control.refresh_position_state("MD-105428")
+
+    assert payload["action"] == "refresh"
+    assert "does not power-cycle" in payload["detail"]
+    assert payload["position"]["position"] == "MD-105428"
+
+
+def test_restart_position_requires_confirmation_but_remains_host_agent_contract(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_request(method, path, payload=None, *, query=None):
+        calls.append((method, path, payload))
+        return {
+            "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
+            "position": "MD-105428",
+            "fake_or_demo_devices": False,
+        }
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+
+    try:
+        ont_run_control.restart_position("MD-105428", {"confirm_restart": False})
+    except ValueError as exc:
+        assert "confirm_restart" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("restart should require explicit confirmation")
+
+    payload = ont_run_control.restart_position("MD-105428", {"confirm_restart": True})
+
+    assert "does not yet perform" in payload["detail"]
+    assert calls == [("POST", "/ont/positions/MD-105428/restart", {"confirm_restart": True})]
+
 def test_protocol_options_endpoint_uses_host_agent_payload(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
