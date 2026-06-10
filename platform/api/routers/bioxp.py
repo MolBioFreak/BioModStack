@@ -263,6 +263,7 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/position_table/plan": True,
     "/motion/oem/pathing/default_parameters": True,
     "/motion/oem/pathing/scriptmove_plan": True,
+    "/motion/oem/movement_readiness/comparison": True,
     "/motion/oem/shadow_readback": True,
     "/motion/oem/shadow_readback/capture": True,
     "/motion/range/status": True,
@@ -1043,6 +1044,18 @@ async def oem_pathing_scriptmove_plan(
     if pseudo_z_home is not None:
         params["pseudo_z_home"] = pseudo_z_home
     payload = await proxy_request("GET", "/motion/oem/pathing/scriptmove_plan", params=params, timeout=12.0)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["bms_role"] = "thin_proxy_only"
+        payload["live_homing"] = "blocked"
+        payload["usb_motion"] = "no"
+    return payload
+
+
+@router.get("/motion/oem/movement_readiness/comparison")
+async def oem_movement_readiness_comparison():
+    """Read-only proxy to robot-local OEM-vs-new movement readiness comparison."""
+    payload = await proxy_request("GET", "/motion/oem/movement_readiness/comparison", timeout=12.0)
     if isinstance(payload, dict):
         payload = dict(payload)
         payload["bms_role"] = "thin_proxy_only"
