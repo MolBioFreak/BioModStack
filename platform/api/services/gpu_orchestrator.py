@@ -868,7 +868,8 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
 
     started_at = getattr(job, "started_at", None)
     if live_vram_mb is not None and live_vram_mb > 0:
-        return max(1, min(peak_estimate, int(live_vram_mb) + live_surge))
+        live_reserve = int(live_vram_mb) + live_surge
+        return max(1, min(peak_estimate, max(startup_reserve, live_reserve)))
 
     if started_at is not None:
         try:
