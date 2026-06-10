@@ -6,9 +6,13 @@ from routers import bioxp
 @pytest.mark.asyncio
 async def test_oem_shadow_readback_routes_are_expected_and_proxied():
     assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/machine_config"] is True
+    assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/position_table"] is True
+    assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/position_table/plan"] is True
     assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/shadow_readback"] is True
     assert bioxp.ROBOT_LOCAL_EXPECTED_ROUTES["/motion/oem/shadow_readback/capture"] is True
     assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/machine_config"] is True
+    assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/position_table"] is True
+    assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/position_table/plan"] is True
     assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/shadow_readback"] is True
     assert bioxp.BMS_PROXIED_ROUTES["/motion/oem/shadow_readback/capture"] is True
 
@@ -67,3 +71,46 @@ async def test_oem_shadow_readback_capture_is_thin_readonly_proxy(monkeypatch):
     assert payload["bms_role"] == "thin_proxy_only"
     assert payload["live_homing"] == "blocked"
     assert calls == [{"method": "POST", "path": "/motion/oem/shadow_readback/capture", "json_data": {"axes": "x,y,z,g,door"}, "params": None, "timeout": 30.0}]
+
+
+
+@pytest.mark.asyncio
+async def test_oem_position_table_is_thin_readonly_proxy(monkeypatch):
+    calls = []
+
+    async def fake_proxy(method, path, json_data=None, params=None, timeout=65.0):
+        calls.append({"method": method, "path": path, "json_data": json_data, "params": params, "timeout": timeout})
+        return {"ok": True, "position_table_count": 29, "opened_usb": False, "physical_motion": False}
+
+    monkeypatch.setattr(bioxp, "proxy_request", fake_proxy)
+    payload = await bioxp.oem_position_table()
+
+    assert payload["ok"] is True
+    assert payload["bms_role"] == "thin_proxy_only"
+    assert payload["live_homing"] == "blocked"
+    assert payload["usb_motion"] == "no"
+    assert calls == [{"method": "GET", "path": "/motion/oem/position_table", "json_data": None, "params": None, "timeout": 12.0}]
+
+
+@pytest.mark.asyncio
+async def test_oem_position_table_plan_is_thin_readonly_proxy(monkeypatch):
+    calls = []
+
+    async def fake_proxy(method, path, json_data=None, params=None, timeout=65.0):
+        calls.append({"method": method, "path": path, "json_data": json_data, "params": params, "timeout": timeout})
+        return {"ok": True, "planned_coordinates": {"x": 1, "y": 2, "z": 3}, "opened_usb": False, "physical_motion": False}
+
+    monkeypatch.setattr(bioxp, "proxy_request", fake_proxy)
+    payload = await bioxp.oem_position_table_plan("LOC_MS", column=2, row=3, high_pos=False, mode="scriptmoveTo", positionflag=2, tip_location=1)
+
+    assert payload["ok"] is True
+    assert payload["bms_role"] == "thin_proxy_only"
+    assert payload["live_homing"] == "blocked"
+    assert payload["usb_motion"] == "no"
+    assert calls == [{
+        "method": "GET",
+        "path": "/motion/oem/position_table/plan",
+        "json_data": None,
+        "params": {"location_id": "LOC_MS", "column": 2, "row": 3, "high_pos": False, "mode": "scriptmoveTo", "positionflag": 2, "tip_location": 1, "offset_x": 0, "offset_y": 0},
+        "timeout": 12.0,
+    }]
