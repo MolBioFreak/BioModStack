@@ -126,6 +126,7 @@ PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 #   before live attribution settles
 # - live_surge_mb: extra headroom to add on top of live VRAM for a running job
 # - startup_grace_seconds: time window after launch where startup_reserve_mb is used
+# - peak_reserve_fraction: formulaic floor as a fraction of peak estimate
 SCHEDULER_RESERVATION_PROFILES: Dict[str, Dict[str, int]] = {
     'rfantibody': {
         'startup_reserve_mb': 2200,
@@ -153,10 +154,11 @@ SCHEDULER_RESERVATION_PROFILES: Dict[str, Dict[str, int]] = {
         'startup_grace_seconds': 60,
     },
     'maturation_child': {
-        # PPIFlow children can sit at low VRAM before RunPartialFlow, then jump
-        # close to their peak estimate. Reserving only startup VRAM lets the
-        # scheduler overpack GPU0 and causes CUDA OOM once diffusion starts.
-        'reserve_peak': True,
+        # PPIFlow children can sit at low VRAM before RunPartialFlow, then jump.
+        # Use a formulaic reserve below peak instead of the tiny startup reserve;
+        # this keeps packing adaptive while preventing four x8 children from
+        # landing on one 5090 just because their startup footprint is small.
+        'peak_reserve_fraction': 0.75,
         'startup_reserve_mb': 3200,
         'live_surge_mb': 3500,
         'startup_grace_seconds': 75,
@@ -811,6 +813,19 @@ def _scheduler_profile(model_type: str) -> Dict[str, int]:
     return SCHEDULER_RESERVATION_PROFILES.get(normalized_model, {})
 
 
+def _profile_startup_reserve(profile: Dict[str, Any], peak_estimate: int) -> int:
+    startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
+    try:
+        peak_fraction = float(profile.get("peak_reserve_fraction", 0) or 0)
+    except (TypeError, ValueError):
+        peak_fraction = 0.0
+    peak_fraction = max(0.0, min(1.0, peak_fraction))
+    if peak_fraction > 0:
+        fraction_reserve = int(math.ceil(peak_estimate * peak_fraction))
+        startup_reserve = max(startup_reserve, fraction_reserve)
+    return max(1, min(peak_estimate, startup_reserve))
+
+
 def _effective_job_model_type(job: Any) -> str:
     mode = str(getattr(job, "mode", "") or "").strip().lower()
     if mode == "maturation_child":
@@ -827,9 +842,7 @@ def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str
     """
     profile = _scheduler_profile(job.model_type)
     peak_estimate = max(1, int(job.vram_estimate_mb or 1))
-    if profile.get("reserve_peak"):
-        return peak_estimate
-    startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
+    startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     observed = observed_live_by_model.get(job.model_type, [])
     if observed:
@@ -849,9 +862,7 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     """
     peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
     profile = _scheduler_profile(_effective_job_model_type(job))
-    if profile.get("reserve_peak"):
-        return peak_estimate
-    startup_reserve = int(profile.get("startup_reserve_mb", peak_estimate))
+    startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     startup_grace = int(profile.get("startup_grace_seconds", 30))
 
