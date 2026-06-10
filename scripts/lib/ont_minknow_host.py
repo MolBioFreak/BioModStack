@@ -377,8 +377,13 @@ def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[i
                     "fake_or_demo_devices": False,
                 }
             except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
-                return 502, {
-                    "detail": f"MinKNOW hardware check failed to start: {exc}",
+                detail = str(exc)
+                status_code = 502
+                if "No flow cell present for hardware check" in detail:
+                    status_code = 409
+                    detail = "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."
+                return status_code, {
+                    "detail": detail if status_code == 409 else f"MinKNOW hardware check failed to start: {detail}",
                     "position": position_name,
                     "fake_or_demo_devices": False,
                 }
