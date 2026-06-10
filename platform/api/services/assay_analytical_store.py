@@ -53,7 +53,7 @@ class AnalyticalStoreSettings:
     port: int
     database: str
     username: str
-    password: str
+    password: str | None
 
 
 def analytical_store_settings() -> AnalyticalStoreSettings:
@@ -63,7 +63,7 @@ def analytical_store_settings() -> AnalyticalStoreSettings:
         port=int(os.getenv("BMS_ANALYTICAL_DB_PORT") or "5432"),
         database=(os.getenv("BMS_ANALYTICAL_DB_NAME") or "bms_analytical_data").strip(),
         username=(os.getenv("BMS_ANALYTICAL_DB_USER") or "bms_assay").strip(),
-        password=os.getenv("BMS_ANALYTICAL_DB_PASSWORD") or "bms_assay_dev",
+        password=(os.getenv("BMS_ANALYTICAL_DB_PASSWORD") or "").strip() or None,
     )
 
 

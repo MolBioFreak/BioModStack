@@ -1006,7 +1006,7 @@ bms-db:
 Update env for API/stats-tools:
 
 ```yaml
-BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@bms-db:5432/${BMS_ANALYTICAL_DB_NAME:-bms_analytical_data}}
+BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:?set BMS_ANALYTICAL_DB_PASSWORD in local env}@bms-db:5432/${BMS_ANALYTICAL_DB_NAME:-bms_analytical_data}}
 BMS_CORE_STORAGE_MODE: ${BMS_CORE_STORAGE_MODE:-sqlite-legacy}
 BMS_CORE_DATABASE_URL: ${BMS_CORE_DATABASE_URL:-}
 ```
