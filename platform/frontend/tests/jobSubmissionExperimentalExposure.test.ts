@@ -56,6 +56,12 @@ test('Conformational mapping template exposes monomer-only workflow copy, docs d
     assert.match(templateYaml, /template_model_id:\s*confornets_experimental/);
     assert.match(templateYaml, /template_mode_id:\s*design/);
     assert.match(templateYaml, /workflow_model_topic:\s*confornets/);
+    assert.match(templateYaml, /ui_group:\s*Inputs/);
+    assert.match(templateYaml, /ui_group:\s*Mapping Mode/);
+    assert.match(templateYaml, /ui_group:\s*Model Orchestration/);
+    assert.match(templateYaml, /ui_group:\s*Outputs/);
+    assert.match(templateYaml, /ui_group:\s*Advanced/);
+    assert.match(templateYaml, /ui_order:\s*10/);
     assert.match(templateYaml, /^name:\s*Conformational Mapping Experimental/m);
     assert.match(templateYaml.toLowerCase(), /monomer/);
     assert.match(templateYaml.toLowerCase(), /single-chain/);
