@@ -157,7 +157,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
 test('JobSubmission keeps workflow cards concise, hides Advanced Models, and routes method detail into linkouts', () => {
   const source = readSource('src', 'components', 'JobSubmission.tsx');
 
-  requireSnippet(source, "import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';");
+  requireSnippet(source, "import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';");
   requireSnippet(source, 'const compactUiCopy = (value: unknown, maxLength = 118): string => {');
   requireSnippet(source, 'compactUiCopy(param.description, 112)');
   requireSnippet(source, 'compactUiCopy(selectedMode.description, 120)');
@@ -168,7 +168,9 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   rejectSnippet(modeToggle, 'Advanced (Models)');
   rejectSnippet(modeToggle, "setWizardMode('manual')");
 
-  requireSnippet(source, 'const getTemplateDocumentationTopics = (template: UntypedApiValue | null | undefined): ModelDocumentationTopic[] => {');
+  requireSnippet(source, 'const getTemplateDocumentationTopics = (');
+  requireSnippet(source, 'launchParams?.workflow_model_topic');
+  requireSnippet(source, 'template?.preset_params?.workflow_model_topic');
   requireSnippet(source, "return ['fold_cp', 'boltz2'];");
   requireSnippet(source, "return ['confornets'];");
   requireSnippet(source, "return ['esmfold2'];");
@@ -177,15 +179,24 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['boltz2', 'rf3', 'protenix'];");
 
   requireSnippet(source, "return 'Experimental Fold-CP path for large Boltz-2 folds.';");
-  requireSnippet(source, "return 'Experimental single-chain conformer landscape workflow.';");
+  requireSnippet(source, "return 'Experimental conformational mapping; ConforNets backend first.';");
   requireSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
   requireSnippet(source, "'esmfold2_experimental'].includes(model.id)");
   requireSnippet(source, "if (template.id === 'esmfold2_experimental') return 'EF';");
   requireSnippet(source, "return 'Backbone generation and local redesign.';");
   requireSnippet(source, "return 'Structure and complex prediction validator.';");
-  requireSnippet(source, 'Docs available');
-  requireSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail)}');
-  requireSnippet(source, 'summary="Docs carry method detail."');
+  requireSnippet(source, 'getModelDocumentationLinks(docTopics)');
+  requireSnippet(source, 'data-bms-workflow-doc-hover="true"');
+  requireSnippet(source, 'group-hover/docs:flex');
+  requireSnippet(source, 'Docs ({docLinks.length})');
+  rejectSnippet(source, 'data-bms-workflow-doc-table="true"');
+  rejectSnippet(source, "{docsExpanded ? 'Hide docs' : `Docs (${docLinks.length})`}");
+  rejectSnippet(source, 'Hide docs');
+  rejectSnippet(source, 'Docs available');
+  requireSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail, params)}');
+  requireSnippet(source, 'summary="Model docs update from the selected workflow model; launch controls stay here."');
+  rejectSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail)}');
+  rejectSnippet(source, 'summary="Docs carry method detail."');
   requireSnippet(source, 'topics={getModelDocumentationTopics(selectedModel)}');
   requireSnippet(source, 'summary="Docs linked; launch controls here."');
 
