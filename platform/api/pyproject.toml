@@ -31,6 +31,7 @@ dependencies = [
     "bofire>=0.3.1",
     "qpcr>=4.1.4",
     "qslib>=0.15.0",
+    "minknow-api>=6.10.1",
     "openpyxl>=3.1.5",
     "xlrd>=2.0.2",
 ]
