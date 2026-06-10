@@ -8,9 +8,22 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+pin_nextflow_java() {
+    local candidate="${BMS_NEXTFLOW_JAVA_HOME:-}"
+    if [ -z "$candidate" ] && [ -x "$HOME/.local/jdks/temurin-17/bin/java" ]; then
+        candidate="$HOME/.local/jdks/temurin-17"
+    fi
+    if [ -n "$candidate" ] && [ -x "$candidate/bin/java" ]; then
+        export BMS_NEXTFLOW_JAVA_HOME="$candidate"
+        export JAVA_HOME="$candidate"
+        export PATH="$candidate/bin:$PATH"
+    fi
+}
+
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
+pin_nextflow_java
 
 API_MODE_RAW="${BMS_API_MODE:-dev}"
 API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
