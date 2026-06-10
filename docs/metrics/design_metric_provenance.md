@@ -8,7 +8,12 @@ BioModStack result rows must distinguish model-native outputs, BioModStack-deriv
 - Direction: lower is better.
 - Use: sidechain QC gate.
 - Not use: binding evidence, complete FA-MPNN sequence-design rank, or wet-lab priority by itself.
-- Missing upstream-native signal to collect: `seq_probs` from FA-MPNN `sample_pkls`, converted into sampled residue probability, log-probability/pseudo-NLL, and entropy metrics.
+- `seq_probs` from FA-MPNN `sample_pkls` are collected as sampled residue probability, log-probability/pseudo-NLL, and entropy metrics.
+- BMS also derives optional single-substitution mutation triage from the same `seq_probs` tensor:
+  - `fampnn_mutation_score_source = seq_probs_log_odds_delta`
+  - `fampnn_top_model_favored_mutations[]`
+  - `fampnn_mutation_opportunity_count`
+- Mutation deltas mean FA-MPNN assigned higher probability to an alternative residue than to the sampled residue in that local context. They are model-native likelihood triage, not experimental stability/binding truth.
 
 ## PPIFlow
 

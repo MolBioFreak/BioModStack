@@ -152,7 +152,9 @@ process RunFAMPNN {
         python /scripts/analyse_fampnn_seq_probs.py \\
             --sample-pkl-dir "fampnn_output/sample_pkls" \\
             --out-jsonl "fampnn_seq_prob_metrics_${batch_id}.jsonl" \\
-            --out-csv "fampnn_seq_prob_metrics_${batch_id}.csv"
+            --out-csv "fampnn_seq_prob_metrics_${batch_id}.csv" \\
+            --mutation-top-n ${params.fampnn_mutation_top_n ?: 25} \\
+            --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta ?: 0.0}
     else
         printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
     fi

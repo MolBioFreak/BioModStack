@@ -82,7 +82,43 @@ def _entropy(probabilities: List[float]) -> float:
     return entropy
 
 
-def analyze_sample_pkl(path: Path) -> Dict[str, Any]:
+def _mutation_delta_candidates(
+    *,
+    normalized_row: List[float],
+    sampled_aa_index: int,
+    chain_index: int,
+    residue_index: int,
+    min_log_odds_delta: float,
+) -> List[Dict[str, Any]]:
+    if sampled_aa_index < 0 or sampled_aa_index >= min(len(normalized_row), len(AA_ALPHABET)):
+        return []
+    from_prob = max(float(normalized_row[sampled_aa_index]), EPS)
+    from_aa = AA_ALPHABET[sampled_aa_index]
+    candidates: List[Dict[str, Any]] = []
+    for to_aa_index, to_aa in enumerate(AA_ALPHABET):
+        if to_aa_index == sampled_aa_index or to_aa_index >= len(normalized_row):
+            continue
+        to_prob = max(float(normalized_row[to_aa_index]), EPS)
+        log_odds_delta = math.log(to_prob) - math.log(from_prob)
+        if log_odds_delta < min_log_odds_delta:
+            continue
+        candidates.append(
+            {
+                "chain_index": chain_index,
+                "residue_index": residue_index,
+                "from_aa": from_aa,
+                "to_aa": to_aa,
+                "mutation": f"{from_aa}{residue_index}{to_aa}",
+                "from_prob": _round(from_prob),
+                "to_prob": _round(to_prob),
+                "log_odds_delta": _round(log_odds_delta),
+            }
+        )
+    candidates.sort(key=lambda row: float(row.get("log_odds_delta") or 0.0), reverse=True)
+    return candidates
+
+
+def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log_odds_delta: float = 0.0) -> Dict[str, Any]:
     with path.open("rb") as handle:
         payload = pickle.load(handle)
 
@@ -122,6 +158,7 @@ def analyze_sample_pkl(path: Path) -> Dict[str, Any]:
     sampled_probs: List[float] = []
     entropies: List[float] = []
     low_confidence_positions: List[Dict[str, Any]] = []
+    mutation_candidates: List[Dict[str, Any]] = []
     for idx in range(length):
         if not seq_mask[idx]:
             continue
@@ -135,6 +172,15 @@ def analyze_sample_pkl(path: Path) -> Dict[str, Any]:
         entropy = _entropy(normalized_row)
         sampled_probs.append(sampled_prob)
         entropies.append(entropy)
+        mutation_candidates.extend(
+            _mutation_delta_candidates(
+                normalized_row=normalized_row,
+                sampled_aa_index=aa_index,
+                chain_index=chain_index[idx],
+                residue_index=residue_index[idx],
+                min_log_odds_delta=mutation_min_log_odds_delta,
+            )
+        )
         if sampled_prob < 0.5 or entropy > 1.5:
             low_confidence_positions.append(
                 {
@@ -151,6 +197,8 @@ def analyze_sample_pkl(path: Path) -> Dict[str, Any]:
         return {**base, "missing": ["designed_residue_probabilities"]}
 
     log_probs = [math.log(max(p, EPS)) for p in sampled_probs]
+    mutation_candidates.sort(key=lambda row: float(row.get("log_odds_delta") or 0.0), reverse=True)
+    top_mutations = mutation_candidates[: max(int(mutation_top_n), 0)]
     result = {
         **base,
         "fampnn_seq_probs_available": True,
@@ -164,6 +212,11 @@ def analyze_sample_pkl(path: Path) -> Dict[str, Any]:
         "fampnn_mean_entropy": _round(sum(entropies) / len(entropies)),
         "fampnn_max_entropy": _round(max(entropies)),
         "fampnn_low_confidence_positions": low_confidence_positions,
+        "fampnn_mutation_scoring_available": True,
+        "fampnn_mutation_score_source": "seq_probs_log_odds_delta",
+        "fampnn_mutation_score_scope": "single_residue_substitutions_from_sample_pkl_seq_probs",
+        "fampnn_mutation_opportunity_count": len(mutation_candidates),
+        "fampnn_top_model_favored_mutations": top_mutations,
     }
     return result
 
@@ -198,12 +251,21 @@ def main() -> int:
     parser.add_argument("--sample-pkl-dir", required=True, type=Path)
     parser.add_argument("--out-jsonl", required=True, type=Path)
     parser.add_argument("--out-csv", type=Path)
+    parser.add_argument("--mutation-top-n", type=int, default=25)
+    parser.add_argument("--mutation-min-log-odds-delta", type=float, default=0.0)
     args = parser.parse_args()
 
     if not args.sample_pkl_dir.exists():
         raise SystemExit(f"sample PKL directory does not exist: {args.sample_pkl_dir}")
 
-    rows = [analyze_sample_pkl(path) for path in iter_sample_pkls(args.sample_pkl_dir)]
+    rows = [
+        analyze_sample_pkl(
+            path,
+            mutation_top_n=args.mutation_top_n,
+            mutation_min_log_odds_delta=args.mutation_min_log_odds_delta,
+        )
+        for path in iter_sample_pkls(args.sample_pkl_dir)
+    ]
     write_jsonl(rows, args.out_jsonl)
     if args.out_csv:
         write_csv(rows, args.out_csv)
