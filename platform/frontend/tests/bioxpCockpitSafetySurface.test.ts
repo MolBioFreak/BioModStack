@@ -51,11 +51,14 @@ test('commissioning motion keeps axis controls while default handler restores gr
     assert.match(manualTab, /<AxisControls axis="x" label="Gantry X"/);
     assert.match(manualTab, /<AxisControls axis="y" label="Gantry Y"/);
     assert.match(manualTab, /<AxisControls axis="z" label="Pipette Z"/);
-    assert.match(manualTab, /<AxisControls axis="g" label="Gripper"/);
+    assert.doesNotMatch(manualTab, /<AxisControls axis="g" label="Gripper"/);
+    assert.match(manualTab, /Generic G jog controls are disabled here/);
+    assert.match(manualTab, /\{gripperPanel\}/);
     assert.match(manualTab, /\{liquidCommissioningPanel\}/);
     assert.doesNotMatch(manualTab, /Reconnect USB Runtime/);
-    assert.match(cockpitSource, /Live X\/Y\/Z \+ Grabber Motion/);
-    assert.match(cockpitSource, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.match(cockpitSource, /Live X\/Y\/Z Motion/);
+    assert.doesNotMatch(cockpitSource, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.match(cockpitSource, /Gripper uses the OEM Gripper Contract below/);
     assert.match(cockpitSource, /AXIS_MOTION_SLIDER_PROFILES/);
     assert.match(cockpitSource, /type="range"/);
     assert.match(cockpitSource, /type="number"/);
@@ -93,6 +96,7 @@ test('default handler controls preserve readback and thermal surfaces while dire
     const liquidCommissioningPanel = sourceBetween('const liquidCommissioningPanel = (', 'const oemReadbackPanel = (');
 
     assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
+    assert.match(controlsTab, /\{gripperPanel\}/);
     assert.match(controlsTab, /\{oemReadbackPanel\}/);
     assert.match(controlsTab, /\{liquidPanel\}/);
     assert.match(controlsTab, /Thermal Cycler/);
