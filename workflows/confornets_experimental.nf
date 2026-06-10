@@ -42,7 +42,7 @@ workflow CONFORNETS_EXPERIMENTAL {
 
 workflow {
     println("=" * 60)
-    println("ConforNets Experimental Workflow")
+    println("Conformational Mapping Experimental Workflow (ConforNets backend)")
     println("=" * 60)
     println("* Task: ${params.cn_task ?: 'diversity'}")
     println("* Benchmark: ${params.cn_benchmark_name ?: 'bms_confornets'}")

@@ -105,7 +105,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     },
     {
         workflowId: 'confornets_experimental',
-        label: 'ConforNets Experimental',
+        label: 'Conformational Mapping Experimental',
         modelTopics: ['confornets'],
         sourceFiles: [
             'platform/api/config/models/confornets_experimental.yaml',
