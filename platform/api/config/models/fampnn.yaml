@@ -134,6 +134,22 @@ params:
     minimum: 0.0
     maximum: 1.0
 
+  - name: fampnn_mutation_top_n
+    type: integer
+    description: "Top FA-MPNN model-favored single-substitution log-odds deltas to keep per sampled design"
+    required: false
+    default: 25
+    minimum: 0
+    maximum: 500
+
+  - name: fampnn_mutation_min_log_odds_delta
+    type: number
+    description: "Minimum log(P_alt)-log(P_sampled) delta for reporting FA-MPNN model-favored single substitutions"
+    required: false
+    default: 0.0
+    minimum: -20.0
+    maximum: 20.0
+
   # Advanced denoising parameters
   - name: fampnn_seq_only
     type: boolean
