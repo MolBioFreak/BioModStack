@@ -21,6 +21,93 @@ logger = logging.getLogger(__name__)
 CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
 DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
+DEFAULT_NEXTFLOW_JAVA_HOME = Path("/home/dalab/.local/jdks/temurin-17")
+
+
+def _java_patch_version(text: str) -> Optional[str]:
+    """Extract a Java 17.0.x patch token from java/jspawnhelper output."""
+    import re
+
+    match = re.search(r"17\.0\.\d+", text or "")
+    return match.group(0) if match else None
+
+
+def _path_is_java_home(path: Path) -> bool:
+    return bool(path) and (path / "bin" / "java").exists()
+
+
+def resolve_nextflow_java_env(base_env: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
+    """Pin Nextflow launches to a consistent JDK when one is available.
+
+    BMS has observed system OpenJDK package drift where the active JVM and
+    lib/jspawnhelper came from different patch versions. Nextflow uses Java
+    ProcessBuilder heavily, so that mismatch can wedge local workflow tasks.
+    """
+    env = dict(base_env)
+    notes: List[str] = []
+    explicit = (os.getenv("BMS_NEXTFLOW_JAVA_HOME") or "").strip()
+    candidates: List[Tuple[str, Path]] = []
+    if explicit:
+        candidates.append(("BMS_NEXTFLOW_JAVA_HOME", Path(explicit).expanduser()))
+    candidates.append(("default Temurin JDK", DEFAULT_NEXTFLOW_JAVA_HOME))
+    inherited = (env.get("JAVA_HOME") or "").strip()
+    if inherited:
+        candidates.append(("inherited JAVA_HOME", Path(inherited).expanduser()))
+
+    for label, candidate in candidates:
+        if _path_is_java_home(candidate):
+            resolved = str(candidate)
+            env["JAVA_HOME"] = resolved
+            java_bin = str(candidate / "bin")
+            old_path = env.get("PATH", "")
+            env["PATH"] = java_bin if not old_path else f"{java_bin}:{old_path}"
+            notes.append(f"Nextflow Java pinned from {label}: {resolved}")
+            return env, notes
+
+    notes.append("No explicit/default JAVA_HOME found for Nextflow; using existing PATH")
+    return env, notes
+
+
+def preflight_nextflow_java(env: Dict[str, str]) -> Tuple[bool, str]:
+    """Validate that the selected Java runtime is internally consistent."""
+    java_home = (env.get("JAVA_HOME") or "").strip()
+    java_bin = Path(java_home) / "bin" / "java" if java_home else Path("java")
+    try:
+        result = subprocess.run(
+            [str(java_bin), "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            timeout=15,
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"java -version failed for {java_bin}: {exc}"
+
+    java_output = result.stdout or ""
+    if result.returncode != 0:
+        return False, f"java -version exited {result.returncode}: {java_output.strip()}"
+
+    java_version = _java_patch_version(java_output)
+    if java_home:
+        helper = Path(java_home) / "lib" / "jspawnhelper"
+        if helper.exists():
+            try:
+                helper_text = helper.read_bytes().decode("utf-8", errors="ignore")
+            except Exception as exc:
+                return False, f"Could not read jspawnhelper {helper}: {exc}"
+            helper_version = _java_patch_version(helper_text)
+            if java_version and helper_version and java_version != helper_version:
+                return (
+                    False,
+                    "Java/jspawnhelper version mismatch: "
+                    f"java={java_version} helper={helper_version} JAVA_HOME={java_home}",
+                )
+            return True, f"Java preflight ok: java={java_version or 'unknown'} JAVA_HOME={java_home}"
+        return True, f"Java preflight ok: java={java_version or 'unknown'} JAVA_HOME={java_home}; no jspawnhelper found"
+
+    return True, f"Java preflight ok from PATH: java={java_version or 'unknown'}"
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
@@ -1781,6 +1868,25 @@ async def launch_nextflow_job(
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
+            env, java_notes = resolve_nextflow_java_env(env)
+            java_ok, java_message = preflight_nextflow_java(env)
+            for note in java_notes:
+                logger.info("[NEXTFLOW-JAVA] %s", note)
+            if java_ok:
+                logger.info("[NEXTFLOW-JAVA] %s", java_message)
+            else:
+                logger.error("[NEXTFLOW-JAVA] %s", java_message)
+                async with async_session() as fail_session:
+                    result = await fail_session.execute(select(Job).where(Job.id == job_id))
+                    failed_job = result.scalar_one_or_none()
+                    if failed_job:
+                        failed_job.status = JobStatus.FAILED.value
+                        failed_job.queue_status = "failed"
+                        failed_job.error_message = f"Nextflow Java preflight failed: {java_message}"
+                        failed_job.completed_at = datetime.utcnow()
+                        failed_job.assigned_gpu = None
+                        await fail_session.commit()
+                return
             gpu_id_str = None
             if gpu_id is not None:
                 try:
