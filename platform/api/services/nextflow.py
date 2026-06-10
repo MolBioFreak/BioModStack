@@ -356,6 +356,30 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
                 return "complete"
             return None
         
+        # PPIFlow / maturation partial-flow: Lightning tqdm progress and output samples
+        elif 'ppiflow' in stage_lower or 'partialflow' in stage_lower or 'maturation' in stage_lower:
+            # tqdm-style progress, e.g.:
+            # "Testing DataLoader 0:  25%|██▌ | 2/8 [05:20<16:00, 0.01it/s]"
+            ppiflow_matches = re.findall(
+                r'Testing DataLoader\s+\d+:\s+(\d+)%\|.*?\|\s*(\d+)/(\d+)\s*\[',
+                content,
+            )
+            if ppiflow_matches:
+                percent, done, total = ppiflow_matches[-1]
+                return f"PPIFlow sample {done}/{total} ({percent}%)"
+
+            # Fallback to produced sample files. This is useful because PPIFlow
+            # only prints tqdm carriage-return lines and the API may poll between
+            # full line refreshes.
+            ppiflow_out = Path(work_dir) / "ppiflow_out"
+            if ppiflow_out.exists():
+                completed = len(list(ppiflow_out.glob("sample*.pdb")))
+                if completed:
+                    total_match = re.findall(r'samples_per_target[=\s:]+(\d+)', content)
+                    total = total_match[-1] if total_match else "?"
+                    return f"PPIFlow sample {completed}/{total}"
+            return None
+
         # Boltz2: Look for step counters or sample completion
         elif 'boltz' in stage_lower:
             # Check for diffusion steps [500/1000]
