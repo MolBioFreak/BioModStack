@@ -175,6 +175,12 @@ def test_template_registry_loads_confornets_experimental_card_with_monomer_only_
 
     user_params = {param.name: param for param in template.user_params}
     assert user_params["task"].enum == ["diversity", "mse", "transfer"]
+    assert user_params["task"].ui_group == "Mapping Mode"
+    assert user_params["task"].ui_order == 10
+    assert user_params["sequence"].ui_group == "Inputs"
+    assert user_params["num_runs"].ui_group == "Model Orchestration"
+    assert user_params["compute_confidence"].ui_group == "Outputs"
+    assert user_params["checkpoint_path"].ui_group == "Advanced"
     assert user_params["chain_id"].type == "enum"
     assert user_params["save_steps"].type == "enum"
     assert user_params["source_test_cases"].type == "enum"
