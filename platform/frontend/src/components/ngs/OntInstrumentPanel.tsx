@@ -316,11 +316,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             <div>Protocol runs in API history: {selectedDevice.protocol_runs?.length ?? 0}</div>
                             <div>Output reads dir: {selectedOutputDirs.reads || 'not reported'}</div>
                             {hardwareCheckMessage ? <div className="text-cyan-100">Hardware check: {hardwareCheckMessage}</div> : null}
+                            {!selectedDevice.flow_cell?.present ? <div className="text-amber-100">Hardware check requires MinKNOW to report a present flow cell/test cell.</div> : null}
                             {blockers.length ? <div className="text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}
                             <div className="flex flex-wrap gap-2 pt-1">
                                 <button
                                     type="button"
-                                    disabled={!selectedPositionForQuery || beginHardwareCheck.isPending}
+                                    disabled={!selectedPositionForQuery || !selectedDevice?.flow_cell?.present || beginHardwareCheck.isPending}
                                     onClick={() => beginHardwareCheck.mutate()}
                                     className="rounded border border-emerald-500/40 px-2 py-1 text-emerald-100 disabled:opacity-50"
                                 >

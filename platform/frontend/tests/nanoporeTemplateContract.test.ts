@@ -156,6 +156,7 @@ test('NGS instrument panel exposes guarded MinKNOW hardware check controls', () 
     const api = readSource('src/lib/api.ts');
 
     assert.match(panel, /Run hardware check/u);
+    assert.match(panel, /Hardware check requires MinKNOW to report a present flow cell\/test cell/u);
     assert.match(panel, /window\.confirm\('Start a MinKNOW hardware check/u);
     assert.match(panel, /Hardware checks in API history/u);
     assert.match(panel, /Protocol runs in API history/u);
