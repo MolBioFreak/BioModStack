@@ -1658,3 +1658,33 @@ def test_get_per_chain_fampnn_psce_extracts_sidechain_profiles(tmp_path: Path) -
     assert profile_ignore_cbeta["A"]["psce"] == [4.0]
     assert profile_ignore_cbeta["A"]["residue_numbers"] == [2]
     assert "B" not in profile_ignore_cbeta
+
+
+def test_extract_fampnn_metrics_preserves_mutation_scoring_payload() -> None:
+    payload = {
+        "fampnn_seq_probs_available": True,
+        "fampnn_mutation_scoring_available": True,
+        "fampnn_mutation_score_source": "seq_probs_log_odds_delta",
+        "fampnn_mutation_score_scope": "single_residue_substitutions_from_sample_pkl_seq_probs",
+        "fampnn_mutation_opportunity_count": 2,
+        "fampnn_top_model_favored_mutations": [
+            {
+                "chain_index": 0,
+                "residue_index": 101,
+                "from_aa": "A",
+                "to_aa": "D",
+                "mutation": "A101D",
+                "from_prob": 0.2,
+                "to_prob": 0.6,
+                "log_odds_delta": 1.098612,
+            }
+        ],
+    }
+
+    metrics = _extract_fampnn_metrics(payload)
+
+    assert metrics["mutation_scoring_available"] is True
+    assert metrics["mutation_score_source"] == "seq_probs_log_odds_delta"
+    assert metrics["mutation_score_scope"] == "single_residue_substitutions_from_sample_pkl_seq_probs"
+    assert metrics["mutation_opportunity_count"] == 2
+    assert metrics["top_model_favored_mutations"][0]["mutation"] == "A101D"
