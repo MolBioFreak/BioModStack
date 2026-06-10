@@ -198,9 +198,11 @@ def test_host_agent_hardware_check_route_is_guarded(monkeypatch) -> None:
         lambda position, payload: (
             202,
             {
-                "action": "begin_hardware_check",
+                "action": "start_hardware_check",
                 "position": position,
+                "hardware_check_id": "HC-001",
                 "hardware_check_run_id": "HC-001",
+                "result_source": "minknow.hardware_check.start_hardware_check",
                 "fake_or_demo_devices": False,
             },
         ),
@@ -209,21 +211,30 @@ def test_host_agent_hardware_check_route_is_guarded(monkeypatch) -> None:
     assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True}) == (
         202,
         {
-            "action": "begin_hardware_check",
+            "action": "start_hardware_check",
             "position": "MD-105428",
+            "hardware_check_id": "HC-001",
             "hardware_check_run_id": "HC-001",
+            "result_source": "minknow.hardware_check.start_hardware_check",
             "fake_or_demo_devices": False,
         },
     )
 
 
 
-def test_begin_hardware_check_uses_configured_manager_without_name_error(monkeypatch) -> None:
+def test_begin_hardware_check_uses_full_hardware_check_service_not_short_ctc_protocol(monkeypatch) -> None:
     from lib import ont_minknow_host  # noqa: PLC0415
+
+    calls: list[tuple[str, object]] = []
+
+    class FakeHardwareCheck:
+        def start_hardware_check(self, **kwargs):
+            calls.append(("start_hardware_check", kwargs))
+            return {"hardware_check_id": "FULL-HC-001"}
 
     class FakeProtocol:
         def begin_hardware_check(self):
-            return {"run_id": "HC-UNIT-001"}
+            raise AssertionError("BMS must not use protocol.begin_hardware_check(); it starts the short CTC script")
 
     class FakeConnection:
         protocol = FakeProtocol()
@@ -238,12 +249,15 @@ def test_begin_hardware_check_uses_configured_manager_without_name_error(monkeyp
         def flow_cell_positions(self):
             return [FakePosition()]
 
+        def hardware_check(self):
+            return FakeHardwareCheck()
+
     monkeypatch.setattr(
         ont_minknow_host,
         "discover_status",
         lambda: {
             "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
-            "live_devices": [{"position": "MD-105428", "current_protocol": None}],
+            "live_devices": [{"position": "MD-105428", "current_protocol": None, "flow_cell": {"present": True}}],
         },
     )
     monkeypatch.setattr(ont_minknow_host.MinknowHostConfig, "from_env", staticmethod(lambda: object()))
@@ -252,20 +266,23 @@ def test_begin_hardware_check_uses_configured_manager_without_name_error(monkeyp
     status_code, payload = ont_minknow_host.begin_hardware_check("MD-105428", {"confirm_hardware_check": True})
 
     assert status_code == 202
-    assert payload["action"] == "begin_hardware_check"
-    assert payload["hardware_check_run_id"] == "HC-UNIT-001"
+    assert payload["action"] == "start_hardware_check"
+    assert payload["hardware_check_id"] == "FULL-HC-001"
+    assert payload["hardware_check_run_id"] == "FULL-HC-001"
+    assert payload["result_source"] == "minknow.hardware_check.start_hardware_check"
+    assert calls == [("start_hardware_check", {"position_ids": ["MD-105428"]})]
 
 
 
 def test_begin_hardware_check_reports_no_flowcell_as_operator_conflict(monkeypatch) -> None:
     from lib import ont_minknow_host  # noqa: PLC0415
 
-    class FakeProtocol:
-        def begin_hardware_check(self):
+    class FakeHardwareCheck:
+        def start_hardware_check(self, **kwargs):
             raise RuntimeError('FAILED_PRECONDITION:No flow cell present for hardware check.')
 
     class FakeConnection:
-        protocol = FakeProtocol()
+        pass
 
     class FakePosition:
         name = "MD-105428"
@@ -276,6 +293,9 @@ def test_begin_hardware_check_reports_no_flowcell_as_operator_conflict(monkeypat
     class FakeManager:
         def flow_cell_positions(self):
             return [FakePosition()]
+
+        def hardware_check(self):
+            return FakeHardwareCheck()
 
     monkeypatch.setattr(
         ont_minknow_host,
