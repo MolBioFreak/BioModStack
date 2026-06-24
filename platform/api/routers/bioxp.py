@@ -350,7 +350,129 @@ OEM_IDLE_STANDBY_CURRENT = 10
 OEM_MAX_RUN_CURRENT = 31
 REFERENCE_OK_STATES = {"referenced", "synced", "known"}
 GANTRY_CURRENT_AXES = {"x", "y", "z"}
-MOTION_GUARDED_AXES = {"x", "y", "z", "g", "door"}
+MOTION_GUARDED_AXES = {"x", "y", "z", "door"}
+MOTION_STATUS_AXES = {"x", "y", "z", "g", "door"}
+GRIPPER_OEM_CONFIRMATION_RULE = "queryHome(MotorGrip) OR getG()<50"
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "active", "confirmed"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "inactive", "unconfirmed"}:
+            return False
+    return None
+
+
+def _extract_gripper_position_steps(payload: Dict[str, Any]) -> Optional[int]:
+    position = payload.get("position")
+    if isinstance(position, dict):
+        for key in ("position", "position_steps", "steps", "value"):
+            value = _coerce_int(position.get(key))
+            if value is not None:
+                return value
+    return _coerce_int(_first_present(payload, "position", "position_steps", "g_position", "current_position"))
+
+
+def _gripper_oem_home_confirmed(payload: Dict[str, Any]) -> bool:
+    predicate = payload.get("oem_home_predicate")
+    if isinstance(predicate, dict):
+        explicit = _bool_or_none(_first_present(predicate, "oem_confirmed_home", "confirmed", "home_confirmed"))
+        if explicit is not None:
+            return explicit
+        query_home = _bool_or_none(_first_present(predicate, "query_home_active", "queryHome", "query_home"))
+        position_lt_50 = _bool_or_none(_first_present(predicate, "position_lt_50", "g_lt_50", "getG_lt_50"))
+        return bool(query_home) or bool(position_lt_50)
+    position_steps = _extract_gripper_position_steps(payload)
+    return position_steps is not None and position_steps < 50
+
+
+def _with_bms_gripper_oem_interpretation(payload: Dict[str, Any]) -> Dict[str, Any]:
+    interpreted = dict(payload)
+    switches = interpreted.get("switches") if isinstance(interpreted.get("switches"), dict) else {}
+    right_raw_asserted = _bool_or_none(_first_present(switches, "right_raw_active", "right_active"))
+    left_raw_asserted = _bool_or_none(_first_present(switches, "left_raw_active", "left_active"))
+    gap10_state = _coerce_int(_first_present(switches, "right_state", "gap10", "gap10_right"))
+    if right_raw_asserted is None and gap10_state is not None:
+        right_raw_asserted = gap10_state == 1
+    gap9_state = _coerce_int(_first_present(switches, "left_state", "gap9", "gap9_left"))
+    if left_raw_asserted is None and gap9_state is not None:
+        left_raw_asserted = gap9_state == 1
+    oem_home_confirmed = _gripper_oem_home_confirmed(interpreted)
+    both_effective = _bool_or_none(switches.get("both_effective_limits_active"))
+    blockers = interpreted.get("blockers") if isinstance(interpreted.get("blockers"), list) else []
+    hard_blocker_present = "both_effective_limits_active" in blockers
+    gap10_role = "unresolved"
+    motion_test_state = "passive_status_only"
+    physical_double_limit_proven = False
+    notes: list[str] = [
+        "OEM gripper confirmation is queryHome(MotorGrip) OR getG()<50; generic GAP10 is diagnostic until proven.",
+    ]
+    if right_raw_asserted and oem_home_confirmed:
+        gap10_role = "unresolved_raw_asserted_not_physical_limit_proof"
+        motion_test_state = "blocked_until_gap10_truth_table_or_controlled_clear" if hard_blocker_present else "ready_for_controlled_clear_with_gap10_diagnostic"
+        notes.append("GAP10/right raw asserted while OEM home is confirmed; do not report this as a proven physical double-limit.")
+        if not hard_blocker_present:
+            notes.append("Robot-local no longer hard-blocks gripper clear/home solely on generic both-effective-limit state.")
+    elif right_raw_asserted:
+        gap10_role = "unresolved_raw_asserted"
+        motion_test_state = "blocked_until_gap10_truth_table"
+    elif right_raw_asserted is False:
+        gap10_role = "raw_not_asserted"
+    if both_effective and not oem_home_confirmed:
+        motion_test_state = "blocked_until_switch_truth_table"
+    interpreted["bms_oem_interpretation"] = {
+        "oem_home_confirmed": oem_home_confirmed,
+        "oem_confirmation_rule": GRIPPER_OEM_CONFIRMATION_RULE,
+        "gap9_raw_asserted": left_raw_asserted,
+        "gap10_raw_asserted": right_raw_asserted,
+        "gap10_role": gap10_role,
+        "physical_double_limit_proven": physical_double_limit_proven,
+        "motion_test_state": motion_test_state,
+        "notes": notes,
+    }
+    return interpreted
+
+
+def _augment_gripper_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    augmented = dict(payload)
+    augmented.setdefault("capture_bundle", True)
+    augmented.setdefault("require_motion_evidence", True)
+    augmented.setdefault("restore_idle_current", True)
+    return augmented
+
+
+def _with_bms_gripper_action_interpretation(payload: Dict[str, Any], action: str) -> Dict[str, Any]:
+    interpreted = dict(payload)
+    seen_nonzero = _bool_or_none(_first_present(interpreted, "seen_nonzero", "nonzero_speed_seen"))
+    ambiguous_no_motion = _bool_or_none(interpreted.get("ambiguous_no_motion")) is True
+    position_delta = _coerce_int(_first_present(interpreted, "position_delta", "delta_steps"))
+    ok = _bool_or_none(interpreted.get("ok")) is True
+    physical_clear_proven = bool(ok and (seen_nonzero is True or (position_delta is not None and position_delta != 0)) and not ambiguous_no_motion)
+    action_test_readiness = "ready_for_operator_review"
+    notes = [
+        "BMS defaults request capture_bundle, require_motion_evidence, and restore_idle_current for supervised G testing.",
+    ]
+    if ambiguous_no_motion or (ok and seen_nonzero is False):
+        action_test_readiness = "ambiguous_no_motion_not_clear_proof"
+        notes.append("ACK-only gripper clear is not physical proof")
+    elif not ok:
+        action_test_readiness = "robot_blocked_or_failed_before_proof"
+    interpreted["bms_oem_interpretation"] = {
+        "action": action,
+        "action_test_readiness": action_test_readiness,
+        "physical_clear_proven": physical_clear_proven if action == "clear" else None,
+        "requires_operator_physical_confirmation": True,
+        "notes": notes,
+    }
+    return interpreted
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -373,7 +495,6 @@ def _axis_from_payload(payload: Dict[str, Any]) -> str:
     if axis not in MOTION_GUARDED_AXES:
         raise HTTPException(status_code=400, detail=f"axis must be one of {sorted(MOTION_GUARDED_AXES)}")
     return axis
-
 
 def _truthy_override(payload: Dict[str, Any], *names: str) -> bool:
     return any(bool(payload.get(name)) for name in names)
@@ -500,7 +621,7 @@ async def _validate_relative_motion_payload(payload: Dict[str, Any]) -> None:
 
 
 def _validate_home_payload(payload: Dict[str, Any]) -> None:
-    _axis_from_payload(payload)
+    axis = _axis_from_payload(payload)
     if not payload.get("capture_bundle"):
         raise HTTPException(
             status_code=400,
@@ -1663,8 +1784,8 @@ async def bioxp_operation_micro_move_proof(request: Request):
     payload = await _request_json_or_empty(request)
     _require_operator_ack(payload, "micro_move_proof")
     axis = str(payload.get("axis") or "x").lower()
-    if axis not in {"x", "y", "z", "g", "door"}:
-        raise HTTPException(status_code=400, detail="axis must be one of x, y, z, g, or door.")
+    if axis not in MOTION_GUARDED_AXES:
+        raise HTTPException(status_code=400, detail=f"axis must be one of {sorted(MOTION_GUARDED_AXES)}")
     steps = int(payload.get("steps") or 100)
     if abs(steps) > 500:
         raise HTTPException(status_code=400, detail="micro_move_proof is capped at +/-500 steps.")
@@ -1998,7 +2119,7 @@ async def led_rgb(request: Request):
 async def gripper_status():
     payload = await proxy_request("GET", "/motion/gripper/status", timeout=20.0)
     if isinstance(payload, dict):
-        payload = dict(payload)
+        payload = _with_bms_gripper_oem_interpretation(payload)
         payload.setdefault("bms_role", "thin_proxy_only")
     return payload
 
@@ -2016,13 +2137,14 @@ async def gripper_restore_idle_current(request: Request):
 @router.post("/motion/gripper/clear")
 async def gripper_clear(request: Request):
     payload = request if isinstance(request, dict) else await _request_json_or_empty(request)
+    payload = _augment_gripper_action_payload(payload)
     try:
         timeout_s = float(payload.get("timeout_s", 15.0))
     except (TypeError, ValueError):
         timeout_s = 15.0
     response = await proxy_request("POST", "/motion/gripper/clear", payload, timeout=min(max(timeout_s + 20.0, 30.0), 140.0))
     if isinstance(response, dict):
-        response = dict(response)
+        response = _with_bms_gripper_action_interpretation(response, "clear")
         response.setdefault("bms_role", "thin_proxy_only")
     return response
 
@@ -2030,13 +2152,14 @@ async def gripper_clear(request: Request):
 @router.post("/motion/gripper/home")
 async def gripper_home(request: Request):
     payload = request if isinstance(request, dict) else await _request_json_or_empty(request)
+    payload = _augment_gripper_action_payload(payload)
     try:
         timeout_s = float(payload.get("timeout_s", 15.0))
     except (TypeError, ValueError):
         timeout_s = 15.0
     response = await proxy_request("POST", "/motion/gripper/home", payload, timeout=min(max(timeout_s + 20.0, 30.0), 140.0))
     if isinstance(response, dict):
-        response = dict(response)
+        response = _with_bms_gripper_action_interpretation(response, "home")
         response.setdefault("bms_role", "thin_proxy_only")
     return response
 
@@ -2055,7 +2178,9 @@ async def move_axis_absolute(request: Request):
 
 @router.post("/motion/axis/zero")
 async def move_axis_zero(request: Request):
-    return await proxy_request("POST", "/motion/axis/zero", await request.json())
+    payload = await _request_json_or_empty(request)
+    axis = _axis_from_payload(payload)
+    return await proxy_request("POST", "/motion/axis/zero", payload)
 
 @router.post("/motion/axis/home")
 async def home_axis(request: Request):

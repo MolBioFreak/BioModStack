@@ -251,6 +251,17 @@ export interface GripperStatusResponse {
         safe_idle_max?: number;
     } | null;
     oem_home_predicate?: Record<string, UntypedApiValue> | null;
+    bms_oem_interpretation?: {
+        oem_home_confirmed?: boolean;
+        oem_confirmation_rule?: string;
+        gap9_raw_asserted?: boolean | null;
+        gap10_raw_asserted?: boolean | null;
+        gap10_role?: string;
+        physical_double_limit_proven?: boolean;
+        motion_test_state?: string;
+        notes?: string[];
+        [key: string]: UntypedApiValue;
+    } | null;
     profile?: Record<string, UntypedApiValue> | null;
     blockers?: string[];
     motion_commanded?: boolean;
@@ -331,6 +342,7 @@ export interface UsbSniffRunsResponse {
 export type UsbSniffActionResponse = UsbSniffStatusResponse & Record<string, UntypedApiValue>;
 
 export type GantryAxisName = Extract<AxisName, 'x' | 'y' | 'z'>;
+export type GenericMotionAxisName = Exclude<AxisName, 'g'>;
 
 export interface MotionAxisCurrentPayload {
     axes?: GantryAxisName[];
@@ -1443,7 +1455,7 @@ export const useGripperHome = () => {
 export const useMoveRelative = () => {
     const queryClient = useQueryClient();
     return useMutation<AxisMotionResult, Error, {
-        axis: AxisName;
+        axis: GenericMotionAxisName;
         steps: number;
         wait_timeout_s?: number;
         speed?: number;
@@ -1491,7 +1503,7 @@ export const useMoveRelative = () => {
 
 export const useMoveAbsolute = () => {
     const queryClient = useQueryClient();
-    return useMutation<AxisMotionResult, Error, { axis: AxisName; position_steps: number; speed?: number; acc?: number } & MotionArtifactOptions>({
+    return useMutation<AxisMotionResult, Error, { axis: GenericMotionAxisName; position_steps: number; speed?: number; acc?: number } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'absolute'),
         mutationFn: async ({ axis, position_steps, speed, acc, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
             const res = await api.post('/api/bioxp/motion/axis/absolute', {
@@ -1515,7 +1527,7 @@ export const useMoveAbsolute = () => {
     });
 };
 
-const invalidateAxisMotion = (queryClient: ReturnType<typeof useQueryClient>, axis: AxisName) => {
+const invalidateAxisMotion = (queryClient: ReturnType<typeof useQueryClient>, axis: GenericMotionAxisName) => {
     queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', axis] });
     queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
     queryClient.invalidateQueries({ queryKey: ['bioxp', 'status'] });
@@ -1523,7 +1535,7 @@ const invalidateAxisMotion = (queryClient: ReturnType<typeof useQueryClient>, ax
 
 export const useZeroAxis = () => {
     const queryClient = useQueryClient();
-    return useMutation<AxisMotionResult, Error, { axis: AxisName; speed?: number } & MotionArtifactOptions>({
+    return useMutation<AxisMotionResult, Error, { axis: GenericMotionAxisName; speed?: number } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'zero'),
         mutationFn: async ({ axis, speed, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
             const res = await api.post('/api/bioxp/motion/axis/zero', {
@@ -1543,7 +1555,7 @@ export const useZeroAxis = () => {
 
 export const useHomeAxis = () => {
     const queryClient = useQueryClient();
-    return useMutation<AxisMotionResult, Error, { axis: AxisName; speed?: number } & MotionArtifactOptions>({
+    return useMutation<AxisMotionResult, Error, { axis: GenericMotionAxisName; speed?: number } & MotionArtifactOptions>({
         mutationKey: bioxpHardwareMutationKey('motion', 'switch-home'),
         mutationFn: async ({ axis, speed, capture_bundle = false, dry_run_bundle = false, operator_note, snapshot_refs = [] }) => {
             const res = await api.post('/api/bioxp/motion/axis/home', {
