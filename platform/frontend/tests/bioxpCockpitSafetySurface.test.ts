@@ -66,7 +66,7 @@ test('commissioning motion keeps axis controls while default handler restores gr
     assert.match(cockpitSource, /Absolute target/);
     assert.match(cockpitSource, /Limits: step/);
     assert.match(cockpitSource, /clamped before send/);
-    assert.match(cockpitSource, /stepMax: 15000/);
+    assert.doesNotMatch(cockpitSource, /stepMax: 15000/);
     assert.doesNotMatch(cockpitSource, /Capture validation bundle/);
     assert.doesNotMatch(cockpitSource, /Dry-run bundle only/);
     assert.doesNotMatch(cockpitSource, /Operator note for supervised validation/);
@@ -167,7 +167,7 @@ test('service operations tab exposes named operation wrappers without acknowledg
 
 
 test('raw motion current defaults stay OEM-safe and manual axis controls use live guardrails', () => {
-    const axisControls = sourceBetween('const AxisControls = ({', 'const CameraAxisQuickControls = ({');
+    const axisControls = sourceBetween('const AxisControls = ({', 'type CameraHoldJogCommand = {');
 
     assert.match(clientSource, /const runCurrent = payload\.run_current \?\? 10/);
     assert.match(clientSource, /standby_current: payload\.standby_current \?\? 10/);

@@ -1,17 +1,39 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import HTTPException
 
-API_ROOT = Path(__file__).resolve().parents[1]
-if str(API_ROOT) not in sys.path:
-    sys.path.insert(0, str(API_ROOT))
 
-from routers import bioxp
+def _load_bioxp_router_module():
+    repo_api = Path(__file__).resolve().parents[1]
+    paths_module = types.ModuleType("paths")
+    paths_module.get_data_root = lambda: Path("/tmp/biomodstack-test-data")
+    services_module = types.ModuleType("services")
+    services_module.bioxp_interlink = types.SimpleNamespace(
+        get_settings=lambda: None,
+        save_settings=lambda settings: None,
+        get_state=lambda: {},
+        lifecycle_action=lambda *args, **kwargs: {},
+        probe_runtime=lambda *args, **kwargs: {},
+        load_profile=lambda: None,
+    )
+    sys.modules.setdefault("paths", paths_module)
+    sys.modules.setdefault("services", services_module)
+    sys.modules.setdefault("services.bioxp_interlink", services_module.bioxp_interlink)
+    spec = importlib.util.spec_from_file_location("bioxp_router_motion_safety_under_test", repo_api / "routers" / "bioxp.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+bioxp = _load_bioxp_router_module()
 
 
 class JsonRequest:
@@ -164,11 +186,26 @@ async def test_switch_home_requires_capture_bundle_and_operator_note(monkeypatch
 
     monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
 
+    with pytest.raises(HTTPException) as missing_evidence:
+        await bioxp.home_axis(JsonRequest({'axis': 'z', 'timeout_s': 9.0}))
+
+    assert missing_evidence.value.status_code == 400
+    assert 'capture_bundle=true' in str(missing_evidence.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generic_gripper_switch_home_is_rejected_as_invalid_axis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """G is not in MOTION_GUARDED_AXES so home_axis rejects it with 400."""
+    async def fake_proxy_request(*args: object, **kwargs: object):
+        raise AssertionError('generic gripper home must not be proxied')
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
     with pytest.raises(HTTPException) as exc_info:
-        await bioxp.home_axis(JsonRequest({'axis': 'g', 'timeout_s': 9.0}))
+        await bioxp.home_axis(JsonRequest({'axis': 'g', 'timeout_s': 9.0, 'capture_bundle': True, 'operator_note': 'blocked'}))
 
     assert exc_info.value.status_code == 400
-    assert 'capture_bundle=true' in str(exc_info.value.detail)
+    assert 'axis must be one of' in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

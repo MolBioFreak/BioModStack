@@ -28,15 +28,23 @@ test('BioXP cockpit surfaces OEM Gripper Contract with raw truth and fail-closed
     assert.match(panel, /G LIMITS/);
     assert.match(panel, /CURRENT/);
     assert.match(panel, /OEM HOME/);
-    assert.match(panel, /both G limits are active, robot returns 409 before motion/);
+    assert.match(panel, /OEM home true; GAP10 raw unresolved/);
+    assert.doesNotMatch(panel, /both G limits are active, robot returns 409 before motion/);
     assert.match(panel, /Restore G idle current/);
     assert.match(panel, /OEM Gripper Clear/);
-    assert.match(panel, /OEM Gripper Home/);
+    assert.doesNotMatch(panel, /gripperStatus\.data\?\.switches\?\.both_effective_limits_active === true/);
+    assert.match(panel, /robot-local route decides whether GAP10 inhibits movement/);
 });
 
-test('commissioning motion demotes generic G jogs in favor of OEM gripper contract', () => {
+test('commissioning motion removes generic G jogs in favor of OEM gripper contract', () => {
     const manualTab = sourceBetween(cockpitSource, "{activeTab === 'manual'", "{activeTab === 'controls'");
-    assert.doesNotMatch(manualTab, /<AxisControls axis="g" label="Gripper"/);
+    assert.doesNotMatch(manualTab, /<AxisControls axis="g"/);
+    assert.doesNotMatch(manualTab, /CameraAxisQuickControls axis="g"/);
+    assert.doesNotMatch(cockpitSource, /const CameraAxisQuickControls/);
+    assert.doesNotMatch(cockpitSource, /axis === 'g'/);
+    assert.doesNotMatch(manualTab, /\['x', 'y', 'z', 'g'/);
+    assert.doesNotMatch(cockpitSource, /stepMax:\s*15000/);
     assert.match(manualTab, /Generic G jog controls are disabled here/);
+    assert.match(cockpitSource, /Generic G\/gripper jog is permanently disabled/);
     assert.match(manualTab, /\{gripperPanel\}/);
 });

@@ -451,7 +451,7 @@ async def test_motion_zero_and_manual_switch_home_are_separate_proxy_routes(monk
     class HomeRequestStub:
         async def json(self):
             return {
-                'axis': 'g',
+                'axis': 'z',
                 'timeout_s': 9.0,
                 'capture_bundle': True,
                 'operator_note': 'real-home-route-test with native before/after picture proof',
@@ -470,7 +470,7 @@ async def test_motion_zero_and_manual_switch_home_are_separate_proxy_routes(monk
             'POST',
             '/motion/axis/home',
             {
-                'axis': 'g',
+                'axis': 'z',
                 'timeout_s': 9.0,
                 'capture_bundle': True,
                 'operator_note': 'real-home-route-test with native before/after picture proof',
@@ -521,7 +521,7 @@ async def test_oem_startup_runtime_and_range_routes_proxy_to_robot_runtime(monke
         ('POST', '/oem/runtime/commands/initializeSystem', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
         ('GET', '/oem/runtime/commands/history', None, {'limit': 7}, 30.0),
         ('GET', '/oem/motion_worker/status', None, None, 30.0),
-        ('POST', '/motion/oem/startup_step', {'operator': 'bms-test', 'dry_run': True}, None, 90.0),
+        ('POST', '/motion/oem/startup_step', {'operator': 'bms-test', 'dry_run': True}, None, 120.0),
         ('POST', '/motion/oem/home_xy', {'operator': 'bms-test', 'dry_run': True}, None, 120.0),
         ('POST', '/motion/oem/rehome', {'operator': 'bms-test', 'dry_run': True}, None, 180.0),
         ('POST', '/motion/oem/initialize_motion', {'operator': 'bms-test', 'dry_run': True}, None, 180.0),

@@ -31,7 +31,7 @@ test('BioXP shell and page labels point to Handler Controls, not legacy harness/
 test('default Handler Controls tab contains readback and live motion/grabber surfaces, not commissioning action panels', () => {
     const controlsTab = sourceBetween(cockpitSource, "{activeTab === 'controls'", "{activeTab === 'camera'");
     const liveMotionPanel = sourceBetween(cockpitSource, 'const liveXyzMotionPanel = (', 'const liquidPanel = (');
-    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
+    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'type CameraHoldJogCommand = {');
 
     assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
     assert.match(liveMotionPanel, /Live X\/Y\/Z Motion/);
@@ -61,7 +61,7 @@ test('default Handler Controls tab contains readback and live motion/grabber sur
     assert.match(cockpitSource, /stepMax: 91919/);
     assert.match(cockpitSource, /stepMax: 95247/);
     assert.match(cockpitSource, /stepMax: 160000/);
-    assert.match(cockpitSource, /stepMax: 15000/);
+    assert.doesNotMatch(cockpitSource, /stepMax: 15000/);
     assert.doesNotMatch(axisControls, /Capture validation bundle/);
     assert.doesNotMatch(axisControls, /Dry-run bundle only/);
     assert.doesNotMatch(axisControls, /Operator note for supervised validation/);
@@ -132,8 +132,7 @@ test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw r
 });
 
 test('Zero and Switch Home controls are separate while live guardrails block risky raw motion', () => {
-    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
-    const cameraAxisControls = sourceBetween(cockpitSource, 'const CameraAxisQuickControls = ({', 'type CameraHoldJogCommand = {');
+    const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'type CameraHoldJogCommand = {');
     const cameraHoldJogPad = sourceBetween(cockpitSource, 'const CameraHoldJogPad = ({', 'const CameraSettingControl = ({');
     const axisDirectionHelper = sourceBetween(cockpitSource, 'const getAxisDirectionState = (', 'const hasMutationKeyPrefix =');
 
@@ -161,16 +160,12 @@ test('Zero and Switch Home controls are separate while live guardrails block ris
     assert.match(axisControls, /disabled=\{!enabled \|\| zeroAxis\.isPending \|\| zeroToControllerBlocked\}/);
     assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
     assert.match(axisControls, /Switch Home disabled here; use supervised OEM recipe/);
-    assert.match(cameraAxisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
-    assert.match(cameraAxisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked \|\| zPositiveDownBlocked/);
-    assert.match(cameraAxisControls, /useMotionReferenceStatus\(enabled, \[axis\]/);
-    assert.match(cameraAxisControls, /Z DN\/\+Z blocked until reference\/position is trusted/);
-    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| negativeMoveBlocked\}/);
-    assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| positiveMoveBlocked\}/);
+    assert.doesNotMatch(cockpitSource, /const CameraAxisQuickControls/);
+    assert.doesNotMatch(cockpitSource, /CameraAxisQuickControls axis="g"/);
+    assert.match(cockpitSource, /Generic G\/gripper jog is permanently disabled/);
     assert.match(cameraHoldJogPad, /useMotionReferenceStatus\(enabled, \[\.\.\.CAMERA_HOLD_JOG_AXES\]/);
     assert.match(cameraHoldJogPad, /command\.axis === 'z' && command\.steps > 0 && zPositiveDownBlocked/);
     assert.match(cameraHoldJogPad, /zPositive\.blocked \|\| zPositiveDownBlocked/);
-    assert.match(cameraAxisControls, /motion buttons blocked until telemetry clears/);
     assert.match(cockpitSource, /UP\/-Z/);
     assert.match(cockpitSource, /DN\/\+Z/);
     assert.doesNotMatch(axisControls, /limitConflictBlocked/);

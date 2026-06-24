@@ -395,6 +395,8 @@ const isZPositiveDownReferenceGuardBlocked = (axis: AxisName, referenceState: st
 const hasMutationKeyPrefix = (mutationKey: unknown, prefix: readonly string[]) =>
     Array.isArray(mutationKey) && prefix.every((part, index) => mutationKey[index] === part);
 
+type GenericMotionAxis = Exclude<AxisName, 'g'>;
+
 type AxisMotionSliderProfile = {
     stepMin: number;
     stepMax: number;
@@ -413,7 +415,7 @@ type AxisMotionSliderProfile = {
     source: string;
 };
 
-const AXIS_MOTION_SLIDER_PROFILES: Record<AxisName, AxisMotionSliderProfile> = {
+const AXIS_MOTION_SLIDER_PROFILES: Record<GenericMotionAxis, AxisMotionSliderProfile> = {
     x: {
         stepMin: 1,
         stepMax: 91919,
@@ -464,23 +466,6 @@ const AXIS_MOTION_SLIDER_PROFILES: Record<AxisName, AxisMotionSliderProfile> = {
         absoluteMin: 0,
         absoluteMax: 160000,
         source: 'OEM axis limit: Z 0..160000; speed/acc norm 50..1791 / 20..576',
-    },
-    g: {
-        stepMin: 1,
-        stepMax: 15000,
-        stepDefault: 30,
-        stepIncrement: 10,
-        speedMin: 20,
-        speedMax: 600,
-        speedDefault: 600,
-        speedIncrement: 10,
-        accMin: 5,
-        accMax: 5,
-        accDefault: 5,
-        accIncrement: 1,
-        absoluteMin: 0,
-        absoluteMax: 15000,
-        source: 'OEM axis limit: gripper 0..15000; startup/manual gripper profile speed 600 / acc 5 / run current 31',
     },
     door: {
         stepMin: 1,
@@ -571,7 +556,7 @@ const AxisControls = ({
     enabled,
     pollIntervalMs = 8000,
 }: {
-    axis: AxisName;
+    axis: GenericMotionAxis;
     label: string;
     enabled: boolean;
     pollIntervalMs?: number | false;
@@ -943,125 +928,6 @@ const AxisControls = ({
     );
 };
 
-const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
-    const moveRelative = useMoveRelative();
-    const zeroAxis = useZeroAxis();
-    const [steps, setSteps] = useState(axis === 'z' ? 35 : axis === 'g' ? 30 : 60);
-    const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
-    const [commandLabel, setCommandLabel] = useState<string | null>(null);
-    const localMotionBusy = moveRelative.isPending || zeroAxis.isPending;
-    const { data, isError, error } = useAxisStatus(axis, enabled, localMotionBusy ? 750 : 2500);
-    const motionReferenceStatus = useMotionReferenceStatus(enabled, [axis], localMotionBusy ? false : 2500);
-
-    const position = data?.status?.position?.position;
-    const referenceState = getAxisReferenceState(motionReferenceStatus.data, axis);
-    const speed = data?.status?.speed?.speed;
-    const moving = typeof speed === 'number' ? speed !== 0 : false;
-    const directionGuard = getAxisDirectionState(data);
-    const leftActive = directionGuard.leftActive;
-    const rightActive = directionGuard.rightActive;
-    const leftMasked = directionGuard.leftMasked;
-    const rightMasked = directionGuard.rightMasked;
-    const switchConflictObserved = directionGuard.conflictingSwitches;
-    const negativeMoveBlocked = directionGuard.negativeBlocked;
-    const zPositiveDownBlocked = isZPositiveDownReferenceGuardBlocked(axis, referenceState, position);
-    const positiveMoveBlocked = directionGuard.positiveBlocked || zPositiveDownBlocked;
-    const zeroToControllerBlocked = false;
-    const liveDelta =
-        commandStartPosition != null && typeof position === 'number'
-            ? position - commandStartPosition
-            : null;
-
-    const beginCommand = (labelText: string) => {
-        setCommandLabel(labelText);
-        setCommandStartPosition(typeof position === 'number' ? position : null);
-    };
-
-    return (
-        <div className="rounded-lg border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-2 space-y-2 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
-            <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-content">{label}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving || moveRelative.isPending || zeroAxis.isPending ? 'bg-white/10 text-content border-white/15' : 'bg-white/5 text-content-muted border-white/10'}`}>
-                    {moving || moveRelative.isPending || zeroAxis.isPending ? 'MOVE' : 'IDLE'}
-                </span>
-            </div>
-            <div className="flex items-center justify-between text-[10px] font-mono text-content-muted">
-                <span>P {position ?? 'n/a'}</span>
-                <span>Δ {liveDelta ?? '--'}</span>
-            </div>
-            <div className="flex items-center gap-1">
-                <input
-                    type="number"
-                    value={steps}
-                    onChange={(e) => setSteps(Number(e.target.value))}
-                    className="w-14 bg-surface border border-white/10 rounded px-2 py-1 text-[11px] text-content font-mono"
-                />
-                <button
-                    onClick={() => {
-                        beginCommand(`REL ${-Math.abs(steps)}`);
-                        moveRelative.mutate(
-                            { axis, steps: -Math.abs(steps) },
-                            { onSettled: () => setCommandLabel(null) },
-                        );
-                    }}
-                    disabled={!enabled || moveRelative.isPending || negativeMoveBlocked}
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
-                >
-                    {axis === 'z' ? 'UP/-Z' : '◄'}
-                </button>
-                <button
-                    onClick={() => {
-                        beginCommand(`REL ${Math.abs(steps)}`);
-                        moveRelative.mutate(
-                            { axis, steps: Math.abs(steps) },
-                            { onSettled: () => setCommandLabel(null) },
-                        );
-                    }}
-                    disabled={!enabled || moveRelative.isPending || positiveMoveBlocked}
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
-                >
-                    {axis === 'z' ? 'DN/+Z' : '►'}
-                </button>
-                <button
-                    onClick={() => {
-                        beginCommand('ZERO → 0');
-                        zeroAxis.mutate(
-                            { axis },
-                            { onSettled: () => setCommandLabel(null) },
-                        );
-                    }}
-                    disabled={!enabled || zeroAxis.isPending || zeroToControllerBlocked}
-                    title="Return this axis to controller coordinate 0; this is not switch-search homing."
-                    className="ml-auto px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
-                >
-                    Zero → 0
-                </button>
-            </div>
-            {(leftActive === true || rightActive === true) && (
-                <div className={`text-[10px] ${switchConflictObserved ? 'text-content-muted' : 'text-content-muted'} font-mono`}>
-                    {switchConflictObserved
-                        ? 'L/R switch readback both active (motion buttons blocked until telemetry clears)'
-                        : `${leftActive === true ? (leftMasked ? 'L sw(masked)' : 'L sw(block)') : 'L ok'} · ${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw(block)') : 'R ok'}`}
-                </div>
-            )}
-            {zPositiveDownBlocked && (
-                <div className="text-[10px] text-warning">
-                    Z DN/+Z blocked until reference/position is trusted; use UP/-Z for lift.
-                </div>
-            )}
-            {commandLabel && (
-                <div className="text-[10px] text-content-muted font-mono">
-                    {commandLabel}
-                </div>
-            )}
-            {(moveRelative.isError || zeroAxis.isError || isError) && (
-                <div className="text-[10px] text-error">
-                    {getErrorMessage(moveRelative.error) || getErrorMessage(zeroAxis.error) || getErrorMessage(error)}
-                </div>
-            )}
-        </div>
-    );
-};
 
 type CameraHoldJogCommand = {
     axis: 'x' | 'y' | 'z';
@@ -1704,7 +1570,7 @@ export const BioXpCockpit = () => {
     const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
     const [showCommissioningControls, setShowCommissioningControls] = useState(false);
     const [headLiftSteps, setHeadLiftSteps] = useState(500);
-    const [microMoveAxis, setMicroMoveAxis] = useState<AxisName>('x');
+    const [microMoveAxis, setMicroMoveAxis] = useState<GenericMotionAxis>('x');
     const [microMoveSteps, setMicroMoveSteps] = useState(100);
     const [gripperReason, setGripperReason] = useState('OEM gripper commissioning; operator watching instrument');
     const [interlockOverrideReason, setInterlockOverrideReason] = useState('mag/latch commissioning; operator watching instrument');
@@ -2411,8 +2277,8 @@ export const BioXpCockpit = () => {
                     <div className="text-sm font-semibold text-content">Controller-only proof move — commissioning fallback</div>
                     <div className="text-xs text-warning">Commissioning fallback; operator must watch mechanism.</div>
                     <div className="flex flex-wrap items-center gap-2">
-                        <select value={microMoveAxis} onChange={(e) => setMicroMoveAxis(e.target.value as AxisName)} className="bg-surface-secondary border border-border-primary rounded px-2 py-2 text-xs text-content">
-                            {(['x', 'y', 'z', 'g', 'door'] as AxisName[]).map((axis) => <option key={axis} value={axis}>{axis.toUpperCase()}</option>)}
+                        <select value={microMoveAxis} onChange={(e) => setMicroMoveAxis(e.target.value as GenericMotionAxis)} className="bg-surface-secondary border border-border-primary rounded px-2 py-2 text-xs text-content">
+                            {(['x', 'y', 'z', 'door'] as GenericMotionAxis[]).map((axis) => <option key={axis} value={axis}>{axis.toUpperCase()}</option>)}
                         </select>
                         <input type="number" value={microMoveSteps} min={-500} max={500} onChange={(e) => setMicroMoveSteps(Number(e.target.value))} className="w-24 bg-surface-secondary border border-border-primary rounded px-2 py-2 text-xs text-content font-mono" />
                         <button onClick={() => microMoveProofOperation.mutate({ ...operationPayload(), axis: microMoveAxis, steps: microMoveSteps }, { onSuccess: recordOperationReport, onError: (error) => recordOperationError('micro_move_proof', error) })} disabled={!isConnected || microMoveProofOperation.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg disabled:opacity-40">Micro-move Proof</button>
@@ -3043,7 +2909,9 @@ export const BioXpCockpit = () => {
             {showCommissioningControls ? (
                 <>
                     <CameraHoldJogPad enabled={isConnected} />
-                    <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+                    <div className="rounded border border-warning/20 bg-warning/5 px-3 py-2 text-[11px] text-warning">
+                        Generic G/gripper jog is permanently disabled. Gripper movement must use the OEM Gripper Contract routes only.
+                    </div>
                 </>
             ) : (
                 <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] text-content-muted">
@@ -3230,7 +3098,7 @@ export const BioXpCockpit = () => {
                     </span>
                 </div>
                 <div>
-                    Raw/effective switches and current stay visible. Clear/home require robot-side ack + reason; if both G limits are active, robot returns 409 before motion.
+                    Raw/effective switches and current stay visible. OEM home true; GAP10 raw unresolved until passive truth-table or controlled clear proves its function. Clear/home require robot-side ack + reason; robot-local route decides whether GAP10 inhibits movement, and BMS never treats ACK-only as physical proof.
                 </div>
                 <label className="block space-y-1">
                     <span className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Gripper action reason</span>
@@ -3264,7 +3132,7 @@ export const BioXpCockpit = () => {
                                 onError: (error) => recordMotionInfraError('gripper_clear', error),
                             },
                         )}
-                        disabled={gripperClear.isPending || !gripperReason.trim() || gripperStatus.data?.switches?.both_effective_limits_active === true}
+                        disabled={gripperClear.isPending || !gripperReason.trim()}
                         className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
                     >
                         {gripperClear.isPending ? 'CLEARING...' : 'OEM Gripper Clear'}
@@ -3278,7 +3146,7 @@ export const BioXpCockpit = () => {
                                 onError: (error) => recordMotionInfraError('gripper_home', error),
                             },
                         )}
-                        disabled={gripperHome.isPending || !gripperReason.trim() || gripperStatus.data?.switches?.both_effective_limits_active === true}
+                        disabled={gripperHome.isPending || !gripperReason.trim()}
                         className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
                     >
                         {gripperHome.isPending ? 'HOMING...' : 'OEM Gripper Home'}
