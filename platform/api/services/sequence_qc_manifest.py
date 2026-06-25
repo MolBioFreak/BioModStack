@@ -37,6 +37,8 @@ SCHEMA_BY_KIND = {
     "methylation_bed": "sequence_qc.methylation_bed.v1",
     "plasmid_qc_summary": "sequence_qc.plasmid_qc_summary.v1",
     "construct_screening_summary": "sequence_qc.construct_screening_summary.v1",
+    "clone_validation_assembly": "sequence_qc.clone_validation_assembly.v1",
+    "clone_validation_report": "sequence_qc.clone_validation_report.v1",
 }
 
 ARTIFACT_STATES = {

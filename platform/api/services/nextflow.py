@@ -162,13 +162,13 @@ STRUCTURE_PREDICTION_ENTRYPOINT = "workflows/structure_prediction.nf"
 # protein-design contexts; those route through MODEL_MODE_WORKFLOW_ENTRYPOINTS.
 WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "oligo_design": "workflows/oligo_design.nf",
-    "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
     "caliby_experimental": "workflows/caliby_experimental.nf",
@@ -2531,7 +2531,8 @@ def build_nextflow_command(
         ('nanopore', 'construct_screening'): 'ont_construct_screening',
         ('nanopore', 'methylation_analysis'): 'ont_methylation_analysis',
         ('nanopore', 'fastq_qc'): 'ont_fastq_qc',
-        ('nanopore', 'nanopore_methylation'): 'ont_methylation_analysis',
+        ('nanopore', 'wf_clone_validation'): 'wf_clone_validation',
+        ('nanopore', 'clone_validation'): 'wf_clone_validation',
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
