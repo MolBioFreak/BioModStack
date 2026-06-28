@@ -168,8 +168,8 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_methylation_analysis": OntWorkflowSpec(
         workflow_id="ont_methylation_analysis",
         display_name="ONT Methylation Analysis",
-        description="Dorado/modkit methylation analysis from POD5/BAM plus optional FASTQ plasmid QC seed behavior.",
-        input_modes=("pod5", "bam", "fastq"),
+        description="Dorado/modkit methylation analysis from POD5/BAM inputs with modified-base tags; FASTQ-only reads do not carry MM/ML tags and are not accepted here.",
+        input_modes=("pod5", "bam"),
         artifact_kinds=(
             "raw_reads",
             "basecall_reads",
@@ -332,7 +332,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["ont_workflow_id"] = spec.workflow_id
     normalized["ont_molecule_type"] = molecule_type
     normalized["dorado_quality_mode"] = quality_mode
-    normalized["dorado_model"] = normalized.get("dorado_model") or quality_mode
+    if normalized.get("dorado_model"):
+        normalized["dorado_model"] = normalized["dorado_model"]
+    elif molecule_type == "rna":
+        normalized["dorado_model"] = f"rna004_{quality_mode}"
+    else:
+        normalized["dorado_model"] = quality_mode
     normalized["dorado_basecall_mode"] = basecall_mode
     normalized["dorado_device"] = normalized.get("dorado_device") or ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
