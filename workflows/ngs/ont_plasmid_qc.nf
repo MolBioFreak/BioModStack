@@ -11,9 +11,10 @@ nextflow.enable.dsl = 2
 
 include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; PrepareReferenceForIGV; BamToFastqForQC as Pod5BamToFastqForQC; BamToFastqForQC as BamInputToFastqForQC } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
-include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
+include { FastqPlasmidQC as Pod5PlasmidQC; FastqPlasmidQC as BamPlasmidQC; FastqPlasmidQC as InputFastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
+include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDimerAnalysis; FastqDimerAnalysis as InputFastqDimerAnalysis; BuildDimerCanonicalOutputs as Pod5DimerCanonicalOutputs; BuildDimerCanonicalOutputs as BamDimerCanonicalOutputs; BuildDimerCanonicalOutputs as InputFastqDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -108,15 +109,27 @@ workflow ONT_PLASMID_QC {
             }
 
             if (runFastqQc) {
-                FastqPlasmidQC(DoradoAlign.out.aligned, Channel.of(reference_file))
-                FastqPlasmidQC.out.summary.subscribe { _ ->
+                Pod5BamToFastqForQC(DoradoAlign.out.aligned)
+                Pod5DimerAnalysis(Pod5BamToFastqForQC.out.fastq, Channel.of(reference_file))
+                Pod5DimerCanonicalOutputs(
+                    Pod5DimerAnalysis.out.summary,
+                    Pod5DimerAnalysis.out.junction_events,
+                    Pod5DimerAnalysis.out.single_ref_split_events,
+                    Pod5DimerAnalysis.out.single_ref_split_profile,
+                    Pod5DimerAnalysis.out.breakpoint_screen,
+                    Pod5DimerAnalysis.out.dimer_reference
+                )
+                Pod5PlasmidQC(DoradoAlign.out.aligned, Channel.of(reference_file), Pod5BamToFastqForQC.out.fastq)
+                Pod5PlasmidQC.out.summary.subscribe { _ ->
                     reportStage(params, "fastq_qc", [
+                        "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
                         "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
                         "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
                         "${params.out_dir}/fastq_qc/per_base_support.tsv",
                         "${params.out_dir}/fastq_qc/qc_manifest.json",
                         "${params.out_dir}/fastq_qc/igv_report.html",
                         "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                        "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                     ])
                 }
             }
@@ -170,15 +183,27 @@ workflow ONT_PLASMID_QC {
         }
 
         if (has_reference && runFastqQc && analysis_bam != null) {
-            FastqPlasmidQC(analysis_bam, Channel.of(reference_file))
-            FastqPlasmidQC.out.summary.subscribe { _ ->
+            BamInputToFastqForQC(analysis_bam)
+            BamDimerAnalysis(BamInputToFastqForQC.out.fastq, Channel.of(reference_file))
+            BamDimerCanonicalOutputs(
+                BamDimerAnalysis.out.summary,
+                BamDimerAnalysis.out.junction_events,
+                BamDimerAnalysis.out.single_ref_split_events,
+                BamDimerAnalysis.out.single_ref_split_profile,
+                BamDimerAnalysis.out.breakpoint_screen,
+                BamDimerAnalysis.out.dimer_reference
+            )
+            BamPlasmidQC(analysis_bam, Channel.of(reference_file), BamInputToFastqForQC.out.fastq)
+            BamPlasmidQC.out.summary.subscribe { _ ->
                 reportStage(params, "fastq_qc", [
+                    "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
                     "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
                     "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
                     "${params.out_dir}/fastq_qc/per_base_support.tsv",
                     "${params.out_dir}/fastq_qc/qc_manifest.json",
                     "${params.out_dir}/fastq_qc/igv_report.html",
                     "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                 ])
             }
         }
@@ -203,8 +228,17 @@ workflow ONT_PLASMID_QC {
         }
 
         if (runFastqQc) {
-            FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
-            FastqPlasmidQC.out.summary.subscribe { _ ->
+            InputFastqDimerAnalysis(Channel.of(fastq_input), Channel.of(reference_file))
+            InputFastqDimerCanonicalOutputs(
+                InputFastqDimerAnalysis.out.summary,
+                InputFastqDimerAnalysis.out.junction_events,
+                InputFastqDimerAnalysis.out.single_ref_split_events,
+                InputFastqDimerAnalysis.out.single_ref_split_profile,
+                InputFastqDimerAnalysis.out.breakpoint_screen,
+                InputFastqDimerAnalysis.out.dimer_reference
+            )
+            InputFastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
+            InputFastqPlasmidQC.out.summary.subscribe { _ ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/read_lengths.tsv",
                     "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
@@ -214,6 +248,7 @@ workflow ONT_PLASMID_QC {
                     "${params.out_dir}/fastq_qc/qc_manifest.json",
                     "${params.out_dir}/fastq_qc/igv_report.html",
                     "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                 ])
             }
         }

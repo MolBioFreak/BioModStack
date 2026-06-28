@@ -9,6 +9,7 @@ nextflow.enable.dsl = 2
 
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
+include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -75,6 +76,26 @@ workflow ONT_FASTQ_QC {
             "${params.out_dir}/align/reference.fasta",
             "${params.out_dir}/align/reference.fasta.fai",
             "${params.out_dir}/align/fastq_align.log",
+        ])
+    }
+
+    FastqDimerAnalysis(Channel.of(fastq_input), Channel.of(reference_file))
+    BuildDimerCanonicalOutputs(
+        FastqDimerAnalysis.out.summary,
+        FastqDimerAnalysis.out.junction_events,
+        FastqDimerAnalysis.out.single_ref_split_events,
+        FastqDimerAnalysis.out.single_ref_split_profile,
+        FastqDimerAnalysis.out.breakpoint_screen,
+        FastqDimerAnalysis.out.dimer_reference,
+    )
+    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
+        reportStage(params, "dimer_qc", [
+            "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+            "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+            "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+            "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+            "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+            "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
         ])
     }
 
