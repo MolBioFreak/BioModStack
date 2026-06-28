@@ -18,6 +18,7 @@ from services.ont_ngs_contract import (  # noqa: E402
     CANONICAL_ONT_WORKFLOWS,
     ONT_WORKFLOW_ALIASES,
     ONT_SEQUENCE_QC_MANIFEST_CONTRACT,
+    normalize_ont_launch_params,
     resolve_ont_workflow_alias,
 )
 from services.sequence_qc_manifest import (  # noqa: E402
@@ -96,6 +97,18 @@ class TestCanonicalWorkflows:
         assert "pod5" in spec.input_modes
         assert "bam" in spec.input_modes
         assert "fastq" in spec.input_modes
+
+    def test_methylation_input_modes_match_workflow_support(self):
+        """Methylation workflow currently supports only POD5/BAM with MM/ML-capable BAMs."""
+        spec = CANONICAL_ONT_WORKFLOWS.get("ont_methylation_analysis")
+        assert spec is not None
+        assert spec.input_modes == ("pod5", "bam")
+
+    def test_rna_launch_defaults_to_rna_dorado_model(self):
+        """RNA workflow normalization must select an RNA model, not generic 'sup'."""
+        normalized = normalize_ont_launch_params("ont_basecall_rna", {})
+        assert normalized["ont_molecule_type"] == "rna"
+        assert normalized["dorado_model"].startswith("rna")
 
 
 class TestWorkflowAliases:
