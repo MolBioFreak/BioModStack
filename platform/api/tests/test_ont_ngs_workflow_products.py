@@ -105,6 +105,12 @@ class TestDefaultParameters:
         content = (root / "workflows/ngs/ont_basecall_rna.nf").read_text()
         assert "DoradoBasecall" in content
 
+    def test_dorado_basecall_preflights_model_directory(self, root):
+        """Dorado basecalling should fail cleanly when bound model weights are missing."""
+        content = (root / "modules/ngs/dorado_basecall.nf").read_text()
+        assert "DORADO_MODELS_DIR" in content
+        assert "Dorado model directory is empty" in content
+
 
 class TestModuleIncludes:
     """Validate that workflows include the right modules."""
