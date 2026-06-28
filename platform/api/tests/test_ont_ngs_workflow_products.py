@@ -129,6 +129,14 @@ class TestModuleIncludes:
         assert "ModkitPileup" in content
         assert "ModkitSummary" in content
 
+    def test_methylation_validates_modified_base_tags_before_modkit(self, root):
+        """Modkit must not run directly on unvalidated BAMs lacking MM/ML tags."""
+        content = (root / "workflows/ngs/ont_methylation_analysis.nf").read_text()
+        assert "ValidateModifiedBaseBam" in content
+        assert "Pod5ModkitPileup(Pod5ValidateModifiedBaseBam.out.bam" in content
+        assert "BamModkitPileup(BamValidateModifiedBaseBam.out.bam" in content
+        assert "ModkitPileup(prepared_bam" not in content
+
     @pytest.mark.parametrize(
         "workflow_path",
         [
