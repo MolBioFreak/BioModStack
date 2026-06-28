@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -24,41 +25,60 @@ def _require_runtime_command(name: str) -> None:
         pytest.skip(f"{name} is not installed in this test environment")
 
 
+def _require_container_engine() -> None:
+    """Verify that a container engine (apptainer/singularity) is available."""
+    if shutil.which("apptainer") is None and shutil.which("singularity") is None:
+        pytest.skip(
+            "Nextflow dorado_cpu processes require apptainer or singularity "
+            "container engine — neither found in this environment"
+        )
+
+
 def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
-    """Run tiny FASTQ+reference through Nextflow and assert advertised outputs."""
-    for command in ("nextflow", "minimap2", "samtools"):
-        _require_runtime_command(command)
+    """Run tiny FASTQ+reference through Nextflow and assert advertised outputs.
 
-    fixture_dir = tmp_path / "fixture"
-    out_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-    fixture_dir.mkdir()
+    NOTE: ``dorado_cpu`` processes run in a Singularity container that binds only
+    ``--bind ${params.code_root}`` (the repo root).  Files in ``/tmp`` are invisible
+    to the container, so fixtures live in a dedicated subdirectory of the repo.
+    Timestamped filenames avoid collisions across parallel test runs.
+    """
+    _require_runtime_command("nextflow")
+    # The dorado_cpu label runs in dorado.sif which has minimap2/samtools.
+    # Verify container engine is available before running.
+    _require_container_engine()
 
-    reference = fixture_dir / "reference.fasta"
-    fastq = fixture_dir / "reads.fastq"
-    sequence = "ACGT" * 200
-    reference.write_text(f">tiny_plasmid\n{sequence}\n")
-    quality = "I" * len(sequence)
-    fastq.write_text(f"@read_1\n{sequence}\n+\n{quality}\n")
+    # ── Fixtures inside repo (visible to container) ──────────────────
+    fixture_dir = REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
+    fixture_dir.mkdir(exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ref = fixture_dir / f"ref_{ts}.fasta"
+    fastq = fixture_dir / f"reads_{ts}.fastq"
+    out_dir = fixture_dir / f"out_{ts}"
+    work_dir = fixture_dir / f"work_{ts}"
+
+    seq = "ACGT" * 200
+    ref.write_text(f">tiny_plasmid\n{seq}\n")
+    fastq.write_text(f"@read_1\n{seq}\n+\n{'I' * len(seq)}\n")
 
     cmd = [
         "nextflow",
         "run",
         str(REPO_ROOT / "workflows/ngs/ont_fastq_qc.nf"),
         "-profile",
-        "ont_fastq_qc",
+        f"singularity,ont_fastq_qc" if shutil.which("singularity") is not None else "apptainer,ont_fastq_qc",
         "-w",
         str(work_dir),
         "--fastq_path",
         str(fastq),
         "--reference_fasta",
-        str(reference),
+        str(ref),
         "--out_dir",
         str(out_dir),
         "--code_root",
         str(REPO_ROOT),
         "--expected_plasmid_size",
-        str(len(sequence)),
+        str(len(seq)),
         "--dimer_output_mode",
         "core",
     ]
