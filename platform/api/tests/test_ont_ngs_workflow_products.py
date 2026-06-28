@@ -129,6 +129,30 @@ class TestModuleIncludes:
         assert "ModkitPileup" in content
         assert "ModkitSummary" in content
 
+    @pytest.mark.parametrize(
+        "workflow_path",
+        [
+            "workflows/ngs/ont_fastq_qc.nf",
+            "workflows/ngs/ont_plasmid_qc.nf",
+            "workflows/ngs/wf_clone_validation.nf",
+        ],
+    )
+    def test_core_plasmid_workflows_include_dimer_qc(self, root, workflow_path):
+        """Core plasmid QC workflows must execute FastqDimerQC, not leave it unused."""
+        content = (root / workflow_path).read_text()
+        assert "FastqDimerAnalysis" in content
+        assert "fastq_dimer_qc.nf" in content
+
+    def test_plasmid_qc_has_no_two_argument_fastq_plasmid_qc_calls(self, root):
+        """Alignment-backed POD5/BAM paths must not call 3-input FastqPlasmidQC with 2 args."""
+        content = (root / "workflows/ngs/ont_plasmid_qc.nf").read_text()
+        bad_calls = [
+            "FastqPlasmidQC(DoradoAlign.out.aligned, Channel.of(reference_file))",
+            "FastqPlasmidQC(analysis_bam, Channel.of(reference_file))",
+        ]
+        for call in bad_calls:
+            assert call not in content
+
 
 class TestCommandBuilding:
     """Validate that CLI commands can be built."""
