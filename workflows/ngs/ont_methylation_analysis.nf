@@ -89,7 +89,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             Pod5PrepareBamForAnalysis(DoradoBasecall.out.bam)
             Pod5ValidateModifiedBaseBam(Pod5PrepareBamForAnalysis.out.aligned)
             Pod5ModkitPileup(Pod5ValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            Pod5ModkitPileup.out.bed.subscribe { _, _ ->
+            Pod5ModkitPileup.out.bed.subscribe { bed, bedgz ->
                 reportStage(params, "modkit_pileup", [
                     "${params.out_dir}/methylation/methylation.bed",
                     "${params.out_dir}/methylation/modified_sites.tsv",
@@ -99,7 +99,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             }
 
             Pod5ModkitSummary(Pod5ValidateModifiedBaseBam.out.bam)
-            Pod5ModkitSummary.out.summary.subscribe { _, _ ->
+            Pod5ModkitSummary.out.summary.subscribe { summary, _ ->
                 reportStage(params, "modkit_summary", [
                     "${params.out_dir}/methylation/summary.tsv",
                     "${params.out_dir}/methylation/modkit_summary.log",
@@ -116,7 +116,7 @@ workflow ONT_METHYLATION_ANALYSIS {
         }
 
         BamPrepareBamForAnalysis(Channel.of(bam_input))
-        BamPrepareBamForAnalysis.out.aligned.subscribe { _, _ ->
+        BamPrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
             reportStage(params, "bam_prepare", [
                 "${params.out_dir}/align/aligned.bam",
                 "${params.out_dir}/align/aligned.bam.bai",
@@ -139,7 +139,7 @@ workflow ONT_METHYLATION_ANALYSIS {
         if (runModkit) {
             BamValidateModifiedBaseBam(prepared_bam)
             BamModkitPileup(BamValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            BamModkitPileup.out.bed.subscribe { _, _ ->
+            BamModkitPileup.out.bed.subscribe { bed, bedgz ->
                 reportStage(params, "modkit_pileup", [
                     "${params.out_dir}/methylation/methylation.bed",
                     "${params.out_dir}/methylation/modified_sites.tsv",
@@ -149,7 +149,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             }
 
             BamModkitSummary(BamValidateModifiedBaseBam.out.bam)
-            BamModkitSummary.out.summary.subscribe { _, _ ->
+            BamModkitSummary.out.summary.subscribe { summary, _ ->
                 reportStage(params, "modkit_summary", [
                     "${params.out_dir}/methylation/summary.tsv",
                     "${params.out_dir}/methylation/modkit_summary.log",
@@ -157,4 +157,9 @@ workflow ONT_METHYLATION_ANALYSIS {
             }
         }
     }
+}
+
+// Entry point for standalone Ont Methylation Analysis workflow
+workflow {
+    ONT_METHYLATION_ANALYSIS()
 }

@@ -69,7 +69,7 @@ workflow ONT_FASTQ_QC {
     }
 
     FastqAlign(Channel.of(fastq_input), Channel.of(reference_file))
-    FastqAlign.out.aligned.subscribe { _, _ ->
+    FastqAlign.out.aligned.subscribe { bam, bai ->
         reportStage(params, "fastq_align", [
             "${params.out_dir}/align/aligned.bam",
             "${params.out_dir}/align/aligned.bam.bai",
@@ -114,4 +114,9 @@ workflow ONT_FASTQ_QC {
             ])
         }
     }
+}
+
+// Entry point for standalone FASTQ QC workflow
+workflow {
+    ONT_FASTQ_QC()
 }
