@@ -1,15 +1,16 @@
 """Environment-gated runtime smoke test for the ONT FASTQ QC workflow.
 
-This test is intentionally skipped on lightweight CI/dev containers that do not
-have the Nextflow/minimap2/samtools runtime installed. On a runtime-capable
-BioModStack host it proves the workflow emits the core plasmid-QC artifacts
-instead of only passing static file/registry checks.
+Skips on lightweight CI/dev containers that don't have the runtime.
+Two execution paths:
+  1) Container mode — requires apptainer/singularity CLI + dorado.sif
+  2) Local mode   — requires minimap2 + samtools on PATH
 """
-
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -19,33 +20,67 @@ import pytest
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
 
+# Path to the dorado.sif container
+SIF_PATH = REPO_ROOT / "apptainer" / "dorado.sif"
 
-def _require_runtime_command(name: str) -> None:
-    if shutil.which(name) is None:
-        pytest.skip(f"{name} is not installed in this test environment")
+# Known tool paths (sandbox PATH is limited; tools live outside it)
+MICROMAMBA_BIN = Path("/home/dalab/micromamba/bin")
+LOCAL_BIN = Path("/home/dalab/.local/bin")
+
+# Directories to add to PATH when running Nextflow in local mode
+TOOL_DIRS = [
+    p for p in (MICROMAMBA_BIN, LOCAL_BIN)
+    if p.exists()
+]
 
 
-def _require_container_engine() -> None:
-    """Verify that a container engine (apptainer/singularity) is available."""
-    if shutil.which("apptainer") is None and shutil.which("singularity") is None:
-        pytest.skip(
-            "Nextflow dorado_cpu processes require apptainer or singularity "
-            "container engine — neither found in this environment"
-        )
+def _which(name: str) -> str | None:
+    """Like shutil.which but also checks known tool directories."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in TOOL_DIRS:
+        candidate = d / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _require_runtime_command(*names: str) -> None:
+    for name in names:
+        if _which(name) is None:
+            pytest.skip(f"{name} is not installed in this test environment")
+
+
+def _detect_execution_mode() -> str:
+    """Return 'local', 'container', or 'skip' based on available tooling."""
+    # Prefer local mode when minimap2/samtools are available — the Singularity
+    # SIF extraction path fails in Alpine-based Nextflow containers (liblzo2).
+    if _which("minimap2") is not None and _which("samtools") is not None:
+        return "local"
+    if MICROMAMBA_BIN.exists():
+        if (MICROMAMBA_BIN / "minimap2").exists() and (MICROMAMBA_BIN / "samtools").exists():
+            return "local"
+
+    has_container_engine = (
+        _which("apptainer") is not None
+        or _which("singularity") is not None
+    )
+    if has_container_engine and SIF_PATH.exists():
+        return "container"
+
+    pytest.skip(
+        "No apptainer/singularity (container mode) and no minimap2/samtools on PATH "
+        "(local mode) — cannot run runtime smoke test"
+    )
 
 
 def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
-    """Run tiny FASTQ+reference through Nextflow and assert advertised outputs.
-
-    NOTE: ``dorado_cpu`` processes run in a Singularity container that binds only
-    ``--bind ${params.code_root}`` (the repo root).  Files in ``/tmp`` are invisible
-    to the container, so fixtures live in a dedicated subdirectory of the repo.
-    Timestamped filenames avoid collisions across parallel test runs.
-    """
+    """Run tiny FASTQ+reference through Nextflow and assert advertised outputs."""
     _require_runtime_command("nextflow")
-    # The dorado_cpu label runs in dorado.sif which has minimap2/samtools.
-    # Verify container engine is available before running.
-    _require_container_engine()
+
+    mode = _detect_execution_mode()
+    assert mode in ("container", "local"), f"unexpected mode: {mode}"
 
     # ── Fixtures inside repo (visible to container) ──────────────────
     fixture_dir = REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
@@ -61,12 +96,11 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     ref.write_text(f">tiny_plasmid\n{seq}\n")
     fastq.write_text(f"@read_1\n{seq}\n+\n{'I' * len(seq)}\n")
 
+    # ── Build command ────────────────────────────────────────────────
     cmd = [
         "nextflow",
         "run",
         str(REPO_ROOT / "workflows/ngs/ont_fastq_qc.nf"),
-        "-profile",
-        f"singularity,ont_fastq_qc" if shutil.which("singularity") is not None else "apptainer,ont_fastq_qc",
         "-w",
         str(work_dir),
         "--fastq_path",
@@ -82,9 +116,55 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         "--dimer_output_mode",
         "core",
     ]
+
+    env = os.environ.copy()
+    # Add known tool dirs to PATH so subprocess can find nextflow + tools
+    extra = ":".join(str(d) for d in TOOL_DIRS)
+    if extra:
+        env["PATH"] = f"{extra}:{env['PATH']}"
+
+    # Ensure work_dir exists before writing temp config files
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    if mode == "container":
+        # Container mode with local SIF — override container_dir to local path,
+        # drop the weights bind mount (not needed for FastqAlign), and ensure
+        # code_root is bound so process scripts resolve scripts/ paths.
+        # We pass --container_dir as a CLI param since CLI params have highest
+        # precedence over profiles in nextflow's config loading order.
+        sif_dir = SIF_PATH.parent
+        cmd.extend(["--container_dir", str(sif_dir)])
+        # Override containerOptions to drop the weights bind mount
+        override_cfg = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".config", delete=False, dir=work_dir
+        )
+        override_cfg.write(
+            f'withLabel: dorado_cpu {{\n'
+            f'    containerOptions = "--bind {REPO_ROOT}"\n'
+            f'}}\n'
+        )
+        override_cfg.close()
+        profile = "singularity" if _which("singularity") else "apptainer"
+        cmd.extend(["-profile", f"{profile},ont_fastq_qc", "-c", override_cfg.name])
+    else:
+        # Local mode override the container directive so Nextflow
+        # doesn't try to pull dorado.sif (which requires apptainer/singularity).
+        override_cfg = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".config", delete=False, dir=work_dir
+        )
+        override_cfg.write(
+            "process {\n"
+            "    withLabel: dorado_cpu { container = null }\n"
+            "}\n"
+        )
+        override_cfg.close()
+        cmd.extend(["-profile", "ont_fastq_qc", "-c", override_cfg.name])
+
+    # ── Execute ──────────────────────────────────────────────────────
     completed = subprocess.run(
         cmd,
         cwd=REPO_ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -93,6 +173,7 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     )
     assert completed.returncode == 0, completed.stdout
 
+    # ── Assert expected artifacts ────────────────────────────────────
     expected = [
         out_dir / "align/aligned.bam",
         out_dir / "align/aligned.bam.bai",
@@ -104,7 +185,7 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         out_dir / "multimer_qc/dimer_read_events.tsv",
     ]
     missing = [str(path) for path in expected if not path.exists()]
-    assert missing == []
+    assert missing == [], f"Missing expected artifacts: {missing}"
 
     assert (out_dir / "fastq_qc/per_base_support.tsv").stat().st_size > 0
     assert (out_dir / "fastq_qc/qc_manifest.json").stat().st_size > 0
