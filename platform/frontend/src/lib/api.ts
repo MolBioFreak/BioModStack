@@ -362,6 +362,16 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface OntNgsSubmitRequest {
+    name?: string;
+    params: Record<string, unknown>;
+    pinned_gpu?: number | null;
+    source_instrument_run_id?: string | null;
+}
+
+export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
+    api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
     scaffold_specs: Array<Record<string, UntypedApiValue>>;
