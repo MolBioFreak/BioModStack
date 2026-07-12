@@ -35,6 +35,7 @@ DEFAULT_RUNTIME_MODE = CONTAINER_RUNTIME_MODE
 VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = 8000
+DEV_API_PORT = 8002
 FRONTEND_PORT = DEFAULT_DEV_WEB_HOST_PORT
 STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
 WORKFLOW_ADAPTER_PORT = 8001
@@ -215,7 +216,7 @@ def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
         return (WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
-    return (FRONTEND_SERVICE,)
+    return (API_SERVICE, FRONTEND_SERVICE)
 
 
 def runtime_target_unit(runtime_mode: str | None = None) -> str:
@@ -230,7 +231,7 @@ def all_runtime_service_names() -> tuple[str, ...]:
 def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
-        return (API_SERVICE,)
+        return ()
     return ()
 
 
@@ -273,6 +274,21 @@ def runtime_frontend_url(runtime_mode: str | None = None, project_root: Path | N
     return f"{origin}{basename}"
 
 
+def runtime_api_port(runtime_mode: str | None = None, project_root: Path | None = None) -> int:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == DEV_RUNTIME_MODE:
+        return _resolved_profile_int(project_root, "dev_api_host_port", DEV_API_PORT)
+    return _resolved_profile_int(project_root, "api_host_port", API_PORT)
+
+
+def runtime_api_url(runtime_mode: str | None = None, project_root: Path | None = None) -> str:
+    return f"http://127.0.0.1:{runtime_api_port(runtime_mode, project_root)}"
+
+
+def runtime_api_health_url(runtime_mode: str | None = None, project_root: Path | None = None) -> str:
+    return f"{runtime_api_url(runtime_mode, project_root)}/api/health"
+
+
 def active_runtime_mode(project_root: Path | None = None) -> str | None:
     root = (project_root or get_project_root()).resolve()
     active_modes = [
@@ -311,11 +327,16 @@ def _coerce_host_port(value: int | str | None, *, label: str) -> int | None:
 
 
 def _runtime_port_settings_from_resolved(resolved: Mapping[str, object], project_root: Path | None = None) -> dict[str, object]:
+    dev_api_port = _coerce_host_port(resolved.get("dev_api_host_port"), label="dev_api_host_port") or DEV_API_PORT
     dev_port = _coerce_host_port(resolved.get("dev_web_host_port"), label="dev_web_host_port") or FRONTEND_PORT
     prod_port = _coerce_host_port(resolved.get("web_host_port"), label="prod_web_host_port") or STABLE_FRONTEND_PORT
     return {
+        "dev_api_host_port": dev_api_port,
+        "prod_api_host_port": runtime_api_port(CONTAINER_RUNTIME_MODE, project_root=project_root),
         "dev_web_host_port": dev_port,
         "prod_web_host_port": prod_port,
+        "dev_api_url": runtime_api_url(DEV_RUNTIME_MODE, project_root=project_root),
+        "prod_api_url": runtime_api_url(CONTAINER_RUNTIME_MODE, project_root=project_root),
         "dev_url": runtime_frontend_url(DEV_RUNTIME_MODE, project_root=project_root),
         "prod_url": runtime_frontend_url(CONTAINER_RUNTIME_MODE, project_root=project_root),
     }
@@ -331,13 +352,17 @@ def runtime_port_settings(project_root: Path | None = None) -> dict[str, object]
 
 
 def save_runtime_port_settings(
+    dev_api_host_port: int | str | None = None,
     dev_web_host_port: int | str | None = None,
     prod_web_host_port: int | str | None = None,
     project_root: Path | None = None,
 ) -> dict[str, object]:
+    dev_api_port = _coerce_host_port(dev_api_host_port, label="dev_api_host_port")
     dev_port = _coerce_host_port(dev_web_host_port, label="dev_web_host_port")
     prod_port = _coerce_host_port(prod_web_host_port, label="prod_web_host_port")
     payload = dict(load_install_profile())
+    if dev_api_port is not None:
+        payload["dev_api_host_port"] = dev_api_port
     if dev_port is not None:
         payload["dev_web_host_port"] = dev_port
     if prod_port is not None:
@@ -377,7 +402,8 @@ def runtime_service_descriptors(project_root: Path | None = None, runtime_mode: 
 def runtime_api_listener_ownership(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, object]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
-    pids = listener_pids(API_PORT)
+    api_port = runtime_api_port(mode, project_root=root)
+    pids = listener_pids(api_port)
     listeners: list[dict[str, object]] = []
     ok = True
     for pid in pids:
@@ -397,14 +423,14 @@ def runtime_api_listener_ownership(project_root: Path | None = None, runtime_mod
 
     if not pids:
         return {
-            "port": API_PORT,
+            "port": api_port,
             "checked": True,
             "ok": None,
             "status": "no-listener",
             "listeners": [],
         }
     return {
-        "port": API_PORT,
+        "port": api_port,
         "checked": True,
         "ok": ok,
         "status": "ok" if ok else "wrong-owner",
@@ -423,7 +449,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
     resolved_paths = install_profile.get("resolved", {})
     if not isinstance(resolved_paths, Mapping):
         resolved_paths = {}
-    api_http_ready = url_is_ready(API_HEALTH_URL)
+    api_http_ready = url_is_ready(runtime_api_health_url(mode, project_root=root))
     api_ownership = runtime_api_listener_ownership(root, mode)
     api_owner_ok = api_ownership.get("ok")
     api_ready = api_http_ready and (api_owner_ok is not False)
@@ -442,7 +468,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "runtime_active": all(bool(service["active"]) for service in services) and http_ready,
         "runtime_ready": http_ready,
         "runtime_manager": "systemd-user",
-        "api_url": f"http://127.0.0.1:{API_PORT}",
+        "api_url": runtime_api_url(mode, project_root=root),
         "frontend_origin": runtime_frontend_origin(mode, project_root=root),
         "frontend_url": frontend_url,
         "browser_url": frontend_url,
@@ -577,6 +603,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
+    dev_api_host_port = runtime_api_port(DEV_RUNTIME_MODE, project_root=root)
     dev_web_host_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
 
     api_unit = dedent(
@@ -592,6 +619,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_API_MODE=dev
+        Environment=BMS_API_BIND_PORT={dev_api_host_port}
         Environment=BMS_CPU_POWER_STRICT=0
         Environment=PYTHONUNBUFFERED=1
         ExecStartPre=/usr/bin/env python3 {log_rotator}
@@ -621,6 +649,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_FRONTEND_MODE=dev
+        Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}
         Environment=BMS_DEV_WEB_HOST_PORT={dev_web_host_port}
         ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={frontend_runner}
@@ -640,7 +669,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={FRONTEND_SERVICE}
+        Wants={API_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -735,7 +764,17 @@ def is_biomodstack_api_process(cmdline: str, cwd: str | None, project_root: Path
     root = (project_root or get_project_root()).resolve()
     api_dir = str(root / "platform" / "api")
     cmd = cmdline.strip()
-    if "uvicorn" not in cmd or "main:app" not in cmd or f"--port {API_PORT}" not in cmd:
+    if "uvicorn" not in cmd or "main:app" not in cmd:
+        return False
+    dev_port = runtime_api_port(DEV_RUNTIME_MODE, project_root=root)
+    prod_port = runtime_api_port(CONTAINER_RUNTIME_MODE, project_root=root)
+    port_markers = (
+        f"--port {dev_port}",
+        f"--port={dev_port}",
+        f"--port {prod_port}",
+        f"--port={prod_port}",
+    )
+    if not any(marker in cmd for marker in port_markers):
         return False
     if api_dir in cmd:
         return True
@@ -973,10 +1012,15 @@ def _terminate_pid(pid: int, grace_seconds: float = 8.0) -> None:
         return
 
 
-def cleanup_legacy_listener(kind: str, project_root: Path | None = None) -> None:
+def cleanup_legacy_listener(
+    kind: str,
+    project_root: Path | None = None,
+    runtime_mode: str | None = None,
+) -> None:
     root = (project_root or get_project_root()).resolve()
     if kind == "api":
-        port = API_PORT
+        mode = resolve_runtime_mode(runtime_mode or DEV_RUNTIME_MODE)
+        port = runtime_api_port(mode, project_root=root)
         matcher = is_biomodstack_api_process
     elif kind == "frontend":
         port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
@@ -1071,15 +1115,15 @@ def start_all(
 
     if mode == DEV_RUNTIME_MODE:
         services_to_start: list[str] = []
-        if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(API_HEALTH_URL):
-            cleanup_legacy_listener("api", root)
+        if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(runtime_api_health_url(mode, project_root=root)):
+            cleanup_legacy_listener("api", root, runtime_mode=mode)
             services_to_start.append(API_SERVICE)
         if not service_is_active(FRONTEND_SERVICE, project_root=root):
             cleanup_legacy_listener("frontend", root)
         services_to_start.append(FRONTEND_SERVICE)
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
         if not skip_api_wait:
-            wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+            wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
         return
 
@@ -1088,16 +1132,16 @@ def start_all(
     if incompatible_services:
         run_systemctl("stop", *incompatible_services, check=False, project_root=root)
     if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
-        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("api", root, runtime_mode=mode)
     runtime_services_active = all(service_is_active(name, project_root=root) for name in runtime_service_names(mode))
-    if runtime_services_active and not (url_is_ready(API_HEALTH_URL) and url_is_ready(frontend_url)):
+    if runtime_services_active and not (url_is_ready(runtime_api_health_url(mode, project_root=root)) and url_is_ready(frontend_url)):
         run_core_runtime_script("up", "bms-api", "bms-web", project_root=root)
     else:
         run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     if not skip_workflow_adapter_wait:
         wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     if not skip_api_wait:
-        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
 
@@ -1146,7 +1190,7 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
     cleanup_legacy_listener("frontend", root)
     if service_is_active(API_SERVICE, project_root=root):
         run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("api", root, runtime_mode=mode)
 
 
 def restart_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -1161,23 +1205,23 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
         cleanup_legacy_listener("frontend", root)
         services_to_start: list[str] = []
-        if local_api_active or not url_is_ready(API_HEALTH_URL):
+        if local_api_active or not url_is_ready(runtime_api_health_url(mode, project_root=root)):
             run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-            cleanup_legacy_listener("api", root)
+            cleanup_legacy_listener("api", root, runtime_mode=mode)
             services_to_start.append(API_SERVICE)
         services_to_start.append(FRONTEND_SERVICE)
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
-        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
-    run_systemctl("stop", API_SERVICE, WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE, check=False, project_root=root)
-    cleanup_legacy_listener("api", root)
+    run_systemctl("stop", WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE, check=False, project_root=root)
+    cleanup_legacy_listener("api", root, runtime_mode=mode)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
-    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
 
@@ -1189,29 +1233,23 @@ def start_api(project_root: Path | None = None, runtime_mode: str | None = None)
 
     if mode == CONTAINER_RUNTIME_MODE:
         ensure_target_enabled(root, runtime_mode=mode)
-        api_pids = listener_pids(API_PORT)
+        api_pids = listener_pids(runtime_api_port(mode, project_root=root))
         if api_pids and all(pid_is_biomodstack_runtime_container(pid, "api", root) for pid in api_pids):
-            wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+            wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
             return
         if service_is_active(API_SERVICE, project_root=root):
             run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-            cleanup_legacy_listener("api", root)
+            cleanup_legacy_listener("api", root, runtime_mode=mode)
         elif api_pids:
-            cleanup_legacy_listener("api", root)
+            cleanup_legacy_listener("api", root, runtime_mode=mode)
         run_core_runtime_script("up", "--no-deps", "bms-api", project_root=root)
-        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         return
 
-    api_pids = listener_pids(API_PORT)
-    if api_pids and all(pid_is_biomodstack_runtime_container(pid, "api", root) for pid in api_pids):
-        raise ServiceManagerError(
-            "Cannot start the dev API while the core runtime container API owns port 8000. "
-            "Stop the container API first or use runtime='container'."
-        )
     if not service_is_active(API_SERVICE, project_root=root):
-        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("api", root, runtime_mode=mode)
     run_systemctl("start", API_SERVICE, project_root=root)
-    wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
 
 
 def stop_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -1224,7 +1262,7 @@ def stop_api(project_root: Path | None = None, runtime_mode: str | None = None) 
         return
 
     run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-    cleanup_legacy_listener("api", root)
+    cleanup_legacy_listener("api", root, runtime_mode=mode)
 
 
 def restart_api(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -1235,25 +1273,26 @@ def restart_api(project_root: Path | None = None, runtime_mode: str | None = Non
         run_core_runtime_script("restart", "bms-api", project_root=root)
     elif service_is_active(API_SERVICE, project_root=root):
         run_systemctl("stop", API_SERVICE, check=False, project_root=root)
-        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("api", root, runtime_mode=mode)
         run_systemctl("start", API_SERVICE, project_root=root)
     elif service_is_active(CORE_RUNTIME_SERVICE, project_root=root):
         run_core_runtime_script("restart", "bms-api", project_root=root)
     else:
-        cleanup_legacy_listener("api", root)
+        cleanup_legacy_listener("api", root, runtime_mode=mode)
         run_systemctl("start", API_SERVICE, project_root=root)
-    wait_for_http(API_HEALTH_URL)
+    wait_for_http(runtime_api_health_url(mode, project_root=root))
 
 
 def status_lines(project_root: Path | None = None, runtime_mode: str | None = None) -> list[str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     descriptor = runtime_descriptor(project_root=root, runtime_mode=mode)
+    api_health_url = runtime_api_health_url(mode, project_root=root)
     if mode == CONTAINER_RUNTIME_MODE:
         return [
             f"Runtime: {'active' if descriptor['runtime_active'] else 'inactive'} ({CORE_RUNTIME_SERVICE})",
             f"Workflow adapter: {'ready' if descriptor['health']['adapter_ready'] else 'not ready'} ({WORKFLOW_ADAPTER_HEALTH_URL})",
-            f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
+            f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({api_health_url})",
             f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({descriptor['frontend_url']})",
             f"Workflow adapter log: {WORKFLOW_ADAPTER_LOG}",
             f"Runtime log: {CORE_RUNTIME_LOG}",
@@ -1262,7 +1301,7 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
     services_by_name = {item["name"]: item["active"] for item in descriptor["services"]}
     frontend_unit_state = "unit active" if services_by_name.get(FRONTEND_SERVICE, False) else "unit inactive"
     return [
-        f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
+        f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({api_health_url})",
         f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({FRONTEND_SERVICE} {frontend_unit_state}; {descriptor['frontend_url']})",
         f"API log: {API_LOG}",
         f"Frontend log: {FRONTEND_LOG}",
