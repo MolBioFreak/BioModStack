@@ -9,13 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from database import NucleotideSequence, get_session
 
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
+
+
+def _sortable_timestamp(value: Optional[datetime]) -> datetime:
+    """Return one UTC-aware value so mixed legacy timestamps remain sortable."""
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -446,8 +455,8 @@ async def list_sequences(
         if sort_by == "feature_count":
             return len(seq.features) if seq.features else 0
         if sort_by == "created_at":
-            return seq.created_at or datetime.min
-        return seq.updated_at or seq.created_at or datetime.min
+            return _sortable_timestamp(seq.created_at)
+        return _sortable_timestamp(seq.updated_at or seq.created_at)
 
     sequences = sorted(sequences, key=sort_value, reverse=sort_desc)
     paginated = sequences[offset:offset + limit]
