@@ -50,8 +50,9 @@ test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole j
     const api = readSource('src/lib/api.ts');
 
     assert.match(api, /model_id\?: string/u);
-    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100 \}\)/u);
+    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
+    assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
 });
 
 test('NGS modkit summary label matches the rendered preview limit', () => {
