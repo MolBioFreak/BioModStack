@@ -330,3 +330,12 @@ def test_protenix_v2_passes_when_shared_checkpoint_exists(tmp_path: Path) -> Non
     }
 
     _validate_protenix_checkpoint_requirements("protenix", params)
+
+
+def test_protenix_v2_is_the_default_and_is_not_downgraded_without_msa() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    config_text = (repo_root / "nextflow.config").read_text(encoding="utf-8")
+    module_text = (repo_root / "modules" / "protenix.nf").read_text(encoding="utf-8")
+
+    assert "protenix_model_weights = 'protenix-v2'" in config_text
+    assert module_text.count("effective_model.contains('protenix-v2')") == 2
