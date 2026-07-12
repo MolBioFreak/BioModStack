@@ -11,7 +11,7 @@ test('mobile/recent job list calls use lightweight summaries instead of full job
   assert.match(apiSource, /summary\?: boolean;/u);
   assert.match(dashboardSource, /fetchJobs\(\{ limit: 100, summary: true \}\)/u);
   assert.match(quickViewerSource, /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}\)/u);
-  assert.match(resultsViewerSource, /fetchJobs\(\{ include_children: true, limit: 2000, summary: true \}\)/u);
+  assert.match(resultsViewerSource, /fetchJobs\(\{ include_children: true, limit: 500, summary: true \}\)/u);
 });
 
 test('summary lists hydrate full job detail before using params-heavy dashboard actions', () => {

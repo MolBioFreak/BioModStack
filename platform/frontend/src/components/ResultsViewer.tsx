@@ -1744,7 +1744,7 @@ export function ResultsViewer() {
     // Fetch jobs list (include children for aggregation)
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs', 'include_children', 'summary'],
-        queryFn: () => fetchJobs({ include_children: true, limit: 2000, summary: true }),
+        queryFn: () => fetchJobs({ include_children: true, limit: 500, summary: true }),
     });
     const { data: routedJobData, isLoading: routedJobLoading } = useQuery({
         queryKey: ['job', jobId, 'direct'],

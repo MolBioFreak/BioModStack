@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -60,6 +60,13 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     app.include_router(jobs_router.router, prefix="/api/jobs")
     client = TestClient(app)
 
+    selected_statements: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selected_statements.append(statement.lower())
+
     summary_response = client.get("/api/jobs", params={"summary": "true", "limit": 10})
     assert summary_response.status_code == 200
     summary_job = summary_response.json()["jobs"][0]
@@ -75,6 +82,21 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     assert summary_job["stage_outputs"] == {}
     assert summary_job["awaiting_payload"] == {}
     assert summary_job["decision_history"] == []
+
+    summary_job_query = next(
+        statement
+        for statement in selected_statements
+        if "from jobs" in statement and "join designs" in statement
+    )
+    for forbidden_column in (
+        "params",
+        "provenance",
+        "saved_selection_sets",
+        "stage_outputs",
+        "awaiting_payload",
+        "decision_history",
+    ):
+        assert f"jobs.{forbidden_column}" not in summary_job_query
 
     full_response = client.get("/api/jobs", params={"limit": 10})
     assert full_response.status_code == 200
