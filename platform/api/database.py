@@ -7,6 +7,7 @@ Uses SQLAlchemy with async SQLite.
 from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 from pathlib import Path
 import os
@@ -26,6 +27,35 @@ async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False
 Base = declarative_base()
 
 
+class LenientSQLiteDateTime(TypeDecorator):
+    """SQLite datetime adapter tolerant of legacy RFC3339 ``Z`` strings.
+
+    SQLAlchemy's SQLite ``DateTime`` processor accepts its own emitted
+    ``YYYY-MM-DD HH:MM:SS.ffffff`` form but rejects rows imported as
+    ``YYYY-MM-DDTHH:MM:SS.ffffffZ``. One such imported job row must not brick
+    the whole jobs list.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat(sep=" ")
+        return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None or isinstance(value, datetime):
+            return value
+        raw = str(value)
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.fromisoformat(raw)
+
+
 class Job(Base):
     """Pipeline job record."""
     __tablename__ = "jobs"
@@ -37,9 +67,9 @@ class Job(Base):
     mode = Column(String(100), nullable=False)  # monomer_denovo, binder_denovo, etc.
     params = Column(JSON, nullable=False)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow)
+    started_at = Column(LenientSQLiteDateTime, nullable=True)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
     
     output_dir = Column(String(500), nullable=True)
     nextflow_run_id = Column(String(100), nullable=True)
