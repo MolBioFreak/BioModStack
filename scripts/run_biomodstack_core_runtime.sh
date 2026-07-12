@@ -99,8 +99,8 @@ from pathlib import Path
 root = Path(__import__('os').environ.get('BMS_HOME', '.')).resolve()
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
-from biomodstack_services import cleanup_legacy_listener
-cleanup_legacy_listener('api', root)
+from biomodstack_services import CONTAINER_RUNTIME_MODE, cleanup_legacy_listener
+cleanup_legacy_listener('api', root, runtime_mode=CONTAINER_RUNTIME_MODE)
 PY
 }
 
