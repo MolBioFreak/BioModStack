@@ -22,7 +22,7 @@ from database import get_session, Design, Job
 from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
-from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
+from services.stage_review import REVIEWABLE_STAGES, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
 from services.result_contracts import resolve_result_contract
 from services.design_metrics import build_design_metric_completeness, build_design_metric_provenance
@@ -95,41 +95,21 @@ def _merge_review_payload(
     return merged
 
 
-async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Optional[str]:
+async def _hydrate_review_job(_session: AsyncSession, job: Optional[Job]) -> Optional[str]:
+    """Read the persisted review state for a result view without mutating it.
+
+    Gate restoration and review-row materialization are worker/repair duties;
+    GET handlers must not modify database state as a side effect of rendering.
+    """
     if job is None:
         return None
 
-    gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
-    gate_payload = _merge_review_payload(gate_payload, job.awaiting_payload or {})
+    gate_stage, _gate_payload = load_review_gate_snapshot(
+        job.child_output_dir or job.output_dir,
+        job.awaiting_stage,
+    )
     review_stage = str(job.awaiting_stage or gate_stage or "").strip().lower()
-    changed = False
-
-    if gate_stage and job.awaiting_stage != gate_stage:
-        job.awaiting_stage = gate_stage
-        review_stage = gate_stage
-        changed = True
-    if gate_payload and gate_payload != (job.awaiting_payload or {}):
-        job.awaiting_payload = gate_payload
-        changed = True
-    if review_stage in REVIEWABLE_STAGES and not bool(job.awaiting_input):
-        job.awaiting_input = True
-        changed = True
-
-    if review_stage in REVIEWABLE_STAGES and bool(job.awaiting_input):
-        existing_review_design_count = await session.scalar(
-            select(func.count()).select_from(Design).where(
-                Design.job_id == job.id,
-                Design.source_stage == review_stage,
-            )
-        )
-        if not existing_review_design_count:
-            await ensure_stage_review_rows(session, job)
-            changed = True
-
-    if changed:
-        await session.commit()
-
-    return review_stage if review_stage in REVIEWABLE_STAGES else None
+    return review_stage if job.awaiting_input and review_stage in REVIEWABLE_STAGES else None
 
 
 def _should_force_review_stage_listing(job: Optional[Job], review_stage: Optional[str]) -> bool:
