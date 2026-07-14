@@ -1446,7 +1446,12 @@ async def _resolve_parent_design_lineage(
     }
 
 
-def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> Dict[str, Any]:
+def _design_lineage_fields(
+    context: Dict[str, Any],
+    lineage: Dict[str, Any],
+    *,
+    artifact_class_override: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
         "lineage_root_job_id": context.get("lineage_root_job_id"),
         "parent_design_id": lineage.get("parent_design_id"),
@@ -1458,7 +1463,7 @@ def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> 
         "source_stage_mode": lineage.get("source_stage_mode") or context.get("source_stage_mode"),
         "source_pdb_path": lineage.get("source_pdb_path"),
         "source_design_name": lineage.get("source_design_name"),
-        "artifact_class": context.get("artifact_class"),
+        "artifact_class": artifact_class_override or context.get("artifact_class"),
         "artifact_schema_version": context.get("artifact_schema_version"),
     }
 
@@ -1694,6 +1699,8 @@ async def ingest_esmfold2_results(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     final_root = _resolve_esmfold2_final_root(output_path)
     if final_root is None:
@@ -1813,7 +1820,7 @@ async def ingest_esmfold2_results(
             ))
         created += 1
 
-    if created > 0:
+    if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Ingested {created} ESMFold2 designs for job {job_id}")
     return created
@@ -2260,6 +2267,8 @@ async def ingest_confornets_results(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job],
+    *,
+    commit: bool = True,
 ) -> int:
     """Ingest only final ConforNets conformers, not raw/work duplicate structures."""
     final_root = _resolve_confornets_final_root(output_path)
@@ -2418,7 +2427,8 @@ async def ingest_confornets_results(
         processed_count += 1
 
     try:
-        await session.commit()
+        if commit:
+            await session.commit()
         action = "Updated" if had_existing_designs else "Ingested"
         print(f"[Ingester] {action} {processed_count} final ConforNets conformers for job {job_id}")
     except Exception as exc:
@@ -2432,7 +2442,9 @@ async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
     session: AsyncSession,
-    epitope_residues: Optional[list] = None
+    epitope_residues: Optional[list] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Parse pipeline outputs and populate Design table.
@@ -2491,10 +2503,10 @@ async def ingest_job_results(
     )
 
     if _is_confornets_job(current_job):
-        return await ingest_confornets_results(job_id, output_path, session, current_job)
+        return await ingest_confornets_results(job_id, output_path, session, current_job, commit=commit)
 
     if _is_esmfold2_job(current_job):
-        return await ingest_esmfold2_results(job_id, output_path, session, current_job)
+        return await ingest_esmfold2_results(job_id, output_path, session, current_job, commit=commit)
     
     # Only try to process CSV if it exists
     if csv_path.exists():
@@ -2639,7 +2651,8 @@ async def ingest_job_results(
                     session.add(design)
                     designs_created += 1
             
-            await session.commit()
+            if commit:
+                await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs for job {job_id}")
             
         except Exception as e:
@@ -3664,14 +3677,17 @@ async def ingest_collected_ppiflow_structures(
             pdb_path=str(structure_path),
             json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
             backbone_id=parse_backbone_id(design_name),
-            **_design_lineage_fields(job_context, lineage),
+            **_design_lineage_fields(
+                job_context,
+                lineage,
+                artifact_class_override=(
+                    infer_antibody_artifact_class_from_stage("ppiflow", ingested_stage_mode)
+                    or job_context.get("artifact_class")
+                ),
+            ),
             stage_family="ppiflow",
             stage_mode=ingested_stage_mode,
             selected_loop_scope=job_context.get("selected_loop_scope"),
-            artifact_class=(
-                infer_antibody_artifact_class_from_stage("ppiflow", ingested_stage_mode)
-                or job_context.get("artifact_class")
-            ),
             provenance={
                 **job_context.get("provenance", {}),
                 "artifact_group": "ppiflow",

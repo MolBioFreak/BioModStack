@@ -524,10 +524,16 @@ def infer_antibody_stage_state(job: Job, completed: list[str], stage_outputs: di
     return completed, stage_outputs
 
 
+def job_result_output_dir(job: Job) -> str | None:
+    """Return the authoritative artifact root for parent and child jobs."""
+    return getattr(job, "child_output_dir", None) or job.output_dir
+
+
 def gate_file_for_stage(job: Job) -> Optional[Path]:
-    if not job.output_dir or not job.awaiting_stage:
+    output_dir = job_result_output_dir(job)
+    if not output_dir or not job.awaiting_stage:
         return None
-    output_path = resolve_output_dir(job.output_dir)
+    output_path = resolve_output_dir(output_dir)
     if not output_path:
         return None
     return output_path / "gates" / f"gate_{job.awaiting_stage}.json"
@@ -588,7 +594,7 @@ def load_review_gate_snapshot(
 
 
 def nextflow_history_status(job: Job) -> str:
-    return nextflow_history_status_for_run_dir(job.output_dir, str(job.id))
+    return nextflow_history_status_for_run_dir(job_result_output_dir(job), str(job.id))
 
 
 def has_stage_gate(job: Job) -> bool:
