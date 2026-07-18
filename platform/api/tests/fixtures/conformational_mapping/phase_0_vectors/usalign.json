@@ -1,0 +1,10 @@
+{
+  "schema_name":"cm_phase0_usalign",
+  "schema_version":1,
+  "case_key":"P0-USALIGN-001",
+  "required_version":"20240730",
+  "executable_sha256":null,
+  "runtime_status":"unmeasured",
+  "parser_input":"Aligned length= 42, RMSD= 1.50, Seq_ID=n_identical/n_aligned= 0.500",
+  "expected_parse":{"aligned_length":42,"rmsd":1.5,"sequence_identity":0.5}
+}

@@ -1,0 +1,15 @@
+{
+  "schema_name":"cm_phase0_protenix_composition",
+  "schema_version":1,
+  "cases":[
+    {"case_key":"P0-PROTENIX-COMPOSITION-001","control":"protein","source_instances":["p1"],"runtime_instances":["rp1"],"output_instances":["A"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-002","control":"dna","source_instances":["d1"],"runtime_instances":["rd1"],"output_instances":["B"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-003","control":"rna","source_instances":["r1"],"runtime_instances":["rr1"],"output_instances":["C"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-004","control":"ccd_ligand","source_instances":["l1"],"runtime_instances":["rl1"],"output_instances":["D"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-005","control":"smiles_ligand","source_instances":["s1"],"runtime_instances":["rs1"],"output_instances":["E"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-006","control":"ion","source_instances":["i1"],"runtime_instances":["ri1"],"output_instances":["F"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-007","control":"modification_and_bond","source_instances":["p1","l1"],"runtime_instances":["rp1","rl1"],"output_instances":["A","B"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-008","control":"repeated_protein","source_instances":["p1","p2"],"runtime_instances":["rp1","rp2"],"output_instances":["A","B"]},
+    {"case_key":"P0-PROTENIX-COMPOSITION-009","control":"repeated_ligand_and_mixed_distinct","source_instances":["l1","l2","sameA","sameB"],"runtime_instances":["rl1","rl2","rA","rB"],"output_instances":["C","D","E","F"]}
+  ]
+}
