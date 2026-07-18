@@ -8,11 +8,17 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, or_
+from sqlalchemy import select, or_
 from datetime import datetime, timezone
 import uuid
 
-from database import NucleotideSequence, get_session
+from molbio_database import get_molbio_session
+from molbio_models import NucleotideSequence
+from services.molbio_persistence import (
+    begin_immediate_molbio_write,
+    record_sequence_deletion,
+    record_sequence_revision,
+)
 
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
@@ -411,7 +417,7 @@ def normalize_feature_payloads(
 
 @router.get("/", response_model=List[NucleotideSequenceListItem])
 async def list_sequences(
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_molbio_session),
     search: Optional[str] = Query(None, description="Search by name, description, accession, organism, or source file"),
     sequence_type: Optional[str] = Query(None, description="Filter by polymer type: dna or rna"),
     topology: str = Query("all", description="Filter by topology: all, circular, linear"),
@@ -489,7 +495,7 @@ async def list_sequences(
 @router.post("/", response_model=NucleotideSequenceResponse)
 async def create_sequence(
     data: NucleotideSequenceCreate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Create a new nucleotide sequence."""
     # Clean and validate sequence
@@ -522,6 +528,12 @@ async def create_sequence(
     )
     
     session.add(seq)
+    await record_sequence_revision(
+        session,
+        seq,
+        change_kind="create",
+        provenance={"source": "api", "endpoint": "POST /api/sequences/"},
+    )
     await session.commit()
     await session.refresh(seq)
     
@@ -531,7 +543,7 @@ async def create_sequence(
 @router.get("/{sequence_id}", response_model=NucleotideSequenceResponse)
 async def get_sequence(
     sequence_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Get a specific sequence by ID."""
     result = await session.execute(
@@ -549,9 +561,10 @@ async def get_sequence(
 async def update_sequence(
     sequence_id: str,
     data: NucleotideSequenceUpdate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Update an existing sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -623,6 +636,13 @@ async def update_sequence(
 
     if changed:
         seq.version = (seq.version or 1) + 1
+        seq.updated_at = datetime.utcnow()
+        await record_sequence_revision(
+            session,
+            seq,
+            change_kind="update",
+            provenance={"source": "api", "endpoint": "PUT /api/sequences/{sequence_id}"},
+        )
 
     await session.commit()
     await session.refresh(seq)
@@ -633,9 +653,10 @@ async def update_sequence(
 @router.delete("/{sequence_id}")
 async def delete_sequence(
     sequence_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Delete a sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -644,6 +665,11 @@ async def delete_sequence(
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
     
+    await record_sequence_deletion(
+        session,
+        seq,
+        provenance={"source": "api", "endpoint": "DELETE /api/sequences/{sequence_id}"},
+    )
     await session.delete(seq)
     await session.commit()
     
@@ -654,9 +680,10 @@ async def delete_sequence(
 async def add_feature(
     sequence_id: str,
     feature: FeatureSchema,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Add a feature to a sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -673,7 +700,15 @@ async def add_feature(
     features = list(seq.features)
     features.append(feature)
     seq.features = normalize_feature_payloads(features, seq.length)
-    
+    seq.version = (seq.version or 1) + 1
+    seq.updated_at = datetime.utcnow()
+    await record_sequence_revision(
+        session,
+        seq,
+        change_kind="feature_add",
+        provenance={"source": "api", "feature_id": feature.id},
+    )
+
     await session.commit()
     await session.refresh(seq)
     
@@ -684,9 +719,10 @@ async def add_feature(
 async def delete_feature(
     sequence_id: str,
     feature_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Delete a feature from a sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -696,7 +732,17 @@ async def delete_feature(
         raise HTTPException(status_code=404, detail="Sequence not found")
     
     if seq.features:
+        previous_count = len(seq.features)
         seq.features = [f for f in seq.features if f.get("id") != feature_id]
-        await session.commit()
+        if len(seq.features) != previous_count:
+            seq.version = (seq.version or 1) + 1
+            seq.updated_at = datetime.utcnow()
+            await record_sequence_revision(
+                session,
+                seq,
+                change_kind="feature_delete",
+                provenance={"source": "api", "feature_id": feature_id},
+            )
+            await session.commit()
     
     return {"status": "deleted", "feature_id": feature_id}
