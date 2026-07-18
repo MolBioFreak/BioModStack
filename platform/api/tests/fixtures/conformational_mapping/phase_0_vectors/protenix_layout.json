@@ -1,0 +1,14 @@
+{
+  "schema_name":"cm_phase0_protenix_layout",
+  "schema_version":1,
+  "case_key":"P0-PROTENIX-LAYOUT-001",
+  "target_id":"small_protein",
+  "ordered_seeds":[101,202,303,404,505],
+  "samples_per_seed":5,
+  "expected_cardinality":25,
+  "mandatory_roles":["authoritative_cif","confidence_json","full_data_json"],
+  "candidates":[
+    {"seed":101,"sample_indices":[0,1,2,3,4]},{"seed":202,"sample_indices":[0,1,2,3,4]},{"seed":303,"sample_indices":[0,1,2,3,4]},{"seed":404,"sample_indices":[0,1,2,3,4]},{"seed":505,"sample_indices":[0,1,2,3,4]}
+  ],
+  "path_template":"targets/small_protein/seeds/{seed}/samples/{sample_index}/{role}"
+}
