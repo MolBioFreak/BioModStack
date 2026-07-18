@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import NucleotideSequence, get_session
+from molbio_database import get_molbio_session
+from molbio_models import NucleotideSequence
 from services.rna_structure import (
     RnaStructureError,
     RnaStructureSettings,
@@ -190,7 +191,7 @@ async def get_rna_structure_options():
 @router.post("/fold", response_model=RnaStructureResponse)
 async def fold_rna(
     data: RnaFoldRequest,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_molbio_session),
 ):
     """Fold an RNA sequence and optionally compute ensemble statistics."""
     source_sequence_id, name, sequence, circular = await _resolve_rna_request(data, session)
@@ -201,7 +202,7 @@ async def fold_rna(
 @router.post("/partition", response_model=RnaStructureResponse)
 async def partition_rna(
     data: RnaStructureRequest,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_molbio_session),
 ):
     """Compute RNA partition-function ensemble statistics and pair probabilities."""
     source_sequence_id, name, sequence, circular = await _resolve_rna_request(data, session)
