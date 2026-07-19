@@ -23,9 +23,11 @@ The previous source-only document claimed M0–M3 were each 100% complete. That 
 - real Results Viewer structure load and visible molecular render;
 - native Mol* toolbar/settings/control panels;
 - pLDDT coloring and linked sequence selection;
-- one shared metric workbench exposing every available metric layer rather than a pLDDT-only selector;
-- on the verified DRT4 route: pLDDT, pTM, complex ipLDDT, complex ipDE, radius of gyration, residue count, helix %, sheet %, and coil %;
-- structure-scalar values display their persisted value and provenance without fake residue coloring or opacity controls;
+- one shared metric workbench that separates spatial visual layers from non-spatial structure summaries;
+- on the verified DRT4 route, the visual selector contains residue pLDDT and chain-projected subunit mean pLDDT;
+- pTM, complex ipLDDT, complex ipDE, radius of gyration, residue count, helix %, sheet %, and coil % appear only in an explicitly non-spatial structure summary;
+- subunit mean pLDDT colors every residue in each chain by that chain's authoritative persisted mean;
+- visual-layer changes atomically clear stale residue selection and reset Mol* to whole-scene camera bounds;
 - the shared workbench owns minimize/restore in normal and fullscreen modes;
 - sequence-only fullscreen state with the workbench minimized while pLDDT is active;
 - legacy top metric/quick-view/legend controls and the duplicate analytics sidebar/fullscreen panel are disabled;
