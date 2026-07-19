@@ -55,6 +55,8 @@ USER biomodstack
 RUN --mount=type=bind,source=.,target=/src,readonly \
     cp -R --no-preserve=ownership,timestamps /src/. /app \
     && uv sync --frozen --no-dev \
+    && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
+        /app/platform/api/.venv/lib/python3.10/site-packages \
     && rm -rf "${UV_CACHE_DIR}" /home/biomodstack/.cache/uv \
     && python -c 'import os, shutil; from pathlib import Path; venv=Path("/app/platform/api/.venv"); [shutil.rmtree(path) for path in sorted(venv.rglob("__pycache__"), key=lambda path: len(path.parts), reverse=True)]; root=Path("/app"); epoch=int(os.environ["SOURCE_DATE_EPOCH"]); [os.utime(path, (epoch, epoch), follow_symlinks=False) for path in [root, *root.rglob("*")]]'
 
@@ -95,6 +97,9 @@ RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" create -y -n "${BMS_PLANNOTATE_ENV}" \
         --file /app/docker/plannotate-conda-linux-64.lock \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" plannotate setupdb \
+    && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
+        /app/platform/api/.venv/lib/python3.10/site-packages \
+        "${MAMBA_ROOT_PREFIX}/envs/${BMS_PLANNOTATE_ENV}/lib/python3.12/site-packages" \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" clean -a -y \
     && rm -rf "${MAMBA_ROOT_PREFIX}/pkgs" \
         /root/.cache \
