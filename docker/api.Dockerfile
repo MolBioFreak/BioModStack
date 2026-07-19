@@ -132,10 +132,21 @@ RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
 
 FROM scratch AS api-runtime
 
+ARG BMS_BUILD_SHA=unknown
+ARG BMS_BUILD_ID=development
+ARG BMS_BUILD_TIME=unknown
+
+LABEL org.opencontainers.image.revision=$BMS_BUILD_SHA \
+      org.opencontainers.image.created=$BMS_BUILD_TIME \
+      org.opencontainers.image.version=$BMS_BUILD_ID
+
 COPY --from=api-runtime-prepared / /
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    BMS_BUILD_SHA=$BMS_BUILD_SHA \
+    BMS_BUILD_ID=$BMS_BUILD_ID \
+    BMS_BUILD_TIME=$BMS_BUILD_TIME \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=0 \
     UV_CACHE_DIR=/tmp/uv-cache \
