@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -441,6 +442,26 @@ def run_gromacs_job(
         gmx_binary=gmx_binary,
         ledger=ledger,
     )
+    representative_structure = output_dir / "production" / "production-final.pdb"
+    (output_dir / "analysis").mkdir(parents=True, exist_ok=True)
+    representative_is_valid = False
+    previous_manifest_path = output_dir / "manifest.json"
+    if representative_structure.is_file() and previous_manifest_path.is_file():
+        try:
+            previous_manifest = json.loads(previous_manifest_path.read_text(encoding="utf-8"))
+            previous_record = previous_manifest["artifacts"]["representative_structure"]
+            representative_is_valid = (
+                previous_record["bytes"] == representative_structure.stat().st_size
+                and previous_record["sha256"] == hashlib.sha256(representative_structure.read_bytes()).hexdigest()
+            )
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            representative_is_valid = False
+    if not representative_is_valid:
+        _run_command(
+            [gmx_binary, "editconf", "-f", str(coordinates), "-o", str(representative_structure)],
+            cwd=output_dir / "production",
+            log_path=output_dir / "analysis" / "representative_structure.command.log",
+        )
     manifest = build_run_manifest(
         output_dir=output_dir,
         job_config=config,
@@ -453,6 +474,7 @@ def run_gromacs_job(
             "coordinates": coordinates,
             "run_input": production.with_suffix(".tpr"),
             "trajectory": trajectory,
+            "representative_structure": representative_structure,
             "checkpoint": checkpoint,
             "energy": energy,
             "engine_log": production.with_suffix(".log"),
@@ -467,6 +489,14 @@ def run_gromacs_job(
     manifest["engine"]["cuda_enabled"] = "gpu support: cuda" in normalized_version_output
     manifest["engine"]["binary"] = gmx_binary
     manifest["replica_seed"] = int(config["random_seed"]) + replica_index
+    atom_order_identity = f"sha256:{manifest['artifacts']['coordinates']['sha256']}"
+    manifest["artifacts"]["coordinates"].update({
+        "semantic_role": "analysis_topology", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["trajectory"].update({
+        "semantic_role": "analysis_trajectory", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["representative_structure"]["semantic_role"] = "representative_structure"
     manifest_path = output_dir / "manifest.json"
     _atomic_json(manifest_path, manifest)
     return manifest_path
