@@ -26,7 +26,7 @@ from services.gpu_orchestrator import (
 
 
 def test_recover_rfantibody_parent_after_child_wait_opens_post_rf_gate(tmp_path: Path) -> None:
-    for mode in ("antibody_refinement_pipeline", "antibody_refinement_pipeline"):
+    for mode in ("antibody_denovo_pipeline", "antibody_refinement_pipeline"):
         parent_output = tmp_path / mode / "parent"
         child_output = tmp_path / mode / "child"
         child_rfa_dir = child_output / "run" / "rfantibody" / "output"
