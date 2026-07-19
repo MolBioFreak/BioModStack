@@ -73,7 +73,7 @@ workflow ONT_METHYLATION_ANALYSIS {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { ignoredValue ->
+        DoradoBasecall.out.bam.subscribe { _ ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -83,7 +83,7 @@ workflow ONT_METHYLATION_ANALYSIS {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { ignoredValue -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ -> }
         }
 
         if (runModkit) {
@@ -140,7 +140,7 @@ workflow ONT_METHYLATION_ANALYSIS {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { ignoredValue -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ -> }
         }
 
         if (runModkit) {

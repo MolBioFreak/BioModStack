@@ -92,7 +92,7 @@ workflow WF_CLONE_VALIDATION {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { ignoredValue ->
+        DoradoBasecall.out.bam.subscribe { _ ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -189,7 +189,7 @@ workflow WF_CLONE_VALIDATION {
     println("Running wf-clone-validation assembly stage")
     def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
     RunCloneValidation(clone_input)
-    RunCloneValidation.out.out.subscribe { ignoredValue ->
+    RunCloneValidation.out.out.subscribe { _ ->
         reportStage(params, "wf_clone_validation", [
             "${params.out_dir}/assembly/wf_clone_out",
             "${params.out_dir}/assembly/wf_clone.log",

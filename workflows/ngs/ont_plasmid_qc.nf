@@ -89,7 +89,7 @@ workflow ONT_PLASMID_QC {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { ignoredValue ->
+        DoradoBasecall.out.bam.subscribe { _ ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -189,7 +189,7 @@ workflow ONT_PLASMID_QC {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { ignoredValue -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ -> }
         }
 
         if (has_reference && runFastqQc && analysis_bam != null) {

@@ -1,116 +1,99 @@
-BioModStack Cordova Android wrapper
+BioModStack Cordova Android shell
 
-Project root:
-  /home/dalab/Desktop/BioModStack Cordova Android Project
+Purpose
+  This project builds the BioModStack Vite frontend into a Cordova Android shell. It has two deliberately separate update mechanisms:
 
-Purpose:
-  Build the existing BioModStack Vite frontend from an external checkout, copy the production web bundle into Cordova www/, and emit a debug Android APK.
+  1. UI bundle update: replaces only signed/versioned Cordova web assets.
+  2. Native APK update: downloads a complete, signed Android package and hands it to Android's user-approved package installer.
 
-Expected source checkout:
-  /home/dalab/biomodstack/biomodstack
+  A UI bundle update cannot replace Kotlin/Java, Cordova plugins, permissions, package metadata, or the native shell. Those changes require a newly signed APK.
 
-Important constraint:
-  This wrapper does not edit files inside the BioModStack repo. It runs the frontend Vite build from /home/dalab/biomodstack/biomodstack/platform/frontend and sends the build output to this wrapper's .cache/ and www/ directories.
-
-Files in this wrapper:
-  package.json
-  config.xml
-  cordova.runtime.json
+Runtime configurations
   cordova.runtime.phone.json
-  cordova.runtime.emulator.json
-  cordova.runtime.example.json
-  docs/2026-04-20-standalone-cordova-bundled-apk-plan.md
-  resources/android/xml/network_security_config.xml
-  scripts/install-android-sdk.sh
-  scripts/prepare-bms-assets.mjs
-  scripts/build-apk.sh
-  scripts/verify-apk.sh
-
-Runtime configs:
-  cordova.runtime.json
-    default active config for phone-targeted builds
-    frontendCheckout: /home/dalab/biomodstack/biomodstack
     apiBaseUrl: https://compute-node.taileb3a90.ts.net
-    routerBasename: /
-
-  cordova.runtime.phone.json
-    same Tailscale/phone-oriented target as above
 
   cordova.runtime.emulator.json
-    Android emulator target
     apiBaseUrl: http://10.0.2.2:8000
 
-  Notes:
-    - 10.0.2.2 is the Android emulator alias for the host machine's localhost.
-    - For a physical phone, the current default is the BioModStack Tailscale host.
-    - routerBasename stays / because Cordova serves the app from local www/.
+  The phone origin is the only production native-update origin accepted by the Android policy. Emulator HTTP is restricted to the emulator build's network-security configuration and is not accepted for native APK downloads.
 
-Host toolchain expectations:
-  - Node.js 20+
-  - npm 10+
-  - pnpm available on PATH
-  - Java runtime 17 available on PATH
-  - Android SDK installed under $HOME/Android/Sdk or another path exported as ANDROID_SDK_ROOT
-  - local Gradle 8.7 is supported if present at $HOME/.local/gradle/gradle-8.7
+Clean bootstrap and debug build
+  cd platform/mobile-cordova
+  npm ci
 
-Android SDK bootstrap from this wrapper:
-    cd /home/dalab/Desktop/BioModStack Cordova Android Project
-    npm run install:sdk
+  # The referenced BioModStack frontend checkout also needs its workspace dependencies.
+  cd ../..
+  pnpm install --frozen-lockfile
+  cd platform/mobile-cordova
 
-One-time source-checkout bootstrap:
-  The BioModStack source checkout must already have its frontend dependencies installed.
-  If /home/dalab/biomodstack/biomodstack/platform/frontend/node_modules is missing, bootstrap the source checkout once:
+  export JAVA_HOME=/path/to/jdk-17
+  export ANDROID_SDK_ROOT=$HOME/Android/Sdk
+  export ANDROID_HOME=$ANDROID_SDK_ROOT
+  ./scripts/build-apk.sh ./cordova.runtime.phone.json
 
-    cd /home/dalab/biomodstack/biomodstack
-    pnpm install --frozen-lockfile
+The clean build prepares www/ before adding the Android platform, installs both local plugins, patches the generated MainActivity, builds the APK, and runs the wrapper verification script.
 
-One-time Cordova wrapper bootstrap:
-    cd /home/dalab/Desktop/BioModStack Cordova Android Project
-    npm install
-    npx cordova platform add android@13.0.0
+Expected debug APK
+  platforms/android/app/build/outputs/apk/debug/app-debug.apk
 
-Build the web assets only:
-    cd /home/dalab/Desktop/BioModStack Cordova Android Project
-    npm run prepare:www
+Native APK update trust model
+  Backend routes:
+    GET /api/mobile-apk/channels/stable/manifest
+    GET /api/mobile-apk/channels/stable/files/<content-addressed-name>.apk
 
-Full debug APK builds:
-    cd /home/dalab/Desktop/BioModStack Cordova Android Project
-    export ANDROID_SDK_ROOT=$HOME/Android/Sdk
+  The backend accepts Tailscale identity headers only from an explicitly trusted proxy source. It fails closed unless both are configured:
+    BMS_MOBILE_APK_TRUSTED_PROXY_HOSTS
+      Comma-separated source IPs, CIDRs, or exact local proxy host tokens.
+    BMS_MOBILE_APK_ALLOWED_TAILSCALE_USERS
+      Comma-separated exact Tailscale login identities allowed to fetch native updates.
 
-    npm run build:debug:phone
-    npm run build:debug:emulator
+  Tailscale Serve must terminate HTTPS, inject Tailscale-User-Login, and proxy from a source covered by BMS_MOBILE_APK_TRUSTED_PROXY_HOSTS. Do not expose the API directly with that source allowlist; a direct client able to originate from a trusted source could forge the identity header.
 
-Expected Cordova APK location:
-    /home/dalab/Desktop/BioModStack Cordova Android Project/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+  Every request revalidates bounded metadata. Manifest checks use a bounded inode/ctime-aware verification cache, while Range and full downloads copy and hash into a private bounded snapshot under a two-slot concurrency limit and stream only that verified snapshot.
 
-Convenience copy created for tomorrow:
-    /home/dalab/Desktop/BioModStack Android APK/BioModStack-debug-phone.apk
-    /home/dalab/Desktop/BioModStack Android APK/BioModStack-debug-phone.apk.sha256
-    /home/dalab/Desktop/BioModStack Android APK/README.txt
+Android policy
+  The native shell fails closed unless all of these are true:
+    - exact HTTPS origin https://compute-node.taileb3a90.ts.net
+    - exact stable channel and stable artifact path
+    - no redirect, URL userinfo, query, or fragment
+    - package org.biomodstack.mobile
+    - strictly increasing versionCode
+    - declared versionName and minimum SDK match the downloaded archive
+    - installed signer, declared signer, and archive signer match
+    - bounded size, exact Content-Length/Content-Range semantics, exact final size, and SHA-256
 
-Verification:
-    cd /home/dalab/Desktop/BioModStack Cordova Android Project
-    npm run verify:apk
+  Partial downloads resume only when the immutable manifest identity still matches and the server returns a coherent 206 range. Otherwise the partial file is discarded and the download restarts. Android installation always requires user approval. Returning from the installer is reconciled through PackageManager; launching the installer is not reported as success.
 
-What verify-apk.sh checks:
-  - the APK file exists
-  - size and sha256 are printed
-  - AndroidManifest.xml, classes.dex, assets/www/index.html, assets/www/bms-runtime-config.js, and assets/www/bms-cordova-shim.js are present inside the APK zip
-  - if apksigner is on PATH, signature verification is printed
-  - if adb sees a connected device or emulator, the APK is installed and a launch smoke test is run
+Publishing
+  platform/mobile-cordova/tools/publish_apk_update.py snapshots the source APK once, then inspects, hashes, validates, and promotes only those snapshot bytes. It publishes a content-addressed APK before atomically replacing manifest.json under a per-channel lock.
 
-How API/base URL injection works:
-  - scripts/prepare-bms-assets.mjs generates www/bms-runtime-config.js from the selected cordova.runtime*.json file
-  - the generated runtime config sets window.__BMS_ROUTER_BASENAME__ and window.__BMS_API_BASE_URL__
-  - www/bms-cordova-shim.js is injected into index.html before the built Vite module and rewrites /api... requests for fetch, XMLHttpRequest, sendBeacon, EventSource, WebSocket, and image/src consumers to the configured apiBaseUrl
+  Production publication requires the durable release certificate digest and a non-debuggable release APK. Never publish a debug-signed artifact to the production stable channel.
 
-Why the Vite build uses --base ./:
-  The upstream frontend vite.config.ts uses /bms/ for production builds. Cordova needs relative asset paths so the packaged app can load its JS/CSS from local www/. This wrapper overrides the base only for the external build command and keeps the upstream repo untouched.
+Release signing guard
+  Any release packaging/signing/install task fails unless all four values are supplied through environment variables or Gradle properties:
+    BMS_ANDROID_KEYSTORE_PATH
+    BMS_ANDROID_KEYSTORE_PASSWORD
+    BMS_ANDROID_KEY_ALIAS
+    BMS_ANDROID_KEY_PASSWORD
 
-Current verified APK:
-  - built successfully on this machine
-  - sha256: 5a6095565479eb321c61cf67416143f1f5498a2bffab48b857773d5488839bf2
-  - copied to Desktop for manual phone transfer
+  Do not store those values in this repository or in command history.
 
-Important runtime note:
-  If the app launches but API requests fail, the most likely blocker is backend CORS for the Cordova app origin (`https://localhost`). The wrapper is already rewriting `/api...` to the configured host; a backend allowlist change or a later native-HTTP fallback would be the next fix.
+Verification
+  Python/API and publisher tests:
+    cd platform/api
+    uv run --group dev python -m pytest -q tests/test_mobile_apk_updates.py tests/test_mobile_ui_updates.py
+
+    cd ../mobile-cordova
+    python -m pytest -q tests/test_publish_apk_update.py tests/test_android_apk_updater.py
+    node --test tests/*.test.mjs
+
+  Generated Android project:
+    cd platforms/android
+    tools/gradlew --no-daemon --max-workers=1 -p . testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+    ANDROID_SERIAL=<emulator> tools/gradlew --no-daemon --max-workers=1 -p . connectedDebugAndroidTest
+
+Release gates that emulator/debug evidence does not satisfy
+  - The preserved production keystore must sign the candidate and match the signer installed on real BioModStack devices.
+  - The exact production release APK must be published and retrieved through the configured authenticated Tailscale path.
+  - An authorized physical handset must complete the user-approved upgrade and retain application state.
+  - Debug-emulator upgrade continuity is developmental evidence only; it cannot replace those gates.

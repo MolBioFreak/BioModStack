@@ -1,12 +1,13 @@
 <?xml version='1.0' encoding='utf-8'?>
-<widget id="org.biomodstack.mobile" version="0.1.0" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+<widget id="org.biomodstack.mobile" version="0.2.0" android-versionCode="200" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
     <name>BioModStack</name>
     <description>Standalone Cordova Android wrapper for the BioModStack frontend.</description>
     <author email="noreply@example.com" href="https://biomodstack.invalid">BioModStack</author>
     <content src="index.html" />
-    <access origin="*" />
-    <allow-navigation href="http://*/*" />
-    <allow-navigation href="https://*/*" />
+    <access origin="https://localhost" />
+    <access origin="https://compute-node.taileb3a90.ts.net" />
+    <access origin="http://10.0.2.2:8000" />
+    <allow-navigation href="https://localhost/*" />
     <allow-intent href="http://*/*" />
     <allow-intent href="https://*/*" />
     <allow-intent href="tel:*" />
@@ -15,6 +16,9 @@
     <allow-intent href="geo:*" />
     <engine name="android" spec="13.0.0" />
     <preference name="AndroidXEnabled" value="true" />
+    <preference name="GradlePluginKotlinEnabled" value="true" />
+    <preference name="GradlePluginKotlinVersion" value="1.9.24" />
+    <preference name="BMS_API_ORIGIN" value="https://compute-node.taileb3a90.ts.net" />
     <preference name="scheme" value="https" />
     <preference name="hostname" value="localhost" />
     <preference name="android-minSdkVersion" value="24" />
@@ -34,5 +38,6 @@
             <application android:networkSecurityConfig="@xml/network_security_config" android:usesCleartextTraffic="true" />
         </edit-config>
         <resource-file src="resources/android/xml/network_security_config.xml" target="app/src/main/res/xml/network_security_config.xml" />
+        <resource-file src="build-extras.gradle" target="app/build-extras.gradle" />
     </platform>
 </widget>
