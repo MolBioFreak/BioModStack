@@ -36,7 +36,7 @@ test('antibody target parsing invalidates stale success, error, and settled call
 
     assert.match(parseEffect, /targetParseControllerRef\.current\.begin\(\)/);
     assert.equal(
-        (parseEffect.match(/targetParseControllerRef\.current\.isCurrent\(generation\)/g) || []).length,
+        (parseEffect.match(/targetParseControllerRef\.current\.isCurrent\(parseToken\)/g) || []).length,
         3,
     );
     assert.match(source, /targetParseControllerRef\.current\.dispose\(\)/);
