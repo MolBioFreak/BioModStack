@@ -1,3 +1,5 @@
+import { ViewerResourceOwner } from './resourceOwnership.js';
+
 export interface MolstarOwnedPlugin {
     dispose(options?: { doNotForceWebGLContextLoss?: boolean }): void;
     readonly managers?: {
@@ -46,6 +48,7 @@ interface MolstarOwnershipAttempt<TPlugin extends MolstarOwnedPlugin> {
     rootUnmounted: boolean;
     terminal: boolean;
     teardownScheduled: boolean;
+    readonly resources: ViewerResourceOwner;
 }
 
 export class MolstarOwnerCancelledError extends Error {
@@ -75,9 +78,21 @@ export class MolstarEngineOwner<TPlugin extends MolstarOwnedPlugin = MolstarOwne
         return this.generationCounter;
     }
 
-    get activePlugin(): TPlugin | undefined {
+    private get currentPlugin(): TPlugin | undefined {
         const attempt = this.currentAttempt;
         return attempt && !attempt.terminal ? attempt.plugin : undefined;
+    }
+
+    diagnostics(): {
+        readonly generation: number;
+        readonly active: boolean;
+        readonly resources: readonly { id: string; generation: number; disposed: boolean }[];
+    } {
+        return {
+            generation: this.generationCounter,
+            active: Boolean(this.currentPlugin),
+            resources: this.currentAttempt?.resources.snapshot() ?? [],
+        };
     }
 
     async initialize(target: HTMLElement): Promise<MolstarEngineOwnerResult<TPlugin>> {
@@ -89,6 +104,7 @@ export class MolstarEngineOwner<TPlugin extends MolstarOwnedPlugin = MolstarOwne
             rootUnmounted: false,
             terminal: false,
             teardownScheduled: false,
+            resources: new ViewerResourceOwner(),
         };
         this.currentAttempt = attempt;
 
@@ -98,7 +114,10 @@ export class MolstarEngineOwner<TPlugin extends MolstarOwnedPlugin = MolstarOwne
                 plugin.dispose();
                 throw new Error('Mol* factory published more than one plugin for one generation');
             }
-            attempt.plugin = plugin;
+            if (!attempt.plugin) {
+                attempt.plugin = plugin;
+                attempt.resources.own(`plugin:${attempt.generation}`, () => this.disposePlugin(attempt), attempt.generation);
+            }
             if (!isCurrent()) {
                 this.abortPluginTasks(attempt);
                 this.scheduleAttemptTeardown(attempt);
@@ -110,6 +129,7 @@ export class MolstarEngineOwner<TPlugin extends MolstarOwnedPlugin = MolstarOwne
 
             const root = this.dependencies.createUiRoot(container);
             attempt.root = root;
+            attempt.resources.own(`root:${attempt.generation}`, () => this.unmountRoot(attempt), attempt.generation);
             root.render(component);
 
             if (!isCurrent()) this.scheduleAttemptTeardown(attempt);
@@ -177,12 +197,12 @@ export class MolstarEngineOwner<TPlugin extends MolstarOwnedPlugin = MolstarOwne
 
     private performAttemptTeardown(attempt: MolstarOwnershipAttempt<TPlugin>): void {
         try {
-            this.unmountRoot(attempt);
+            attempt.resources.disposeSync(`root:${attempt.generation}`);
         } catch (error) {
             this.dependencies.onTeardownError?.(error);
         } finally {
             try {
-                this.disposePlugin(attempt);
+                attempt.resources.disposeSync(`plugin:${attempt.generation}`);
             } catch (error) {
                 this.dependencies.onTeardownError?.(error);
             }
