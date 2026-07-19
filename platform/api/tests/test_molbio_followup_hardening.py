@@ -23,7 +23,8 @@ from molbio_database import (  # noqa: E402
 )
 from molbio_migrations import (  # noqa: E402
     MigrationVerificationError,
-    extract_legacy_molbio_data,
+    extract_legacy_molbio_data as _extract_legacy_molbio_data,
+    legacy_molbio_manifest_sha256,
 )
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -31,6 +32,11 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from test_molbio_database import _create_legacy_source  # noqa: E402
+
+
+async def _extract_approved(source: Path, destination: Path, **kwargs):
+    kwargs.setdefault("expected_manifest_sha256", legacy_molbio_manifest_sha256(source))
+    return await _extract_legacy_molbio_data(source, destination, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -92,12 +98,12 @@ async def test_concurrent_identical_extractions_serialize_per_destination(
     _create_legacy_source(source)
 
     reports = await asyncio.gather(
-        extract_legacy_molbio_data(
+        _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "concurrent-backup-a.db",
         ),
-        extract_legacy_molbio_data(
+        _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "concurrent-backup-b.db",
@@ -137,7 +143,7 @@ async def test_extraction_releases_destination_lock_when_engine_disposal_fails(
     monkeypatch.setattr(AsyncEngine, "dispose", fail_disposal)
 
     with pytest.raises(RuntimeError, match="forced engine disposal failure"):
-        await extract_legacy_molbio_data(
+        await _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "dispose-failure-backup.db",
@@ -165,7 +171,7 @@ async def test_extraction_releases_destination_lock_when_cancelled_during_engine
 
     monkeypatch.setattr(AsyncEngine, "dispose", block_disposal)
     extraction = asyncio.create_task(
-        extract_legacy_molbio_data(
+        _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "dispose-cancel-backup.db",
@@ -556,7 +562,7 @@ async def test_extraction_orders_parent_before_lexically_earlier_child(
         )
         connection.commit()
 
-    report = await extract_legacy_molbio_data(
+    report = await _extract_approved(
         source,
         destination,
         backup_path=tmp_path / "child-first-backup.db",
@@ -613,7 +619,7 @@ async def test_idempotent_extraction_rejects_surplus_or_corrupt_complete_history
     source = tmp_path / "history-source.db"
     destination = tmp_path / "history-destination.db"
     _create_legacy_source(source)
-    await extract_legacy_molbio_data(
+    await _extract_approved(
         source,
         destination,
         backup_path=tmp_path / "history-first-backup.db",
@@ -653,7 +659,7 @@ async def test_idempotent_extraction_rejects_surplus_or_corrupt_complete_history
         connection.commit()
 
     with pytest.raises(MigrationVerificationError, match="history|graph"):
-        await extract_legacy_molbio_data(
+        await _extract_approved(
             source,
             destination,
             backup_path=tmp_path / f"history-{corruption}-backup.db",
@@ -685,7 +691,7 @@ async def test_extraction_rejects_non_ok_destination_quick_check_and_rolls_back(
     monkeypatch.setattr(AsyncSession, "execute", poison_quick_check)
 
     with pytest.raises(MigrationVerificationError, match="quick_check"):
-        await extract_legacy_molbio_data(
+        await _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "quick-check-backup.db",
@@ -795,3 +801,26 @@ def test_backup_removes_own_publication_after_verification_failure(
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".backup.db.tmp-*"))
+
+
+@pytest.mark.asyncio
+async def test_health_and_startup_reject_missing_required_table_with_current_ledger(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "missing-required-table.db"
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{database}")
+    try:
+        await init_molbio_db(engine=engine)
+        async with engine.begin() as connection:
+            await connection.execute(text("DROP TABLE primers"))
+
+        health = await molbio_health(engine=engine)
+        assert health["database_schema_current"] is False
+        issue_count = health["database_schema_issue_count"]
+        assert isinstance(issue_count, int) and issue_count >= 1
+        assert health["status"] == "degraded"
+
+        with pytest.raises(RuntimeError, match="schema.*drift|required table"):
+            await init_molbio_db(engine=engine)
+    finally:
+        await engine.dispose()

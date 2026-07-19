@@ -27,10 +27,22 @@ import {
     inferSequenceTypeFromSequence,
     isValidNucleotideSequence,
     resolvePrimerBindings,
-    reverseComplementSequence,
     sequenceUnitLabel,
 } from '../utils/nucleotides';
-import { getPrimerHighlightRegions } from '../utils/selectionActions';
+import {
+    buildSelectionPrimer,
+    canonicalizePrimerPlacement,
+    createSelectionSnapshot,
+    getPrimerHighlightRegions,
+    prepareSelectionPrimer,
+    type SelectionSnapshot,
+} from '../utils/selectionActions';
+
+interface SelectionPrimerDraft {
+    snapshot: SelectionSnapshot;
+    direction: 'forward' | 'reverse';
+    expectedSequence: string;
+}
 
 interface PrimerPanelProps {
     sequenceData: SequenceData;
@@ -103,6 +115,7 @@ export function PrimerPanel({
     const [newPrimerName, setNewPrimerName] = useState('');
     const [newPrimerSeq, setNewPrimerSeq] = useState('');
     const [isReverse, setIsReverse] = useState(false);
+    const [selectionPrimerDraft, setSelectionPrimerDraft] = useState<SelectionPrimerDraft | null>(null);
     const [hoveredPrimerId, setHoveredPrimerId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'sequence' | 'design' | 'qc' | 'library'>('sequence');
 
@@ -140,12 +153,17 @@ export function PrimerPanel({
     const unitLabel = sequenceUnitLabel(sequenceType);
 
     const selectedRegion = useMemo(() => {
-        if (!selection || selection.start === selection.end) return null;
-        const start = Math.min(selection.start, selection.end);
-        const end = Math.max(selection.start, selection.end);
-        const seq = sequenceData.sequence.slice(start, end);
-        return { start, end, sequence: seq, length: seq.length };
-    }, [selection, sequenceData.sequence]);
+        const snapshot = createSelectionSnapshot(
+            selection,
+            sequenceData.sequence,
+            sequenceData.circular,
+        );
+        return snapshot ? {
+            ...snapshot,
+            start: snapshot.placement.start,
+            end: snapshot.placement.end,
+        } : null;
+    }, [selection, sequenceData.circular, sequenceData.sequence]);
 
     const cleanedDraftPrimer = useMemo(() => cleanNucleotideSequence(newPrimerSeq), [newPrimerSeq]);
     const draftBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, cleanedDraftPrimer, {
@@ -192,18 +210,18 @@ export function PrimerPanel({
             setDesignTargetEnd(1);
             return;
         }
-        if (selection && selection.start !== selection.end) {
-            const start = Math.min(selection.start, selection.end) + 1;
-            const end = Math.max(selection.start, selection.end);
+        if (selectedRegion && !selectedRegion.placement.wrapsOrigin) {
+            const start = selectedRegion.start + 1;
+            const end = selectedRegion.end;
             setDesignTargetStart(start);
             setDesignTargetEnd(end);
-            setDesignProductMinLength((current) => Math.max(current, end - start + 40));
+            setDesignProductMinLength((current) => Math.max(current, selectedRegion.length + 40));
         } else {
             setDesignTargetStart((current) => Math.max(1, Math.min(current, sequenceLength)));
             setDesignTargetEnd((current) => Math.max(1, Math.min(current, sequenceLength)));
         }
         setDesignResult(null);
-    }, [selection, sequenceData.sequence.length]);
+    }, [selectedRegion, sequenceData.sequence.length]);
 
     const calculateTmForSequence = useCallback(async (
         sequence: string,
@@ -308,11 +326,15 @@ export function PrimerPanel({
     const handleSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
         setError(null);
-        const seq = reverse
-            ? reverseComplementSequence(selectedRegion.sequence, sequenceType)
-            : selectedRegion.sequence;
-        setNewPrimerSeq(seq);
+        const direction = reverse ? 'reverse' : 'forward';
+        const prepared = prepareSelectionPrimer(selectedRegion, direction, sequenceType);
+        setNewPrimerSeq(prepared.sequence);
         setIsReverse(reverse);
+        setSelectionPrimerDraft({
+            snapshot: selectedRegion,
+            direction,
+            expectedSequence: prepared.sequence,
+        });
         setNewPrimerName(`Primer_${reverse ? 'Rev' : 'Fwd'}_${selectedRegion.start + 1}`);
     };
 
@@ -325,7 +347,26 @@ export function PrimerPanel({
         }
         setError(null);
 
-        const binding = draftBinding;
+        const pinnedPrepared = selectionPrimerDraft
+            ? prepareSelectionPrimer(
+                selectionPrimerDraft.snapshot,
+                selectionPrimerDraft.direction,
+                sequenceType,
+            )
+            : null;
+        const usePinnedPlacement = Boolean(
+            selectionPrimerDraft
+            && pinnedPrepared
+            && cleanedPrimer === cleanNucleotideSequence(selectionPrimerDraft.expectedSequence)
+            && isReverse === (selectionPrimerDraft.direction === 'reverse'),
+        );
+        const binding = usePinnedPlacement && selectionPrimerDraft
+            ? {
+                start: selectionPrimerDraft.snapshot.placement.start,
+                end: selectionPrimerDraft.snapshot.placement.end,
+                annealLength: selectionPrimerDraft.snapshot.length,
+            }
+            : draftBinding;
         if (!binding) {
             setError('No primer annealing site was found on the current construct. Tailed primers are supported, but the 3′ annealing region must match.');
             return;
@@ -337,19 +378,40 @@ export function PrimerPanel({
             inferSequenceTypeFromSequence(cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength)),
         );
 
+        const primerName = newPrimerName || `Primer_${(sequenceData.primers?.length || 0) + 1}`;
+        const rawPrimer: Primer = usePinnedPlacement && selectionPrimerDraft && pinnedPrepared
+            ? buildSelectionPrimer({
+                id: `primer_${Date.now()}`,
+                name: primerName,
+                snapshot: selectionPrimerDraft.snapshot,
+                prepared: pinnedPrepared,
+                tm: effectiveTmResult?.tm ?? undefined,
+                gcPercent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
+                tmAlgorithm: effectiveTmResult?.algorithm,
+                tmSaltCorrection: effectiveTmResult?.salt_correction,
+                tmSettings,
+            })
+            : {
+                id: `primer_${Date.now()}`,
+                name: primerName,
+                sequence: cleanedPrimer,
+                sequenceType: sequenceTypeForPrimer,
+                start: binding.start,
+                end: binding.end,
+                strand: isReverse ? -1 : 1,
+                tm: effectiveTmResult?.tm ?? undefined,
+                gc_percent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
+                tm_algorithm: effectiveTmResult?.algorithm,
+                tm_salt_correction: effectiveTmResult?.salt_correction,
+                tm_settings: tmSettings,
+            };
         const primer: Primer = {
-            id: `primer_${Date.now()}`,
-            name: newPrimerName || `Primer_${(sequenceData.primers?.length || 0) + 1}`,
-            sequence: cleanedPrimer,
-            sequenceType: sequenceTypeForPrimer,
-            start: binding.start,
-            end: binding.end,
-            strand: isReverse ? -1 : 1,
-            tm: effectiveTmResult?.tm ?? undefined,
-            gc_percent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
-            tm_algorithm: effectiveTmResult?.algorithm,
-            tm_salt_correction: effectiveTmResult?.salt_correction,
-            tm_settings: tmSettings,
+            ...rawPrimer,
+            ...canonicalizePrimerPlacement(
+                rawPrimer,
+                sequenceData.sequence.length,
+                sequenceData.circular,
+            ),
         };
 
         onAddPrimer(primer);
@@ -375,6 +437,7 @@ export function PrimerPanel({
         setNewPrimerName('');
         setNewPrimerSeq('');
         setIsReverse(false);
+        setSelectionPrimerDraft(null);
         setDraftTmResult(null);
     };
 
@@ -385,6 +448,8 @@ export function PrimerPanel({
                 existingPrimer,
                 existingPrimer.strand === 1 ? '#22c55e' : '#ef4444',
                 existingPrimer.name,
+                sequenceData.sequence.length,
+                sequenceData.circular,
             )
         )));
     };
@@ -408,7 +473,7 @@ export function PrimerPanel({
             inferSequenceTypeFromSequence(annealSequence),
         );
 
-        const primer: Primer = {
+        const rawPrimer: Primer = {
             id: `primer_${Date.now()}`,
             name: libPrimer.name,
             sequence: libPrimer.sequence,
@@ -422,12 +487,20 @@ export function PrimerPanel({
             tm_salt_correction: liveTmResult?.salt_correction ?? libPrimer.tm_salt_correction ?? undefined,
             tm_settings: tmSettings,
         };
+        const primer: Primer = {
+            ...rawPrimer,
+            ...canonicalizePrimerPlacement(
+                rawPrimer,
+                sequenceData.sequence.length,
+                sequenceData.circular,
+            ),
+        };
 
         onAddPrimer(primer);
     };
 
     const useSelectionAsDesignTarget = () => {
-        if (!selectedRegion) return;
+        if (!selectedRegion || selectedRegion.placement.wrapsOrigin) return;
         setDesignTargetStart(selectedRegion.start + 1);
         setDesignTargetEnd(selectedRegion.end);
         setDesignProductMinLength(Math.max(selectedRegion.length + 40, 120));
@@ -501,8 +574,22 @@ export function PrimerPanel({
             tm_salt_correction: tmSettings.salt_correction,
             tm_settings: tmSettings,
         };
-        onAddPrimer(forwardPrimer);
-        onAddPrimer(reversePrimer);
+        onAddPrimer({
+            ...forwardPrimer,
+            ...canonicalizePrimerPlacement(
+                forwardPrimer,
+                sequenceData.sequence.length,
+                sequenceData.circular,
+            ),
+        });
+        onAddPrimer({
+            ...reversePrimer,
+            ...canonicalizePrimerPlacement(
+                reversePrimer,
+                sequenceData.sequence.length,
+                sequenceData.circular,
+            ),
+        });
     };
 
     const handleToggleFavorite = async (primerId: string) => {
@@ -590,7 +677,7 @@ export function PrimerPanel({
                     {selectedRegion && (
                         <div className="p-3 bg-slate-700/50 rounded space-y-2">
                             <div className="text-sm text-slate-300">
-                                Selected: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} {unitLabel})
+                                Selected: {selectedRegion.coordinateLabel} ({selectedRegion.length} {unitLabel})
                             </div>
                             <div className="font-mono text-xs text-slate-400 truncate">
                                 {selectedRegion.sequence.slice(0, 50)}{selectedRegion.length > 50 ? '...' : ''}
@@ -626,7 +713,10 @@ export function PrimerPanel({
                         <input
                             type="text"
                             value={newPrimerSeq}
-                            onChange={(event) => setNewPrimerSeq(event.target.value.toUpperCase())}
+                            onChange={(event) => {
+                                setNewPrimerSeq(event.target.value.toUpperCase());
+                                setSelectionPrimerDraft(null);
+                            }}
                             placeholder="Sequence (5'→3')"
                             className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                         />
@@ -636,7 +726,10 @@ export function PrimerPanel({
                                 <input
                                     type="checkbox"
                                     checked={isReverse}
-                                    onChange={(event) => setIsReverse(event.target.checked)}
+                                    onChange={(event) => {
+                                        setIsReverse(event.target.checked);
+                                        setSelectionPrimerDraft(null);
+                                    }}
                                     className="w-3 h-3"
                                 />
                                 Reverse
@@ -662,7 +755,11 @@ export function PrimerPanel({
                                     </span>
                                     <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%</span>
                                 </div>
-                                {draftBinding ? (
+                                {selectionPrimerDraft ? (
+                                    <div className="text-emerald-400">
+                                        Pinned to selected locus {selectionPrimerDraft.snapshot.coordinateLabel}
+                                    </div>
+                                ) : draftBinding ? (
                                     <div className="text-emerald-400">
                                         Anneals @ {draftBinding.start + 1}
                                         {draftBinding.overhangLength > 0 ? ` with ${draftBinding.overhangLength} ${unitLabel} 5′ overhang` : ''}
@@ -762,13 +859,17 @@ export function PrimerPanel({
                     {selectedRegion && (
                         <div className="flex items-center justify-between rounded border border-cyan-700/40 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
                             <span>
-                                Selection available: {selectedRegion.start + 1}–{selectedRegion.end} ({selectedRegion.length} {unitLabel})
+                                Selection available: {selectedRegion.coordinateLabel} ({selectedRegion.length} {unitLabel})
                             </span>
                             <button
                                 onClick={useSelectionAsDesignTarget}
-                                className="rounded bg-cyan-600 px-2 py-1 font-medium text-white transition-colors hover:bg-cyan-500"
+                                disabled={selectedRegion.placement.wrapsOrigin}
+                                title={selectedRegion.placement.wrapsOrigin
+                                    ? 'Origin-spanning primer-design targets are not supported; rotate the construct origin or choose one contiguous range.'
+                                    : undefined}
+                                className="rounded bg-cyan-600 px-2 py-1 font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
                             >
-                                Use Selection
+                                {selectedRegion.placement.wrapsOrigin ? 'Rotate Origin First' : 'Use Selection'}
                             </button>
                         </div>
                     )}

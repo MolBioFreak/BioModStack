@@ -9,14 +9,18 @@ from pathlib import Path
 import pytest
 from Bio.Seq import Seq
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from pydantic import ValidationError
+from sqlalchemy import func, select, text
 
 API_DIR = Path(__file__).resolve().parents[1]
 if str(API_DIR) not in sys.path:
     sys.path.insert(0, str(API_DIR))
 
 from molbio_database import create_molbio_engine, init_molbio_db, make_molbio_session_factory  # noqa: E402
-from molbio_migrations import extract_legacy_molbio_data  # noqa: E402
+from molbio_migrations import (  # noqa: E402
+    extract_legacy_molbio_data as _extract_legacy_molbio_data,
+    legacy_molbio_manifest_sha256,
+)
 from molbio_models import (  # noqa: E402
     MolBioAuditEvent,
     MolecularDocument,
@@ -24,34 +28,50 @@ from molbio_models import (  # noqa: E402
     MolecularOperationInput,
     MolecularRevision,
     NucleotideSequence,
+    PCRExperiment,
     PCRExperimentRevision,
     Primer,
     PrimerRevision,
     TmModelRevision,
 )
 from routers.molbio_ops import (  # noqa: E402
+    AlignmentSettingsSchema,
     AssemblyFragmentEndSchema,
     AssemblyFragmentSchema,
     DigestRequest,
     EnzymeSchema,
     LigationAssemblyRequest,
+    MutationSchema,
+    MutagenesisRequest,
     PCRRequest,
     PCRReviewStateRequest,
     PrimerCreate,
     PrimerUpdate,
+    SequenceAlignmentRequest,
     PrimerTmSettings,
     create_primer,
+    align_molecular_sequences,
     delete_primer,
     digest,
     get_primer,
     list_primers,
+    mutagenesis,
     pcr,
     save_ligation_assembly,
     update_pcr_experiment_review_state,
     update_primer,
 )
-from routers.nucleotide_sequences import NucleotideSequenceUpdate, update_sequence  # noqa: E402
+from routers.nucleotide_sequences import (  # noqa: E402
+    AnalysisTrackSchema,
+    NucleotideSequenceUpdate,
+    delete_sequence,
+    update_sequence,
+)
+from services.assembly.golden_gate import simulate_golden_gate  # noqa: E402
+from services.assembly.types import AssemblyFragment, FragmentEnd  # noqa: E402
+from services.molbio_ops import pcr_product  # noqa: E402
 from services.molbio_persistence import record_sequence_revision  # noqa: E402
+from services.primer_qc import evaluate_primer_pair_qc  # noqa: E402
 from services.sqlite_backup import backup_sqlite_database  # noqa: E402
 
 
@@ -87,6 +107,11 @@ def _legacy_db(path: Path) -> None:
         )
 
 
+async def _extract_approved(source: Path, destination: Path, **kwargs):
+    kwargs.setdefault("expected_manifest_sha256", legacy_molbio_manifest_sha256(source))
+    return await _extract_legacy_molbio_data(source, destination, **kwargs)
+
+
 async def _seed_template(session, template_id: str = "template-1") -> NucleotideSequence:
     sequence = "ATGCGTACGTTAGCTAGCTAGGCTAACCGGTTACGATCGATCGTACGTTAGC"
     template = NucleotideSequence(
@@ -110,6 +135,242 @@ async def _seed_template(session, template_id: str = "template-1") -> Nucleotide
 
 
 @pytest.mark.asyncio
+async def test_sequence_update_recanonicalizes_type_and_clears_explicit_nulls(tmp_path: Path) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'sequence-update.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            template.description = "clear me"
+            template.organism = "synthetic"
+            await session.commit()
+
+            updated = await update_sequence(
+                template.id,
+                NucleotideSequenceUpdate(
+                    sequence_type="rna",
+                    description=None,
+                    organism=None,
+                ),
+                session,
+            )
+            assert updated.sequence_type == "rna"
+            assert "T" not in updated.sequence and "U" in updated.sequence
+            assert updated.description is None
+            assert updated.organism is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_primer_create_update_validate_sequence_geometry_and_explicit_nulls(tmp_path: Path) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'primer-validation.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            for payload in (
+                PrimerCreate(name="empty", sequence=""),
+                PrimerCreate(name="invalid", sequence="!!!!"),
+                PrimerCreate(
+                    name="geometry",
+                    sequence="ATGCGTAC",
+                    target_sequence_id=template.id,
+                    binding_start=-99,
+                    binding_end=999,
+                    binding_strand=7,
+                ),
+            ):
+                with pytest.raises(HTTPException) as error:
+                    await create_primer(payload, session)
+                assert error.value.status_code == 400
+
+            created = await create_primer(
+                PrimerCreate(
+                    name="valid",
+                    sequence="ATGCGTAC",
+                    description="clear me",
+                    target_sequence_id=template.id,
+                    binding_start=0,
+                    binding_end=8,
+                    binding_strand=1,
+                ),
+                session,
+            )
+            with pytest.raises(HTTPException) as error:
+                await update_primer(created.id, PrimerUpdate(sequence="!!!!"), session)
+            assert error.value.status_code == 400
+
+            cleared = await update_primer(
+                created.id,
+                PrimerUpdate(
+                    description=None,
+                    target_sequence_id=None,
+                    binding_start=None,
+                    binding_end=None,
+                ),
+                session,
+            )
+            assert cleared.description is None
+            assert cleared.target_sequence_id is None
+            assert cleared.binding_start is None
+            assert cleared.binding_end is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sequence_delete_clears_soft_deleted_primer_reference(tmp_path: Path) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'soft-delete-reference.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            primer = await create_primer(
+                PrimerCreate(
+                    name="dependent",
+                    sequence="ATGCGTAC",
+                    target_sequence_id=template.id,
+                    binding_start=0,
+                    binding_end=8,
+                ),
+                session,
+            )
+            await delete_primer(primer.id, session)
+            result = await delete_sequence(template.id, session)
+            assert result == {"status": "deleted", "id": template.id}
+            persisted_primer = await session.get(Primer, primer.id)
+            assert persisted_primer is not None
+            assert persisted_primer.target_sequence_id is None
+            assert persisted_primer.binding_start is None
+            assert persisted_primer.binding_end is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mutagenesis_rejects_non_residue_and_preserves_molecular_metadata(
+    tmp_path: Path,
+) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'mutagenesis.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            template.molecule_strandedness = "double"
+            template.molecule_orientation = "both"
+            await session.commit()
+
+            with pytest.raises(HTTPException) as error:
+                await mutagenesis(
+                    MutagenesisRequest(
+                        sequence_id=template.id,
+                        mutations=[MutationSchema(pos=2, **{"from": "T"}, to="XYZ")],
+                    ),
+                    session,
+                )
+            assert error.value.status_code == 400
+
+            result = await mutagenesis(
+                MutagenesisRequest(
+                    sequence_id=template.id,
+                    mutations=[MutationSchema(pos=2, **{"from": "T"}, to="C")],
+                ),
+                session,
+            )
+            assert result.sequence is not None
+            persisted = await session.get(NucleotideSequence, result.sequence.id)
+            assert persisted is not None
+            assert persisted.molecule_strandedness == "double"
+            assert persisted.molecule_orientation == "both"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pcr_rejects_invalid_primers_before_snapshot_persistence(tmp_path: Path) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'pcr-invalid.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            reverse = str(Seq(template.sequence[-12:]).reverse_complement())
+            with pytest.raises(HTTPException) as error:
+                await pcr(
+                    PCRRequest(
+                        sequence_id=template.id,
+                        primer_fwd="!!!" + template.sequence[:12],
+                        primer_rev=reverse,
+                        save=False,
+                        persist_experiment=True,
+                    ),
+                    session,
+                )
+            assert error.value.status_code == 400
+            assert await session.scalar(select(func.count()).select_from(PCRExperiment)) == 0
+    finally:
+        await engine.dispose()
+
+
+def test_pcr_rejects_ambiguous_binding_site_pairs() -> None:
+    with pytest.raises(ValueError, match="[Aa]mbiguous"):
+        pcr_product("A" * 20, "A" * 8, "T" * 8, circular=False)
+
+
+def test_scientific_numeric_schemas_reject_nonfinite_and_impossible_values() -> None:
+    invalid_factories = (
+        lambda: PrimerTmSettings(na_mM=-50),
+        lambda: PrimerTmSettings(dmso_percent=float("nan")),
+        lambda: AlignmentSettingsSchema(match_score=float("nan")),
+        lambda: AnalysisTrackSchema(
+            id="track",
+            name="track",
+            values=[0.0, float("nan")],
+        ),
+    )
+    for factory in invalid_factories:
+        with pytest.raises(ValidationError):
+            factory()
+
+
+@pytest.mark.asyncio
+async def test_alignment_route_does_not_block_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import time
+    import routers.molbio_ops as molbio_router
+
+    original = molbio_router.align_sequences
+
+    def slow_alignment(*args, **kwargs):
+        time.sleep(0.1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(molbio_router, "align_sequences", slow_alignment)
+    task = asyncio.create_task(
+        align_molecular_sequences(
+            SequenceAlignmentRequest(
+                reference_name="reference",
+                reference_sequence="ACGTACGT",
+                query_name="query",
+                query_sequence="ACGTACGT",
+                settings=AlignmentSettingsSchema(),
+            )
+        )
+    )
+    await asyncio.sleep(0.02)
+    assert task.done() is False
+    response = await task
+    assert response.identity_pct == 100.0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("alias_pair", ["source-destination", "source-backup", "destination-backup"])
 async def test_extraction_rejects_pairwise_path_aliases_before_write(tmp_path: Path, alias_pair: str) -> None:
     source = tmp_path / "source.db"
@@ -124,7 +385,7 @@ async def test_extraction_rejects_pairwise_path_aliases_before_write(tmp_path: P
         destination = backup
     source_before = source.read_bytes()
     with pytest.raises(ValueError, match="distinct|alias"):
-        await extract_legacy_molbio_data(source, destination, backup_path=backup)
+        await _extract_approved(source, destination, backup_path=backup)
     assert source.read_bytes() == source_before
     if alias_pair == "destination-backup":
         assert not destination.exists()
@@ -142,8 +403,79 @@ async def test_extraction_rejects_inode_aliases(tmp_path: Path, alias_kind: str)
         alias.symlink_to(source)
     before = source.read_bytes()
     with pytest.raises(ValueError, match="distinct|alias"):
-        await extract_legacy_molbio_data(source, alias, backup_path=tmp_path / "backup.db")
+        await _extract_approved(source, alias, backup_path=tmp_path / "backup.db")
     assert source.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_extraction_rejects_same_inventory_content_substitution(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    _legacy_db(source)
+    approved_manifest = legacy_molbio_manifest_sha256(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            "UPDATE nucleotide_sequences SET sequence = 'TTTTAAAA' WHERE id = 'seq-1'"
+        )
+        connection.commit()
+
+    with pytest.raises(Exception, match="manifest changed"):
+        await _extract_legacy_molbio_data(
+            source,
+            tmp_path / "destination.db",
+            backup_path=tmp_path / "backup.db",
+            expected_manifest_sha256=approved_manifest,
+            expected_sequence_count=1,
+            expected_total_bases=8,
+            expected_primer_count=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_extraction_is_idempotent_after_nullable_legacy_default_normalization(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "destination.db"
+    _legacy_db(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            """
+            INSERT INTO primers (
+                id, name, sequence, sequence_type, length, primer_type,
+                target_sequence_id, binding_start, binding_end, binding_strand,
+                is_favorite, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "primer-1",
+                "nullable default",
+                "ATGCGTAC",
+                "dna",
+                8,
+                None,
+                "seq-1",
+                0,
+                8,
+                1,
+                0,
+                "2026-01-01T00:00:00",
+            ),
+        )
+        connection.commit()
+
+    first = await _extract_approved(
+        source,
+        destination,
+        backup_path=tmp_path / "first-backup.db",
+    )
+    second = await _extract_approved(
+        source,
+        destination,
+        backup_path=tmp_path / "second-backup.db",
+    )
+    assert first.copied_primers == 1
+    assert second.copied_primers == 0
+    assert second.skipped_primers == 1
 
 
 @pytest.mark.asyncio
@@ -536,6 +868,168 @@ async def test_review_actor_claim_cannot_forge_authenticated_audit_identity(tmp_
                 "verification": "unverified",
             }
             assert claim not in {revision.created_by, event.actor}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_approval_requires_authenticated_reviewer_and_persists_that_actor(
+    tmp_path: Path,
+) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'approval-actor.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            template = await _seed_template(session)
+            created = await pcr(
+                PCRRequest(
+                    sequence_id=template.id,
+                    primer_fwd=template.sequence[:12],
+                    primer_rev=str(Seq(template.sequence[-12:]).reverse_complement()),
+                    save=False,
+                    persist_experiment=True,
+                    idempotency_key="approval-actor",
+                ),
+                session,
+            )
+            assert created.experiment_id is not None
+            experiment_id = created.experiment_id
+            request = PCRReviewStateRequest(
+                review_state="approved",
+                actor="client-forgery",
+            )
+            with pytest.raises(HTTPException) as error:
+                await update_pcr_experiment_review_state(
+                    experiment_id,
+                    request,
+                    session,
+                )
+            assert error.value.status_code == 403
+
+            response = await update_pcr_experiment_review_state(
+                experiment_id,
+                request,
+                session,
+                "reviewer:alice",
+            )
+            revision = await session.get(PCRExperimentRevision, response["id"])
+            assert revision is not None
+            assert revision.review_state == "approved"
+            assert revision.created_by == "reviewer:alice"
+            assert revision.provenance["client_actor_claim"]["verification"] == "unverified"
+    finally:
+        await engine.dispose()
+
+
+def test_three_prime_heterodimer_anchors_both_physical_three_prime_ends() -> None:
+    metrics = evaluate_primer_pair_qc(
+        "AAAAAAAAAAAACCCC",
+        "GGGGTTTTTTTTTTTT",
+    )
+    assert metrics.heterodimer_complement == 16
+    assert metrics.three_prime_heterodimer == 0
+
+
+def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends() -> None:
+    with pytest.raises(ValidationError):
+        AssemblyFragmentEndSchema(type="sticky", overhang="AAAA")
+
+    fragments = [
+        AssemblyFragment(
+            id="one",
+            name="one",
+            sequence="GGTCTCAAAAGGTCTC",
+            left_end=FragmentEnd(type="sticky_5", overhang="AAAA"),
+            right_end=FragmentEnd(type="sticky_5", overhang="CCCC"),
+        ),
+        AssemblyFragment(
+            id="two",
+            name="two",
+            sequence="TTTTGGGG",
+            left_end=FragmentEnd(type="sticky_5", overhang="GGGG"),
+            right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
+        ),
+    ]
+    with pytest.raises(ValueError, match="recognition site"):
+        simulate_golden_gate(fragments, enzyme_name="BsaI", circular=False)
+
+    reverse_site_fragments = [
+        AssemblyFragment(
+            id="reverse-one",
+            name="reverse-one",
+            sequence="AAAAGAGACCTTTT",
+            left_end=FragmentEnd(type="sticky_5", overhang="AAAA"),
+            right_end=FragmentEnd(type="sticky_5", overhang="CCCC"),
+        ),
+        fragments[1],
+    ]
+    with pytest.raises(ValueError, match="recognition site"):
+        simulate_golden_gate(reverse_site_fragments, enzyme_name="BsaI", circular=False)
+
+    junction_fragments = [
+        AssemblyFragment(
+            id="junction-one",
+            name="junction-one",
+            sequence="AAAAGAGA",
+            left_end=FragmentEnd(type="sticky_5", overhang="AAAA"),
+            right_end=FragmentEnd(type="sticky_5", overhang="CCCC"),
+        ),
+        AssemblyFragment(
+            id="junction-two",
+            name="junction-two",
+            sequence="CCTTTT",
+            left_end=FragmentEnd(type="sticky_5", overhang="GGGG"),
+            right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
+        ),
+    ]
+    product = simulate_golden_gate(junction_fragments, enzyme_name="BsaI", circular=False)
+    assert "GAGACC" in product.sequence
+    assert any("either orientation" in warning for warning in product.warnings)
+
+
+@pytest.mark.asyncio
+async def test_saved_assembly_rejects_forged_source_slice_before_persistence(
+    tmp_path: Path,
+) -> None:
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'forged-lineage.db'}")
+    await init_molbio_db(engine=engine)
+    sessions = make_molbio_session_factory(engine)
+    try:
+        async with sessions() as session:
+            source = await _seed_template(session, "forged-source")
+            blunt = AssemblyFragmentEndSchema(type="blunt")
+            request = LigationAssemblyRequest(
+                fragments=[
+                    AssemblyFragmentSchema(
+                        id="forged",
+                        name="forged",
+                        sequence="TTTT",
+                        source_sequence_id=source.id,
+                        source_start=0,
+                        source_end=4,
+                        left_end=blunt,
+                        right_end=blunt,
+                    ),
+                    AssemblyFragmentSchema(
+                        id="inline",
+                        name="inline",
+                        sequence="AAAA",
+                        left_end=blunt,
+                        right_end=blunt,
+                    ),
+                ],
+                circular=False,
+            )
+            with pytest.raises(HTTPException) as error:
+                await save_ligation_assembly(request, session)
+            assert error.value.status_code == 409
+            count = await session.scalar(
+                select(func.count()).select_from(MolecularOperation).where(
+                    MolecularOperation.operation_kind == "ligation"
+                )
+            )
+            assert count == 0
     finally:
         await engine.dispose()
 

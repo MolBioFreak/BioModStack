@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import fcntl
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 
-from sqlalchemy import event, text
+from sqlalchemy import UniqueConstraint, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -68,6 +69,104 @@ def _immutable_triggers_are_current(rows: Iterable[Sequence[object]]) -> bool:
         and _normalize_sql(str(observed[name][2] or "")) == expected_sql
         for name, (table_name, expected_sql) in expected.items()
     )
+
+
+def _foreign_key_signature(payload: Mapping[str, Any]) -> tuple[object, ...]:
+    options = payload.get("options")
+    normalized_options = options if isinstance(options, Mapping) else {}
+    return (
+        tuple(str(column) for column in payload.get("constrained_columns") or ()),
+        str(payload.get("referred_table") or ""),
+        tuple(str(column) for column in payload.get("referred_columns") or ()),
+        str(normalized_options.get("ondelete") or "").upper(),
+        str(normalized_options.get("onupdate") or "").upper(),
+    )
+
+
+def _expected_foreign_key_signatures(table) -> Counter[tuple[object, ...]]:  # noqa: ANN001
+    signatures: Counter[tuple[object, ...]] = Counter()
+    for constraint in table.foreign_key_constraints:
+        elements = list(constraint.elements)
+        signatures[
+            (
+                tuple(str(element.parent.name) for element in elements),
+                str(elements[0].column.table.name),
+                tuple(str(element.column.name) for element in elements),
+                str(constraint.ondelete or "").upper(),
+                str(constraint.onupdate or "").upper(),
+            )
+        ] += 1
+    return signatures
+
+
+def _molbio_schema_issues_sync(sync_connection) -> list[str]:  # noqa: ANN001
+    """Return structural drift from the SQLAlchemy-owned SQLite contract."""
+
+    inspector = inspect(sync_connection)
+    actual_tables = set(inspector.get_table_names())
+    issues: list[str] = []
+    for table_name, table in MolBioBase.metadata.tables.items():
+        if table_name not in actual_tables:
+            issues.append(f"required table missing: {table_name}")
+            continue
+
+        actual_columns = {str(column["name"]): column for column in inspector.get_columns(table_name)}
+        expected_columns = {str(column.name): column for column in table.columns}
+        for column_name, expected_column in expected_columns.items():
+            actual_column = actual_columns.get(column_name)
+            if actual_column is None:
+                issues.append(f"required column missing: {table_name}.{column_name}")
+                continue
+            if not expected_column.primary_key and bool(actual_column.get("nullable")) != bool(expected_column.nullable):
+                issues.append(f"column nullability differs: {table_name}.{column_name}")
+        unexpected_columns = sorted(set(actual_columns).difference(expected_columns))
+        if unexpected_columns:
+            issues.append(f"unexpected columns in {table_name}: {unexpected_columns}")
+
+        expected_foreign_keys = _expected_foreign_key_signatures(table)
+        actual_foreign_keys = Counter(
+            _foreign_key_signature(foreign_key)
+            for foreign_key in inspector.get_foreign_keys(table_name)
+        )
+        if actual_foreign_keys != expected_foreign_keys:
+            issues.append(f"foreign keys differ: {table_name}")
+
+        actual_indexes = {
+            (
+                str(index.get("name") or ""),
+                tuple(str(column) for column in index.get("column_names") or ()),
+                bool(index.get("unique")),
+            )
+            for index in inspector.get_indexes(table_name)
+        }
+        for index in table.indexes:
+            expected_index = (
+                str(index.name or ""),
+                tuple(str(column.name) for column in index.columns),
+                bool(index.unique),
+            )
+            if expected_index not in actual_indexes:
+                issues.append(f"required index differs or is missing: {table_name}.{index.name}")
+
+        expected_unique_columns = {
+            tuple(str(column.name) for column in constraint.columns)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        actual_unique_columns = {
+            tuple(str(column) for column in constraint.get("column_names") or ())
+            for constraint in inspector.get_unique_constraints(table_name)
+        }
+        missing_unique = expected_unique_columns.difference(actual_unique_columns)
+        if missing_unique:
+            issues.append(
+                f"required unique constraint differs or is missing: {table_name} {sorted(missing_unique)}"
+            )
+    return issues
+
+
+async def _molbio_schema_issues(connection: AsyncConnection) -> list[str]:
+    return await connection.run_sync(_molbio_schema_issues_sync)
 
 
 def _without_sequence_parent_foreign_keys(create_table_sql: str) -> str:
@@ -530,6 +629,12 @@ async def run_molbio_migrations(*, engine: AsyncEngine) -> list[str]:
                     await connection.commit()
             applied.add(version)
 
+        schema_issues = await _molbio_schema_issues(connection)
+        if schema_issues:
+            raise RuntimeError(
+                "Mol Bio schema drift detected after migration: " + "; ".join(schema_issues)
+            )
+
     return sorted(applied)
 
 
@@ -551,6 +656,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
     expected_versions = [version for version, _description, _apply in MOLBIO_MIGRATIONS]
     try:
         async with target_engine.connect() as connection:
+            schema_issues = await _molbio_schema_issues(connection)
             quick_check = str((await connection.execute(text("PRAGMA quick_check"))).scalar_one())
             foreign_key_rows = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
             migrations = (
@@ -587,6 +693,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             quick_check.lower() == "ok"
             and not foreign_key_rows
             and migrations_current
+            and not schema_issues
             and triggers_current
             and sequence_parent_fk_current
             and not sequence_parent_cycles
@@ -600,6 +707,8 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "migration_count": len(versions),
             "latest_migration": versions[-1] if versions else None,
             "migrations_current": migrations_current,
+            "database_schema_current": not schema_issues,
+            "database_schema_issue_count": len(schema_issues),
             "immutable_trigger_count": len(trigger_rows),
             "immutable_triggers_current": triggers_current,
             "sequence_parent_foreign_key_current": sequence_parent_fk_current,
@@ -615,6 +724,8 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "migration_count": 0,
             "latest_migration": None,
             "migrations_current": False,
+            "database_schema_current": False,
+            "database_schema_issue_count": None,
             "immutable_trigger_count": 0,
             "immutable_triggers_current": False,
             "sequence_parent_foreign_key_current": False,

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     buildSelectionPrimer,
     buildPrimerTmRequest,
+    canonicalizePrimerPlacement,
     createSelectionSnapshot,
     getPrimerHighlightRegions,
     getPrimerRenderableSites,
@@ -159,6 +160,23 @@ test('save/reload normalization preserves circular top-level placement and split
     });
 });
 
+test('compatibility payload infers origin-wrapping placement from all ordered split sites', () => {
+    assert.deepEqual(normalizeStoredPrimerPlacement({
+        sites: [
+            { start: 12, end: 16, strand: 1, tm: 61.5 },
+            { start: 0, end: 4, strand: 1, tm: 61.5 },
+        ],
+    }), {
+        start: 12,
+        end: 4,
+        strand: 1,
+        sites: [
+            { start: 12, end: 16, strand: 1, tm: 61.5 },
+            { start: 0, end: 4, strand: 1, tm: 61.5 },
+        ],
+    });
+});
+
 test('origin-wrapping forward primer exposes every selected range as a renderable binding site', () => {
     const snapshot = createSelectionSnapshot(
         { start: 12, end: 4, clockwise: true },
@@ -244,4 +262,25 @@ test('reverse-display Plotly drag maps the displayed interval back to source coo
         selectionFromPlotRange([10, 20], 100, true),
         { start: 80, end: 90, clockwise: true, type: 'TRACK' },
     );
+});
+
+test('circular library placement crossing the origin is canonicalized into bounded ordered sites', () => {
+    const raw = { start: 14, end: 20, strand: 1 as const };
+    assert.deepEqual(canonicalizePrimerPlacement(raw, 16, true), {
+        start: 14,
+        end: 4,
+        strand: 1,
+        sites: [
+            { start: 14, end: 16, strand: 1 },
+            { start: 0, end: 4, strand: 1 },
+        ],
+    });
+    assert.deepEqual(getPrimerRenderableSites(raw, 16, true), [
+        { start: 14, end: 16, strand: 1 },
+        { start: 0, end: 4, strand: 1 },
+    ]);
+    assert.deepEqual(getPrimerHighlightRegions(raw, '#22c55e', 'wrap', 16, true), [
+        { start: 14, end: 16, color: '#22c55e', label: 'wrap' },
+        { start: 0, end: 4, color: '#22c55e', label: 'wrap' },
+    ]);
 });
