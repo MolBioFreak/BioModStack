@@ -32,6 +32,7 @@ import {
 import { clearFeatureAnnotations } from './utils/annotations';
 import {
     assertAnnotationTopology,
+    resolveAnnotationAlignmentPolicy,
     resolveAnnotationSequenceAlignment,
     transformFeatureForAlignment,
 } from './utils/annotationTransfer';
@@ -61,6 +62,7 @@ import { EMPTY_SEQUENCE } from './types';
 import {
     calculateGcPercent,
     displayStrandForMoleculeOrientation,
+    hasExplicitNucleotideStrandednessMetadata,
     inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromSequence,
     moleculeLabelForNucleotide,
@@ -1327,12 +1329,30 @@ export function MolBioToolkitV2() {
         if (!sequenceData.sequence) {
             throw new Error('Open a construct before importing annotations.');
         }
+        if (sequenceData.features.length > 0) {
+            throw new Error('This construct already has existing feature annotations. Use Clear all feature annotations before importing a published annotation set; source sets are never silently merged.');
+        }
+
+        const fileBytes = await file.arrayBuffer();
+        const sha256Hex = async (content: BufferSource): Promise<string> => {
+            const digest = await crypto.subtle.digest('SHA-256', content);
+            return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        };
+        const sourceFileSha256 = await sha256Hex(fileBytes);
 
         const result = await anyToJson(file, {
             fileName: file.name,
-            parseOptions: { inclusive1BasedStart: false, jsonType: 'json' },
+            inclusive1BasedStart: false,
+            jsonType: 'json',
         });
         const results = Array.isArray(result) ? result : [result];
+        const parserMessages = results.flatMap((entry) => Array.isArray(entry?.messages)
+            ? entry.messages.map((message: unknown) => String(message))
+            : []);
+        if (results.some((entry) => entry?.success === false)) {
+            const detail = parserMessages.length > 0 ? `: ${parserMessages.join('; ')}` : '';
+            throw new Error(`The annotated file parser reported a failure${detail}`);
+        }
         const parsedRecords = results
             .map((entry) => entry?.parsedSequence)
             .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
@@ -1350,12 +1370,26 @@ export function MolBioToolkitV2() {
             throw new Error(`Annotated-file molecule type (${importedType}) does not match the open ${sequenceData.sequenceType.toUpperCase()} construct.`);
         }
 
+        const sourceStrandednessExplicit = hasExplicitNucleotideStrandednessMetadata(parsed);
+        const alignmentPolicy = resolveAnnotationAlignmentPolicy(
+            {
+                sequenceType: moleculeMetadata.sequenceType,
+                moleculeStrandedness: moleculeMetadata.moleculeStrandedness ?? 'unknown',
+                strandednessExplicit: sourceStrandednessExplicit,
+            },
+            {
+                sequenceType: sequenceData.sequenceType,
+                moleculeStrandedness: sequenceData.moleculeStrandedness ?? 'unknown',
+                strandednessExplicit: sequenceData.moleculeStrandedness !== undefined,
+            },
+        );
         assertAnnotationTopology(Boolean(parsed.circular), sequenceData.circular);
-        const importedSequence = normalizeSequenceForType(parsed.sequence || '', importedType);
+        const importedSequence = String(parsed.sequence || '');
         const alignment = resolveAnnotationSequenceAlignment(
             importedSequence,
             sequenceData.sequence,
             sequenceData.circular,
+            alignmentPolicy,
         );
         const parsedFeatures = parsed.features || [];
         if (parsedFeatures.length === 0) {
@@ -1363,6 +1397,8 @@ export function MolBioToolkitV2() {
         }
 
         const importedAt = new Date().toISOString();
+        const sourceSequenceSha256 = await sha256Hex(new TextEncoder().encode(importedSequence));
+        const targetSequenceSha256 = await sha256Hex(new TextEncoder().encode(sequenceData.sequence));
         const importedFeatures = parsedFeatures.map((rawFeature: UntypedApiValue, index: number) => {
             const fallbackId = `annotation_import_${Date.now()}_${index}`;
             const normalized = normalizeFeatureRecord(rawFeature, fallbackId);
@@ -1373,28 +1409,41 @@ export function MolBioToolkitV2() {
                 provenance: {
                     ...(transformed.provenance || {}),
                     annotation_import: {
+                        provider: 'user_file',
+                        source_origin: 'user_provided_origin_unknown',
                         source_file: file.name,
+                        source_media_type: file.type || 'application/octet-stream',
+                        source_byte_count: file.size,
+                        source_file_sha256: sourceFileSha256,
+                        source_sequence_sha256: sourceSequenceSha256,
+                        target_sequence_sha256: targetSequenceSha256,
+                        source_topology: parsed.circular ? 'circular' : 'linear',
+                        source_sequence_type: moleculeMetadata.sequenceType,
+                        source_strandedness: moleculeMetadata.moleculeStrandedness,
+                        source_strandedness_explicit: sourceStrandednessExplicit,
+                        parser: '@teselagen/bio-parsers:anyToJson',
+                        parser_version: '0.4.32',
+                        parser_messages: parserMessages,
                         match_mode: alignment.mode,
+                        rotation_offset: alignment.rotation,
+                        reverse_complement: alignment.reverseComplement,
                         imported_at: importedAt,
+                        source_feature_record: rawFeature,
                     },
                 },
             };
         });
 
-        const mergedFeatures = normalizeFeatureList([
-            ...sequenceData.features,
-            ...importedFeatures,
-        ]).sort((left, right) => left.start - right.start || left.end - right.end || left.name.localeCompare(right.name));
-        const addedCount = Math.max(0, mergedFeatures.length - sequenceData.features.length);
+        const transferredFeatures = normalizeFeatureList(importedFeatures)
+            .sort((left, right) => left.start - right.start || left.end - right.end || left.name.localeCompare(right.name));
         setSequenceData({
             ...sequenceData,
-            features: mergedFeatures,
-        }, `Import ${importedFeatures.length} annotations from ${file.name}`);
+            features: transferredFeatures,
+        }, `Import ${transferredFeatures.length} annotations from ${file.name}`);
         setIsDirty(true);
 
-        const duplicateCount = importedFeatures.length - addedCount;
-        const duplicateMessage = duplicateCount > 0 ? `; ${duplicateCount} matched existing features and were merged` : '';
-        return `Imported ${importedFeatures.length} feature annotations from ${file.name} using ${alignment.mode.replaceAll('_', ' ')} sequence alignment${duplicateMessage}.`;
+        const parserMessage = parserMessages.length > 0 ? ` Parser messages retained: ${parserMessages.length}.` : '';
+        return `Imported ${transferredFeatures.length} feature annotations from ${file.name} using ${alignment.mode.replaceAll('_', ' ')} sequence alignment.${parserMessage}`;
     }, [sequenceData, setSequenceData]);
 
     // Run auto-annotation with user settings
