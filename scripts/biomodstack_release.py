@@ -14,7 +14,6 @@ import json
 import os
 import re
 import subprocess
-import shutil
 import sys
 import tempfile
 import urllib.error
@@ -259,17 +258,10 @@ class ProductionReleaseBackend:
     def build_images(self, identity: BuildIdentity) -> None:
         self.identity = identity
         _validated_source_revision(self.repo_root, identity.revision)
-        materialized_root = Path(tempfile.mkdtemp(prefix="biomodstack-release-source-"))
-        materialized_root.rmdir()
-        self._run(["git", "worktree", "add", "--detach", str(materialized_root), identity.revision])
-        try:
+        with tempfile.TemporaryDirectory(prefix="biomodstack-release-source-") as temporary:
+            materialized_root = Path(temporary)
+            _materialize_git_revision(self.repo_root, identity.revision, materialized_root)
             self._build_materialized_images(materialized_root, identity)
-        finally:
-            self._run(
-                ["git", "worktree", "remove", "--force", str(materialized_root)],
-                check=False,
-            )
-            shutil.rmtree(materialized_root, ignore_errors=True)
 
     @staticmethod
     def _build_materialized_images(materialized_root: Path, identity: BuildIdentity) -> None:
@@ -425,6 +417,74 @@ def _git_revision(repo_root: Path) -> str:
         text=True,
     )
     return completed.stdout.strip()
+
+
+def _materialize_git_revision(repo_root: Path, revision: str, destination: Path) -> None:
+    """Write exact committed object bytes without invoking checkout machinery."""
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+        }
+    )
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", revision],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+    ).stdout
+    entries: list[tuple[bytes, bytes, Path]] = []
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, object_type, object_id = metadata.split(b" ", 2)
+        relative_path = Path(os.fsdecode(raw_path))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ReleaseValidationError(f"unsafe path in release source: {relative_path}")
+        if object_type != b"blob" or mode not in {b"100644", b"100755", b"120000"}:
+            raise ReleaseValidationError(
+                f"unsupported Git entry in release source: {mode.decode()} {object_type.decode()} {relative_path}"
+            )
+        entries.append((mode, object_id, relative_path))
+
+    process = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        for mode, object_id, relative_path in entries:
+            process.stdin.write(object_id + b"\n")
+            process.stdin.flush()
+            header = process.stdout.readline().rstrip(b"\n").split(b" ")
+            if len(header) != 3 or header[1] != b"blob":
+                raise ReleaseValidationError(f"cannot read committed blob for {relative_path}")
+            size = int(header[2])
+            content = process.stdout.read(size)
+            if len(content) != size or process.stdout.read(1) != b"\n":
+                raise ReleaseValidationError(f"truncated committed blob for {relative_path}")
+            target = destination / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if mode == b"120000":
+                os.symlink(os.fsdecode(content), target)
+            else:
+                target.write_bytes(content)
+                target.chmod(0o755 if mode == b"100755" else 0o644)
+        process.stdin.close()
+        if process.wait() != 0:
+            raise ReleaseValidationError("git cat-file failed while materializing release source")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 def _validated_source_revision(repo_root: Path, requested_revision: str | None = None) -> str:

@@ -849,6 +849,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             maxVram,
             local.vramLimitMb,
             safetyMb,
+            existing.threshold ?? config.global.target_vram_fill,
         );
 
         try {
