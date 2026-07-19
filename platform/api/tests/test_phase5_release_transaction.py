@@ -52,40 +52,42 @@ def test_release_rejects_revision_that_is_not_current_head(tmp_path: Path) -> No
         release._validated_source_revision(tmp_path, "not-a-revision")
 
 
-def test_release_builds_from_detached_committed_materialization(tmp_path: Path, monkeypatch) -> None:
+def test_release_materializes_exact_blobs_without_hooks_or_private_attributes(
+    tmp_path: Path, monkeypatch
+) -> None:
     head = _init_git_repo(tmp_path)
     (tmp_path / "compose.core-runtime.yml").write_text("services: {}\n", encoding="utf-8")
-    subprocess.run(["git", "add", "compose.core-runtime.yml"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked-link").symlink_to("tracked.txt")
+    subprocess.run(
+        ["git", "add", "compose.core-runtime.yml", "tracked-link"], cwd=tmp_path, check=True
+    )
     subprocess.run(["git", "commit", "-qm", "compose"], cwd=tmp_path, check=True)
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
+    hook = tmp_path / ".git/hooks/post-checkout"
+    hook.write_text("#!/bin/sh\nprintf 'hook-mutated\\n' > tracked.txt\n", encoding="utf-8")
+    hook.chmod(0o755)
+    info_attributes = tmp_path / ".git/info/attributes"
+    info_attributes.write_text("tracked.txt export-ignore\n", encoding="utf-8")
+    subprocess.run(["git", "config", "core.symlinks", "false"], cwd=tmp_path, check=True)
     backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
     observed: dict[str, object] = {}
 
     def fake_build(materialized_root: Path, identity: release.BuildIdentity) -> None:
         observed["root"] = materialized_root
-        observed["revision"] = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=materialized_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        observed["status"] = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=materialized_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        observed["tracked"] = (materialized_root / "tracked.txt").read_text(encoding="utf-8")
+        observed["has_git_metadata"] = (materialized_root / ".git").exists()
+        observed["link_target"] = (materialized_root / "tracked-link").readlink()
 
     monkeypatch.setattr(backend, "_build_materialized_images", fake_build)
     identity = release.BuildIdentity(head, "materialized", "2026-07-19T00:00:00Z")
     backend.build_images(identity)
 
-    assert observed["revision"] == head
-    assert observed["status"] == ""
+    assert observed["tracked"] == "committed\n"
+    assert observed["has_git_metadata"] is False
+    assert observed["link_target"] == Path("tracked.txt")
+    assert (tmp_path / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
     materialized_root = observed["root"]
     assert isinstance(materialized_root, Path)
     assert not materialized_root.exists()
