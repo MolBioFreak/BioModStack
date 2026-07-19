@@ -85,7 +85,7 @@ export function buildUiDiagnosticsPayload(input: UiDiagnosticsInput): UiDiagnost
     'Revision skew',
     frontendRevision && apiRevision
       ? (frontendRevision === apiRevision ? 'none detected' : 'detected')
-      : 'unknown',
+      : 'indeterminate',
   );
 
   if (input.shellContext) {

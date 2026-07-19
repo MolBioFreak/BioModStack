@@ -46,7 +46,7 @@ test('ui diagnostics payload includes channel-critical details without dumping a
   assert.doesNotMatch(payload.text, /SECRET|TOKEN|PASSWORD|KEY=/i);
 });
 
-test('ui diagnostics distinguishes matching revisions from unknown identity', () => {
+test('ui diagnostics distinguishes matching revisions from indeterminate identity', () => {
   const base = {
     surfaceLabel: 'Stable hosted web',
     origin: 'http://127.0.0.1:18080',
@@ -62,14 +62,14 @@ test('ui diagnostics distinguishes matching revisions from unknown identity', ()
     frontendBuildRevision: 'abc1234',
     apiBuildRevision: 'abc1234',
   });
-  const unknown = buildUiDiagnosticsPayload({
+  const indeterminate = buildUiDiagnosticsPayload({
     ...base,
     frontendBuildRevision: 'unknown',
     apiBuildRevision: 'abc1234',
   });
 
   assert.equal(matching.fields['Revision skew'], 'none detected');
-  assert.equal(unknown.fields['Revision skew'], 'unknown');
+  assert.equal(indeterminate.fields['Revision skew'], 'indeterminate');
 });
 
 test('layout exposes one far-left diagnostics top-bar entry with copy support', () => {
