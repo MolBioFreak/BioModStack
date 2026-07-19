@@ -14,7 +14,9 @@ import json
 import os
 import re
 import subprocess
+import shutil
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -82,6 +84,7 @@ class BuildIdentity:
 class ReleaseBackend(Protocol):
     def snapshot_known_good(self) -> Mapping[str, Any]: ...
     def build_images(self, identity: BuildIdentity) -> None: ...
+    def verify_generated_ownership(self) -> None: ...
     def verify_image_provenance(self, identity: BuildIdentity) -> None: ...
     def install_units(self) -> None: ...
     def restart_runtime(self) -> None: ...
@@ -94,6 +97,7 @@ def release_plan() -> tuple[str, ...]:
     return (
         "snapshot-known-good",
         "build-images-explicitly",
+        "verify-generated-ownership",
         "verify-image-provenance",
         "render-install-units",
         "restart-container-runtime",
@@ -120,6 +124,7 @@ def execute_release(backend: ReleaseBackend, identity: BuildIdentity) -> None:
     snapshot = backend.snapshot_known_good()
     try:
         backend.build_images(identity)
+        backend.verify_generated_ownership()
         backend.verify_image_provenance(identity)
         backend.install_units()
         backend.restart_runtime()
@@ -253,12 +258,45 @@ class ProductionReleaseBackend:
 
     def build_images(self, identity: BuildIdentity) -> None:
         self.identity = identity
-        self._compose(
-            "build",
-            "--pull",
-            *BUILD_SERVICES,
-            env=identity.as_environment(),
-            capture_output=False,
+        _validated_source_revision(self.repo_root, identity.revision)
+        materialized_root = Path(tempfile.mkdtemp(prefix="biomodstack-release-source-"))
+        materialized_root.rmdir()
+        self._run(["git", "worktree", "add", "--detach", str(materialized_root), identity.revision])
+        try:
+            self._build_materialized_images(materialized_root, identity)
+        finally:
+            self._run(
+                ["git", "worktree", "remove", "--force", str(materialized_root)],
+                check=False,
+            )
+            shutil.rmtree(materialized_root, ignore_errors=True)
+
+    @staticmethod
+    def _build_materialized_images(materialized_root: Path, identity: BuildIdentity) -> None:
+        merged_env = os.environ.copy()
+        merged_env.update(identity.as_environment())
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(materialized_root / "compose.core-runtime.yml"),
+                "build",
+                "--pull",
+                *BUILD_SERVICES,
+            ],
+            cwd=materialized_root,
+            env=merged_env,
+            check=True,
+        )
+
+    def verify_generated_ownership(self) -> None:
+        self._run(
+            [
+                sys.executable,
+                str(self.repo_root / "scripts" / "normalize_generated_ownership.py"),
+                "--check",
+            ]
         )
 
     def verify_image_provenance(self, identity: BuildIdentity) -> None:
@@ -389,6 +427,38 @@ def _git_revision(repo_root: Path) -> str:
     return completed.stdout.strip()
 
 
+def _validated_source_revision(repo_root: Path, requested_revision: str | None = None) -> str:
+    """Bind release identity to the exact clean working tree that Compose will build."""
+    head = _git_revision(repo_root)
+    if requested_revision is not None:
+        try:
+            completed = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{requested_revision}^{{commit}}"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise ReleaseValidationError("--revision must resolve to a Git commit") from exc
+        if completed.stdout.strip() != head:
+            raise ReleaseValidationError(
+                "--revision must resolve to the current HEAD because release builds the current checkout"
+            )
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if status:
+        raise ReleaseValidationError(
+            "release checkout must be clean; commit or remove tracked and untracked changes before deploy"
+        )
+    return head
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -409,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.confirm_runtime_activation:
         raise SystemExit("deploy requires exact --confirm-runtime-activation")
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    revision = args.revision or _git_revision(REPO_ROOT)
+    revision = _validated_source_revision(REPO_ROOT, args.revision)
     identity = BuildIdentity(
         revision=revision,
         build_id=args.build_id or f"{revision[:12]}-{now}",
