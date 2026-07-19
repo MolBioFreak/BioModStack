@@ -12,4 +12,5 @@ From: nvcr.io/nvidia/gromacs@sha256:8ee1822b8a34ace738e000a6c9cf8bc9a8abdbbf49e8
 
 %test
     command -v gmx
+    command -v python3
     gmx mdrun -version

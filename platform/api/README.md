@@ -118,10 +118,10 @@ GPU scheduler state defaults to `${BMS_DATA}/scheduler/gpu_config.json`. Set
 directory; the service resolves it at process start, so restart the scheduling
 authority after changing that environment variable.
 
-Nextflow launcher logs are bounded in memory and compacted on disk while jobs
-are active. Deployments can tune the limits with:
+Nextflow launcher logs remain append-only and durable on disk while diagnostic
+tails are bounded in memory. Incremental reads are also byte-bounded. Deployments
+can tune the in-memory/read limits with:
 
-- `BMS_NEXTFLOW_LOG_MAX_BYTES` (active `nextflow.log` disk cap)
 - `BMS_NEXTFLOW_LOG_READ_BYTES` (maximum incremental read size)
 - `BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES` (in-memory diagnostic tail bytes)
 - `BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES` (in-memory diagnostic tail lines)
@@ -142,11 +142,6 @@ Common env vars include:
 - `BMS_COLABFOLD_DB`
 - `BMS_SABDAB_CACHE`
 - `BMS_WORKFLOW_ADAPTER_URL`
-- `BMS_SCHEDULER_STATE_DIR`
-- `BMS_NEXTFLOW_LOG_MAX_BYTES`
-- `BMS_NEXTFLOW_LOG_READ_BYTES`
-- `BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES`
-- `BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES`
 - `BMS_MOBILE_UI_UPDATES_DIR`
 - `BMS_FAN_CONTROL_BACKEND`
 - `CORS_ORIGINS`
