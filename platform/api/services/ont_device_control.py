@@ -35,7 +35,7 @@ ONT_DEVICE_CONTROL_CAPABILITIES: dict[str, Any] = {
         "monitor_run",
         "handoff_outputs_to_analysis",
     ],
-    "analysis_handoff_inputs": ("pod5", "fast5", "fastq", "bam"),
+    "analysis_handoff_inputs": ("pod5", "fastq", "bam"),
 }
 
 
@@ -82,8 +82,14 @@ def build_analysis_handoff(*, workflow_id: str, run_output_dir: str | Path, prim
     spec = get_ont_workflow_spec(workflow_id)
     output_path = Path(run_output_dir).expanduser()
     input_kind = str(primary_input_kind or "").strip().lower()
-    if input_kind not in ONT_DEVICE_CONTROL_CAPABILITIES["analysis_handoff_inputs"]:
-        raise ValueError(f"unsupported ONT handoff input kind: {primary_input_kind!r}")
+    if (
+        input_kind not in ONT_DEVICE_CONTROL_CAPABILITIES["analysis_handoff_inputs"]
+        or input_kind not in spec.input_modes
+    ):
+        raise ValueError(
+            f"workflow {spec.workflow_id!r} does not accept ONT input kind: "
+            f"{primary_input_kind!r}"
+        )
 
     return {
         "workflow_id": spec.workflow_id,
