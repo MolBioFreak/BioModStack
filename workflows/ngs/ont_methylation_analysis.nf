@@ -73,7 +73,7 @@ workflow ONT_METHYLATION_ANALYSIS {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { ignoredValue ->
+        DoradoBasecall.out.bam.subscribe { _ ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -83,7 +83,7 @@ workflow ONT_METHYLATION_ANALYSIS {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { ignoredValue -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ -> }
         }
 
         if (runModkit) {
@@ -92,7 +92,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             Pod5DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
             Pod5ValidateModifiedBaseBam(Pod5DoradoAlign.out.aligned)
             Pod5ModkitPileup(Pod5ValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            Pod5ModkitPileup.out.log.subscribe { ignoredValue ->
+            Pod5ModkitPileup.out.log.subscribe { _ ->
                 reportStage(params, "modkit_pileup", [
                     "${params.out_dir}/methylation/modified_base_input.bam",
                     "${params.out_dir}/methylation/modified_base_input.bam.bai",
@@ -103,7 +103,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             }
 
             Pod5ModkitSummary(Pod5ValidateModifiedBaseBam.out.bam)
-            Pod5ModkitSummary.out.log.subscribe { ignoredValue ->
+            Pod5ModkitSummary.out.log.subscribe { _ ->
                 reportStage(params, "modkit_summary", [
                     "${params.out_dir}/methylation/modkit_summary.tsv",
                     "${params.out_dir}/methylation/summary.log",
@@ -140,13 +140,13 @@ workflow ONT_METHYLATION_ANALYSIS {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { ignoredValue -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ -> }
         }
 
         if (runModkit) {
             BamValidateModifiedBaseBam(prepared_bam)
             BamModkitPileup(BamValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            BamModkitPileup.out.log.subscribe { ignoredValue ->
+            BamModkitPileup.out.log.subscribe { _ ->
                 reportStage(params, "modkit_pileup", [
                     "${params.out_dir}/methylation/modified_base_input.bam",
                     "${params.out_dir}/methylation/modified_base_input.bam.bai",
@@ -157,7 +157,7 @@ workflow ONT_METHYLATION_ANALYSIS {
             }
 
             BamModkitSummary(BamValidateModifiedBaseBam.out.bam)
-            BamModkitSummary.out.log.subscribe { ignoredValue ->
+            BamModkitSummary.out.log.subscribe { _ ->
                 reportStage(params, "modkit_summary", [
                     "${params.out_dir}/methylation/modkit_summary.tsv",
                     "${params.out_dir}/methylation/summary.log",
