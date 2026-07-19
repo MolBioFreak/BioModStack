@@ -911,8 +911,33 @@ def validate_contract_bundle(bundle: Mapping[str, Any], *, resume_descriptor: Ma
             raise ContractValidationError("ensemble is not bound to request identity/backend")
         if ensemble["request_sha256"] != request["request_sha256"]:
             raise ContractValidationError("ensemble request hash mismatch")
-    if snapshot and ensemble and ensemble["source_snapshot_sha256"] != canonical_sha256(snapshot):
-        raise ContractValidationError("ensemble source snapshot hash mismatch")
+    if request and snapshot:
+        request_target_ids = {target["target_id"] for target in request["targets"]}
+        if snapshot["target_id"] not in request_target_ids:
+            raise ContractValidationError(
+                "complex snapshot target is not authorized by request targets"
+            )
+    if snapshot and ensemble:
+        if ensemble["source_snapshot_sha256"] != canonical_sha256(snapshot):
+            raise ContractValidationError("ensemble source snapshot hash mismatch")
+        snapshot_candidate_ids = {
+            mapping["candidate_id"] for mapping in snapshot["instance_mappings"]
+        }
+        ensemble_candidate_ids = {
+            candidate["candidate_id"] for candidate in ensemble["candidates"]
+        }
+        if snapshot_candidate_ids != ensemble_candidate_ids:
+            raise ContractValidationError(
+                "complex snapshot candidate mappings do not exactly match ensemble candidates"
+            )
+        ensemble_target_ids = {
+            candidate["backend_coordinates"]["target_id"]
+            for candidate in ensemble["candidates"]
+        }
+        if ensemble_target_ids != {snapshot["target_id"]}:
+            raise ContractValidationError(
+                "complex snapshot target does not exactly match ensemble candidate targets"
+            )
     if native and ensemble:
         if ensemble["native_manifest_sha256"] != canonical_sha256(native):
             raise ContractValidationError("ensemble native manifest hash mismatch")
@@ -1179,10 +1204,24 @@ class FeaturePolicy(_StrictModel):
         "paired_regenerate_changed_protein_v1",
         "features_disabled_control_v1",
     ]
+    per_entity_hashes: dict[
+        str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    ] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_null_entity_hashes(cls, value: Any) -> Any:
+        if (
+            isinstance(value, Mapping)
+            and "per_entity_hashes" in value
+            and value["per_entity_hashes"] is None
+        ):
+            raise ValueError("per_entity_hashes must be an object when present")
+        return value
 
 
 def validate_feature_policy(value: Any) -> dict[str, Any]:
-    return FeaturePolicy.model_validate(value).model_dump(mode="json")
+    return FeaturePolicy.model_validate(value).model_dump(mode="json", exclude_none=True)
 
 
 def feature_policy_sha256(value: Any) -> str:
