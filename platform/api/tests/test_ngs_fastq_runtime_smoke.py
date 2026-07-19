@@ -7,6 +7,7 @@ Two execution paths:
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -77,14 +78,23 @@ def _detect_execution_mode() -> str:
 
 def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     """Run tiny FASTQ+reference through Nextflow and assert advertised outputs."""
-    _require_runtime_command("nextflow")
+    configured_nextflow = os.environ.get("BMS_NEXTFLOW_BIN")
+    if configured_nextflow:
+        nextflow_bin = Path(configured_nextflow)
+        if not (nextflow_bin.is_file() and os.access(nextflow_bin, os.X_OK)):
+            pytest.fail(f"BMS_NEXTFLOW_BIN is not executable: {nextflow_bin}")
+    else:
+        _require_runtime_command("nextflow")
+        nextflow_bin = Path(_which("nextflow") or "nextflow")
 
     mode = _detect_execution_mode()
     assert mode in ("container", "local"), f"unexpected mode: {mode}"
 
-    # ── Fixtures inside repo (visible to container) ──────────────────
-    fixture_dir = REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
-    fixture_dir.mkdir(exist_ok=True)
+    # Explicit worktree-safe launchers can use pytest's disposable directory.
+    # The legacy container wrapper only mounts /tmp and its configured checkout,
+    # so retain the repository fixture path for that compatibility mode.
+    fixture_dir = tmp_path if configured_nextflow else REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     ref = fixture_dir / f"ref_{ts}.fasta"
@@ -98,7 +108,7 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
 
     # ── Build command ────────────────────────────────────────────────
     cmd = [
-        "nextflow",
+        str(nextflow_bin),
         "run",
         str(REPO_ROOT / "workflows/ngs/ont_fastq_qc.nf"),
         "-w",
@@ -188,4 +198,28 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     assert missing == [], f"Missing expected artifacts: {missing}"
 
     assert (out_dir / "fastq_qc/per_base_support.tsv").stat().st_size > 0
-    assert (out_dir / "fastq_qc/qc_manifest.json").stat().st_size > 0
+    manifest_path = out_dir / "fastq_qc/qc_manifest.json"
+    assert manifest_path.stat().st_size > 0
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["artifact_schema_version"] == 2
+    assert manifest["consensus"]["fallback"] is False
+    assert manifest["consensus"]["provenance"]["source"] == "aligned_reads"
+    assert manifest["sequence_digests"]["expected_reference_sha256"]
+    assert manifest["sequence_digests"]["observed_consensus_sha256"]
+    assert manifest["interpretation"]["verified_construct_status"] == "review_required"
+
+    fastq_dir = manifest_path.parent
+    generated_paths = {
+        path.name for path in fastq_dir.iterdir() if path.is_file() and path.name != manifest_path.name
+    }
+    declared_artifacts = [artifact for artifact in manifest["artifacts"] if artifact.get("path")]
+    declared_paths = {artifact["path"] for artifact in declared_artifacts}
+    assert declared_paths == generated_paths, {
+        "generated_but_undeclared": sorted(generated_paths - declared_paths),
+        "declared_but_missing": sorted(declared_paths - generated_paths),
+    }
+    assert all(artifact["state"] == "present" for artifact in declared_artifacts)
+    assert all(
+        artifact["state"] != "missing_after_workflow" for artifact in manifest["artifacts"]
+    )

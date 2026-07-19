@@ -10,6 +10,7 @@ nextflow.enable.dsl = 2
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
+include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -101,6 +102,25 @@ workflow ONT_FASTQ_QC {
 
     if (runFastqQc) {
         FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
+        ConstructVerify(
+            FastqPlasmidQC.out.reference,
+            FastqPlasmidQC.out.verification_input,
+            FastqPlasmidQC.out.per_base_support,
+            FastqAlign.out.aligned,
+            FastqPlasmidQC.out.alignment_stats,
+            BuildDimerCanonicalOutputs.out.breakpoint_call,
+            BuildDimerCanonicalOutputs.out.secondary_summary,
+        )
+        ConstructVerify.out.manifest.subscribe { _ ->
+            reportStage(params, "construct_verification", [
+                "${params.out_dir}/verification/qc_manifest.json",
+                "${params.out_dir}/verification/verification_summary.tsv",
+                "${params.out_dir}/verification/variants.vcf",
+                "${params.out_dir}/verification/per_base_metrics.tsv",
+                "${params.out_dir}/verification/evidence.html",
+                "${params.out_dir}/verification/topology_evidence.json",
+            ])
+        }
         FastqPlasmidQC.out.summary.subscribe { _ ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",

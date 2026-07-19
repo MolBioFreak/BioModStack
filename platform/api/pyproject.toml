@@ -38,6 +38,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4.26.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-randomly>=3.15.0",

@@ -87,6 +87,7 @@ modes:
     description: Dorado DNA basecalling from existing POD5/FAST5 run outputs.
     params:
       - pod5_dir
+      - reference_fasta
       - dorado_model
       - dorado_device
       - min_qscore
@@ -99,6 +100,7 @@ modes:
     description: Dorado RNA basecalling from existing ONT run outputs.
     params:
       - pod5_dir
+      - reference_fasta
       - dorado_model
       - dorado_device
       - min_qscore
@@ -108,10 +110,20 @@ modes:
 
   - id: plasmid_qc
     name: ONT Plasmid QC
-    description: FASTQ-to-reference plasmid QC with per-base support, consensus, and IGV/report artifacts.
+    description: Reference-backed plasmid QC from exactly one POD5, BAM, or FASTQ input.
     params:
+      - pod5_dir
+      - bam_path
       - fastq_path
       - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - bam_force_realign
+      - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
       - min_fastq_read_length
@@ -123,10 +135,20 @@ modes:
 
   - id: construct_screening
     name: ONT Construct Screening
-    description: Expected-construct screening over ONT FASTQ reads.
+    description: Expected-construct screening from exactly one POD5, BAM, or FASTQ input.
     params:
+      - pod5_dir
+      - bam_path
       - fastq_path
       - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - bam_force_realign
+      - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
       - min_fastq_read_length
@@ -203,90 +225,6 @@ modes:
       - wf_clone_min_quality
       - wf_clone_assembly_tool
 
-  - id: plasmid_qc
-    name: Plasmid QC
-    description: Reference-optional plasmid QC from POD5/BAM/FASTQ input
-    params:
-      - pod5_dir
-      - bam_path
-      - fastq_path
-      - reference_fasta
-      - dorado_model
-      - dorado_device
-      - min_qscore
-      - trim_adapters
-      - emit_summary
-      - expected_plasmid_size
-      - min_fastq_read_length
-      - fastq_minimap2_preset
-      - fastq_minimap2_allow_secondary
-      - igv_track_window_bp
-      - igv_report_max_sites
-      - igv_report_flanking_bp
-
-  - id: basecall_dna
-    name: DNA Basecalling
-    description: Dorado DNA basecalling from POD5 inputs
-    params:
-      - pod5_dir
-      - reference_fasta
-      - dorado_model
-      - dorado_device
-      - min_qscore
-      - trim_adapters
-      - emit_summary
-
-  - id: basecall_rna
-    name: RNA Basecalling
-    description: Dorado RNA basecalling from POD5 inputs
-    params:
-      - pod5_dir
-      - reference_fasta
-      - dorado_model
-      - dorado_device
-      - min_qscore
-      - trim_adapters
-      - emit_summary
-
-  - id: fastq_qc
-    name: FASTQ Plasmid QC
-    description: FASTQ-only plasmid QC with alignment and evidence
-    params:
-      - fastq_path
-      - reference_fasta
-      - expected_plasmid_size
-      - min_fastq_read_length
-      - fastq_minimap2_preset
-      - fastq_minimap2_allow_secondary
-      - igv_track_window_bp
-      - igv_report_max_sites
-      - igv_report_flanking_bp
-
-  - id: construct_screening
-    name: Construct Screening
-    description: Clone validation construct QC from POD5/BAM/FASTQ
-    params:
-      - pod5_dir
-      - bam_path
-      - fastq_path
-      - reference_fasta
-      - dorado_model
-      - dorado_device
-      - min_qscore
-      - trim_adapters
-      - emit_summary
-      - wf_clone_workflow_dir
-      - wf_clone_source
-      - wf_clone_revision
-      - wf_clone_profile
-      - wf_clone_sample
-      - wf_clone_large_construct
-      - wf_clone_approx_size
-      - wf_clone_assm_coverage
-      - wf_clone_trim_length
-      - wf_clone_min_quality
-      - wf_clone_assembly_tool
-
 params:
   - name: pod5_dir
     type: directory
@@ -327,19 +265,17 @@ params:
 
   - name: dorado_model
     type: string
-    description: Dorado basecalling model preset
+    description: Dorado concrete model identifier or reviewed preset
     required: false
     default: sup
-    enum:
-      - sup
-      - hac
-      - fast
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$'
 
   - name: dorado_device
     type: string
     description: CUDA device selector passed to Dorado (e.g., cuda:0, cuda:all)
     required: false
     default: cuda:0
+    pattern: '^(?:cuda:(?:all|auto|[0-9]+)|cpu|metal)$'
 
   - name: modified_bases
     type: string

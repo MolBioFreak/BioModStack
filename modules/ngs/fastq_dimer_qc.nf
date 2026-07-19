@@ -131,6 +131,7 @@ process FastqDimerAnalysis {
     path "dimer_reference.fasta.fai", emit: dimer_reference_index
     path "dimer_analysis_summary.tsv", emit: summary
     path "dimer_analysis.log", emit: log
+    path "qc_manifest.json", emit: qc_manifest
     path "dimer_candidates.aligned.bam", emit: dimer_bam, optional: true
     path "dimer_candidates.aligned.bam.bai", emit: dimer_bai, optional: true
     path "dimer_consensus.fasta", emit: consensus, optional: true
@@ -1367,6 +1368,8 @@ process FastqDimerAnalysis {
         echo "Breakpoint model: \${breakpoint_model_status}; screened=\${screened_primary_breakpoint_position_mod_ref} support=\${screened_primary_breakpoint_support_reads} conf=\${screened_primary_breakpoint_confidence}"
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
+
+    python3 "${codeRoot}/scripts/build_alignment_session_manifest.py"
         """
     }
 process BuildDimerCanonicalOutputs {

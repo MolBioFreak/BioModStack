@@ -9,6 +9,8 @@ not get hidden inside a methylation-era pipeline branch.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 from typing import Any, Mapping
 
 from services.sequence_qc_manifest import (
@@ -21,6 +23,33 @@ ONT_NGS_FAMILY_ID = "ont_ngs"
 ANALYSIS_OWNER = "nextflow_analysis"
 DEVICE_CONTROL_OWNER = "bms_service_api"
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
+
+
+def normalized_fasta_sequence_sha256(path: Path) -> str:
+    """Hash one normalized FASTA record without trusting headers or line wrapping."""
+    records = 0
+    chunks: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                records += 1
+                if records > 1:
+                    raise ValueError("reference_fasta must contain exactly one record")
+                continue
+            if records != 1:
+                raise ValueError("reference_fasta sequence appears before its header")
+            chunks.append(line.upper())
+    sequence = "".join(chunks)
+    if records != 1 or not sequence:
+        raise ValueError("reference_fasta must contain one non-empty record")
+    invalid = sorted(set(sequence) - set("ACGTN"))
+    if invalid:
+        raise ValueError(f"reference_fasta contains unsupported symbols: {''.join(invalid)}")
+    return hashlib.sha256(sequence.encode("ascii")).hexdigest()
+
 
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "molecule_types": ("dna", "rna"),
@@ -335,7 +364,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if normalized.get("dorado_model"):
         normalized["dorado_model"] = normalized["dorado_model"]
     elif molecule_type == "rna":
-        normalized["dorado_model"] = f"rna004_{quality_mode}"
+        normalized["dorado_model"] = "rna004_130bps_sup@v5.2.0"
     else:
         normalized["dorado_model"] = quality_mode
     normalized["dorado_basecall_mode"] = basecall_mode

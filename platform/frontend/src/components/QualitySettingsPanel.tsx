@@ -191,7 +191,7 @@ const MSA_PRESET_INFO: Record<QualitySettings['msa_preset'], { label: string; de
 interface QualitySettingsPanelProps {
     settings: QualitySettings;
     onSettingsChange: (settings: QualitySettings) => void;
-    structureValidator?: 'boltz2' | 'protenix';
+    structureValidator?: 'boltz2' | 'protenix' | 'esmfold2';
     allowPostPpiFlowRetry?: boolean;
     showRfantibodySettings?: boolean;
     showStructureValidationSettings?: boolean;
