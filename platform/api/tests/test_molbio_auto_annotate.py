@@ -105,3 +105,41 @@ def test_plannotate_empty_hit_error_is_treated_as_no_features() -> None:
 
     assert molbio_ops._plannotate_error_means_no_features(stderr, "") is True
     assert molbio_ops._plannotate_error_means_no_features("blast crashed", "") is False
+
+
+@pytest.mark.asyncio
+async def test_auto_annotate_subprocess_does_not_block_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import subprocess
+    import time
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        molbio_ops,
+        "_build_plannotate_command",
+        lambda **_kwargs: ["fake-plannotate"],
+    )
+
+    def slow_run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        time.sleep(0.15)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", slow_run)
+    task = asyncio.create_task(
+        molbio_ops.auto_annotate(
+            molbio_ops.AutoAnnotateRequest(
+                sequence="ATGCGT",
+                is_linear=True,
+                detailed=False,
+                min_identity=50.0,
+            ),
+        ),
+    )
+    await asyncio.sleep(0.02)
+
+    assert task.done() is False
+    response = await task
+    assert response.features == []
+    assert response.message == "No features detected"

@@ -21,9 +21,9 @@ python scripts/biomodstack_release.py deploy --confirm-runtime-activation
 The deploy transaction:
 
 1. derives a full 40-character Git SHA plus UTC build ID/time;
-2. snapshots all five known-good image IDs and generated user-unit contents;
-3. explicitly rebuilds `bms-api`, `bms-host-agent`, `bms-cpu-power`,
-   `bms-stats-tools`, and `bms-web` with `--pull`;
+2. snapshots all four known-good image IDs and generated user-unit contents;
+3. explicitly rebuilds `bms-api`, `bms-host-agent`, `bms-cpu-power`, and
+   `bms-web` with `--pull`;
 4. verifies every built image's OCI revision label before activation;
 5. renders and installs the repository's existing user-unit set;
 6. restarts the existing container-runtime lifecycle boundary;
@@ -47,8 +47,6 @@ rollback cannot exist before the first successful release.
 - `liveness.alive`: the API process can answer;
 - `readiness.checks.core_database`: core SQLite can execute `SELECT 1`;
 - `readiness.checks.molbio_database`: molecular-biology DB health;
-- `readiness.checks.analytical_database`: required only when the assay DB
-  feature is enabled;
 - `readiness.checks.workflow_adapter`: required in core-runtime/container mode,
   but explicitly `not_required` in native development mode;
 - `readiness.checks.frontend`: the configured frontend URL answers; and
@@ -86,11 +84,9 @@ positive integers. Invalid or injection-shaped values are rejected.
 
 | Service | Default memory | Default PIDs |
 |---|---:|---:|
-| bms-db | 8g | 1024 |
 | bms-api | 16g | 4096 |
 | bms-host-agent | 2g | 512 |
 | bms-cpu-power | 1g | 256 |
-| bms-stats-tools | 32g | 4096 |
 | bms-web | 2g | 512 |
 
 Override names follow `BMS_<SERVICE>_MEMORY_LIMIT` and

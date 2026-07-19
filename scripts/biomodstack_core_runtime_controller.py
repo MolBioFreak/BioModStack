@@ -25,20 +25,16 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = PROJECT_ROOT / "compose.core-runtime.yml"
 ALL_SERVICES = (
-    "bms-db",
     "bms-api",
     "bms-host-agent",
     "bms-cpu-power",
-    "bms-stats-tools",
     "bms-web",
 )
-DEFAULT_SERVICES = tuple(service for service in ALL_SERVICES if service != "bms-stats-tools")
-OPTIONAL_PROFILE_SERVICES: dict[str, tuple[str, ...]] = {"stats-tools": ("bms-stats-tools",)}
+DEFAULT_SERVICES = ALL_SERVICES
+OPTIONAL_PROFILE_SERVICES: dict[str, tuple[str, ...]] = {}
 SERVICE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
-    "bms-stats-tools": ("bms-db",),
     "bms-web": ("bms-api",),
 }
-DATABASE_SERVICE = "bms-db"
 MAX_RECOVERIES = int(os.getenv("BMS_RUNTIME_MAX_RECOVERIES", "2"))
 RECOVERY_WINDOW_SECONDS = int(os.getenv("BMS_RUNTIME_RECOVERY_WINDOW_SECONDS", "300"))
 POLL_SECONDS = float(os.getenv("BMS_RUNTIME_SUPERVISOR_POLL_SECONDS", "10"))
@@ -209,12 +205,6 @@ def recovery_attempts(state: Mapping[str, Any], service: str, *, now: float | No
 
 
 def reserve_recovery(service: str, *, now: float | None = None) -> dict[str, Any]:
-    if service == DATABASE_SERVICE:
-        raise RuntimeBlockedError(
-            "database-recovery-requires-operator",
-            "Automatic database restart is disabled to protect persistent state",
-            context={"service": service},
-        )
     current = time.time() if now is None else now
     state = read_state()
     attempts = recovery_attempts(state, service, now=current)
@@ -258,8 +248,6 @@ def expected_container_names() -> dict[str, str]:
         "bms-web": "biomodstack-web",
         "bms-host-agent": "biomodstack-host-agent",
         "bms-cpu-power": "biomodstack-cpu-power",
-        "bms-stats-tools": "biomodstack-stats-tools",
-        "bms-db": "biomodstack-db",
     }
 
 

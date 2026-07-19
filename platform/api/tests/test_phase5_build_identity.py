@@ -49,7 +49,6 @@ def test_every_locally_built_compose_service_receives_build_identity_and_stable_
         "bms-api",
         "bms-host-agent",
         "bms-cpu-power",
-        "bms-stats-tools",
         "bms-web",
     }
     for service_name, service in locally_built.items():
@@ -62,7 +61,6 @@ def test_every_locally_built_compose_service_receives_build_identity_and_stable_
         "bms-api": "${BMS_API_IMAGE:-biomodstack/api:local}",
         "bms-host-agent": "${BMS_HOST_AGENT_IMAGE:-biomodstack/host-agent:local}",
         "bms-cpu-power": "${BMS_CPU_POWER_IMAGE:-biomodstack/cpu-power:local}",
-        "bms-stats-tools": "${BMS_STATS_TOOLS_IMAGE:-biomodstack/stats-tools:local}",
         "bms-web": "${BMS_WEB_IMAGE:-biomodstack/web:local}",
     }
     for service_name, image_ref in expected_images.items():

@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .contract import build_run_manifest, load_verified_job_config
+from .contract import build_run_manifest, prepare_verified_worker_inputs
 from .gromacs import assert_cuda_enabled, build_mdrun_command
 from .runner import (
     StageLedger,
@@ -380,16 +380,19 @@ def run_gromacs_job(
     *,
     replica_index: int = 0,
     gmx_binary: str = "gmx",
+    _prepared_config: Mapping[str, Any] | None = None,
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
-    config = load_verified_job_config(config_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
+        config_path,
+        output_dir / ".worker_inputs",
+    )
     if config["engine"] != "gromacs":
         raise ValueError("run_gromacs_job requires engine=gromacs")
     if replica_index < 0 or replica_index >= config["replicas"]:
         raise ValueError("replica_index is outside configured replica range")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     version_output = _run_command(
         [gmx_binary, "mdrun", "-version"],
         cwd=output_dir,

@@ -234,6 +234,7 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
                                 <button
                                     key={mode}
                                     type="button"
+                                    disabled={mode === 'prepared' && form.engine !== 'openmm'}
                                     onClick={() => update('inputMode', mode)}
                                     className={`rounded-lg border px-3 py-2 text-sm ${form.inputMode === mode ? 'border-cyan-500 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`}
                                 >
@@ -258,7 +259,7 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
                                 <label className={labelClass}>Topology path (.top)
                                     <input className={inputClass} value={form.topologyPath} onChange={(event) => update('topologyPath', event.target.value)} />
                                 </label>
-                                <p className="md:col-span-2 text-xs text-amber-300/80">Prepared topology includes must already be available beside the topology on the BMS data plane.</p>
+                                <p className="md:col-span-2 text-xs text-amber-300/80">Prepared systems are supported only by OpenMM. Declared topology includes are snapshotted into the verified job closure.</p>
                             </div>
                         )}
                     </section>
@@ -268,7 +269,7 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
                         <div className="grid gap-4 md:grid-cols-3">
                             <label className={labelClass}>Engine
                                 <select className={inputClass} value={form.engine} onChange={(event) => update('engine', event.target.value as MolecularDynamicsForm['engine'])}>
-                                    <option value="gromacs">GROMACS 2025.3 (default)</option>
+                                    <option value="gromacs" disabled={form.inputMode === 'prepared'}>GROMACS 2025.3 (automatic preparation only)</option>
                                     <option value="openmm">OpenMM 8.5.2 (prepared systems only)</option>
                                 </select>
                             </label>

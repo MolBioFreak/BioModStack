@@ -3,9 +3,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import shutil
+import stat
+import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 MD_JOB_SCHEMA = "bms.md.job.v1"
@@ -161,34 +165,218 @@ def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     return config
 
 
+def _snapshot_mismatch(message: str) -> MDInputSnapshotError:
+    return MDInputSnapshotError(f"MD_INPUT_SNAPSHOT_MISMATCH: {message}")
+
+
+def _expected_snapshot_metadata(input_config: Mapping[str, Any], field: str) -> tuple[str, int]:
+    expected_digest = input_config.get(f"{field}_sha256")
+    expected_bytes = input_config.get(f"{field}_bytes")
+    if not isinstance(expected_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise _snapshot_mismatch("input snapshot digest is missing")
+    if isinstance(expected_bytes, bool) or not isinstance(expected_bytes, int) or not 0 <= expected_bytes <= MAX_INPUT_SNAPSHOT_BYTES:
+        raise _snapshot_mismatch("input snapshot size is missing or invalid")
+    return expected_digest, expected_bytes
+
+
+def _verify_open_snapshot(source: Path, expected_digest: str, expected_bytes: int) -> None:
+    digest = hashlib.sha256()
+    consumed = 0
+    try:
+        with source.open("rb") as handle:
+            opened_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_size != expected_bytes:
+                raise _snapshot_mismatch("input snapshot size changed")
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                consumed += len(chunk)
+                if consumed > MAX_INPUT_SNAPSHOT_BYTES:
+                    raise _snapshot_mismatch("input snapshot exceeds its bounded size")
+                digest.update(chunk)
+    except MDInputSnapshotError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise _snapshot_mismatch("input snapshot is unavailable") from exc
+    if consumed != expected_bytes or digest.hexdigest() != expected_digest:
+        raise _snapshot_mismatch("input snapshot digest or size changed")
+
+
+def _safe_closure_relative(raw: Any) -> PurePosixPath:
+    if not isinstance(raw, str) or not raw or raw.startswith("/") or "\\" in raw:
+        raise _snapshot_mismatch("topology closure path is invalid")
+    path = PurePosixPath(raw)
+    if path.as_posix() != raw or any(part in {"", ".", ".."} for part in path.parts):
+        raise _snapshot_mismatch("topology closure path is invalid")
+    return path
+
+
+def _topology_closure(job_config: Mapping[str, Any]) -> tuple[Path, list[dict[str, Any]]]:
+    input_config = job_config.get("input")
+    closure = input_config.get("topology_closure") if isinstance(input_config, Mapping) else None
+    if not isinstance(closure, Mapping):
+        raise _snapshot_mismatch("prepared topology closure manifest is missing")
+    root_value = closure.get("root")
+    files = closure.get("files")
+    if not isinstance(root_value, str) or not root_value or not isinstance(files, list) or len(files) > 256:
+        raise _snapshot_mismatch("prepared topology closure manifest is invalid")
+    root = Path(root_value)
+    normalized: list[dict[str, Any]] = []
+    for record in files:
+        if not isinstance(record, Mapping):
+            raise _snapshot_mismatch("topology closure record is invalid")
+        relative = _safe_closure_relative(record.get("path"))
+        digest = record.get("sha256")
+        size = record.get("bytes")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise _snapshot_mismatch("topology closure digest is invalid")
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= MAX_INPUT_SNAPSHOT_BYTES:
+            raise _snapshot_mismatch("topology closure size is invalid")
+        normalized.append({**dict(record), "_relative": relative, "sha256": digest, "bytes": size})
+    return root, normalized
+
+
 def verify_input_snapshots(job_config: Mapping[str, Any]) -> None:
-    """Rehash every persisted job-owned input immediately before worker use."""
+    """Rehash every persisted job-owned input and declared local topology include."""
 
     input_config = job_config.get("input")
     if not isinstance(input_config, Mapping):
-        raise MDInputSnapshotError("MD_INPUT_SNAPSHOT_MISMATCH: input snapshot contract is missing")
+        raise _snapshot_mismatch("input snapshot contract is missing")
     for field in ("structure", "coordinates", "topology"):
         value = input_config.get(field)
         if not value:
             continue
-        expected = input_config.get(f"{field}_sha256")
-        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
-            raise MDInputSnapshotError("MD_INPUT_SNAPSHOT_MISMATCH: input snapshot digest is missing")
-        digest = hashlib.sha256()
-        consumed = 0
+        expected_digest, expected_bytes = _expected_snapshot_metadata(input_config, field)
+        _verify_open_snapshot(Path(str(value)), expected_digest, expected_bytes)
+    if input_config.get("topology"):
+        closure_root, closure_files = _topology_closure(job_config)
+        for record in closure_files:
+            _verify_open_snapshot(
+                closure_root.joinpath(*record["_relative"].parts),
+                record["sha256"],
+                record["bytes"],
+            )
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _copy_verified_snapshot(
+    source: Path,
+    destination: Path,
+    *,
+    expected_digest: str,
+    expected_bytes: int,
+) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".verified.", suffix=".tmp", dir=destination.parent)
+    temporary = Path(temporary_name)
+    digest = hashlib.sha256()
+    consumed = 0
+    published = False
+    try:
         try:
-            with Path(str(value)).open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    consumed += len(chunk)
-                    if consumed > MAX_INPUT_SNAPSHOT_BYTES:
-                        raise MDInputSnapshotError(
-                            "MD_INPUT_SNAPSHOT_MISMATCH: input snapshot exceeds its bounded size"
-                        )
-                    digest.update(chunk)
-        except (OSError, ValueError) as exc:
-            raise MDInputSnapshotError("MD_INPUT_SNAPSHOT_MISMATCH: input snapshot is unavailable") from exc
-        if digest.hexdigest() != expected:
-            raise MDInputSnapshotError("MD_INPUT_SNAPSHOT_MISMATCH: input snapshot digest changed")
+            source_handle = source.open("rb")
+        except OSError as exc:
+            raise _snapshot_mismatch("input snapshot is unavailable") from exc
+        with source_handle, os.fdopen(descriptor, "wb") as private_handle:
+            opened_stat = os.fstat(source_handle.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_size != expected_bytes:
+                raise _snapshot_mismatch("input snapshot size changed")
+            for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                consumed += len(chunk)
+                if consumed > MAX_INPUT_SNAPSHOT_BYTES:
+                    raise _snapshot_mismatch("input snapshot exceeds its bounded size")
+                digest.update(chunk)
+                private_handle.write(chunk)
+            private_handle.flush()
+            os.fsync(private_handle.fileno())
+        if consumed != expected_bytes or digest.hexdigest() != expected_digest:
+            raise _snapshot_mismatch("input snapshot digest or size changed")
+        os.chmod(temporary, 0o444)
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as exc:
+            raise _snapshot_mismatch("private input destination conflict") from exc
+        published = True
+        temporary.unlink()
+        _fsync_directory(destination.parent)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        if published:
+            destination.unlink(missing_ok=True)
+        raise
+
+
+def prepare_verified_worker_inputs(config_path: Path, worker_root: Path) -> dict[str, Any]:
+    """Verify-and-copy job snapshots into one invocation-private, read-only input tree."""
+
+    config = normalize_job_config(json.loads(Path(config_path).read_text(encoding="utf-8")))
+    input_config = dict(config["input"])
+    worker_root = Path(worker_root)
+    worker_root.mkdir(parents=True, exist_ok=True)
+    private_root = Path(tempfile.mkdtemp(prefix="verified-inputs-", dir=worker_root))
+    try:
+        for field in ("structure", "coordinates"):
+            source_value = input_config.get(field)
+            if not source_value:
+                continue
+            expected_digest, expected_bytes = _expected_snapshot_metadata(input_config, field)
+            source = Path(str(source_value))
+            suffix = source.suffix.lower() if re.fullmatch(r"\.[a-z0-9]{1,10}", source.suffix.lower()) else ".bin"
+            destination = private_root / f"{field}{suffix}"
+            _copy_verified_snapshot(
+                source,
+                destination,
+                expected_digest=expected_digest,
+                expected_bytes=expected_bytes,
+            )
+            input_config[field] = str(destination.resolve())
+
+        topology_value = input_config.get("topology")
+        if topology_value:
+            expected_digest, expected_bytes = _expected_snapshot_metadata(input_config, "topology")
+            closure_source_root, closure_files = _topology_closure(config)
+            private_closure_root = private_root / "topology_closure"
+            private_topology = private_closure_root / "topology.top"
+            _copy_verified_snapshot(
+                Path(str(topology_value)),
+                private_topology,
+                expected_digest=expected_digest,
+                expected_bytes=expected_bytes,
+            )
+            copied: dict[str, tuple[str, int]] = {}
+            for record in closure_files:
+                relative: PurePosixPath = record["_relative"]
+                previous = copied.get(relative.as_posix())
+                identity = (record["sha256"], record["bytes"])
+                if previous is not None and previous != identity:
+                    raise _snapshot_mismatch("duplicate topology closure path has conflicting identity")
+                if previous is None:
+                    _copy_verified_snapshot(
+                        closure_source_root.joinpath(*relative.parts),
+                        private_closure_root.joinpath(*relative.parts),
+                        expected_digest=record["sha256"],
+                        expected_bytes=record["bytes"],
+                    )
+                    copied[relative.as_posix()] = identity
+            closure = dict(input_config["topology_closure"])
+            closure["root"] = str(private_closure_root.resolve())
+            input_config["topology_closure"] = closure
+            input_config["topology"] = str(private_topology.resolve())
+        config["input"] = input_config
+        for directory in sorted((path for path in private_root.rglob("*") if path.is_dir()), reverse=True):
+            os.chmod(directory, 0o555)
+        os.chmod(private_root, 0o555)
+        _fsync_directory(private_root)
+        _fsync_directory(worker_root)
+        return config
+    except Exception:
+        shutil.rmtree(private_root, ignore_errors=True)
+        raise
 
 
 def load_verified_job_config(config_path: Path) -> dict[str, Any]:
