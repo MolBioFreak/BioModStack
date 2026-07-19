@@ -8,17 +8,17 @@ import {
 } from '../structureViewer/adapters/MolstarDirectAdapter';
 import type {
     MolstarDirectDocument,
-    MolstarDirectPresentation,
-    MolstarDirectQuery,
     MolstarDirectResidueClick,
 } from '../structureViewer/adapters/MolstarDirectAdapter';
-import { adaptLegacyResidueColors } from '../structureViewer/adapters/residueColorSelections';
 import type { ResidueColor } from '../structureViewer/adapters/residueColorSelections';
-import { adaptResidueMetricLayer } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 import { createStructureSceneState } from '../structureViewer/contracts/sceneState';
+import type { MDSceneState } from '../structureViewer/contracts/mdTrajectory';
 import type { ViewerMeasurement } from '../structureViewer/contracts/measurements';
+import type { StructureScenePresentation } from '../structureViewer/contracts/scenePresentation';
+import type { ViewerEvent } from '../structureViewer/contracts/viewerEvents';
 import { MolstarDirectSceneEngineAdapter } from '../structureViewer/runtime/MolstarDirectSceneEngineAdapter';
+import type { EngineResidueClick } from '../structureViewer/runtime/MolstarEngineAdapter';
 import { StructureSceneController } from '../structureViewer/runtime/StructureSceneController';
 import {
     MOLSTAR_TOUCH_INTERACTION_SELECTOR,
@@ -57,8 +57,14 @@ export interface MolstarViewerProps {
     overlayStructures?: OverlayStructure[];
     /** Viewer-scoped residue clicks with exact label and author identity. */
     onResidueClick?: (residue: MolstarDirectResidueClick) => void;
+    /** Every controller event with viewer/scene/generation/document provenance. */
+    onViewerEvent?: (event: ViewerEvent) => void;
     /** Exact, provenance-bound atom measurements reconciled declaratively. */
     measurements?: readonly ViewerMeasurement[];
+    /** Complete declarative presentation state owned by the shared scene controller. */
+    scenePresentation?: StructureScenePresentation;
+    /** Governed, hash-bound MD metadata; playback remains capability-gated by the direct adapter. */
+    molecularDynamics?: MDSceneState;
 }
 
 type ViewerStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -90,12 +96,13 @@ export default function MolstarViewer({
     height = 500,
     backgroundColor = '#0f172a',
     label,
-    selections,
-    residueColors,
-    residueMetricLayer,
+
     overlayStructures,
     onResidueClick,
+    onViewerEvent,
     measurements,
+    scenePresentation,
+    molecularDynamics,
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
@@ -104,7 +111,7 @@ export default function MolstarViewer({
     const viewerIdRef = useRef(`molstar-viewer-${crypto.randomUUID()}`);
     const [status, setStatus] = useState<ViewerStatus>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    const [measurementError, setMeasurementError] = useState<string | null>(null);
+
 
     const absoluteUrl = useMemo(() => toAbsoluteStructureUrl(structureUrl), [structureUrl]);
     const normalizedBackgroundColor = useMemo(
@@ -112,8 +119,7 @@ export default function MolstarViewer({
         [backgroundColor],
     );
     const effectiveAlphafoldView = alphafoldView
-        && !residueColors?.size
-        && !residueMetricLayer?.points.length;
+        && !(scenePresentation?.colorQueries?.length);
 
     const interactionTouchAction = useMemo(() => {
         const coarsePointer = typeof window.matchMedia === 'function'
@@ -202,12 +208,25 @@ export default function MolstarViewer({
     }, [adapterSignature, hasStructure]);
 
     useEffect(() => {
-        const adapter = adapterRef.current;
-        adapter?.setResidueClickHandler(onResidueClick);
-        return () => {
-            if (adapterRef.current === adapter) adapter?.setResidueClickHandler(undefined);
-        };
-    }, [adapterEpoch, onResidueClick]);
+        const controller = controllerRef.current;
+        if (!controller || (!onViewerEvent && !onResidueClick)) return undefined;
+        return controller.subscribe((event) => {
+            onViewerEvent?.(event);
+            if (event.type !== 'selection-changed' || event.origin !== 'canvas' || !onResidueClick) return;
+            const click = event.payload as EngineResidueClick;
+            const residue = click.residue;
+            if (!residue.labelAsymId || !residue.authAsymId || residue.labelSeqId === undefined || residue.authSeqId === undefined) return;
+            onResidueClick({
+                documentId: residue.documentId,
+                labelAsymId: residue.labelAsymId,
+                authAsymId: residue.authAsymId,
+                labelSeqId: residue.labelSeqId,
+                authSeqId: residue.authSeqId,
+                insertionCode: residue.insertionCode,
+                sceneGeneration: click.engineGeneration,
+            });
+        });
+    }, [adapterEpoch, onResidueClick, onViewerEvent]);
 
     useEffect(() => {
         const adapter = adapterRef.current;
@@ -240,6 +259,11 @@ export default function MolstarViewer({
                 createdBy: 'MolstarViewer compatibility facade',
                 createdAt: new Date().toISOString(),
             },
+            presentation: {
+                ...scenePresentation,
+                measurements: measurements ?? scenePresentation?.measurements,
+            },
+            molecularDynamics,
         });
         if (sceneResult.status !== 'ok') {
             const error = sceneResult.status === 'error'
@@ -267,93 +291,8 @@ export default function MolstarViewer({
         return () => {
             cancelled = true;
         };
-    }, [adapterEpoch, documents]);
+    }, [adapterEpoch, documents, measurements, molecularDynamics, scenePresentation]);
 
-    useEffect(() => {
-        const adapter = adapterRef.current;
-        if (!adapter || adapterEpoch === 0 || documents.length === 0) return undefined;
-        let cancelled = false;
-        void adapter.setMeasurements(measurements ?? []).then((result) => {
-            if (cancelled || adapterRef.current !== adapter || result.status === 'cancelled') return;
-            if (result.status === 'ok') {
-                setMeasurementError(null);
-                return;
-            }
-            setMeasurementError(result.status === 'error' ? result.error.message : result.reason);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [adapterEpoch, documents, measurements]);
-
-    const adaptedResidueColors = useMemo(
-        () => residueColors?.size ? adaptLegacyResidueColors(residueColors) : null,
-        [residueColors],
-    );
-
-    const presentation = useMemo<MolstarDirectPresentation>(() => {
-        // Explicit workflow selections take precedence over a metric layer, matching
-        // BMS color-mode behavior while avoiding competing asynchronous overpaint.
-        if (selections && selections.length > 0) {
-            const colorSelections: MolstarDirectQuery[] = selections.map((selection) => ({
-                // BMS Selection.chain_id is explicitly the label/struct namespace.
-                // Do not also populate auth_asym_id: mixed namespaces fail closed.
-                struct_asym_id: selection.chain_id,
-                start_residue_number: selection.start_residue_number,
-                end_residue_number: selection.end_residue_number,
-                color: selection.color,
-                focus: selection.focus,
-            }));
-            return {
-                colorSelections,
-                nonSelectedColor: '#888888',
-            };
-        }
-
-        if (adaptedResidueColors?.selections.length) {
-            return {
-                colorSelections: adaptedResidueColors.selections,
-                nonSelectedColor: { r: 68, g: 68, b: 68 },
-            };
-        }
-
-        if (residueMetricLayer?.points.length) {
-            const adapted = adaptResidueMetricLayer(residueMetricLayer);
-            return {
-                colorSelections: adapted.colorSelections,
-                tooltipSelections: adapted.tooltipSelections,
-                nonSelectedColor: residueMetricLayer.nonSelectedColor ?? { r: 68, g: 68, b: 68 },
-            };
-        }
-        return {};
-    }, [adaptedResidueColors, residueMetricLayer, selections]);
-
-    useEffect(() => {
-        const adapter = adapterRef.current;
-        if (status !== 'ready' || !adapter) return undefined;
-
-        let cancelled = false;
-        if (adaptedResidueColors?.rejected.length) {
-            console.warn('Mol* residue color adapter rejected entries:', adaptedResidueColors.rejected);
-        }
-        if (!selections?.length && residueMetricLayer?.points.length) {
-            const adapted = adaptResidueMetricLayer(residueMetricLayer);
-            if (adapted.rejected.length > 0) {
-                console.warn('Mol* metric adapter rejected residue points:', adapted.rejected);
-            }
-            if (adapted.colorSelections.length === 0) {
-                console.error('Mol* metric layer has no selectable, explicitly numbered residues.');
-            }
-        }
-
-        void adapter.applyPresentation(presentation).catch((error) => {
-            if (cancelled || error instanceof MolstarDirectAdapterCancelledError) return;
-            console.error('Failed to apply direct Mol* presentation:', error);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [adaptedResidueColors, presentation, residueMetricLayer, selections, status]);
 
     useEffect(() => {
         const target = mountRef.current;
@@ -401,15 +340,7 @@ export default function MolstarViewer({
                     {label}
                 </div>
             )}
-            {measurementError && (
-                <div
-                    className="absolute bottom-2 left-2 right-2 z-20 px-2 py-1 bg-amber-950/90 text-amber-200 text-xs rounded"
-                    role="status"
-                    data-bms-measurement-error="true"
-                >
-                    Measurements unavailable: {measurementError}
-                </div>
-            )}
+
             {status === 'loading' && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/70 pointer-events-none">
                     <div className="text-slate-300 flex items-center gap-2">

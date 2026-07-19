@@ -1,14 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
-import MolstarViewer from './MolstarViewer';
-import type { MolstarDirectResidueClick } from '../structureViewer/adapters/MolstarDirectAdapter';
-
-interface Selection {
-    chain_id?: string;
-    start_residue_number?: number;
-    end_residue_number?: number;
-    color?: { r: number; g: number; b: number };
-}
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
+import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
 
 export interface EpitopeMolstarViewerProps {
     structureUrl?: string;
@@ -16,19 +9,39 @@ export interface EpitopeMolstarViewerProps {
     format?: 'cif' | 'pdb';
     height?: number | string;
     backgroundColor?: string;
-    selectedResidues: Set<string>;
+    /** Canonical viewer identity. Prefer this over selectedResidues. */
+    selectedResidueRefs?: readonly ResidueRef[];
+    /** Deprecated backend/UI compatibility keys. Parsed only at this boundary. */
+    selectedResidues?: ReadonlySet<string>;
+    onResidueRefClick?: (residue: ResidueRef) => void;
+    /** Deprecated backend/UI compatibility callback. */
     onResidueClick?: (residueKey: string) => void;
 }
 
-const parseResidueKey = (key: string): { chainId: string; residueNumber: number } | null => {
-    const compact = key.trim().match(/^([A-Za-z])(-?\d+)([A-Za-z]?)$/);
-    if (!compact) return null;
-    return { chainId: compact[1], residueNumber: Number(compact[2]) };
+const parseCompatibilityKey = (key: string): ResidueRef | null => {
+    const normalized = key.trim();
+    const explicit = /^([^:]+):(-?\d+)([A-Za-z]?)$/.exec(normalized);
+    const compact = /^([A-Za-z])(-?\d+)([A-Za-z]?)$/.exec(normalized);
+    const match = explicit ?? compact;
+    if (!match) return null;
+    const authSeqId = Number(match[2]);
+    if (!Number.isSafeInteger(authSeqId)) return null;
+    return {
+        documentId: 'primary',
+        authAsymId: match[1],
+        authSeqId,
+        insertionCode: match[3] || undefined,
+    };
 };
 
-const legacyResidueKey = (residue: MolstarDirectResidueClick): string => (
-    `${residue.authAsymId}${residue.authSeqId}${residue.insertionCode || ''}`
-);
+const compatibilityKey = (residue: ResidueRef): string | null => {
+    const chain = residue.authAsymId ?? residue.labelAsymId;
+    const number = residue.authSeqId ?? residue.labelSeqId;
+    if (!chain || number === undefined) return null;
+    return chain.length === 1
+        ? `${chain}${number}${residue.insertionCode ?? ''}`
+        : `${chain}:${number}${residue.insertionCode ?? ''}`;
+};
 
 export default function EpitopeMolstarViewer({
     structureUrl,
@@ -36,80 +49,57 @@ export default function EpitopeMolstarViewer({
     format = 'pdb',
     height = 400,
     backgroundColor = '#0f172a',
-    selectedResidues,
+    selectedResidueRefs = [],
+    selectedResidues = new Set<string>(),
+    onResidueRefClick,
     onResidueClick,
 }: EpitopeMolstarViewerProps) {
-    const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (!pdbData) {
-            setBlobUrl(null);
-            return undefined;
-        }
-        const url = URL.createObjectURL(new Blob([pdbData], { type: 'chemical/x-pdb' }));
-        setBlobUrl(url);
-        return () => URL.revokeObjectURL(url);
-    }, [pdbData]);
-
-    const effectiveUrl = blobUrl ?? structureUrl;
-    const selections = useMemo<Selection[]>(() => {
-        const result: Selection[] = [];
+    const canonicalSelections = useMemo(() => {
+        const byKey = new Map<string, ResidueRef>();
+        for (const residue of selectedResidueRefs) byKey.set(compatibilityKey(residue) ?? JSON.stringify(residue), residue);
         for (const key of selectedResidues) {
-            const parsed = parseResidueKey(key);
-            if (!parsed) continue;
-            result.push({
-                chain_id: parsed.chainId,
-                start_residue_number: parsed.residueNumber,
-                end_residue_number: parsed.residueNumber,
-                color: { r: 16, g: 185, b: 129 },
-            });
+            const residue = parseCompatibilityKey(key);
+            if (residue) byKey.set(compatibilityKey(residue)!, residue);
         }
-        return result;
-    }, [selectedResidues]);
+        return [...byKey.values()];
+    }, [selectedResidueRefs, selectedResidues]);
 
     const heightStyle = typeof height === 'number' ? `${height}px` : height;
-    if (!effectiveUrl) {
-        return (
-            <div
-                className="w-full flex items-center justify-center text-slate-500 bg-slate-900 rounded-lg border border-dashed border-slate-700"
-                style={{ height: heightStyle }}
-            >
-                <div className="text-center">
-                    <div className="text-4xl mb-2">🧬</div>
-                    <div className="text-sm">Upload a PDB to view 3D structure</div>
-                </div>
-            </div>
-        );
+    if (!pdbData && !structureUrl) {
+        return <div className="w-full flex items-center justify-center text-slate-500 bg-slate-900 rounded-lg border border-dashed border-slate-700" style={{ height: heightStyle }}>
+            <div className="text-center"><div className="text-4xl mb-2">🧬</div><div className="text-sm">Upload a PDB to view 3D structure</div></div>
+        </div>;
     }
 
-    return (
-        <div
-            className="w-full rounded-lg overflow-hidden relative border border-slate-700"
-            style={{ height: heightStyle }}
-        >
-            <MolstarViewer
-                structureUrl={effectiveUrl}
-                format={format}
-                height="100%"
-                backgroundColor={backgroundColor}
-                alphafoldView={false}
-                hideControls
-                selections={selections}
-                onResidueClick={onResidueClick
-                    ? (residue) => onResidueClick(legacyResidueKey(residue))
-                    : undefined}
-            />
-            <div className="absolute top-2 left-2 z-20 px-2 py-1 bg-slate-800/90 text-slate-300 text-xs rounded flex items-center gap-2 pointer-events-none">
-                <span className="text-blue-400">🔍</span>
-                3D Preview - Click residues here or use the 2D grid below
-            </div>
-            {selectedResidues.size > 0 && (
-                <div className="absolute top-2 right-2 z-20 px-2 py-1 bg-emerald-600/90 text-white text-xs rounded pointer-events-none">
-                    {selectedResidues.size} selected
-                </div>
-            )}
-        </div>
-    );
+    return <div className="w-full rounded-lg overflow-hidden relative border border-slate-700" style={{ height: heightStyle }}>
+        <StructureWorkbench
+            mode="compact"
+            structureUrl={structureUrl}
+            structureData={pdbData}
+            format={format}
+            height="100%"
+            backgroundColor={backgroundColor}
+            alphafoldView={false}
+            hideControls
+            residueSelections={canonicalSelections}
+            onResidueClick={(click) => {
+                const residue: ResidueRef = {
+                    documentId: click.documentId,
+                    labelAsymId: click.labelAsymId,
+                    authAsymId: click.authAsymId,
+                    labelSeqId: click.labelSeqId,
+                    authSeqId: click.authSeqId,
+                    insertionCode: click.insertionCode,
+                };
+                onResidueRefClick?.(residue);
+                const key = compatibilityKey(residue);
+                if (key) onResidueClick?.(key);
+            }}
+        />
+        <div className="absolute top-2 left-2 z-20 px-2 py-1 bg-slate-800/90 text-slate-300 text-xs rounded flex items-center gap-2 pointer-events-none"><span className="text-blue-400">🔍</span>3D Preview - Click residues here or use the 2D grid below</div>
+        {canonicalSelections.length > 0 && <div className="absolute top-2 right-2 z-20 px-2 py-1 bg-emerald-600/90 text-white text-xs rounded pointer-events-none">{canonicalSelections.length} selected</div>}
+    </div>;
 }
 
 export { EpitopeMolstarViewer };

@@ -19,13 +19,11 @@ export interface MolstarDirectCapabilityManifest {
     readonly auditedAt: '2026-07-18';
     readonly adapter: {
         readonly id: 'bms-molstar-direct';
-        readonly version: '1';
+        readonly version: '2';
         readonly enginePackage: 'molstar';
         readonly engineVersion: '4.5.0';
-        readonly compatibilityReferencePackage: 'pdbe-molstar';
-        readonly compatibilityReferenceVersion: '3.3.0';
         readonly wrapperRuntimeDependency: false;
-        readonly governedSurface: 'MolstarViewer';
+        readonly governedSurface: 'StructureViewerHost';
     };
     readonly capabilities: Readonly<Record<ViewerCapabilityId, ViewerCapability>>;
     readonly privateApiInventory: readonly MolstarDirectPrivateApiUse[];
@@ -51,8 +49,8 @@ const directCapability = (
 };
 
 const adapterSource = 'platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts';
-const componentSource = 'platform/frontend/src/components/MolstarViewer.tsx';
-const browserEvidence = 'docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_chrome150.json';
+const componentSource = 'platform/frontend/src/structureViewer/StructureViewerHost.tsx';
+const browserEvidence = 'docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_final_chrome150.json';
 
 const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
     'load-completion': directCapability(
@@ -76,8 +74,8 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
         componentSource,
     ),
     'author-chain-identity': directCapability(
-        'partial', 'bms-direct-adapter',
-        'Canonical metric layers can carry author-chain identity; the generic Selection prop is label-chain only.',
+        'supported', 'bms-direct-adapter',
+        'Canonical metrics, linked views, and direct queries preserve author-chain identity and fail closed on incomplete namespaces.',
         componentSource,
     ),
     'label-residue-identity': directCapability(
@@ -86,13 +84,13 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
         componentSource,
     ),
     'author-residue-identity': directCapability(
-        'partial', 'bms-direct-adapter',
-        'Canonical metric layers preserve author residue numbering when paired with author-chain identity.',
+        'supported', 'bms-direct-adapter',
+        'Canonical metric and measurement contracts preserve author residue numbering when paired with author-chain identity.',
         componentSource,
     ),
     'insertion-code-identity': directCapability(
-        'partial', 'bms-direct-adapter',
-        'Canonical metric layers preserve insertion codes; legacy residue-color keys reject insertion-like ambiguity.',
+        'supported', 'bms-direct-adapter',
+        'Canonical metrics and exact-atom measurements preserve author insertion codes; legacy ambiguous keys fail closed.',
         'platform/frontend/src/structureViewer/adapters/residueColorSelections.ts',
     ),
     'model-identity': directCapability(
@@ -136,14 +134,14 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
         componentSource,
     ),
     measurements: directCapability(
-        'unsupported', 'not-implemented',
-        'No governed BMS measurement contract exists.',
-        componentSource,
+        'supported', 'bms-direct-adapter',
+        'Distance, angle, and dihedral measurements require exact canonical atoms and provenance and reconcile declaratively.',
+        'platform/frontend/src/structureViewer/contracts/measurements.ts',
     ),
     trajectories: directCapability(
         'unsupported', 'not-implemented',
-        'No governed trajectory playback or frame-selection contract exists.',
-        componentSource,
+        'Governed hash-bound metadata, replica replacement, playback state, and source-frame contracts exist; XTC/DCD engine playback remains fail-closed pending exercised Molstar 4.5 format proof.',
+        'platform/frontend/src/structureViewer/contracts/mdTrajectory.ts',
     ),
     assemblies: directCapability(
         'partial', 'bms-direct-adapter',
@@ -161,14 +159,14 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
         componentSource,
     ),
     snapshots: directCapability(
-        'unsupported', 'not-implemented',
-        'No governed BMS state snapshot/import/export contract exists.',
-        componentSource,
+        'supported', 'bms-engine-owner',
+        'Versioned scene snapshots preserve collection, presentation, adapter identity, provenance, and document hashes and reject stale sources.',
+        'platform/frontend/src/structureViewer/contracts/sceneState.ts',
     ),
     'event-provenance': directCapability(
-        'unsupported', 'not-implemented',
-        'The generic facade does not expose click/hover events with explicit model/operator provenance.',
-        componentSource,
+        'supported', 'bms-engine-owner',
+        'Controller events are scoped to viewer, scene, generation, document, origin, and timestamp; residue clicks retain direct identity.',
+        'platform/frontend/src/structureViewer/contracts/viewerEvents.ts',
     ),
 };
 
@@ -177,13 +175,11 @@ export const MOLSTAR_DIRECT_45_CAPABILITIES: MolstarDirectCapabilityManifest = O
     auditedAt: '2026-07-18',
     adapter: Object.freeze({
         id: 'bms-molstar-direct',
-        version: '1',
+        version: '2',
         enginePackage: 'molstar',
         engineVersion: '4.5.0',
-        compatibilityReferencePackage: 'pdbe-molstar',
-        compatibilityReferenceVersion: '3.3.0',
         wrapperRuntimeDependency: false,
-        governedSurface: 'MolstarViewer',
+        governedSurface: 'StructureViewerHost',
     }),
     capabilities: Object.freeze(capabilities),
     privateApiInventory: Object.freeze([
