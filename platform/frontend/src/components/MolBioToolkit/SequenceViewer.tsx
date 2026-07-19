@@ -223,8 +223,9 @@ export function SequenceViewer({
     visibleFrames = new Set([1]),
     activeDisplayStrand,
 }: SequenceViewerProps) {
-    const nucleotideSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
-    const sourceDisplayStrand = sequenceData.sequenceType === 'protein'
+    const normalizedSequenceType = sequenceData.sequenceType.toLowerCase();
+    const nucleotideSequenceType = normalizedSequenceType === 'rna' ? 'rna' : 'dna';
+    const sourceDisplayStrand = normalizedSequenceType === 'protein'
         ? 'plus'
         : displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
     const resolvedDisplayStrand = activeDisplayStrand ?? sourceDisplayStrand;
@@ -464,7 +465,7 @@ export function SequenceViewer({
     }, []);
 
     const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
-    const seqVizSeqType = sequenceData.sequenceType === 'protein' ? 'aa' : sequenceData.sequenceType;
+    const seqVizSeqType = normalizedSequenceType === 'protein' ? 'aa' : nucleotideSequenceType;
     const viewerSequenceKey = useMemo(() => {
         const head = displaySequence.slice(0, 24);
         const tail = displaySequence.slice(-24);
