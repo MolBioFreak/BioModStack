@@ -136,6 +136,7 @@ class _Residue:
 @dataclass(frozen=True)
 class _AuthorizedInstance:
     source_entity_id: str
+    output_entity_id: str
     entity_instance_id: str
     label_asym_id: str
     auth_asym_id: str
@@ -285,6 +286,7 @@ def validate_coordinate_mmcif(
     source_ids: set[str] = set()
     models: set[int] = set()
     observed_residues: dict[int, str] = {}
+    observed_atoms: dict[int, set[str]] = {}
     for row_number, raw in enumerate(raw_rows, start=1):
         def get(name: str) -> str:
             return raw[positions[name]]
@@ -298,9 +300,17 @@ def validate_coordinate_mmcif(
             raise StructureMapError(
                 f"coordinate mmCIF row {row_number} has unsupported group_PDB {record_type!r}"
             )
-        _required(get("type_symbol"), "type_symbol")
-        _required(get("label_atom_id"), "label_atom_id")
+        element = _required(get("type_symbol"), "type_symbol").upper()
+        atom_name = _required(get("label_atom_id"), "label_atom_id")
         _required(get("auth_atom_id"), "auth_atom_id")
+        expected_backbone_element = {"N": "N", "CA": "C", "C": "C", "O": "O"}.get(
+            atom_name
+        )
+        if expected_backbone_element and element != expected_backbone_element:
+            raise StructureMapError(
+                "coordinate mmCIF backbone atom/element mismatch: "
+                f"{atom_name} requires {expected_backbone_element}, got {element}"
+            )
         label_chain = _required(get("label_asym_id"), "label_asym_id")
         auth_chain = _required(get("auth_asym_id"), "auth_asym_id")
         if label_chain != expected_chain_id or auth_chain != expected_chain_id:
@@ -324,6 +334,7 @@ def validate_coordinate_mmcif(
         previous_name = observed_residues.setdefault(label_seq_id, residue_name)
         if previous_name != residue_name:
             raise StructureMapError("coordinate mmCIF residue identity is ambiguous")
+        observed_atoms.setdefault(label_seq_id, set()).add(atom_name)
         _optional_code(get("label_alt_id"), "label_alt_id")
         _optional_code(get("pdbx_PDB_ins_code"), "pdbx_PDB_ins_code")
         _integer(get("auth_seq_id"), "auth_seq_id")
@@ -342,6 +353,15 @@ def validate_coordinate_mmcif(
         raise StructureMapError(
             "coordinate mmCIF does not contain every canonical sequence residue"
         )
+    required_backbone = {"N", "CA", "C", "O"}
+    for sequence_index in sorted(expected_positions):
+        missing_backbone = sorted(required_backbone - observed_atoms[sequence_index])
+        if missing_backbone:
+            raise StructureMapError(
+                "coordinate mmCIF residue "
+                f"{sequence_index} is missing required backbone atoms: "
+                f"{', '.join(missing_backbone)}"
+            )
 
 
 def _authorized_protein_instances(
@@ -377,6 +397,7 @@ def _authorized_protein_instances(
             contexts.append(
                 _AuthorizedInstance(
                     source_entity_id=entity["source_entity_id"],
+                    output_entity_id=mapping["output_entity_id"],
                     entity_instance_id=instance_id,
                     label_asym_id=mapping["output_label_asym_id"],
                     auth_asym_id=mapping["output_auth_asym_id"],
@@ -417,7 +438,7 @@ def _parse_atom_sites(
         raise StructureMapError(f"atom_site identity columns are missing: {missing}")
     positions = {name: names.index(name) for name in names}
     context_by_output = {
-        (context.source_entity_id, context.label_asym_id, context.auth_asym_id): context
+        (context.output_entity_id, context.label_asym_id, context.auth_asym_id): context
         for context in contexts
     }
 
@@ -427,10 +448,10 @@ def _parse_atom_sites(
         def get(name: str) -> str:
             return raw[positions[name]]
 
-        source_entity_id = _required(get("label_entity_id"), "label_entity_id")
+        output_entity_id = _required(get("label_entity_id"), "label_entity_id")
         label_asym_id = _required(get("label_asym_id"), "label_asym_id")
         auth_asym_id = _required(get("auth_asym_id"), "auth_asym_id")
-        context = context_by_output.get((source_entity_id, label_asym_id, auth_asym_id))
+        context = context_by_output.get((output_entity_id, label_asym_id, auth_asym_id))
         if context is None:
             # Complete-complex mmCIF is allowed. Non-authorized partner proteins,
             # ligands, ions, waters, and nucleic acids are intentionally not
@@ -474,7 +495,7 @@ def _parse_atom_sites(
                 auth_residue_name=auth_residue_name,
                 label_asym_id=label_asym_id,
                 auth_asym_id=auth_asym_id,
-                source_entity_id=source_entity_id,
+                source_entity_id=context.source_entity_id,
                 label_seq_id=_integer(get("label_seq_id"), "label_seq_id", minimum=1),
                 auth_seq_id=_integer(get("auth_seq_id"), "auth_seq_id"),
                 insertion_code=_optional_code(get("pdbx_PDB_ins_code"), "pdbx_PDB_ins_code"),
@@ -491,7 +512,9 @@ def _parse_atom_sites(
             )
         )
     if not atoms:
-        raise StructureMapError("atom_site loop contains no coordinate rows")
+        raise StructureMapError(
+            "atom_site loop contains no coordinate rows authorized by output entity/asym mapping"
+        )
     return atoms
 
 

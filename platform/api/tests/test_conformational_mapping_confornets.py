@@ -31,6 +31,10 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     build_confornets_coordinate_plan,
     materialize_trusted_internal_request,
 )
+from services.conformational_mapping.structure_normalizer import (  # noqa: E402
+    StructureMapError,
+    validate_coordinate_mmcif,
+)
 
 
 def _fixture_settings(**overrides: object) -> dict[str, object]:
@@ -129,6 +133,30 @@ def test_cm4_001_single_chain_only() -> None:
         build_confornets_coordinate_plan(
             _fixture_settings(sequence="MKT:AAA"), target_id="target-a"
         )
+
+
+def test_cm4_001b_ca_only_conformer_is_not_complete_coordinate_evidence() -> None:
+    full = (FIXTURE_ROOT / "native" / "conformers" / "candidate_000.cif").read_text(
+        encoding="utf-8"
+    )
+    ca_only = "\n".join(
+        line for line in full.splitlines() if not line.startswith("ATOM ") or " CA " in line
+    ).encode("utf-8")
+    with pytest.raises(StructureMapError, match="missing required backbone atoms"):
+        validate_coordinate_mmcif(ca_only, expected_sequence="MKT", expected_chain_id="A")
+
+
+def test_cm4_010b_coordinate_validation_rejects_backbone_element_mismatch() -> None:
+    source = FIXTURE_ROOT / "native" / "conformers" / "candidate_000.cif"
+    lines = source.read_text(encoding="utf-8").splitlines()
+    forged = "\n".join(
+        line.replace("ATOM 1 N N ", "ATOM 1 C N ").replace(
+            "ATOM 4 O O ", "ATOM 4 C O "
+        )
+        for line in lines
+    ).encode("utf-8")
+    with pytest.raises(StructureMapError, match="backbone atom/element mismatch"):
+        validate_coordinate_mmcif(forged, expected_sequence="MKT", expected_chain_id="A")
 
 
 def test_cm4_002_at_most_two_references() -> None:
@@ -691,9 +719,18 @@ _atom_site.auth_comp_id
 _atom_site.auth_asym_id
 _atom_site.auth_atom_id
 _atom_site.pdbx_PDB_model_num
-ATOM 1 C CA . MET A 1 1 ? {index}.0 0.0 0.0 1.00 50.00 1 MET A CA 1
-ATOM 2 C CA . LYS A 1 2 ? {index}.1 0.0 0.0 1.00 50.00 2 LYS A CA 1
-ATOM 3 C CA . THR A 1 3 ? {index}.2 0.0 0.0 1.00 50.00 3 THR A CA 1
+ATOM 1 N N . MET A 1 1 ? 0.000 {index}.0 0.000 1.00 50.00 1 MET A N 1
+ATOM 2 C CA . MET A 1 1 ? 1.450 {index}.1 0.000 1.00 50.00 1 MET A CA 1
+ATOM 3 C C . MET A 1 1 ? 2.900 {index}.0 0.000 1.00 50.00 1 MET A C 1
+ATOM 4 O O . MET A 1 1 ? 3.500 {index}.0 0.000 1.00 50.00 1 MET A O 1
+ATOM 5 N N . LYS A 1 2 ? 3.800 {index}.0 0.000 1.00 50.00 2 LYS A N 1
+ATOM 6 C CA . LYS A 1 2 ? 5.250 {index}.1 0.000 1.00 50.00 2 LYS A CA 1
+ATOM 7 C C . LYS A 1 2 ? 6.700 {index}.0 0.000 1.00 50.00 2 LYS A C 1
+ATOM 8 O O . LYS A 1 2 ? 7.300 {index}.0 0.000 1.00 50.00 2 LYS A O 1
+ATOM 9 N N . THR A 1 3 ? 7.600 {index}.0 0.000 1.00 50.00 3 THR A N 1
+ATOM 10 C CA . THR A 1 3 ? 9.050 {index}.1 0.000 1.00 50.00 3 THR A CA 1
+ATOM 11 C C . THR A 1 3 ? 10.500 {index}.0 0.000 1.00 50.00 3 THR A C 1
+ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
 #
 """
     (out/name).write_text(cif)

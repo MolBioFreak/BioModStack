@@ -2,7 +2,7 @@
     "coordinate_plan_sha256": "2a399226da08b097524f9089b3391df34c984ed56292f0e4cfa326a8a28a4be7",
     "entries": [
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -15,10 +15,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_000.cif",
-        "sha256": "6e8987977c2ad855136af61ecd368fef852d7f2763724e7e8e427839a7ef2629"
+            "sha256": "e98e9c64c410103b102ebc0d0d19fda03f9e0f12189e3f0cafa878d037bad7cb"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -31,10 +31,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_001.cif",
-        "sha256": "9f324cd50899f90cadc53e620d4da9405ac966a660693889f56e07cd987a4c32"
+            "sha256": "d6582ca148ae853a81a0503b957a47f320b7396f9c3290d2bc59a9a698d90394"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -47,10 +47,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_002.cif",
-        "sha256": "c0253d886aff8ef4e9bf0b99031f3edc12ac741a26a59b7dc295f500c11b3457"
+            "sha256": "fb2fe0d3155a8a5ba5c35497f37ee65a9315006dcb2754be504467e34d81fcaf"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -63,10 +63,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_003.cif",
-        "sha256": "9ab7175e48736f82ef38304842a08dc8117c750772de3faeac8c19bb155c1211"
+            "sha256": "79e3f8e4979ae8a029adc0f8c5b4c071a69244300d0671c16af19a281f336195"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -79,10 +79,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_004.cif",
-        "sha256": "d3f7b82d932f754dc15397a8cdfbdad298f7726cf0c8154b0e0ad0cfed78ff8e"
+            "sha256": "64d29d185065c1bd40a38de2c81a40c2801809f9f36daa929f37f4c831460526"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -95,10 +95,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_005.cif",
-        "sha256": "41abefd68d0a0f74c08c5038cb4e77568d03b6c80780776fd1b9a3193243d343"
+            "sha256": "ad19e065a9704138f3ffdf464d805b355c6d9fbfd14335c3f2cdcf224a1ff9b8"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -111,10 +111,10 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_006.cif",
-        "sha256": "098966c1d2efe9380c2dfd4da83331705c3e273a4b57cc7c52ece4da12ca6edc"
+            "sha256": "629d5a60f07dbebfef3037cce28d0d6cf6e5f118892144cce635eef0314ea743"
         },
         {
-        "bytes": 679,
+            "bytes": 1299,
             "coordinates": {
                 "backend": "confornets",
                 "confornet_index": 0,
@@ -127,7 +127,7 @@
                 "test_case_id": "case-a"
             },
             "relative_path": "conformers/candidate_007.cif",
-        "sha256": "0697f0d832ff76bff5b07f5669c49b4a0fca44a5555be48d7353cb84bc32a155"
+            "sha256": "03327b61839d077ad1f1c835c1853b728552063af21307b40b97c246f7fab1a3"
         }
     ],
     "native_request_sha256": "9c9f62b6c8b716047929d49e6b82c2293b2287733ee5453787081dd449a6a957",

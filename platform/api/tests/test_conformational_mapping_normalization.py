@@ -80,7 +80,7 @@ def _context_for(case: str) -> dict[str, object]:
                     "runtime_instance_id": f"runtime-{instance_id}",
                     "runtime_order": output_order,
                     "candidate_id": CANDIDATE_ID,
-                    "output_entity_id": f"output-{source_entity_id}",
+                    "output_entity_id": source_entity_id,
                     "output_label_asym_id": label_asym_id,
                     "output_auth_asym_id": auth_asym_id,
                     "output_entity_order": output_order,
@@ -469,3 +469,25 @@ def test_cm2_015_complete_complex_selects_authorized_proteins_in_snapshot_order(
     ]
     assert [row["pdb_chain_id"] for row in result["rows"]] == ["A", "B"]
     assert {line[17:20].strip() for line in _atom_lines(output.read_bytes())} == {"GLY"}
+
+
+def test_cm2_016_rejects_source_entity_id_substituted_for_output_entity_id(
+    tmp_path: Path,
+) -> None:
+    source = FIXTURES / "complete_complex" / "input.cif"
+    forged = tmp_path / "source-entity-substitution.cif"
+    forged.write_text(
+        source.read_text(encoding="utf-8")
+        .replace(" COPY_ALPHA 10 ", " COPY_ALPHA 1 ")
+        .replace(" COPY_BETA 10 ", " COPY_BETA 1 "),
+        encoding="utf-8",
+    )
+    with pytest.raises(StructureMapError, match="output entity/asym mapping"):
+        normalize_conformational_mapping_structure(
+            input_path=forged,
+            output_pdb_path=tmp_path / "forged.pdb",
+            map_path=tmp_path / "forged.json",
+            target_id=TARGET_ID,
+            candidate_id=CANDIDATE_ID,
+            complex_snapshot=_complete_complex_context(),
+        )
