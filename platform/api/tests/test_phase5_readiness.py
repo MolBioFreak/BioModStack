@@ -66,5 +66,17 @@ async def test_version_endpoint_reports_build_identity(monkeypatch) -> None:
     assert response["build"]["revision"] == "fedcba9876543210fedcba9876543210fedcba98"
 
 
+def test_api_route_signatures_are_unique() -> None:
+    main = importlib.import_module("main")
+    signatures: list[tuple[str, tuple[str, ...]]] = []
+    for route in main.app.routes:
+        methods = tuple(sorted(getattr(route, "methods", set()) or set()))
+        if methods:
+            signatures.append((route.path, methods))
+
+    duplicates = sorted({signature for signature in signatures if signatures.count(signature) > 1})
+    assert duplicates == []
+
+
 async def _async_result(ready: bool, status: str):
     return ready, status

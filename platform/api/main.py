@@ -181,7 +181,6 @@ app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
 app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")
-app.include_router(mobile_apk_updates.router, prefix="/api")
 
 @app.get("/api/health")
 async def health_check():
