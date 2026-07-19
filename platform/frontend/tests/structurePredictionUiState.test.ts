@@ -6,6 +6,7 @@ import {
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+    DEFAULT_STRUCTURE_MSA_PROVIDER,
     BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     buildBoltzCpSubmitParams,
@@ -27,6 +28,21 @@ import {
     resolveStructureSubmitTarget,
     resolveTargetPreviewSource,
 } from '../src/components/structurePredictionUiState.js';
+
+test('structure prediction defaults new MSA submissions to the ColabFold server', () => {
+    assert.equal(DEFAULT_STRUCTURE_MSA_PROVIDER, 'colabfold_api');
+    const templateSource = readFileSync(
+        new URL('../src/components/StructurePredictionTemplate.tsx', import.meta.url),
+        'utf8',
+    );
+    assert.doesNotMatch(
+        templateSource,
+        /if \(numParallelJobs > 1 && msaProvider === 'colabfold_api'\) \{\s*setMsaProvider\('local'\);/,
+    );
+    assert.match(templateSource, /Local MMseqs2 \(manual override\)/);
+    assert.match(templateSource, /ColabFold API \(default; single-job only\)/);
+    assert.doesNotMatch(templateSource, /Local MMseqs2 \(recommended\)/);
+});
 
 type PredictorOption = {
     id: string;

@@ -14,6 +14,7 @@ import {
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
     DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+    DEFAULT_STRUCTURE_MSA_PROVIDER,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
@@ -280,7 +281,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
     const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
-        initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+        initialValues?.msa_provider === 'local' ? 'local' : DEFAULT_STRUCTURE_MSA_PROVIDER
     );
     const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
         normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
@@ -811,12 +812,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         setTargetSourcePath(uploadedPath);
         return uploadedPath;
     };
-
-    useEffect(() => {
-        if (numParallelJobs > 1 && msaProvider === 'colabfold_api') {
-            setMsaProvider('local');
-        }
-    }, [numParallelJobs, msaProvider]);
 
     useEffect(() => {
         if (!modalParsedStructure) {
@@ -2092,9 +2087,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
-                                            <option value="local">Local MMseqs2 (recommended)</option>
+                                            <option value="local">Local MMseqs2 (manual override)</option>
                                             <option value="colabfold_api" disabled={numParallelJobs > 1}>
-                                                ColabFold API (single-job only)
+                                                ColabFold API (default; single-job only)
                                             </option>
                                         </select>
                                     </div>
