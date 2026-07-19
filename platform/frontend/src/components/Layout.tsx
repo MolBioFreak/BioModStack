@@ -24,6 +24,7 @@ import {
     useBmsFeatures,
 } from '../runtime/installFeatures';
 import { ThemeSelector } from './ThemeSelector';
+import { buildIdentity } from '../lib/buildIdentity';
 
 import { BioXpInterlinkMenu } from './BioXpInterlinkControlPanel';
 import {
@@ -62,16 +63,29 @@ declare global {
 const API_HEALTH_ENDPOINT = '/api/health';
 const RUNTIME_PORTS_ENDPOINT = '/api/system/runtime-ports';
 const RUNTIME_START_TARGET_ENDPOINT = '/api/system/runtime/start-target';
-async function readApiHealth(): Promise<string> {
+type ApiHealthDiagnostics = {
+    status: string;
+    buildRevision?: string;
+};
+
+async function readApiHealth(): Promise<ApiHealthDiagnostics> {
     try {
         const response = await fetch(API_HEALTH_ENDPOINT, { cache: 'no-store' });
         if (!response.ok) {
-            return `unhealthy (${response.status})`;
+            return { status: `unhealthy (${response.status})` };
         }
-        const body = await response.json().catch(() => null) as { status?: unknown } | null;
-        return String(body?.status || 'healthy');
+        const body = await response.json().catch(() => null) as {
+            status?: unknown;
+            build?: { revision?: unknown };
+        } | null;
+        return {
+            status: String(body?.status || 'healthy'),
+            buildRevision: typeof body?.build?.revision === 'string'
+                ? body.build.revision
+                : undefined,
+        };
     } catch (error) {
-        return `unreachable (${error instanceof Error ? error.message : String(error)})`;
+        return { status: `unreachable (${error instanceof Error ? error.message : String(error)})` };
     }
 }
 
@@ -122,7 +136,9 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
         routerBasename,
         viteMode: import.meta.env.MODE || 'unknown',
         viteBaseUrl: import.meta.env.BASE_URL || '/',
-        apiHealth,
+        apiHealth: apiHealth.status,
+        frontendBuildRevision: buildIdentity.revision,
+        apiBuildRevision: apiHealth.buildRevision,
         shellContext,
         userAgent: navigator.userAgent,
     });
@@ -710,6 +726,7 @@ function DiagnosticsMenu() {
                 viteMode: import.meta.env.MODE || 'unknown',
                 viteBaseUrl: import.meta.env.BASE_URL || '/',
                 apiHealth: `diagnostics error (${error instanceof Error ? error.message : String(error)})`,
+                frontendBuildRevision: buildIdentity.revision,
             });
             setDiagnostics(fallback);
             return fallback;

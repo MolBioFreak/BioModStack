@@ -5,6 +5,7 @@ Handles launching and managing Nextflow pipeline processes.
 """
 
 import asyncio
+import codecs
 from collections import deque
 import subprocess
 import os
@@ -24,18 +25,60 @@ CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
 DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
 DEFAULT_NEXTFLOW_JAVA_HOME = Path("/home/dalab/.local/jdks/temurin-17")
+DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_LINES = 4_000
+DEFAULT_NEXTFLOW_LOG_READ_BYTES = 256 * 1024
 NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
 
 
-class _BoundedLogTail:
-    """Retain only a bounded diagnostic tail while the full log stays on disk."""
+def _bounded_env_int(name: str, default: int, minimum: int) -> int:
+    """Read a positive integer limit from the environment with a safe floor."""
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
 
-    def __init__(self, *, max_lines: int, max_line_chars: int) -> None:
+
+def read_incremental_log_chunk(log_path: Path, offset: int, max_bytes: int) -> Tuple[bytes, int]:
+    """Read at most ``max_bytes`` from an append-only durable log."""
+    if not log_path.exists():
+        return b"", max(0, offset)
+    safe_offset = max(0, offset)
+    with open(log_path, "rb") as reader:
+        reader.seek(safe_offset)
+        chunk = reader.read(max(1, max_bytes))
+    return chunk, safe_offset + len(chunk)
+
+
+class _BoundedLogTail:
+    """Retain a diagnostic tail bounded by lines, line length, and UTF-8 bytes."""
+
+    def __init__(self, *, max_lines: int, max_line_chars: int, max_bytes: int) -> None:
         self.max_lines = max(1, int(max_lines))
         self.max_line_chars = max(1, int(max_line_chars))
-        self._lines: Deque[str] = deque(maxlen=self.max_lines)
+        self.max_bytes = max(1, int(max_bytes))
+        self._lines: Deque[Tuple[str, int]] = deque()
+        self.byte_size = 0
+
+    def _truncate_to_byte_limit(self, text: str) -> str:
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) <= self.max_bytes:
+            return text
+        newline = "\n" if text.endswith("\n") else ""
+        body = text[:-1] if newline else text
+        marker = "...[truncated]..."
+        fixed_bytes = len((marker + newline).encode("utf-8"))
+        if fixed_bytes >= self.max_bytes:
+            return (marker + newline).encode("utf-8")[-self.max_bytes :].decode(
+                "utf-8", errors="ignore"
+            )
+        budget = self.max_bytes - fixed_bytes
+        body_bytes = body.encode("utf-8", errors="replace")
+        prefix = body_bytes[: budget // 2].decode("utf-8", errors="ignore")
+        suffix = body_bytes[-(budget - budget // 2) :].decode("utf-8", errors="ignore")
+        return prefix + marker + suffix + newline
 
     def append(self, line: str) -> None:
         text = str(line)
@@ -50,15 +93,70 @@ class _BoundedLogTail:
                 prefix_len = available // 2
                 suffix_len = available - prefix_len
                 text = body[:prefix_len] + marker + body[-suffix_len:] + newline
-        self._lines.append(text)
+        text = self._truncate_to_byte_limit(text)
+        size = len(text.encode("utf-8", errors="replace"))
+        self._lines.append((text, size))
+        self.byte_size += size
+        while len(self._lines) > self.max_lines or self.byte_size > self.max_bytes:
+            _discarded, discarded_size = self._lines.popleft()
+            self.byte_size -= discarded_size
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._lines)
+        return (line for line, _size in self._lines)
+
+    def __len__(self) -> int:
+        return len(self._lines)
 
     def tail(self, count: int) -> List[str]:
         if count <= 0:
             return []
-        return list(self._lines)[-count:]
+        return [line for line, _size in list(self._lines)[-count:]]
+
+
+class _IncrementalLogReader:
+    """Decode bounded chunks without splitting UTF-8 or duplicating final EOF data."""
+
+    def __init__(self, log_path: Path, *, offset: int, max_read_bytes: int, max_line_chars: int) -> None:
+        self.log_path = log_path
+        self.offset = max(0, int(offset))
+        self.max_read_bytes = max(1, int(max_read_bytes))
+        self.max_line_chars = max(1, int(max_line_chars))
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending = ""
+        self._finished = False
+
+    def _take_complete_lines(self, text: str, *, final: bool) -> List[str]:
+        combined = self._pending + text
+        self._pending = ""
+        lines = combined.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            self._pending = lines.pop()
+        while len(self._pending) > self.max_line_chars:
+            lines.append(self._pending[: self.max_line_chars])
+            self._pending = self._pending[self.max_line_chars :]
+        if final and self._pending:
+            lines.append(self._pending)
+            self._pending = ""
+        return lines
+
+    def read_available(self, *, final: bool = False) -> List[str]:
+        if self._finished:
+            return []
+        lines: List[str] = []
+        while True:
+            chunk, self.offset = read_incremental_log_chunk(
+                self.log_path, self.offset, self.max_read_bytes
+            )
+            if chunk:
+                lines.extend(self._take_complete_lines(self._decoder.decode(chunk), final=False))
+                if not final:
+                    break
+                continue
+            if final:
+                lines.extend(self._take_complete_lines(self._decoder.decode(b"", final=True), final=True))
+                self._finished = True
+            break
+        return lines
 
 
 def _java_patch_version(text: str) -> Optional[str]:
@@ -2013,9 +2111,23 @@ async def launch_nextflow_job(
             # ═══════════════════════════════════════════════════════════════════
             log_path = Path(output_dir) / "nextflow.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
+            retained_log_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES",
+                DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_BYTES,
+                1024,
+            )
+            retained_log_max_lines = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES",
+                DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_LINES,
+                10,
+            )
+            log_read_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_LOG_READ_BYTES", DEFAULT_NEXTFLOW_LOG_READ_BYTES, 1024
+            )
             full_log = _BoundedLogTail(
-                max_lines=NEXTFLOW_LOG_TAIL_MAX_LINES,
+                max_lines=retained_log_max_lines,
                 max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                max_bytes=retained_log_max_bytes,
             )
             last_resume_lock_line: Optional[str] = None
             last_oom_line: Optional[str] = None
@@ -2075,10 +2187,16 @@ async def launch_nextflow_job(
                 )
 
                 log_offset = log_path.stat().st_size if log_path.exists() else 0
-                pending_fragment = ""
-                attempt_log = _BoundedLogTail(
-                    max_lines=NEXTFLOW_ATTEMPT_LOG_MAX_LINES,
+                log_reader = _IncrementalLogReader(
+                    log_path,
+                    offset=log_offset,
+                    max_read_bytes=log_read_max_bytes,
                     max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                )
+                attempt_log = _BoundedLogTail(
+                    max_lines=min(retained_log_max_lines, NEXTFLOW_ATTEMPT_LOG_MAX_LINES),
+                    max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                    max_bytes=retained_log_max_bytes,
                 )
                 attempt_resume_lock_seen = False
                 attempt_cuda_oom_seen = False
@@ -2232,34 +2350,9 @@ async def launch_nextflow_job(
                             logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
 
                 async def consume_new_log(final: bool = False) -> None:
-                    nonlocal log_offset, pending_fragment
                     if not log_path.exists():
                         return
-                    with open(log_path, "rb") as reader:
-                        reader.seek(log_offset)
-                        chunk = reader.read()
-                    if chunk:
-                        log_offset += len(chunk)
-                        text = pending_fragment + chunk.decode("utf-8", errors="replace")
-                    elif final and pending_fragment:
-                        text = pending_fragment
-                    else:
-                        return
-
-                    pending_fragment = ""
-                    lines = text.splitlines(keepends=True)
-                    if lines and not lines[-1].endswith(("\n", "\r")):
-                        pending_fragment = lines.pop()
-                        while len(pending_fragment) > NEXTFLOW_LOG_MAX_LINE_CHARS:
-                            fragment = pending_fragment[:NEXTFLOW_LOG_MAX_LINE_CHARS]
-                            pending_fragment = pending_fragment[NEXTFLOW_LOG_MAX_LINE_CHARS:]
-                            await handle_log_line(fragment + "...[continued]\n")
-
-                    if final and pending_fragment:
-                        lines.append(pending_fragment)
-                        pending_fragment = ""
-
-                    for line_str in lines:
+                    for line_str in log_reader.read_available(final=final):
                         await handle_log_line(line_str)
 
                 with open(log_path, "ab", buffering=0) as log_sink:

@@ -32,6 +32,8 @@ from services.gpu_config import (
     mutate_scheduler_config,
     GPU_CONFIG_PATH,
     DEFAULT_SCHEDULER_CONFIG,
+    MANDATORY_CONCURRENCY_CAPS,
+    PROTECTED_CONCURRENCY_LIMITS,
 )
 from services.gpu_metadata import HARDWARE_LIMITS
 from services.job_control import force_launch_job as force_launch_job_service
@@ -3159,6 +3161,7 @@ class SchedulerGlobalConfig(BaseModel):
     auto_cpu_thread_job_threshold: int = DEFAULT_SCHEDULER_CONFIG["global"]["auto_cpu_thread_job_threshold"]
     enabled: bool = DEFAULT_SCHEDULER_CONFIG["global"]["enabled"]
     target_vram_fill: float = DEFAULT_SCHEDULER_CONFIG["global"]["target_vram_fill"]
+    vram_safety_margin_mb: int = DEFAULT_SCHEDULER_CONFIG["global"]["vram_safety_margin_mb"]
     capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
     emptiness_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["emptiness_weight"]
     max_launches_per_cycle: int = DEFAULT_SCHEDULER_CONFIG["global"]["max_launches_per_cycle"]
@@ -3175,7 +3178,7 @@ class SchedulerGPUOverride(BaseModel):
     threshold: Optional[float] = None     # null = use global
     disabled: bool = False                # GPU excluded from orchestrator scheduling
     priority_tier: Optional[int] = None   # Manual priority tier (higher = preferred)
-    vram_safety_margin_mb: int = 500      # VRAM buffer to leave free
+    vram_safety_margin_mb: Optional[int] = None  # null = inherit global safety margin
     max_concurrent_jobs: Optional[int] = None  # Max jobs on this GPU (null = unlimited)
 
 
@@ -3197,6 +3200,7 @@ async def get_scheduler_config():
         "overrides": config.get("overrides", {}),
         "workflow_pins": config.get("workflow_pins", {}),
         "gpu_locks": config.get("gpu_locks", {}),
+        "concurrency_limits": config.get("concurrency_limits", {}),
         "config_path": str(GPU_CONFIG_PATH)
     }
 
@@ -3214,6 +3218,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "auto_cpu_thread_job_threshold": max(1, min(32, global_config.auto_cpu_thread_job_threshold)),
         "enabled": global_config.enabled,
         "target_vram_fill": max(0.5, min(0.95, global_config.target_vram_fill)),
+        "vram_safety_margin_mb": max(256, min(16384, global_config.vram_safety_margin_mb)),
         "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),
         "emptiness_weight": max(0.0, min(10.0, global_config.emptiness_weight)),
         "max_launches_per_cycle": max(1, min(20, global_config.max_launches_per_cycle)),
@@ -3244,15 +3249,18 @@ async def set_gpu_override(gpu_id: str, override: SchedulerGPUOverride):
     """Set per-GPU override (force_available, quick_enable, or custom threshold)."""
     if _gpu_proxy_enabled():
         return await _gpu_proxy_request_async("PUT", f"/scheduler-config/gpu/{gpu_id}", _model_payload(override))
-    override_payload = {
+    override_payload: Dict[str, Any] = {
         "force_available": override.force_available,
         "quick_enable": override.quick_enable,
         "threshold": override.threshold,
         "disabled": override.disabled,
         "priority_tier": override.priority_tier,
-        "vram_safety_margin_mb": override.vram_safety_margin_mb,
         "max_concurrent_jobs": override.max_concurrent_jobs,
     }
+    if override.vram_safety_margin_mb is not None:
+        override_payload["vram_safety_margin_mb"] = max(
+            0, min(16384, override.vram_safety_margin_mb)
+        )
 
     def apply_override(config: Dict[str, Any]) -> None:
         config.setdefault("overrides", {})[gpu_id] = override_payload
@@ -3629,7 +3637,7 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
 class ConcurrencyLimitRequest(BaseModel):
     """Request to set concurrency limit for a model type."""
     model_type: str  # e.g., "fampnn", "rfantibody", "boltz"
-    limit: Optional[Union[int, str]] = None  # None = unlimited, "auto" = VRAM-derived
+    limit: Optional[Union[int, str]] = None  # None = unlimited except mandatory safety caps
 
 
 @router.get("/concurrency-limits")
@@ -3650,10 +3658,24 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     [DEBUG] Set concurrency limit for a specific model type.
     
     Limits how many jobs of this type can run concurrently (cap).
-    Set to null for unlimited, or "auto" for VRAM-derived limit.
+    Set to null for unlimited (except mandatory safety caps), or "auto" for VRAM-derived limit.
     """
     import logging
     logger = logging.getLogger("api.gpu")
+
+    mandatory_cap = MANDATORY_CONCURRENCY_CAPS.get(request.model_type)
+    if mandatory_cap is not None:
+        invalid_protected_limit = request.limit is None or (
+            isinstance(request.limit, int) and request.limit > mandatory_cap
+        )
+        if invalid_protected_limit:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{request.model_type} has a mandatory safety cap of "
+                    f"{mandatory_cap} and cannot be unlimited or raised above it"
+                ),
+            )
     
     old_limit: Union[int, str, None] = None
 
@@ -3700,6 +3722,12 @@ async def delete_concurrency_limit(model_type: str):
     """
     import logging
     logger = logging.getLogger("api.gpu")
+
+    if model_type in PROTECTED_CONCURRENCY_LIMITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{model_type} has a mandatory safety cap and cannot be removed",
+        )
     
     old_limit: Union[int, str, None] = None
 

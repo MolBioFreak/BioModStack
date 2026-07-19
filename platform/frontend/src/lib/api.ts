@@ -1563,6 +1563,7 @@ export interface SchedulerConfig {
         auto_cpu_thread_job_threshold: number;
         enabled: boolean;
         target_vram_fill: number;
+        vram_safety_margin_mb: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;
@@ -1577,7 +1578,7 @@ export interface SchedulerConfig {
         quick_enable?: boolean;
         threshold?: number | null;
         priority_tier?: number | null;
-        vram_safety_margin_mb?: number;
+        vram_safety_margin_mb?: number | null;
         max_concurrent_jobs?: number | null;
     }>;
 }
