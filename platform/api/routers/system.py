@@ -44,6 +44,7 @@ from biomodstack_services import (  # noqa: E402
     stop_all,
 )
 from paths import get_db_path, get_results_dir, get_work_dir  # noqa: E402
+from services.addon_status import probe_stats_addon  # noqa: E402
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -372,6 +373,12 @@ async def get_install_features(request: Request):
         "configured_features": configured,
         "dev_features": DEV_INSTALL_FEATURES,
     }
+
+
+@router.get("/stats-toolkit")
+async def get_stats_toolkit_status(request: Request):
+    _require_local_admin(request)
+    return probe_stats_addon()
 
 
 @router.put("/features")
