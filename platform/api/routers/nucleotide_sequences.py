@@ -10,6 +10,7 @@ from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timezone
+import re
 import uuid
 
 from molbio_database import get_molbio_session
@@ -53,6 +54,17 @@ class FeatureSchema(BaseModel):
     segments: Optional[List[dict[str, int]]] = None
 
 
+class PrimerSiteSchema(BaseModel):
+    """Validated binding-site placement while preserving optional provenance."""
+    start: int
+    end: int
+    strand: Optional[int] = None
+    tm: Optional[float] = None
+    note: Optional[str] = None
+
+    model_config = ConfigDict(extra="allow")
+
+
 class PrimerSchema(BaseModel):
     """Primer associated with a sequence."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -69,7 +81,7 @@ class PrimerSchema(BaseModel):
     tm_settings: Optional[dict] = None
     notes: Optional[dict] = None
     provenance: Optional[dict] = None
-    sites: Optional[List[dict[str, Any]]] = None
+    sites: Optional[List[PrimerSiteSchema]] = None
 
 
 class AnalysisTrackSchema(BaseModel):
@@ -363,6 +375,26 @@ def normalize_analysis_tracks(
     return normalized
 
 
+def normalize_feature_type(feature_type: Optional[str]) -> str:
+    """Normalize common UTR aliases to canonical INSDC feature keys."""
+
+    trimmed = (feature_type or "").strip()
+    if not trimmed:
+        return "misc_feature"
+    compact = (
+        trimmed.replace("′", "'")
+        .replace("’", "'")
+        .replace("`", "'")
+        .lower()
+    )
+    compact = re.sub(r"[\s_'\-]", "", compact)
+    if compact in {"5utr", "5primeutr"}:
+        return "5'UTR"
+    if compact in {"3utr", "3primeutr"}:
+        return "3'UTR"
+    return trimmed
+
+
 def normalize_feature_payloads(
     features: Optional[List[Any]],
     sequence_length: Optional[int] = None,
@@ -373,6 +405,7 @@ def normalize_feature_payloads(
     normalized: List[dict] = []
     for raw_feature in features:
         payload = raw_feature.model_dump() if isinstance(raw_feature, BaseModel) else dict(raw_feature)
+        payload["type"] = normalize_feature_type(payload.get("type"))
         segments = payload.get("segments") or []
         if not segments:
             start = payload.get("start")
@@ -406,6 +439,131 @@ def normalize_feature_payloads(
             payload["qualifiers"] = payload["notes"]
         if payload.get("notes") is None and payload.get("qualifiers") is not None:
             payload["notes"] = payload["qualifiers"]
+        normalized.append(payload)
+
+    return normalized
+
+
+def normalize_primer_payloads(
+    primers: Optional[List[Any]],
+    sequence_length: int,
+    is_circular: bool,
+) -> List[dict]:
+    """Validate primer placement and serialize canonical binding-site segments."""
+
+    if not primers:
+        return []
+    if sequence_length <= 0:
+        raise HTTPException(status_code=400, detail="Primer placement requires a non-empty sequence")
+
+    normalized: List[dict] = []
+    for raw_primer in primers:
+        payload = raw_primer.model_dump() if isinstance(raw_primer, BaseModel) else dict(raw_primer)
+        primer_name = str(payload.get("name") or "unnamed")
+        try:
+            start = int(str(payload.get("start")))
+            end = int(str(payload.get("end")))
+            strand = int(str(payload.get("strand", 1)))
+        except (TypeError, ValueError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' has non-integer placement coordinates",
+            ) from error
+
+        if strand not in {-1, 1}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' strand must be +1 or -1",
+            )
+        if not (0 <= start < sequence_length and 0 <= end <= sequence_length):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Primer '{primer_name}' placement {start}-{end} exceeds "
+                    f"sequence length {sequence_length}"
+                ),
+            )
+        if start == end:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' placement must contain at least one base",
+            )
+        if not is_circular and end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' cannot wrap on a linear sequence",
+            )
+
+        if start < end:
+            expected_ranges = [(start, end)]
+        else:
+            expected_ranges = [(start, sequence_length)]
+            if end > 0:
+                expected_ranges.append((0, end))
+
+        raw_sites = payload.get("sites") or [
+            {"start": site_start, "end": site_end, "strand": strand}
+            for site_start, site_end in expected_ranges
+        ]
+        normalized_sites: List[dict[str, Any]] = []
+        for raw_site in raw_sites:
+            site = raw_site.model_dump(exclude_none=True) if isinstance(raw_site, BaseModel) else {
+                key: value for key, value in dict(raw_site).items() if value is not None
+            }
+            try:
+                site_start = int(str(site.get("start")))
+                site_end = int(str(site.get("end")))
+                site_strand_value = site.get("strand")
+                site_strand = (
+                    strand
+                    if site_strand_value is None
+                    else int(str(site_strand_value))
+                )
+            except (TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' contains non-integer site coordinates",
+                ) from error
+            if site_strand not in {-1, 1}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' site strand must be +1 or -1",
+                )
+            if site_strand != strand:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' site strand does not match primer strand",
+                )
+            if not (0 <= site_start < site_end <= sequence_length):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Primer '{primer_name}' site {site_start}-{site_end} exceeds "
+                        f"sequence length {sequence_length} or is empty/reversed"
+                    ),
+                )
+            site["start"] = site_start
+            site["end"] = site_end
+            site["strand"] = site_strand
+            normalized_sites.append(site)
+
+        actual_ranges = [
+            (site["start"], site["end"])
+            for site in normalized_sites
+        ]
+        if actual_ranges != expected_ranges:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Primer '{primer_name}' sites {actual_ranges} do not match "
+                    f"placement {expected_ranges}"
+                ),
+            )
+
+        payload["start"] = start
+        payload["end"] = end
+        payload["strand"] = strand
+        payload["sites"] = normalized_sites
         normalized.append(payload)
 
     return normalized
@@ -519,7 +677,11 @@ async def create_sequence(
         is_circular=data.is_circular,
         length=len(cleaned_seq),
         features=normalize_feature_payloads(data.features, len(cleaned_seq)),
-        primers=[p.model_dump() for p in data.primers] if data.primers else [],
+        primers=normalize_primer_payloads(
+            data.primers,
+            len(cleaned_seq),
+            data.is_circular,
+        ),
         analysis_tracks=normalize_analysis_tracks(data.analysis_tracks, len(cleaned_seq)),
         organism=data.organism,
         accession=data.accession,
@@ -575,6 +737,24 @@ async def update_sequence(
 
     changed = False
 
+    next_sequence_type = normalize_sequence_type(
+        data.sequence_type or seq.sequence_type,
+        data.sequence or seq.sequence,
+    )
+    next_sequence = (
+        clean_sequence(data.sequence, next_sequence_type)
+        if data.sequence is not None
+        else seq.sequence
+    )
+    if not next_sequence:
+        raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
+    next_is_circular = data.is_circular if data.is_circular is not None else seq.is_circular
+    normalized_primers = normalize_primer_payloads(
+        data.primers if data.primers is not None else seq.primers,
+        len(next_sequence),
+        next_is_circular,
+    )
+
     # Update fields if provided
     if data.name is not None:
         seq.name = data.name
@@ -582,12 +762,10 @@ async def update_sequence(
     if data.description is not None:
         seq.description = data.description
         changed = True
-    next_sequence_type = normalize_sequence_type(data.sequence_type or seq.sequence_type, data.sequence or seq.sequence)
     if data.sequence is not None:
-        cleaned_seq = clean_sequence(data.sequence, next_sequence_type)
-        seq.sequence = cleaned_seq
-        seq.length = len(cleaned_seq)
-        seq.gc_content = calculate_gc_content(cleaned_seq)
+        seq.sequence = next_sequence
+        seq.length = len(next_sequence)
+        seq.gc_content = calculate_gc_content(next_sequence)
         if data.analysis_tracks is None:
             seq.analysis_tracks = []
         changed = True
@@ -618,8 +796,8 @@ async def update_sequence(
     if data.features is not None:
         seq.features = normalize_feature_payloads(data.features, seq.length)
         changed = True
-    if data.primers is not None:
-        seq.primers = [p.model_dump() for p in data.primers]
+    if data.primers is not None or data.sequence is not None or data.is_circular is not None:
+        seq.primers = normalized_primers
         changed = True
     if data.analysis_tracks is not None:
         seq.analysis_tracks = normalize_analysis_tracks(data.analysis_tracks, seq.length)

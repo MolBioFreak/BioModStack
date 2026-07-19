@@ -7,7 +7,13 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
-import { featureLength, featureSegments } from '../utils/features';
+import { FEATURE_COLOR_PALETTE, FEATURE_TYPES, getFeatureColor } from '../featureCatalog';
+import {
+    featureCoordinateLabel,
+    featureHighlightRegions,
+    featureLength,
+    featureSegments,
+} from '../utils/features';
 
 interface FeaturePanelProps {
     sequenceData: SequenceData;
@@ -64,34 +70,6 @@ function selectionToDraftSegments(
         { id: nextQualifierId(), start: 1, end: rawEnd },
     ];
 }
-
-const FEATURE_TYPES = [
-    { value: 'CDS', label: 'CDS', color: '#22c55e', category: 'Coding' },
-    { value: 'gene', label: 'Gene', color: '#3b82f6', category: 'Coding' },
-    { value: 'exon', label: 'Exon', color: '#10b981', category: 'Coding' },
-    { value: 'promoter', label: 'Promoter', color: '#8b5cf6', category: 'Regulatory' },
-    { value: 'enhancer', label: 'Enhancer', color: '#a855f7', category: 'Regulatory' },
-    { value: 'terminator', label: 'Terminator', color: '#ef4444', category: 'Regulatory' },
-    { value: '5UTR', label: "5' UTR", color: '#06b6d4', category: 'Regulatory' },
-    { value: '3UTR', label: "3' UTR", color: '#0891b2', category: 'Regulatory' },
-    { value: 'rep_origin', label: 'Origin of Replication', color: '#ec4899', category: 'Replication' },
-    { value: 'oriT', label: 'oriT', color: '#db2777', category: 'Replication' },
-    { value: 'resistance', label: 'Resistance Marker', color: '#dc2626', category: 'Marker' },
-    { value: 'reporter', label: 'Reporter', color: '#65a30d', category: 'Marker' },
-    { value: 'tag', label: 'Tag', color: '#f59e0b', category: 'Marker' },
-    { value: 'primer_bind', label: 'Primer Binding Site', color: '#f59e0b', category: 'Binding' },
-    { value: 'protein_bind', label: 'Protein Binding Site', color: '#0ea5e9', category: 'Binding' },
-    { value: 'misc_feature', label: 'Misc Feature', color: '#6b7280', category: 'Other' },
-    { value: 'misc_difference', label: 'Difference / Variant', color: '#fbbf24', category: 'Other' },
-    { value: 'source', label: 'Source', color: '#94a3b8', category: 'Other' },
-];
-
-const COLOR_PALETTE = [
-    '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16',
-    '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9',
-    '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef',
-    '#ec4899', '#f43f5e', '#64748b', '#475569', '#ffffff',
-];
 
 const COMMON_QUALIFIERS = [
     'gene',
@@ -172,10 +150,6 @@ function qualifierPreview(notes?: Record<string, unknown>): string[] {
             const display = Array.isArray(value) ? value.join(' | ') : String(value);
             return `${key}: ${display}`;
         });
-}
-
-function typeColor(type: string): string {
-    return FEATURE_TYPES.find((entry) => entry.value === type)?.color || '#6b7280';
 }
 
 function QualifierEditor({
@@ -398,7 +372,7 @@ export function FeaturePanel({
     const updateDraftType = (draft: FeatureDraft, type: string): FeatureDraft => ({
         ...draft,
         type,
-        color: typeColor(type),
+        color: getFeatureColor(type),
     });
 
     const useSelection = () => {
@@ -475,7 +449,7 @@ export function FeaturePanel({
             start: feature.start + 1,
             end: feature.end,
             strand: feature.strand,
-            color: feature.color || typeColor(feature.type),
+            color: feature.color || getFeatureColor(feature.type),
             description: feature.description || '',
             qualifiers: notesToRows(feature.qualifiers || feature.notes),
             provenance: notesToRows(feature.provenance),
@@ -515,12 +489,10 @@ export function FeaturePanel({
             onHighlight([]);
             return;
         }
-        onHighlight([{
-            start: feature.start,
-            end: feature.end,
-            color: feature.color || typeColor(feature.type),
-            label: feature.name,
-        }]);
+        onHighlight(featureHighlightRegions(
+            feature,
+            feature.color || getFeatureColor(feature.type),
+        ));
     }, [onHighlight]);
 
     const jumpToFeature = (feature: Feature) => {
@@ -592,7 +564,7 @@ export function FeaturePanel({
                             ))}
                         </select>
                         <div className="flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2">
-                            {COLOR_PALETTE.slice(0, 8).map((color) => (
+                            {FEATURE_COLOR_PALETTE.slice(0, 8).map((color) => (
                                 <button
                                     key={color}
                                     onClick={() => setAddDraft((current) => ({ ...current, color }))}
@@ -807,7 +779,7 @@ export function FeaturePanel({
                                                 Reverse
                                             </label>
                                             <div className="ml-auto flex items-center gap-1">
-                                                {COLOR_PALETTE.slice(0, 8).map((color) => (
+                                                {FEATURE_COLOR_PALETTE.slice(0, 8).map((color) => (
                                                     <button
                                                         key={color}
                                                         onClick={() => setEditDraft((current) => ({ ...current, color }))}
@@ -875,7 +847,7 @@ export function FeaturePanel({
                                                 <div className="flex items-center gap-2">
                                                     <span
                                                         className="inline-block h-3 w-3 rounded-sm"
-                                                        style={{ backgroundColor: feature.color || typeColor(feature.type) }}
+                                                        style={{ backgroundColor: feature.color || getFeatureColor(feature.type) }}
                                                     />
                                                     <span className="font-medium text-slate-100">{feature.name}</span>
                                                     <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] uppercase text-slate-400">
@@ -884,7 +856,7 @@ export function FeaturePanel({
                                                     <span className="text-xs text-slate-500">{feature.strand === 1 ? '→' : '←'}</span>
                                                 </div>
                                                 <div className="mt-1 text-xs text-slate-400">
-                                                    {feature.start + 1}–{feature.end} • {featureLength(feature)} bp
+                                                    {featureCoordinateLabel(feature)} • {featureLength(feature)} bp
                                                     {segments.length > 1 ? ` • ${segments.length} segments` : ''}
                                                 </div>
                                                 {feature.description && (

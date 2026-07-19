@@ -7,7 +7,6 @@ import {
     displayStrandForMoleculeOrientation,
     inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromParsedRecord,
-    moleculeLabelForNucleotide,
     normalizeSequenceForType,
     parseSequenceInput,
     sequenceForDisplayStrand,
@@ -218,7 +217,9 @@ test('viewer labels expose molecule labels and SeqViz receives polymer type, not
     assert.match(modalSource, /label=\{sequence\.molecule_label\}/);
     assert.match(viewerSource, /const seqVizSeqType = sequenceData\.sequenceType === 'protein' \? 'aa' : sequenceData\.sequenceType/);
     assert.match(viewerSource, /sequenceForDisplayStrand\(/);
-    assert.match(viewerSource, /const sourceRange = transformRangeForDisplayStrand\(/);
-    assert.match(viewerSource, /highlights=\{displayHighlightedRegions\}/);
+    assert.match(viewerSource, /const sourceSelection = mapSeqVizSelectionToSource\(/);
+    assert.match(viewerSource, /shouldReverseComplementForDisplay\(sourceDisplayStrand, resolvedDisplayStrand\)/);
+    assert.match(viewerSource, /const mergedHighlightedRegions = useMemo\(/);
+    assert.match(viewerSource, /highlights=\{mergedHighlightedRegions\}/);
     assert.match(viewerSource, /seqType=\{seqVizSeqType\}/);
 });
