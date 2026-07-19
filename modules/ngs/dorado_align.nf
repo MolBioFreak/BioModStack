@@ -19,15 +19,23 @@ process DoradoAlign {
     path "align.log", emit: log
 
     script:
-    def bamMinMapq = Math.max((params.bam_min_mapq ?: 0) as Integer, 0)
+    def rawBamMinMapq = (params.bam_min_mapq ?: '0').toString().trim()
+    if (!(rawBamMinMapq ==~ /[0-9]+/)) {
+        throw new IllegalArgumentException('bam_min_mapq must be an integer between 0 and 255')
+    }
+    def parsedBamMinMapq = rawBamMinMapq.toBigInteger()
+    if (parsedBamMinMapq < 0 || parsedBamMinMapq > 255) {
+        throw new IllegalArgumentException('bam_min_mapq must be an integer between 0 and 255')
+    }
+    def bamMinMapq = parsedBamMinMapq.toString()
     """
     set -euo pipefail
 
     # Sort and align; preserve MM/ML methylation tags
     if [[ ${bamMinMapq} -gt 0 ]]; then
         dorado aligner \\
-            ${reference} \\
-            ${bam} \\
+            "${reference}" \\
+            "${bam}" \\
             --threads ${task.cpus} \\
             2>align.log \\
             | samtools view -h -q ${bamMinMapq} - \\
@@ -35,18 +43,18 @@ process DoradoAlign {
         echo "Applied MAPQ filter: >= ${bamMinMapq}" >> align.log
     else
         dorado aligner \\
-            ${reference} \\
-            ${bam} \\
+            "${reference}" \\
+            "${bam}" \\
             --threads ${task.cpus} \\
             2>align.log \\
             | samtools sort -@ ${task.cpus} -o aligned.bam
     fi
 
     samtools index aligned.bam
-    cp ${reference} reference.fasta
+    cp "${reference}" reference.fasta
     samtools faidx reference.fasta
 
-    input_records=\$(samtools view -c ${bam})
+    input_records=\$(samtools view -c "${bam}")
     output_records=\$(samtools view -c aligned.bam)
     {
         echo "bam_min_mapq=${bamMinMapq}"
