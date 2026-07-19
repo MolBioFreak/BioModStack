@@ -835,9 +835,8 @@ def test_runtime_listener_preflight_checks_all_stable_dependencies(monkeypatch, 
         "frontend",
         "cpu-power",
         "host-agent",
-        "analytical-db",
     }
-    assert set(seen) == {8001, 8000, 18080, 8797, 8798, 55432}
+    assert set(seen) == {8001, 8000, 18080, 8797, 8798}
     assert all(component["status"] == "no-listener" for component in result["components"].values())
 
 

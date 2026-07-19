@@ -1,11 +1,35 @@
-import type { Feature, Primer, SequenceData } from '../types';
-import { remapFeatureAfterDeletion, remapFeatureAfterInsertion, transformFeatureForSelection } from './features';
-import { complementSequence, reverseComplementSequence } from './nucleotides';
+import { remapFeatureAfterDeletion, remapFeatureAfterInsertion, transformFeatureForSelection, type FeatureRecord } from './features.js';
+import { complementSequence, reverseComplementSequence } from './nucleotides.js';
+import { canonicalizePrimerPlacement } from './selectionActions.js';
 
 type RangeLike = {
     start: number;
     end: number;
 };
+
+export interface SequenceEditPrimer extends RangeLike {
+    id: string;
+    name: string;
+    sequence: string;
+    sequenceType?: 'dna' | 'rna';
+    strand: 1 | -1;
+    sites?: Array<RangeLike & {
+        strand: 1 | -1;
+        tm?: number;
+        note?: string;
+    }>;
+}
+
+export interface SequenceEditData {
+    name?: string;
+    sequence: string;
+    circular?: boolean;
+    sequenceType: 'dna' | 'rna' | 'protein';
+    features: FeatureRecord[];
+    primers?: SequenceEditPrimer[];
+    translations?: unknown[];
+    analysisTracks?: unknown[];
+}
 
 export type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
 
@@ -73,12 +97,12 @@ function remapRangeEntitiesAfterInsertion<T extends RangeLike>(entities: T[], po
     });
 }
 
-function withUpdatedSequenceData(
-    sequenceData: SequenceData,
+function withUpdatedSequenceData<T extends SequenceEditData>(
+    sequenceData: T,
     sequence: string,
-    features: Feature[],
-    primers: Primer[],
-): SequenceData {
+    features: FeatureRecord[],
+    primers: SequenceEditPrimer[],
+): T {
     return {
         ...sequenceData,
         sequence,
@@ -89,13 +113,13 @@ function withUpdatedSequenceData(
         // Analysis/evidence tracks are position-aligned to the original sequence.
         // Clear them on sequence-altering edits instead of leaving stale coordinates.
         analysisTracks: [],
-    };
+    } as T;
 }
 
 function transformPrimerSequence(
     primerSequence: string,
     operation: TransformOperation,
-    sequenceType: SequenceData['sequenceType'],
+    sequenceType: SequenceEditData['sequenceType'],
 ): string {
     if (sequenceType === 'protein') {
         return primerSequence;
@@ -111,52 +135,111 @@ function transformPrimerSequence(
 }
 
 function transformFeaturesForSelection(
-    features: Feature[],
+    features: FeatureRecord[],
     start: number,
     end: number,
     operation: TransformOperation,
-): Feature[] {
+): FeatureRecord[] {
     return features.map((feature) => transformFeatureForSelection(feature, start, end, operation));
 }
 
-function transformPrimersForSelection(
-    primers: Primer[],
+function primerSites(primer: SequenceEditPrimer, sequenceLength: number, circular: boolean) {
+    const canonical = canonicalizePrimerPlacement(primer, sequenceLength, circular);
+    return canonical.sites?.map((site) => ({ ...site })) || [];
+}
+
+function withPrimerSites<T extends SequenceEditPrimer>(
+    primer: T,
+    sites: ReturnType<typeof primerSites>,
+): T | null {
+    if (sites.length === 0) {
+        return null;
+    }
+    return {
+        ...primer,
+        start: sites[0].start,
+        end: sites[sites.length - 1].end,
+        strand: sites[0].strand,
+        sites,
+    } as T;
+}
+
+function remapPrimersAfterInsertion<T extends SequenceEditPrimer>(
+    primers: T[],
+    position: number,
+    insertedLength: number,
+    sequenceLength: number,
+    circular: boolean,
+): T[] {
+    return primers.flatMap((primer) => {
+        const remapped = remapRangeEntitiesAfterInsertion(
+            primerSites(primer, sequenceLength, circular),
+            position,
+            insertedLength,
+        );
+        const next = withPrimerSites(primer, remapped);
+        return next ? [next] : [];
+    });
+}
+
+function remapPrimersAfterDeletion<T extends SequenceEditPrimer>(
+    primers: T[],
+    start: number,
+    end: number,
+    sequenceLength: number,
+    circular: boolean,
+): T[] {
+    return primers.flatMap((primer) => {
+        const remapped = remapRangeEntitiesAfterDeletion(
+            primerSites(primer, sequenceLength, circular),
+            start,
+            end,
+        );
+        const next = withPrimerSites(primer, remapped);
+        return next ? [next] : [];
+    });
+}
+
+function transformPrimersForSelection<T extends SequenceEditPrimer>(
+    primers: T[],
     start: number,
     end: number,
     operation: TransformOperation,
-    sequenceType: SequenceData['sequenceType'],
-): Primer[] {
+    sequenceType: SequenceEditData['sequenceType'],
+    sequenceLength: number,
+    circular: boolean,
+): T[] {
     return primers.map((primer) => {
-        const transformedFeature = transformFeatureForSelection({
-            id: primer.id,
-            name: primer.name,
-            type: 'primer',
-            start: primer.start,
-            end: primer.end,
-            strand: primer.strand,
-            notes: primer.notes,
-            provenance: primer.provenance,
-        }, start, end, operation);
-        const transformed: Primer = {
-            ...primer,
-            start: transformedFeature.start,
-            end: transformedFeature.end,
-            strand: transformedFeature.strand,
-        };
-        if (primer.start < start || primer.end > end) {
-            return transformed;
+        const sites = primerSites(primer, sequenceLength, circular);
+        if (!sites.every((site) => site.start >= start && site.end <= end)) {
+            return primer;
+        }
+        const nextSites = sites
+            .map((site) => ({
+                ...site,
+                ...(operation === 'complement'
+                    ? { start: site.start, end: site.end }
+                    : {
+                        start: start + (end - site.end),
+                        end: start + (end - site.start),
+                    }),
+                strand: (site.strand === 1 ? -1 : 1) as 1 | -1,
+            }));
+        const transformed = withPrimerSites(primer, nextSites);
+        if (!transformed) {
+            return primer;
         }
         return {
             ...transformed,
             sequence: transformPrimerSequence(primer.sequence, operation, sequenceType),
-        };
+        } as T;
     });
 }
 
 function transformSelectedSegment(
     selectedSequence: string,
     operation: TransformOperation,
-    sequenceType: SequenceData['sequenceType'],
+    sequenceType: SequenceEditData['sequenceType'],
 ): string {
     if (sequenceType === 'protein') {
         return selectedSequence;
@@ -171,7 +254,11 @@ function transformSelectedSegment(
     return reverseComplementSequence(selectedSequence, sequenceType);
 }
 
-export function applyInsertEdit(sequenceData: SequenceData, position: number, insertedSequence: string): SequenceData {
+export function applyInsertEdit<T extends SequenceEditData>(
+    sequenceData: T,
+    position: number,
+    insertedSequence: string,
+): T {
     const insertAt = clamp(position, 0, sequenceData.sequence.length);
     const insertedLength = insertedSequence.length;
     const nextSequence =
@@ -183,11 +270,21 @@ export function applyInsertEdit(sequenceData: SequenceData, position: number, in
         sequenceData,
         nextSequence,
         sequenceData.features.map((feature) => remapFeatureAfterInsertion(feature, insertAt, insertedLength)),
-        remapRangeEntitiesAfterInsertion(sequenceData.primers || [], insertAt, insertedLength),
+        remapPrimersAfterInsertion(
+            sequenceData.primers || [],
+            insertAt,
+            insertedLength,
+            sequenceData.sequence.length,
+            Boolean(sequenceData.circular),
+        ),
     );
 }
 
-export function applyDeleteEdit(sequenceData: SequenceData, start: number, end: number): SequenceData {
+export function applyDeleteEdit<T extends SequenceEditData>(
+    sequenceData: T,
+    start: number,
+    end: number,
+): T {
     const range = normalizeRange(start, end, sequenceData.sequence.length);
     const nextSequence = sequenceData.sequence.slice(0, range.start) + sequenceData.sequence.slice(range.end);
 
@@ -196,28 +293,34 @@ export function applyDeleteEdit(sequenceData: SequenceData, start: number, end: 
         nextSequence,
         sequenceData.features
             .map((feature) => remapFeatureAfterDeletion(feature, range.start, range.end))
-            .filter((feature): feature is Feature => Boolean(feature)),
-        remapRangeEntitiesAfterDeletion(sequenceData.primers || [], range.start, range.end),
+            .filter((feature): feature is FeatureRecord => Boolean(feature)),
+        remapPrimersAfterDeletion(
+            sequenceData.primers || [],
+            range.start,
+            range.end,
+            sequenceData.sequence.length,
+            Boolean(sequenceData.circular),
+        ),
     );
 }
 
-export function applyReplaceEdit(
-    sequenceData: SequenceData,
+export function applyReplaceEdit<T extends SequenceEditData>(
+    sequenceData: T,
     start: number,
     end: number,
     replacementSequence: string,
-): SequenceData {
+): T {
     const range = normalizeRange(start, end, sequenceData.sequence.length);
     const deleted = applyDeleteEdit(sequenceData, range.start, range.end);
     return applyInsertEdit(deleted, range.start, replacementSequence);
 }
 
-export function applyTransformEdit(
-    sequenceData: SequenceData,
+export function applyTransformEdit<T extends SequenceEditData>(
+    sequenceData: T,
     start: number,
     end: number,
     operation: TransformOperation,
-): SequenceData {
+): T {
     const range = normalizeRange(start, end, sequenceData.sequence.length);
     if (range.end <= range.start) {
         return sequenceData;
@@ -234,6 +337,14 @@ export function applyTransformEdit(
         sequenceData,
         nextSequence,
         transformFeaturesForSelection(sequenceData.features, range.start, range.end, operation),
-        transformPrimersForSelection(sequenceData.primers || [], range.start, range.end, operation, sequenceData.sequenceType),
+        transformPrimersForSelection(
+            sequenceData.primers || [],
+            range.start,
+            range.end,
+            operation,
+            sequenceData.sequenceType,
+            sequenceData.sequence.length,
+            Boolean(sequenceData.circular),
+        ),
     );
 }

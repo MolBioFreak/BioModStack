@@ -35,21 +35,18 @@ BUILD_SERVICES = (
     "bms-api",
     "bms-host-agent",
     "bms-cpu-power",
-    "bms-stats-tools",
     "bms-web",
 )
 IMAGE_REFS = {
     "bms-api": "BMS_API_IMAGE",
     "bms-host-agent": "BMS_HOST_AGENT_IMAGE",
     "bms-cpu-power": "BMS_CPU_POWER_IMAGE",
-    "bms-stats-tools": "BMS_STATS_TOOLS_IMAGE",
     "bms-web": "BMS_WEB_IMAGE",
 }
 IMAGE_DEFAULTS = {
     "bms-api": "biomodstack/api:local",
     "bms-host-agent": "biomodstack/host-agent:local",
     "bms-cpu-power": "biomodstack/cpu-power:local",
-    "bms-stats-tools": "biomodstack/stats-tools:local",
     "bms-web": "biomodstack/web:local",
 }
 

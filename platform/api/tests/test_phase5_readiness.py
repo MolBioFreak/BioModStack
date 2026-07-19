@@ -10,7 +10,6 @@ async def test_native_readiness_does_not_require_workflow_adapter(monkeypatch) -
     readiness = importlib.import_module("readiness")
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "0")
     monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
-    monkeypatch.setenv("BMS_FEATURE_ASSAY_DB", "0")
     monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://frontend.test/bms/")
     monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
     monkeypatch.setattr(readiness, "http_readiness", lambda _url: _async_result(True, "ready"))
@@ -34,7 +33,6 @@ async def test_container_readiness_requires_reachable_adapter(monkeypatch) -> No
     readiness = importlib.import_module("readiness")
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://adapter.test")
-    monkeypatch.setenv("BMS_FEATURE_ASSAY_DB", "0")
     monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://frontend.test/bms/")
     monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
 
