@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from routers import bioxp
@@ -23,15 +23,16 @@ def _client(tmp_path: Path) -> TestClient:
 
 
 def test_every_non_get_route_carries_the_global_guard() -> None:
-    routes = [route for route in bioxp.router.routes if isinstance(route, APIRoute)]
+    routes = [
+        route
+        for included_router in bioxp.router.routes
+        for route in cast(Any, included_router).effective_candidates()
+    ]
     non_get = [route for route in routes if route.methods and route.methods != {"GET"}]
     assert non_get
     assert len(routes) <= 18
     for route in non_get:
-        assert any(
-            dependency.call is require_bioxp_mutation_access
-            for dependency in route.dependant.dependencies
-        ), f"missing mutation dependency: {route.path}"
+        assert any(dependency.dependency is require_bioxp_mutation_access for dependency in route.dependencies), f"missing mutation dependency: {route.path}"
 
 
 def test_safe_local_mutations_are_exact_and_do_not_reach_robot() -> None:
