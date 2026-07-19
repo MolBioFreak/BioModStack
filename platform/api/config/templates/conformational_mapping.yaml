@@ -4,17 +4,34 @@ icon: route
 color: "#F97316"
 experimental: true
 description: >
-  Canonical ConforNets preparation/finalization is implemented as an internal,
-  fail-closed adapter. Public generic launch is disabled; the current pinned
-  upstream also remains STOP because it lacks authoritative coordinate emission.
-goal: Validate request identity, seed authority, backend scope, and coordinate cardinality before scheduling.
-status: Public generic launch disabled pending an authenticated typed launcher. Internal ConforNets adapter present but current upstream STOP; Protenix and import remain stubs.
+  Generate complete-complex Protenix v2 ensembles across explicit target, seed and
+  sample coordinates; alternatively run canonical single-chain ConforNets or secure
+  registered imports; then map residues, compute FrustraMPNN landscapes, and rank
+  hypotheses by support, clash and stability evidence.
+goal: Generate or import independent structural hypotheses, preserve their exact coordinates, and compare mapped energetic landscapes without treating hypotheses as physical populations.
+status: Dedicated typed launcher; the generic jobs endpoint remains intentionally disabled.
 stages:
-  - {name: Validate, tool: CM Request Builder, description: Reject unknown fields, seed conflicts, unsupported ConforNets inputs, and unknown backends.}
-  - {name: Materialize, tool: CM Request Builder, description: Atomically write canonical cm_request_v1 JSON and its exact coordinate plan.}
-  - {name: Dispatch, tool: Nextflow, description: ConforNets is internally adapted but hard-stops on the current uninstrumented upstream; Protenix and import are explicit stubs.}
+  - {name: Generate, tool: Protenix v2, description: Produce complete-complex ensembles over every authenticated target × ordered seed × sample coordinate.}
+  - {name: Alternatives, tool: ConforNets / secure import, description: Run canonical single-chain ConforNets tasks or admit immutable registered structure hypotheses.}
+  - {name: Normalize, tool: Residue mapping, description: Normalize chain and residue identities while preserving native artifacts and exact backend coordinates.}
+  - {name: Analyze, tool: FrustraMPNN landscapes, description: Retain mapped exact-20 energetic landscapes for every admitted hypothesis.}
+  - {name: Compare, tool: Support + ranking, description: Compute clash, sign-support, hierarchical ranking and rank-stability evidence.}
 preset_params:
   template_model_id: conformational_mapping
   template_mode_id: map
   workflow_model_topic: conformational_mapping
-user_params: []
+user_params:
+  - {name: backend, label: Backend, type: select, required: true, default: protenix_v2_ensemble, options: [protenix_v2_ensemble, confornets, external_import]}
+  - {name: ordered_seeds, label: Ordered seeds, type: text, required: true, default: "101,202,303,404,505"}
+  - {name: samples_per_seed, label: Samples per seed, type: number, required: true, default: 5, min: 1, max: 100}
+  - {name: registered_snapshot_id, label: Registered complex snapshot ID, type: string, required: false, description: Server registry ID only; host paths are not accepted.}
+  - {name: registered_artifact_ids, label: Ordered registered import IDs, type: text, required: false, description: JSON array of server registry IDs for external import.}
+  - {name: registered_sequence_id, label: Registered sequence ID, type: string, required: false, description: ConforNets protein-sequence registry ID.}
+  - {name: registered_reference_ids, label: Registered reference IDs, type: text, required: false, description: JSON array of at most two ConforNets structure registry IDs.}
+  - {name: registered_checkpoint_id, label: Registered checkpoint ID, type: string, required: false}
+  - {name: registered_config_id, label: Registered config ID, type: string, required: false}
+  - {name: registered_transfer_id, label: Registered transfer-state ID, type: string, required: false}
+  - {name: feature_policy, label: Feature policy, type: text, required: true, description: Versioned JSON object with explicit protein-MSA, template and RNA-MSA booleans for Protenix.}
+  - {name: runtime_policy, label: Runtime policy, type: text, required: true, description: JSON object selecting defaults or explicit positive cycle and step values.}
+  - {name: analysis_policy, label: Analysis policy, type: text, required: true, description: JSON object containing detector identity and every support, sign, clash and rank threshold.}
+  - {name: confornets, label: ConforNets controls, type: text, required: false, description: JSON object containing task, chain, run, saved-step, network, sample, diffusion, optimization, confidence and evaluation controls; source paths and runtime identity are server-owned.}

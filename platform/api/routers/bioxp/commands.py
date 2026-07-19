@@ -13,9 +13,9 @@ from services.bioxp.command_coordinator import (
 from services.bioxp.command_models import parse_command_request
 from services.bioxp.runtime import BioXpRuntime
 
-from .dependencies import get_bioxp_runtime
+from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
 
 class EmergencyStopRequest(BaseModel):

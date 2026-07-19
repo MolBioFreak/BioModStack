@@ -258,7 +258,7 @@ def run() -> int:
 
     launcher = repo / "scripts/run_protenix_inference.py"
     launcher_defaults = parser_defaults(launcher)
-    layout_meta_path = obs / "runtime_inventory/protenix_layout_fresh_v3/run.meta.json"
+    layout_meta_path = obs / "runtime_inventory/protenix_layout_attempt2/run.meta.json"
     layout_meta = load_json(layout_meta_path)
     layout_args = layout_meta.get("command", [])
     def layout_arg(name: str) -> str | None:

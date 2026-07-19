@@ -9,9 +9,9 @@ from services.bioxp.job_store import JobConflictError
 from services.bioxp.protocols import BioXpProtocol, compile_protocol
 from services.bioxp.runtime import BioXpRuntime
 
-from .dependencies import get_bioxp_runtime
+from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
 
 class ProtocolSubmission(BaseModel):

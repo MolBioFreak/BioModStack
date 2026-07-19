@@ -8,6 +8,7 @@ identity to audit every normalized protein residue and its N/CA/C/O atoms.
 from __future__ import annotations
 
 import hashlib
+import copy
 import math
 import os
 import shlex
@@ -21,6 +22,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .contracts import (
     canonical_json_bytes,
     canonical_json_loads,
+    canonical_sha256,
     validate_schema,
     validate_structure_map_snapshot_binding,
 )
@@ -1018,10 +1020,80 @@ def normalize_conformational_mapping_structure(
     return structure_map
 
 
+def bind_candidate_complex_snapshot(
+    snapshot: Mapping[str, Any], *, candidate_id: str, structure_path: Path | str
+) -> dict[str, Any]:
+    """Bind declared instances to one mmCIF output without filename inference."""
+
+    structure = Path(structure_path)
+    try:
+        validate_schema("cm_complex_snapshot_v1", snapshot)
+        observed: dict[str, tuple[str, str]] = {}
+        if structure.suffix.lower() in {".cif", ".mmcif"}:
+            from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+
+            cif = MMCIF2Dict(str(structure))
+
+            def values(name: str) -> list[str]:
+                value = cif.get(name, [])
+                return [str(item) for item in value] if isinstance(value, list) else [str(value)]
+
+            auth = values("_atom_site.auth_asym_id")
+            label = values("_atom_site.label_asym_id")
+            entity = values("_atom_site.label_entity_id")
+            if not auth or len({len(auth), len(label), len(entity)}) != 1:
+                raise StructureMapError("candidate mmCIF has incomplete output hierarchy identity")
+            for auth_id, label_id, entity_id in zip(auth, label, entity, strict=True):
+                identity = (label_id, entity_id)
+                previous = observed.setdefault(auth_id, identity)
+                if previous != identity:
+                    raise StructureMapError("candidate mmCIF maps one author chain ambiguously")
+        elif structure.suffix.lower() == ".pdb":
+            from Bio.PDB import PDBParser
+
+            model = next(PDBParser(QUIET=True).get_structure("candidate", str(structure)).get_models())
+            observed = {str(chain.id): (str(chain.id), "") for chain in model.get_chains()}
+            if not observed:
+                raise StructureMapError("candidate PDB has no output chains")
+        else:
+            raise StructureMapError("candidate structure format is unsupported")
+    except Exception as exc:
+        raise StructureMapError(f"cannot bind candidate output hierarchy: {exc}") from exc
+    bound = copy.deepcopy(dict(snapshot))
+    entity_by_source = {item["source_entity_id"]: item for item in bound["entities"]}
+    unique_mappings: list[dict[str, Any]] = []
+    seen_source_keys: set[tuple[str, str]] = set()
+    for mapping in bound["instance_mappings"]:
+        source_key = (mapping["source_entity_id"], mapping["source_instance_id"])
+        if source_key in seen_source_keys:
+            continue
+        seen_source_keys.add(source_key)
+        unique_mappings.append(mapping)
+    bound["instance_mappings"] = unique_mappings
+    for mapping in bound["instance_mappings"]:
+        declared_auth = str(mapping.get("output_auth_asym_id") or mapping["source_instance_id"])
+        output = observed.get(declared_auth) or observed.get(mapping["source_instance_id"])
+        source_entity = entity_by_source[mapping["source_entity_id"]]
+        if output is None:
+            if source_entity["entity_type"] == "protein":
+                raise StructureMapError("candidate mmCIF omits an authorized protein instance")
+        else:
+            mapping["output_label_asym_id"] = output[0]
+            mapping["output_entity_id"] = output[1] or mapping["source_entity_id"]
+            mapping["output_auth_asym_id"] = declared_auth if declared_auth in observed else mapping["source_instance_id"]
+        mapping["candidate_id"] = candidate_id
+    bound["normalized_source_sha256"] = canonical_sha256(
+        {key: value for key, value in bound.items() if key != "normalized_source_sha256"}
+    )
+    validate_schema("cm_complex_snapshot_v1", bound)
+    return bound
+
+
 __all__ = [
     "NORMALIZER_VERSION",
     "StructureMapError",
     "load_authoritative_complex_snapshot",
+    "bind_candidate_complex_snapshot",
     "normalize_conformational_mapping_structure",
     "validate_coordinate_mmcif",
     "validate_rendered_pdb_mapping",
