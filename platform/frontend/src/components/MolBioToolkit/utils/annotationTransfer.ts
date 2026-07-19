@@ -169,14 +169,22 @@ function modulo(value: number, modulus: number): number {
 }
 
 function sourceSegments(feature: TransferFeature, length: number): Array<{ start: number; end: number }> {
-    if (feature.segments && feature.segments.length > 0) return feature.segments;
+    const boundedSpan = (segment: { start: number; end: number }) => {
+        if (segment.start === segment.end && segment.start >= 0 && segment.start < length) {
+            return { start: segment.start, end: segment.start + 1 };
+        }
+        return segment;
+    };
+    if (feature.segments && feature.segments.length > 0) {
+        return feature.segments.map(boundedSpan);
+    }
     if (feature.start > feature.end) {
         return [
             { start: feature.start, end: length },
             { start: 0, end: feature.end },
         ];
     }
-    return [{ start: feature.start, end: feature.end }];
+    return [boundedSpan({ start: feature.start, end: feature.end })];
 }
 
 function transformSegment(
