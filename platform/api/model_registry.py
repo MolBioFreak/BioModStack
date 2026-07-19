@@ -6,6 +6,7 @@ to be added without code changes.
 """
 
 import os
+import re
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -157,6 +158,11 @@ class ModelRegistry:
                 # Type validation
                 if param_def.enum and value not in param_def.enum:
                     errors.append(f"Invalid value for {param_name}: must be one of {param_def.enum}")
+                if param_def.pattern and (
+                    not isinstance(value, str)
+                    or re.fullmatch(param_def.pattern, value) is None
+                ):
+                    errors.append(f"{param_name} does not match required pattern")
                 if param_def.minimum is not None and isinstance(value, (int, float)):
                     if value < param_def.minimum:
                         errors.append(f"{param_name} must be >= {param_def.minimum}")

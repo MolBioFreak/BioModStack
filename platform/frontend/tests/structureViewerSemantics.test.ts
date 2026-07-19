@@ -500,5 +500,7 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(molstarSource, /viewerInstance\.load/);
     assert.match(molstarSource, /fullLoad:\s*false/);
     assert.match(molstarSource, /alphafold-view/);
-    assert.match(molstarSource, /residueColors && residueColors\.size > 0 \? 'false'/);
+    assert.match(molstarSource, /adaptResidueMetricLayer\(residueMetricLayer\)/);
+    assert.match(molstarSource, /effectiveResidueColors/);
+    assert.match(molstarSource, /residueMetricLayer\?\.points\.length/);
 });

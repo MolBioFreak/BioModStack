@@ -111,3 +111,8 @@ class TestMonolithRemoval:
             assert "NANOPORE_METHYLATION" not in content, (
                 f"Workflow {workflow.name} still references monolith"
             )
+
+    def test_compat_entrypoint_does_not_accept_retired_monolith_selector(self, root):
+        """The deleted monolith name must not remain as an executable selector."""
+        compat_entrypoint = (root / "ngs.nf").read_text(encoding="utf-8")
+        assert "nanopore_methylation" not in compat_entrypoint

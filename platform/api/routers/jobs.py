@@ -2,7 +2,7 @@
 Jobs API router - Create, list, cancel pipeline jobs.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
@@ -48,6 +48,7 @@ from paths import (
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage
+from services import alignment_access, ont_submission_trust
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
@@ -4803,6 +4804,17 @@ async def create_job(
     except Exception as e:
         logger.warning(f"Failed to reload model registry before validation: {e}")
 
+    if job_data.model_id == "nanopore" and not ont_submission_trust.is_trusted_ont_job_creation():
+        raise HTTPException(
+            status_code=422,
+            detail="Nanopore jobs must be submitted through the typed /api/ont/ngs submission endpoints",
+        )
+    capability_digest: str | None = None
+    if job_data.model_id == "nanopore":
+        capability_digest = ont_submission_trust.alignment_capability_digest()
+        if not capability_digest or len(capability_digest) != 64:
+            raise HTTPException(status_code=500, detail="trusted Nanopore submission is missing alignment authorization")
+
     if isinstance(job_data.params, dict):
         job_data.params = _normalize_nanopore_modbase_for_validation(
             registry,
@@ -4955,6 +4967,8 @@ async def create_job(
         logger.info(f"[MUTAGENESIS] Detected {num_jobs} variants in batch submission")
     elif num_jobs is None or num_jobs < 1:
         num_jobs = 1
+    if job_data.model_id == "nanopore" and num_jobs != 1:
+        raise HTTPException(status_code=422, detail="Nanopore submissions must create exactly one authorized job")
 
     # ColabFold API mode is currently scoped to single structure-prediction jobs.
     msa_provider = str(job_data.params.get("msa_provider", "local") or "local").strip().lower()
@@ -5273,6 +5287,11 @@ async def create_job(
             "job_name": job_name,
             "model_id": job_data.model_id,
             "mode": job_data.mode,
+            "ont_request_workflow_id": job_params.get("ont_request_workflow_id") if isinstance(job_params, dict) else None,
+            "ont_workflow_id": job_params.get("ont_workflow_id") if isinstance(job_params, dict) else None,
+            "ont_model_mode": job_params.get("ont_model_mode") if isinstance(job_params, dict) else None,
+            "ont_input_mode": job_params.get("ont_input_mode") if isinstance(job_params, dict) else None,
+            "ont_input_provenance": job_params.get("ont_input_provenance") if isinstance(job_params, dict) else None,
             "parent_job_id": job_data.parent_job_id,
             "child_stage": job_data.child_stage,
             "lineage_root_job_id": provenance_lineage_root,
@@ -5291,6 +5310,9 @@ async def create_job(
             "selected_input_schema_version": provenance_selected_input_schema_version,
             "iteration_action": job_params.get("iteration_action") if isinstance(job_params, dict) else None,
         }
+        if job_data.model_id == "nanopore":
+            provenance_payload[alignment_access.PROVENANCE_DIGEST_KEY] = capability_digest
+            provenance_payload[alignment_access.PROVENANCE_SCHEME_KEY] = alignment_access.SCHEME
 
         os.makedirs(output_dir, exist_ok=True)
         
@@ -5786,6 +5808,8 @@ async def delete_job_permanently(
 @router.post("/{job_id}/resubmit")
 async def resubmit_job(
     job_id: str,
+    request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_session)
 ):
 
@@ -5800,6 +5824,9 @@ async def resubmit_job(
     
     if not original_job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if original_job.model_id == "nanopore":
+        if not alignment_access.request_is_authorized(request, original_job.id, original_job.provenance):
+            raise HTTPException(status_code=403, detail="alignment access denied")
     
     # Only allow resubmit for failed or cancelled jobs
     if original_job.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:
@@ -5887,11 +5914,16 @@ async def resubmit_job(
         max_retries=2,
     )
 
+    if new_job.model_id == "nanopore":
+        new_job.provenance = alignment_access.grant_alignment_access(
+            new_job.id,
+            new_job.provenance,
+            response,
+            request,
+        )
     session.add(new_job)
     await session.commit()
     await session.refresh(new_job)
-    
-    # No need to manually queue - GPU orchestrator picks up jobs with queue_status='queued'
     
     return {
         "message": "Job resubmitted successfully",
@@ -6617,6 +6649,8 @@ async def get_job_stages(
 @router.post("/{job_id}/resume")
 async def resume_job(
     job_id: str,
+    request_context: Request,
+    response: Response,
     from_stage: str = None,
     request: Optional[ResumeJobRequest] = Body(default=None),
     background_tasks: BackgroundTasks = None,
@@ -6634,6 +6668,9 @@ async def resume_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id == "nanopore":
+        if not alignment_access.request_is_authorized(request_context, job.id, job.provenance):
+            raise HTTPException(status_code=403, detail="alignment access denied")
     
     if job.status not in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] and not job.awaiting_input:
         raise HTTPException(
@@ -6660,6 +6697,14 @@ async def resume_job(
         payload_resume_overrides, payload_resume_from_stage, payload_name_suffix = _resume_defaults_from_awaiting_payload(
             job.awaiting_payload
         )
+    if job.model_id == "nanopore":
+        forbidden_resume_overrides = sorted(set(requested_overrides) | set(payload_resume_overrides))
+        if forbidden_resume_overrides:
+            raise HTTPException(
+                status_code=422,
+                detail="Nanopore resume does not accept parameter overrides: " + ", ".join(forbidden_resume_overrides),
+            )
+        reserved_resume_keys |= ont_submission_trust.ONT_SERVER_CONTROLLED_PARAMS
     param_overrides = {
         key: value
         for key, value in requested_overrides.items()
@@ -6887,6 +6932,13 @@ async def resume_job(
         })
         job.decision_history = history
     
+    if new_job.model_id == "nanopore":
+        new_job.provenance = alignment_access.grant_alignment_access(
+            new_job.id,
+            new_job.provenance,
+            response,
+            request_context,
+        )
     session.add(new_job)
     await session.commit()
     
@@ -6911,6 +6963,8 @@ async def resume_job(
 @router.post("/{job_id}/continue-protein-local-review")
 async def continue_protein_local_review(
     job_id: str,
+    request_context: Request,
+    response: Response,
     request: ContinueProteinLocalReviewRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -6982,6 +7036,8 @@ async def continue_protein_local_review(
 
     return await resume_job(
         job_id=job_id,
+        request_context=request_context,
+        response=response,
         from_stage=from_stage,
         request=ResumeJobRequest(
             from_stage=from_stage,

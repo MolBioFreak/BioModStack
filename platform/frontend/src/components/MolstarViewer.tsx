@@ -4,6 +4,7 @@ import {
     MOLSTAR_TOUCH_INTERACTION_SELECTOR,
     resolveMolstarTouchAction,
 } from './molstarTouchInteraction';
+import { adaptResidueMetricLayer, type MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 
 interface Selection {
     chain_id?: string;  // Will be mapped to struct_asym_id
@@ -31,6 +32,8 @@ interface Props {
     selections?: Selection[]; // Highlights
     /** Per-residue coloring (e.g., frustration maps). Key format: "A45" or "A:45". */
     residueColors?: Map<string, { r: number; g: number; b: number }>;
+    /** Canonical chain- and numbering-aware scalar residue metric layer. */
+    residueMetricLayer?: MolstarResidueMetricLayer;
     /** Additional structures loaded into the same Mol* scene after the primary structure. */
     overlayStructures?: OverlayStructure[];
 }
@@ -101,6 +104,7 @@ export default function MolstarViewer({
     label,
     selections,
     residueColors,
+    residueMetricLayer,
     overlayStructures,
 }: Props) {
     const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
@@ -124,7 +128,26 @@ export default function MolstarViewer({
     ), [overlayStructures]);
     const overlayStructureSignature = useMemo(() => buildOverlayStructureSignature(overlayStructures), [overlayStructures]);
     const selectionSignature = useMemo(() => buildSelectionSignature(selections), [selections]);
-    const residueColorSignature = useMemo(() => buildResidueColorSignature(residueColors), [residueColors]);
+    const metricResidueColors = useMemo(() => {
+        if (!residueMetricLayer) return null;
+        const adapted = adaptResidueMetricLayer(residueMetricLayer);
+        const colors = new Map<string, { r: number; g: number; b: number }>();
+        for (const selection of adapted.colorSelections) {
+            // The stable viewer accepts one chain plus one integer residue key.
+            // Insertion-code/operator identities cannot be represented and stay rejected.
+            if (selection.auth_ins_code_id || selection.instance_id) continue;
+            const chainId = selection.struct_asym_id || selection.auth_asym_id;
+            const residueNumber = selection.residue_number ?? selection.auth_residue_number;
+            if (!chainId || residueNumber == null) continue;
+            colors.set(`${chainId}:${residueNumber}`, selection.color);
+        }
+        return colors;
+    }, [residueMetricLayer]);
+    const effectiveResidueColors = residueMetricLayer ? metricResidueColors : residueColors;
+    const residueColorSignature = useMemo(
+        () => buildResidueColorSignature(effectiveResidueColors || undefined),
+        [effectiveResidueColors],
+    );
     const interactionTouchAction = useMemo(() => {
         const coarsePointer = typeof window.matchMedia === 'function'
             && (window.matchMedia('(unknown-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches);
@@ -325,7 +348,7 @@ export default function MolstarViewer({
 
     // Apply per-residue coloring (for frustration maps, etc.)
     const applyResidueColors = useCallback(async () => {
-        if (!residueColors || residueColors.size === 0) return;
+        if (!effectiveResidueColors || effectiveResidueColors.size === 0) return;
         if (!viewerRef.current) return;
         if (lastAppliedResidueColorSignatureRef.current === residueColorSignature) return;
 
@@ -349,7 +372,7 @@ export default function MolstarViewer({
 
         try {
             // Convert residueColors map to pdbe-molstar selection format
-            const colorData = Array.from(residueColors.entries()).map(([key, color]) => {
+            const colorData = Array.from(effectiveResidueColors.entries()).map(([key, color]) => {
                 const parsedKey = parseResidueColorKey(key);
                 if (!parsedKey) {
                     return null;
@@ -374,15 +397,15 @@ export default function MolstarViewer({
         } catch (err) {
             console.error('Failed to apply residue colors:', err);
         }
-    }, [residueColorSignature, residueColors]);
+    }, [effectiveResidueColors, residueColorSignature]);
 
     // Call applyResidueColors when residueColors change
     useEffect(() => {
-        if (isScriptLoaded && residueColors && residueColors.size > 0 && residueColorSignature) {
+        if (isScriptLoaded && effectiveResidueColors && effectiveResidueColors.size > 0 && residueColorSignature) {
             const timer = setTimeout(applyResidueColors, 1500);
             return () => clearTimeout(timer);
         }
-    }, [isScriptLoaded, residueColorSignature, applyResidueColors, absoluteUrl, residueColors]);
+    }, [isScriptLoaded, residueColorSignature, applyResidueColors, absoluteUrl, effectiveResidueColors]);
 
     // NOTE: Postprocessing settings (shadow, outline, etc) are managed via
     // Molstar's built-in settings panel. Programmatic setProps calls cause
@@ -450,7 +473,9 @@ export default function MolstarViewer({
                 'bg-color-b': bgColor.b.toString(),
                 // Avoid the global AlphaFold/pLDDT theme because it bleeds into atom-level
                 // representations. pLDDT coloring should come from our residueColors overlay.
-                'alphafold-view': residueColors && residueColors.size > 0 ? 'false' : (alphafoldView ? 'true' : 'false'),
+                'alphafold-view': residueMetricLayer?.points.length || (effectiveResidueColors && effectiveResidueColors.size > 0)
+                    ? 'false'
+                    : (alphafoldView ? 'true' : 'false'),
                 'hide-controls': hideControls ? 'true' : 'false',
                 'sequence-panel': 'false',
                 'left-panel': 'false',
