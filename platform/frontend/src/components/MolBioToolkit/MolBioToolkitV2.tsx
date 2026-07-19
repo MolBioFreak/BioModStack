@@ -1140,7 +1140,7 @@ export function MolBioToolkitV2() {
     type ViewMode = 'linear' | 'circular' | 'both';
     type ResizeHandleSide = 'left' | 'right';
     const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
-    const [viewMode, setViewMode] = useState<ViewMode>('both');
+    const [viewMode, setViewMode] = useState<ViewMode>('circular');
     const effectiveViewMode: ViewMode = sequenceData.circular ? viewMode : 'linear';
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
@@ -1155,7 +1155,7 @@ export function MolBioToolkitV2() {
     } | null>(null);
 
     // GC track visibility state
-    const [showGCTrack, setShowGCTrack] = useState(true);
+    const [showGCTrack, setShowGCTrack] = useState(false);
     const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
     const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
     const viewerLayout = useMemo(() => resolveMolBioViewerLayout({
