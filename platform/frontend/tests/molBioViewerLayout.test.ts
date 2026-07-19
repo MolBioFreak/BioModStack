@@ -148,6 +148,9 @@ test('all constructs default to both linear sequence and circular map projection
     assert.equal((toolkitSource.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
     assert.match(viewerSource, /const resolvedViewerMode = viewMode \|\| 'both';/);
     assert.match(viewerSource, /data-linear-circular-projection/);
+    assert.match(viewerSource, /data-linear-break-marker/);
+    assert.match(viewerSource, /LINEAR BREAK/);
+    assert.match(viewerSource, /sequenceData\.sequence\.length\.toLocaleString\(\)/);
     assert.match(viewerSource, /Linear projection/);
     assert.match(viewerSource, /break:.*end.*1/i);
     assert.doesNotMatch(headerSource, /sequenceData\.circular && onViewModeChange/);
@@ -215,4 +218,13 @@ test('mol bio toolkit source gives mobile resize handles touch-safe hit targets'
     assert.match(source, /touch-none/);
     assert.match(source, /w-4/);
     assert.match(source, /md:w-1\.5/);
+});
+
+test('construct acquisition has one canonical button instead of duplicate shelf and header actions', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.doesNotMatch(toolkitSource, /Open Molecular Input/);
+    assert.doesNotMatch(toolkitSource, /onOpenModal/);
+    assert.match(headerSource, />\s*Acquire\s*</);
 });

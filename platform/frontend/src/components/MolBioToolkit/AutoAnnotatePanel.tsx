@@ -26,8 +26,11 @@ interface AutoAnnotatePanelProps {
     isOpen: boolean;
     onClose: () => void;
     onAnnotate: (settings: AutoAnnotateSettings) => void;
+    onClearAnnotations: () => void;
+    onImportAnnotations: (file: File) => Promise<string>;
     isAnnotating: boolean;
     hasSequence: boolean;
+    featureCount: number;
     sequenceLength: number;
     isCircular: boolean;
 }
@@ -36,14 +39,42 @@ export function AutoAnnotatePanel({
     isOpen,
     onClose,
     onAnnotate,
+    onClearAnnotations,
+    onImportAnnotations,
     isAnnotating,
     hasSequence,
+    featureCount,
     sequenceLength,
     isCircular
 }: AutoAnnotatePanelProps) {
     const [settings, setSettings] = useState<AutoAnnotateSettings>(DEFAULT_SETTINGS);
+    const [confirmingClear, setConfirmingClear] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [importMessage, setImportMessage] = useState<string | null>(null);
+    const [importError, setImportError] = useState<string | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const returnFocusRef = useRef<HTMLElement | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setConfirmingClear(false);
+        setImportMessage(null);
+        setImportError(null);
+    }, [isOpen]);
+
+    const handleAnnotationFile = async (file: File | undefined) => {
+        if (!file) return;
+        setIsImporting(true);
+        setImportMessage(null);
+        setImportError(null);
+        try {
+            setImportMessage(await onImportAnnotations(file));
+        } catch (error) {
+            setImportError(error instanceof Error ? error.message : 'Annotation import failed.');
+        } finally {
+            setIsImporting(false);
+        }
+    };
 
     useEffect(() => {
         if (!isOpen) return;
@@ -92,7 +123,7 @@ export function AutoAnnotatePanel({
                 role="dialog"
                 aria-modal="true"
                 aria-label="Auto-Annotate Settings"
-                className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-600"
+                className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-slate-600 bg-slate-800 p-6 shadow-xl"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
@@ -192,6 +223,75 @@ export function AutoAnnotatePanel({
                     <strong>Databases:</strong> SnapGene, SwissProt, UniProt
                     <br />
                     <strong>Detects:</strong> Origins (ori), Resistance genes (KanR, AmpR), Promoters, Tags, CDS
+                </div>
+
+                <div className="mt-4 space-y-3 rounded-lg border border-slate-600 bg-slate-900/70 p-3">
+                    <div>
+                        <div className="text-sm font-medium text-slate-200">Published annotations</div>
+                        <div className="mt-1 text-xs text-slate-400">
+                            Transfer features from an authoritative annotated file only when its topology and sequence match this construct exactly. Unique circular rotations and reverse complements are aligned automatically.
+                        </div>
+                    </div>
+                    <label className={`flex w-full items-center justify-center rounded border border-cyan-600 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors ${isImporting || !hasSequence ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-cyan-950/60'}`}>
+                        <input
+                            type="file"
+                            accept=".dna,.gb,.gbk,.genbank"
+                            className="sr-only"
+                            disabled={isImporting || !hasSequence}
+                            onChange={(event) => {
+                                void handleAnnotationFile(event.target.files?.[0]);
+                                event.target.value = '';
+                            }}
+                        />
+                        {isImporting ? 'Checking annotated file…' : 'Import SnapGene / GenBank annotations'}
+                    </label>
+                    {importMessage && (
+                        <div role="status" className="rounded border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300">
+                            {importMessage}
+                        </div>
+                    )}
+                    {importError && (
+                        <div role="alert" className="rounded border border-red-700 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                            {importError}
+                        </div>
+                    )}
+                </div>
+
+                <div className="mt-4 rounded-lg border border-red-900/70 bg-red-950/20 p-3">
+                    {!confirmingClear ? (
+                        <button
+                            type="button"
+                            onClick={() => setConfirmingClear(true)}
+                            disabled={featureCount === 0 || isAnnotating || isImporting}
+                            className="w-full rounded border border-red-700 px-3 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Clear all feature annotations ({featureCount})
+                        </button>
+                    ) : (
+                        <div>
+                            <div className="text-sm font-medium text-red-200">Clear {featureCount} feature annotations?</div>
+                            <div className="mt-1 text-xs text-red-300/80">Primers and sequence bases will be preserved. This action can be undone.</div>
+                            <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setConfirmingClear(false)}
+                                    className="rounded px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+                                >
+                                    Keep annotations
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        onClearAnnotations();
+                                        setConfirmingClear(false);
+                                    }}
+                                    className="rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-600"
+                                >
+                                    Confirm clear
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Actions */}

@@ -29,6 +29,12 @@ import {
     moveMenuFocus,
     type MenuNavigationKey,
 } from './utils/focusManagement';
+import { clearFeatureAnnotations } from './utils/annotations';
+import {
+    assertAnnotationTopology,
+    resolveAnnotationSequenceAlignment,
+    transformFeatureForAlignment,
+} from './utils/annotationTransfer';
 import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
@@ -99,7 +105,6 @@ interface SequenceLibraryProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onRefresh: () => void;
-    onOpenModal: () => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
     width: number;
@@ -112,7 +117,6 @@ function SequenceLibrary({
     selectedId,
     onSelect,
     onRefresh,
-    onOpenModal,
     onLoadDemo,
     loading,
     width
@@ -139,18 +143,6 @@ function SequenceLibrary({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                 </button>
-            </div>
-
-            <div className="p-3 border-b border-slate-700 space-y-3">
-                <button
-                    onClick={onOpenModal}
-                    className="w-full rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
-                >
-                    Open Molecular Input
-                </button>
-                <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3 text-xs text-slate-400">
-                    Open saved constructs, import files, paste sequence, or pull primers.
-                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -185,7 +177,7 @@ function SequenceLibrary({
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
                         <p>No recent constructs</p>
-                        <p className="mt-1 text-xs">Use the molecular input modal to search or create one</p>
+                        <p className="mt-1 text-xs">Use Acquire in the sequence toolbar to search or create one</p>
                     </div>
                 ) : (
                     sequences.map((seq) => (
@@ -1321,6 +1313,90 @@ export function MolBioToolkitV2() {
         setShowAnnotatePanel(true);
     }, []);
 
+    const clearAnnotations = useCallback(() => {
+        const featureCount = sequenceData.features.length;
+        if (featureCount === 0) return;
+        setSequenceData(
+            clearFeatureAnnotations(sequenceData),
+            `Clear ${featureCount} feature annotations`,
+        );
+        setIsDirty(true);
+    }, [sequenceData, setSequenceData]);
+
+    const importAnnotationsFromFile = useCallback(async (file: File): Promise<string> => {
+        if (!sequenceData.sequence) {
+            throw new Error('Open a construct before importing annotations.');
+        }
+
+        const result = await anyToJson(file, {
+            fileName: file.name,
+            parseOptions: { inclusive1BasedStart: false, jsonType: 'json' },
+        });
+        const results = Array.isArray(result) ? result : [result];
+        const parsedRecords = results
+            .map((entry) => entry?.parsedSequence)
+            .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+        if (parsedRecords.length === 0) {
+            throw new Error('The annotated file could not be parsed.');
+        }
+        if (parsedRecords.length !== 1) {
+            throw new Error('Annotation transfer requires exactly one sequence record per file.');
+        }
+        const parsed = parsedRecords[0];
+
+        const moleculeMetadata = inferNucleotideMoleculeMetadataFromParsedRecord(parsed);
+        const importedType = parsed.isProtein ? 'protein' : moleculeMetadata.sequenceType;
+        if (importedType === 'protein' || importedType !== sequenceData.sequenceType) {
+            throw new Error(`Annotated-file molecule type (${importedType}) does not match the open ${sequenceData.sequenceType.toUpperCase()} construct.`);
+        }
+
+        assertAnnotationTopology(Boolean(parsed.circular), sequenceData.circular);
+        const importedSequence = normalizeSequenceForType(parsed.sequence || '', importedType);
+        const alignment = resolveAnnotationSequenceAlignment(
+            importedSequence,
+            sequenceData.sequence,
+            sequenceData.circular,
+        );
+        const parsedFeatures = parsed.features || [];
+        if (parsedFeatures.length === 0) {
+            throw new Error('The annotated file contains no feature annotations to transfer.');
+        }
+
+        const importedAt = new Date().toISOString();
+        const importedFeatures = parsedFeatures.map((rawFeature: UntypedApiValue, index: number) => {
+            const fallbackId = `annotation_import_${Date.now()}_${index}`;
+            const normalized = normalizeFeatureRecord(rawFeature, fallbackId);
+            const transformed = transformFeatureForAlignment(normalized, alignment);
+            return {
+                ...transformed,
+                id: fallbackId,
+                provenance: {
+                    ...(transformed.provenance || {}),
+                    annotation_import: {
+                        source_file: file.name,
+                        match_mode: alignment.mode,
+                        imported_at: importedAt,
+                    },
+                },
+            };
+        });
+
+        const mergedFeatures = normalizeFeatureList([
+            ...sequenceData.features,
+            ...importedFeatures,
+        ]).sort((left, right) => left.start - right.start || left.end - right.end || left.name.localeCompare(right.name));
+        const addedCount = Math.max(0, mergedFeatures.length - sequenceData.features.length);
+        setSequenceData({
+            ...sequenceData,
+            features: mergedFeatures,
+        }, `Import ${importedFeatures.length} annotations from ${file.name}`);
+        setIsDirty(true);
+
+        const duplicateCount = importedFeatures.length - addedCount;
+        const duplicateMessage = duplicateCount > 0 ? `; ${duplicateCount} matched existing features and were merged` : '';
+        return `Imported ${importedFeatures.length} feature annotations from ${file.name} using ${alignment.mode.replaceAll('_', ' ')} sequence alignment${duplicateMessage}.`;
+    }, [sequenceData, setSequenceData]);
+
     // Run auto-annotation with user settings
     const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
         if (!sequenceData.sequence) return;
@@ -1670,7 +1746,6 @@ export function MolBioToolkitV2() {
                             selectedId={selectedSequenceId}
                             onSelect={loadSequence}
                             onRefresh={loadLibrary}
-                            onOpenModal={() => setShowInputModal(true)}
                             onLoadDemo={loadDemo}
                             loading={loading}
                             width={viewerLayout.leftPanelWidth}
@@ -2171,8 +2246,11 @@ export function MolBioToolkitV2() {
                 isOpen={showAnnotatePanel}
                 onClose={() => setShowAnnotatePanel(false)}
                 onAnnotate={runAutoAnnotate}
+                onClearAnnotations={clearAnnotations}
+                onImportAnnotations={importAnnotationsFromFile}
                 isAnnotating={isAnnotating}
                 hasSequence={!!sequenceData.sequence}
+                featureCount={sequenceData.features.length}
                 sequenceLength={sequenceData.sequence.length}
                 isCircular={sequenceData.circular}
             />
