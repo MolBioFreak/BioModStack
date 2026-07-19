@@ -144,6 +144,24 @@ test('linear imported constructs force the sequence viewer out of plasmid/circul
     assert.equal((source.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
 });
 
+test('large circular viewers default to an unclipped circular-first layout', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(toolkitSource, /useState<ViewMode>\('circular'\)/);
+    assert.match(toolkitSource, /GC track visibility state[\s\S]*useState\(false\)/);
+    assert.match(viewerSource, /overflowY: resolvedViewerMode === 'both' \? 'auto' : 'hidden'/);
+});
+
+test('SeqViz pointer drags publish one committed selection after pointer-up', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(source, /pendingPointerSelectionRef/);
+    assert.match(source, /flushPendingPointerSelection/);
+    assert.match(source, /window\.requestAnimationFrame\(flushPendingPointerSelection\)/);
+    assert.doesNotMatch(source, /if \(sourceSelection\) \{\s*onSelection\(sourceSelection\);\s*\}/);
+});
+
 test('sequence viewer does not add a separate linear drag overlay over SeqViz', () => {
     const source = readFileSync(VIEWER_PATH, 'utf8');
 
