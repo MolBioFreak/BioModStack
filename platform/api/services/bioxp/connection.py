@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -58,6 +59,7 @@ class BioXpConnectionService:
         *,
         client_factory: ClientFactory | None = None,
         freshness_budget_seconds: float = 30.0,
+        active_probe_interval_seconds: float | None = None,
         clock: Clock | None = None,
         initial_generation: int | None = None,
     ) -> None:
@@ -65,6 +67,9 @@ class BioXpConnectionService:
         self.target_policy = target_policy
         self.client_factory = client_factory or (lambda target: BioXpRobotClient(target))
         self.freshness_budget_seconds = freshness_budget_seconds
+        if active_probe_interval_seconds is not None and active_probe_interval_seconds <= 0:
+            raise ValueError("active probe interval must be positive")
+        self.active_probe_interval_seconds = active_probe_interval_seconds
         self.clock = clock or _utcnow
         self._transition_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
@@ -79,6 +84,7 @@ class BioXpConnectionService:
         self._capabilities: tuple[str, ...] = ()
         self._last_error: str | None = None
         self._command_active = False
+        self._active_probe_task: asyncio.Task[None] | None = None
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
         canonical = self.target_policy.validate(profile.api_url)
@@ -105,6 +111,7 @@ class BioXpConnectionService:
                 await self._deactivate_locked(increment=bool(self._client or self._active_target))
                 self._last_error = str(exc)
                 raise
+            await self._stop_active_probe_locked()
             if self._client is not None:
                 await self._client.close()
             self._generation += 1
@@ -112,6 +119,7 @@ class BioXpConnectionService:
             self._active_target = target
             self._client = self.client_factory(target)
             await self._probe_locked()
+            self._start_active_probe_locked()
         return self.snapshot()
 
     async def probe(self) -> BioXpSnapshot:
@@ -166,6 +174,7 @@ class BioXpConnectionService:
             await self._deactivate_locked(increment=False)
 
     async def _deactivate_locked(self, *, increment: bool) -> None:
+        await self._stop_active_probe_locked()
         if self._client is not None:
             await self._client.close()
         self._client = None
@@ -173,6 +182,39 @@ class BioXpConnectionService:
         if increment:
             self._generation += 1
         self._clear_observation()
+
+    def _start_active_probe_locked(self) -> None:
+        if self.active_probe_interval_seconds is None or self._client is None:
+            return
+        self._active_probe_task = asyncio.create_task(
+            self._active_probe_loop(),
+            name="bioxp-active-connection-probe",
+        )
+
+    async def _stop_active_probe_locked(self) -> None:
+        task = self._active_probe_task
+        self._active_probe_task = None
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+        try:
+            same_loop = task.get_loop() is asyncio.get_running_loop()
+        except RuntimeError:
+            same_loop = False
+        if same_loop:
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def _active_probe_loop(self) -> None:
+        assert self.active_probe_interval_seconds is not None
+        try:
+            while True:
+                await asyncio.sleep(self.active_probe_interval_seconds)
+                await self.probe()
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionStateError, TargetPolicyError):
+            return
 
     def _clear_observation(self) -> None:
         self._observed_at = None

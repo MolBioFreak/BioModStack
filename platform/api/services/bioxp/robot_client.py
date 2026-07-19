@@ -11,6 +11,10 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 180.0),
+    "construct_pipettes": ("POST", "/oem/startup/constructor_pipettes", 280.0),
+    "initialize_without_motion": ("POST", "/oem/startup/initialize_without_motion", 140.0),
+    "run_initial_check": ("POST", "/oem/initial_check", 75.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
 
