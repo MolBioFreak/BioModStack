@@ -137,18 +137,27 @@ test('mol bio toolkit source wires fullscreen and side-panel collapse controls',
     assert.match(source, /onToggleToolPanel/);
 });
 
-test('linear imported constructs force the sequence viewer out of plasmid/circular mode', () => {
-    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+test('all constructs default to both linear sequence and circular map projection', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
 
-    assert.match(source, /const effectiveViewMode: ViewMode = sequenceData\.circular \? viewMode : 'linear';/);
-    assert.equal((source.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
+    assert.match(toolkitSource, /\[activeWorkspaceId\]: mode/);
+    assert.match(toolkitSource, /const effectiveViewMode: ViewMode = viewMode;/);
+    assert.equal((toolkitSource.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+    assert.match(viewerSource, /const resolvedViewerMode = viewMode \|\| 'both';/);
+    assert.match(viewerSource, /data-linear-circular-projection/);
+    assert.match(viewerSource, /Linear projection/);
+    assert.match(viewerSource, /break:.*end.*1/i);
+    assert.doesNotMatch(headerSource, /sequenceData\.circular && onViewModeChange/);
 });
 
-test('large circular viewers default to an unclipped circular-first layout', () => {
+test('both-view default remains unclipped and analytics remain opt-in', () => {
     const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
     const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
 
-    assert.match(toolkitSource, /useState<ViewMode>\('circular'\)/);
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
     assert.match(toolkitSource, /GC track visibility state[\s\S]*useState\(false\)/);
     assert.match(viewerSource, /overflowY: resolvedViewerMode === 'both' \? 'auto' : 'hidden'/);
 });
