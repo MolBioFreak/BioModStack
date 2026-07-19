@@ -158,6 +158,9 @@ export const validateMolecularDynamicsForm = (
     if (form.inputMode === 'prepared' && (!form.coordinatesPath.trim() || !form.topologyPath.trim())) {
         errors.push('Prepared coordinates and topology are both required.');
     }
+    if (form.inputMode === 'prepared' && form.engine !== 'openmm') {
+        errors.push('Prepared coordinates and topology are supported only by OpenMM.');
+    }
     if (form.engine === 'openmm' && form.inputMode !== 'prepared') {
         errors.push('The OpenMM alpha adapter requires prepared coordinates and topology.');
     }

@@ -535,7 +535,7 @@ class Primer(Base):
     tm_settings = Column(JSON, nullable=True)
     
     # Primer type and usage
-    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
+    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, quantitative PCR
     description = Column(Text, nullable=True)
     
     # Target binding info (optional)

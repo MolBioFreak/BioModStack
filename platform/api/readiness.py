@@ -10,11 +10,7 @@ from sqlalchemy import text
 
 from database import engine
 from runtime_policy import core_runtime_mode_enabled, workflow_launches_allowed
-from services.assay_analytical_store import create_analytical_engine
 from services.workflow_adapter import workflow_adapter_base_url
-
-
-_TRUE = {"1", "true", "yes", "on"}
 
 
 async def core_database_readiness() -> tuple[bool, str]:
@@ -24,18 +20,6 @@ async def core_database_readiness() -> tuple[bool, str]:
         return True, "ready"
     except Exception as exc:  # noqa: BLE001 - readiness must report degradation, not crash.
         return False, _failure_status(exc)
-
-
-async def analytical_database_readiness() -> tuple[bool, str]:
-    analytical_engine = create_analytical_engine()
-    try:
-        async with analytical_engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-        return True, "ready"
-    except Exception as exc:  # noqa: BLE001 - readiness must report degradation, not crash.
-        return False, _failure_status(exc)
-    finally:
-        await analytical_engine.dispose()
 
 
 async def http_readiness(url: str) -> tuple[bool, str]:
@@ -54,13 +38,6 @@ def _failure_status(exc: BaseException) -> str:
     return f"unavailable:{exc.__class__.__name__}"
 
 
-def _feature_enabled(name: str, *, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in _TRUE
-
-
 def _check(*, required: bool, ready: bool, status: str, **extra: Any) -> dict[str, Any]:
     return {"required": required, "ready": ready, "status": status, **extra}
 
@@ -71,12 +48,6 @@ async def collect_runtime_readiness(*, molbio: dict[str, Any]) -> dict[str, Any]
 
     core_ready, core_status = await core_database_readiness()
     molbio_ready = molbio.get("status") == "healthy" or molbio.get("ready") is True
-
-    analytical_required = _feature_enabled("BMS_FEATURE_ASSAY_DB")
-    if analytical_required:
-        analytical_ready, analytical_status = await analytical_database_readiness()
-    else:
-        analytical_ready, analytical_status = True, "not_required"
 
     adapter_url = workflow_adapter_base_url()
     adapter_required = container_mode
@@ -103,11 +74,6 @@ async def collect_runtime_readiness(*, molbio: dict[str, Any]) -> dict[str, Any]
             required=True,
             ready=molbio_ready,
             status="ready" if molbio_ready else str(molbio.get("status", "unavailable")),
-        ),
-        "analytical_database": _check(
-            required=analytical_required,
-            ready=analytical_ready,
-            status=analytical_status,
         ),
         "workflow_adapter": _check(
             required=adapter_required,
