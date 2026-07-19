@@ -1,4 +1,19 @@
-import type { Feature } from '../types';
+export interface FeatureRecord {
+    id: string;
+    name: string;
+    type: string;
+    start: number;
+    end: number;
+    strand: 1 | -1;
+    color?: string;
+    description?: string;
+    notes?: Record<string, unknown>;
+    qualifiers?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    segments?: Array<{ start: number; end: number }>;
+}
+
+type Feature = FeatureRecord;
 
 type Segment = { start: number; end: number };
 type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
@@ -22,6 +37,21 @@ export function featureBounds(feature: Feature): { start: number; end: number } 
 
 export function featureLength(feature: Feature): number {
     return featureSegments(feature).reduce((sum, segment) => sum + (segment.end - segment.start), 0);
+}
+
+export function featureHighlightRegions(feature: Feature, color: string) {
+    return featureSegments(feature).map((segment) => ({
+        start: segment.start,
+        end: segment.end,
+        color,
+        label: feature.name,
+    }));
+}
+
+export function featureCoordinateLabel(feature: Feature): string {
+    return featureSegments(feature)
+        .map((segment) => `${segment.start + 1}–${segment.end}`)
+        .join(' + ');
 }
 
 function normalizeSegments(segments: Segment[]): Segment[] {

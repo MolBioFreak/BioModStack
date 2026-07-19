@@ -224,6 +224,8 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "migrations_current": True,
             "immutable_trigger_count": 20,
             "immutable_triggers_current": True,
+            "sequence_parent_foreign_key_current": True,
+            "sequence_parent_cycle_count": 0,
         }
     finally:
         await engine.dispose()
@@ -284,6 +286,8 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "migrations_current": True,
             "immutable_trigger_count": 20,
             "immutable_triggers_current": True,
+            "sequence_parent_foreign_key_current": True,
+            "sequence_parent_cycle_count": 0,
         }
 
     monkeypatch.setattr(api_main, "molbio_health", healthy)
