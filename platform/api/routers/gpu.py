@@ -32,6 +32,7 @@ from services.gpu_config import (
     mutate_scheduler_config,
     GPU_CONFIG_PATH,
     DEFAULT_SCHEDULER_CONFIG,
+    MANDATORY_CONCURRENCY_CAPS,
     PROTECTED_CONCURRENCY_LIMITS,
 )
 from services.gpu_metadata import HARDWARE_LIMITS
@@ -3662,11 +3663,19 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     import logging
     logger = logging.getLogger("api.gpu")
 
-    if request.limit is None and request.model_type in PROTECTED_CONCURRENCY_LIMITS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{request.model_type} has a mandatory safety cap and cannot be unlimited",
+    mandatory_cap = MANDATORY_CONCURRENCY_CAPS.get(request.model_type)
+    if mandatory_cap is not None:
+        invalid_protected_limit = request.limit is None or (
+            isinstance(request.limit, int) and request.limit > mandatory_cap
         )
+        if invalid_protected_limit:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{request.model_type} has a mandatory safety cap of "
+                    f"{mandatory_cap} and cannot be unlimited or raised above it"
+                ),
+            )
     
     old_limit: Union[int, str, None] = None
 

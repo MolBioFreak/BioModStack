@@ -115,7 +115,6 @@ VRAM_PROFILES = {
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
-    'esmfold': {'base': 18000, 'scale': 30},  # ESMFold attention/workspace peaks
     'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
@@ -129,7 +128,6 @@ HEAVY_MODELS = {
     'rfdiffusion',
     'rf3',
     'maturation_child',
-    'esmfold',
     'esmfold2',
     'esmfold2_experimental',
 }
