@@ -39,6 +39,27 @@ def test_runtime_state_endpoint_returns_runtime_descriptor(monkeypatch) -> None:
     assert response.json() == descriptor
 
 
+def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> None:
+    expected = {
+        "id": "bms-stats-toolkit",
+        "display_name": "BioModStack Stats Toolkit",
+        "available": True,
+        "ready": True,
+        "version": "1.0.0",
+        "api_version": "v1",
+        "capability_count": 2,
+        "entry_url": "http://127.0.0.1:18180/stats/",
+        "detail": "standalone service ready",
+    }
+    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
+
+    with build_client() as client:
+        response = client.get("/api/system/stats-toolkit")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
 def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:
     started: list[str] = []
     monkeypatch.setattr(system, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"), raising=False)

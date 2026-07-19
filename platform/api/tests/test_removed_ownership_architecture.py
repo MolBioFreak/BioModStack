@@ -59,7 +59,6 @@ REMOVED_RULES = tuple(
         r"/api/as" r"say-analytics",
         r"/as" r"say(?:[/?#\"']|$)",
         r"sta" r"ts[_-]?tools",
-        r"sta" r"ts[-_ ]?tool[-_ ]?kit",
         r"as" r"say_db",
         r"BMS_FEATURE_STA" r"TS_TOOLS",
         r"BMS_FEATURE_AS" r"SAY_DB",
@@ -229,7 +228,6 @@ def test_inventory_includes_tests_and_arbitrary_utf8_extensions(
     (
         _joined("q", "P", "CR"),
         _joined("q", "\n", "P", "CR"),
-        _joined("Sta", "tsTool", "kit"),
         _joined("Sta", "ts", "Tools"),
         _joined("As", "say", "Analytics"),
         _joined("HP", "LC"),
