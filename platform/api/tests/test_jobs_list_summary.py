@@ -48,7 +48,17 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
             stage_mode="sequence_design",
         )
         session.add(job)
-        session.add(Design(id="design-1", job_id="job-summary-1", name="design 1", pdb_path="design_1.pdb"))
+        session.add_all(
+            [
+                Design(
+                    id=f"design-{index}",
+                    job_id="job-summary-1",
+                    name=f"design {index}",
+                    pdb_path=f"design_{index}.pdb",
+                )
+                for index in range(250)
+            ]
+        )
         await session.commit()
 
     async def override_get_session():
@@ -72,7 +82,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     summary_job = summary_response.json()["jobs"][0]
     assert summary_job["id"] == "job-summary-1"
     assert summary_job["name"] == "heavy lineage job"
-    assert summary_job["design_count"] == 1
+    assert summary_job["design_count"] == 250
     assert summary_job["selection_dataset_name"] == "dataset-a"
     assert summary_job["stage_family"] == "fampnn"
     assert summary_job["stage_mode"] == "sequence_design"
@@ -86,8 +96,10 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     summary_job_query = next(
         statement
         for statement in selected_statements
-        if "from jobs" in statement and "join designs" in statement
+        if "from jobs" in statement and "design_count" in statement
     )
+    assert "group by designs.job_id" in summary_job_query
+    assert "group by jobs.id" not in summary_job_query
     for forbidden_column in (
         "params",
         "provenance",
