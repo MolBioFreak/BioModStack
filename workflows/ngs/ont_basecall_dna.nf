@@ -58,7 +58,6 @@ workflow ONT_BASECALL_DNA {
         reportStage(params, "dorado_basecall", [
             "${params.out_dir}/basecall/calls.bam",
             "${params.out_dir}/basecall/basecall.log",
-            "${params.out_dir}/basecall/sequencing_summary.tsv",
         ])
     }
 
