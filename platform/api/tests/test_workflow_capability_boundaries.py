@@ -20,6 +20,7 @@ from services.nextflow import (  # noqa: E402
     build_nextflow_command,
     resolve_nextflow_entrypoint,
 )
+from template_registry import TemplateRegistry  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -100,3 +101,24 @@ def test_frontend_has_no_dedicated_esmfold2_or_boltzgen_launcher() -> None:
     assert "id: 'boltzgen_design'" not in inventory
     assert "id: 'esmfold2'" not in inventory
     assert "id: 'esmfold2_experimental'" not in inventory
+
+
+def test_standalone_protein_binder_template_is_not_publicly_exposed() -> None:
+    registry = TemplateRegistry(API_ROOT / "config" / "templates")
+    public_ids = {template.id for template in registry.list_templates(enabled_only=True)}
+    binder_template = registry.get_template("binder_design")
+    templates_router = (API_ROOT / "routers/templates.py").read_text(encoding="utf-8")
+    job_submission = (FRONTEND_ROOT / "src/components/JobSubmission.tsx").read_text(encoding="utf-8")
+
+    assert binder_template is not None
+    assert binder_template.enabled is False
+    assert "binder_design" not in public_ids
+    assert "if not template or not template.enabled:" in templates_router
+    assert "t.id !== 'binder_design'" in job_submission
+
+
+def test_nanobody_card_names_esmfold2_as_a_nested_validator() -> None:
+    job_submission = (FRONTEND_ROOT / "src/components/JobSubmission.tsx").read_text(encoding="utf-8")
+    denovo_launcher = (FRONTEND_ROOT / "src/components/AntibodyDenovoTemplate.tsx").read_text(encoding="utf-8")
+    assert "Protenix / Boltz2 / ESMFold2" in job_submission
+    assert '<option value="esmfold2">ESMFold2</option>' in denovo_launcher
