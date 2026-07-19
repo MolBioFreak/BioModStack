@@ -5,12 +5,12 @@ async function ab1ToJson(fileObj, options = {}) {
   const arrayBuffer = await getArrayBufferFromFile(fileObj);
   const dataview = new DataView(arrayBuffer);
   const converter = new abConverter(dataview);
-  const chromatogramData = converter.getTraceData();
+  const traceData = converter.getTraceData();
   const returnVal = createInitialSequence(options);
   returnVal.parsedSequence = {
     ...returnVal.parsedSequence,
-    sequence: chromatogramData.baseCalls.join(""),
-    chromatogramData
+    sequence: traceData.baseCalls.join(""),
+    traceData
   };
   return [returnVal];
 }

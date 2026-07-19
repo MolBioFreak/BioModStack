@@ -314,7 +314,11 @@ class PCRExperimentRevision(MolBioBase):
 
     __tablename__ = "pcr_experiment_revisions"
     __table_args__ = (
-        UniqueConstraint("experiment_id", "revision_number", name="uq_pcr_experiment_revision_number"),
+        UniqueConstraint(
+            "experiment_id",
+            "revision_number",
+            name="uq_molbio_pcr_experiment_revision_number",
+        ),
         Index("ix_pcr_revision_template", "template_document_id", "created_at"),
     )
 

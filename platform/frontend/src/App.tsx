@@ -12,7 +12,6 @@ const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
 const InfraMonitorPage = lazy(() => import('./components/InfraMonitorPage').then((module) => ({ default: module.InfraMonitorPage })));
-const AssayAnalytics = lazy(() => import('./components/AssayAnalytics').then((module) => ({ default: module.AssayAnalytics })));
 
 function RouteLoadingFallback() {
   return (
@@ -40,8 +39,7 @@ function App() {
             <Route path="/designer" element={<MolBioToolkitV2 />} />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
             <Route path="/ngs" element={<NGSToolkit />} />
-            {/* Stats Toolkit - qPCR, chromatography/Empower, DOE/statistics */}
-            <Route path="/assay" element={<AssayAnalytics />} />
+
             {/* Infra Monitor - native workstation telemetry surface */}
             <Route path="/infra" element={<InfraMonitorPage />} />
             {/* BioXP Handler Controls */}
