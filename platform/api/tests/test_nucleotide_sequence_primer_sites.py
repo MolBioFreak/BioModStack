@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+import sqlite3
 
 import pytest
 from fastapi import FastAPI
@@ -29,6 +30,7 @@ def sequence_client(tmp_path: Path) -> Iterator[TestClient]:
     )
     app.include_router(nucleotide_sequences.router)
     with TestClient(app) as client:
+        setattr(client, "_molbio_test_database", database)
         yield client
     asyncio.run(engine.dispose())
 
@@ -46,6 +48,56 @@ def _primer(**overrides):
     }
     primer.update(overrides)
     return primer
+
+
+def test_put_rejects_sequence_shrink_that_invalidates_retained_features_atomically(
+    sequence_client: TestClient,
+) -> None:
+    created = sequence_client.post(
+        "/api/sequences/",
+        json={
+            "name": "Feature-bearing construct",
+            "sequence": "ACGTACGT",
+            "sequence_type": "dna",
+            "features": [
+                {
+                    "name": "Tail",
+                    "type": "misc_feature",
+                    "start": 4,
+                    "end": 8,
+                    "strand": 1,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200, created.text
+    sequence_id = created.json()["id"]
+    before = created.json()
+    database = getattr(sequence_client, "_molbio_test_database")
+    with sqlite3.connect(database) as connection:
+        revisions_before = connection.execute(
+            "SELECT COUNT(*) FROM molecular_revisions WHERE document_id=?",
+            (sequence_id,),
+        ).fetchone()[0]
+
+    rejected = sequence_client.put(
+        f"/api/sequences/{sequence_id}",
+        json={"sequence": "ACGT"},
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert "feature" in rejected.json()["detail"].lower()
+
+    reloaded = sequence_client.get(f"/api/sequences/{sequence_id}")
+    assert reloaded.status_code == 200, reloaded.text
+    after = reloaded.json()
+    for field in ("sequence", "length", "features", "version"):
+        assert after[field] == before[field]
+    with sqlite3.connect(database) as connection:
+        revisions_after = connection.execute(
+            "SELECT COUNT(*) FROM molecular_revisions WHERE document_id=?",
+            (sequence_id,),
+        ).fetchone()[0]
+    assert revisions_after == revisions_before
 
 
 @pytest.mark.parametrize(
