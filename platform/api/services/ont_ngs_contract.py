@@ -238,6 +238,7 @@ ONT_WORKFLOW_ALIASES = {
     "basecall_rna": "ont_basecall_rna",
     "plasmid_qc": "ont_plasmid_qc",
     "construct_screening": "ont_construct_screening",
+    "methylation_analysis": "ont_methylation_analysis",
     "fastq_qc": "ont_fastq_qc",
     "wf_clone": "wf_clone_validation",
     "clone_validation": "wf_clone_validation",

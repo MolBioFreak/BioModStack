@@ -44,7 +44,7 @@ function fastqToJson(fileString, options = {}) {
 
     validateFastqSet(header, sequence, plusSign, quality);
 
-    const newChromatogramData = convertBasePosTraceToPerBpTrace({
+    const newTraceData = convertBasePosTraceToPerBpTrace({
       aTrace: [],
       tTrace: [],
       gTrace: [],
@@ -68,7 +68,7 @@ function fastqToJson(fileString, options = {}) {
         sequence: sequence,
         circular: false,
         description: "",
-        chromatogramData: newChromatogramData
+        traceData: newTraceData
       }
     };
     resultArray.push(result);

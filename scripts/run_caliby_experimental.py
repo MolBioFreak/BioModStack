@@ -17,6 +17,8 @@ from caliby_runtime import (
     maybe_run_self_consistency,
     normalize_sampling_results,
     parse_omit_aas,
+    parse_bool,
+    preflight_caliby_runtime,
     read_name_list,
 )
 
@@ -38,6 +40,11 @@ def main() -> None:
     task = str(request.get("task") or "sequence_design").strip().lower()
     model_name = str(request.get("model_name") or "soluble_caliby_v1").strip()
     packer_model = str(request.get("packer_model_name") or "caliby_packer_010").strip()
+    preflight_caliby_runtime(
+        task=task,
+        model_name=model_name,
+        packer_model_name=packer_model,
+    )
     batch_size = int(request.get("batch_size") or 4)
     num_workers = int(request.get("num_workers") or 8)
     clean_num_workers = int(request.get("clean_num_workers") or 2)

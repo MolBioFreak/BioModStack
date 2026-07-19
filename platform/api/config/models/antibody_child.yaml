@@ -1,5 +1,5 @@
 # Antibody Child Validation Workflow
-# Spawned by antibody_denovo in parallel exploration mode
+# Internal antibody-validation child model.
 # Handles batch validation of multiple sequences from the same backbone
 
 id: antibody_child

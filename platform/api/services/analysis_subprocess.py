@@ -24,8 +24,12 @@ from services.analysis_registry import (
     JOB_CORRELATION_MATRIX_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
+    _design_supports_job_analysis,
+    build_analysis_input_signature,
+    get_analysis_definition,
 )
-from services.analysis_runs import build_artifact_manifest_for_run
+from services.analysis_runs import build_artifact_manifest_for_run, validate_job_analysis_request
+from services.result_contracts import validate_design_analysis_request
 from services.aligned_error_utils import load_aligned_error_artifact
 from services.ipsae import compute_ipsae_interface
 from services.cdr_annotator import annotate_pdb, extract_sequence_from_pdb, identify_binder_chains
@@ -83,8 +87,19 @@ def _annotation_field(annotation: Any, field: str) -> Any:
 
 
 def _design_chain_lists(design: Design) -> tuple[list[str], list[str]]:
-    binder_chains = [chain.strip() for chain in str(design.detected_antibody_chains or '').split(',') if chain.strip()]
-    target_chains = [chain.strip() for chain in str(design.detected_target_chain or '').split(',') if chain.strip()]
+    role_map = design.review_role_map if isinstance(design.review_role_map, dict) else {}
+
+    def _chains(value: Any) -> list[str]:
+        values = value if isinstance(value, list) else str(value or "").split(",")
+        return [str(chain).strip() for chain in values if str(chain).strip()]
+
+    binder_chains = _chains(role_map.get("binder_chains") or role_map.get("antibody_chains"))
+    target_chains = _chains(role_map.get("target_chains"))
+    if not binder_chains and str(role_map.get("result_role") or "").strip().lower() in {
+        "antibody_binder",
+        "binder",
+    }:
+        binder_chains = _chains(design.detected_antibody_chains)
     return binder_chains, target_chains
 
 
@@ -516,7 +531,7 @@ async def _job_scope_designs(session, job: Job, params: dict[str, Any], columns:
     if columns:
         from sqlalchemy.orm import load_only
 
-        query = query.options(load_only(*columns))
+        query = query.options(load_only(*columns, Design.review_profile_id))
     result = await session.execute(query)
     return list(result.scalars().all())
 
@@ -543,6 +558,7 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
             Design.binder_probability,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
     metric_names = [metric_name for metric_name in JOB_CORRELATION_METRICS if len(_extract_metric_values(designs, metric_name)) >= 5]
     matrix: list[list[float]] = []
     sample_sizes: list[list[int]] = []
@@ -589,6 +605,7 @@ async def _compute_job_aa_composition(session, job: Job, params: dict[str, Any])
             Design.cdr_l3,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_AA_COMPOSITION_ANALYSIS)]
     cdr_fields = ["cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3"]
     overall_counts = {aa: 0 for aa in STANDARD_AAS}
     by_cdr: list[dict[str, Any]] = []
@@ -651,6 +668,7 @@ async def _compute_job_cdr_logo_pack(session, job: Job, params: dict[str, Any]) 
             Design.cdr_l3,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CDR_LOGO_PACK_ANALYSIS)]
     cdr_fields = ["cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3"]
     logos: list[dict[str, Any]] = []
     for cdr_name in cdr_fields:
@@ -748,6 +766,15 @@ async def _run_analysis(run_id: str) -> int:
             design = design_result.scalar_one_or_none()
             if design is None:
                 raise ValueError(f"Design {run.subject_id} not found")
+            contract_error = validate_design_analysis_request(design, run.analysis_type)
+            if contract_error:
+                raise ValueError(f"Design analysis authority changed after queueing: {contract_error}")
+            definition = get_analysis_definition(run.analysis_type)
+            if definition is None or definition.subject_kind != "design":
+                raise ValueError(f"Unsupported design analysis type: {run.analysis_type}")
+            current_signature = await build_analysis_input_signature(definition, design, params, session)
+            if current_signature != run.input_signature:
+                raise ValueError("Design analysis input signature changed after queueing")
             structure_path = _resolve_design_structure_path(design)
             if not structure_path.exists():
                 raise FileNotFoundError(f"Structure file not found: {design.pdb_path}")
@@ -773,6 +800,15 @@ async def _run_analysis(run_id: str) -> int:
             job = job_result.scalar_one_or_none()
             if job is None:
                 raise ValueError(f"Job {run.subject_id} not found")
+            authority_error = await validate_job_analysis_request(session, job, run.analysis_type, params)
+            if authority_error:
+                raise ValueError(authority_error)
+            definition = get_analysis_definition(run.analysis_type)
+            if definition is None or definition.subject_kind != "job":
+                raise ValueError(f"Unsupported job analysis type: {run.analysis_type}")
+            current_signature = await build_analysis_input_signature(definition, job, params, session)
+            if current_signature != run.input_signature:
+                raise ValueError("Job analysis input signature changed after queueing")
 
             if run.analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
                 result_payload, summary_payload, inline_payload = await _compute_job_correlation_matrix(session, job, params)

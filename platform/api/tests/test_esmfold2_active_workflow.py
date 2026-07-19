@@ -87,7 +87,7 @@ def test_active_structure_prediction_dispatches_esmfold2_channel_process():
 def test_de_novo_workflows_accept_esmfold2_validator():
     batch = (REPO_ROOT / "modules" / "antibody_batch.nf").read_text()
     normalizer = (REPO_ROOT / "scripts" / "normalize_esmfold2_validation.py").read_text()
-    parent = (REPO_ROOT / "workflows" / "antibody_denovo.nf").read_text()
+    parent = (REPO_ROOT / "workflows" / "antibody_child.nf").read_text()
     child = (REPO_ROOT / "workflows" / "antibody_child.nf").read_text()
 
     assert "process BatchESMFold2Validation" in batch

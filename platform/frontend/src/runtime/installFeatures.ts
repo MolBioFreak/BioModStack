@@ -2,14 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 
 export const DEFAULT_BMS_FEATURES = {
     bioxp: false,
-    stats_tools: true,
-    assay_db: true,
 } as const;
 
 export const DEFAULT_BMS_DEV_FEATURES = {
     bioxp: true,
-    stats_tools: true,
-    assay_db: true,
 } as const;
 
 export type BmsFeatureKey = keyof typeof DEFAULT_BMS_FEATURES;
@@ -54,8 +50,6 @@ export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
-        stats_tools: coerceFeatureBool(rawFeatures.stats_tools, defaults.stats_tools),
-        assay_db: coerceFeatureBool(rawFeatures.assay_db, defaults.assay_db),
     };
 }
 
@@ -69,8 +63,6 @@ function normalizeBmsDevFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
-        stats_tools: coerceFeatureBool(rawFeatures.stats_tools, defaults.stats_tools),
-        assay_db: coerceFeatureBool(rawFeatures.assay_db, defaults.assay_db),
     };
 }
 

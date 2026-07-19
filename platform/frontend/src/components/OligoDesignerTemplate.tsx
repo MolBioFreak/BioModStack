@@ -10,7 +10,7 @@
  * - DNA: ≤120 nt (safe), similar limits expected
  * - Protein: ≤400 AA high accuracy, up to 600 AA with reduced quality
  *
- * Pattern follows BindCraftTemplate for consistency and comprehensiveness.
+ * Uses the shared dedicated-workflow form pattern for consistency.
  */
 
 import React, { useState, useMemo, useEffect } from 'react';

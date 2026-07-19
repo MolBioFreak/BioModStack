@@ -211,7 +211,11 @@ export function SequenceViewer({
     visibleFrames = new Set([1]),
     activeDisplayStrand,
 }: SequenceViewerProps) {
-    const nucleotideSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    // Be defensive at the renderer boundary as saved/imported records from
+    // earlier API versions used upper-case DNA/RNA values. SeqViz accepts only
+    // lower-case tokens and otherwise crashes while resolving complements.
+    const normalizedSequenceType = String(sequenceData.sequenceType || '').toLowerCase();
+    const nucleotideSequenceType = normalizedSequenceType === 'rna' ? 'rna' : 'dna';
     const sourceDisplayStrand = sequenceData.sequenceType === 'protein'
         ? 'plus'
         : displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
@@ -425,7 +429,7 @@ export function SequenceViewer({
     }, []);
 
     const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
-    const seqVizSeqType = sequenceData.sequenceType === 'protein' ? 'aa' : sequenceData.sequenceType;
+    const seqVizSeqType = normalizedSequenceType === 'protein' ? 'aa' : nucleotideSequenceType;
     const viewerSequenceKey = useMemo(() => {
         const head = displaySequence.slice(0, 24);
         const tail = displaySequence.slice(-24);

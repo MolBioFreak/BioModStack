@@ -52,8 +52,14 @@ process ESMFold2Predict {
     def seed = params.esmf_seed ?: params.seed
     def device = params.esmf_device ?: params.device ?: 'cuda'
     def complexComponents = params.esmf_complex_components ?: params.complex_components ?: []
+    def complexComponentsFile = params.esmf_complex_components_file
+    if (!(complexComponents instanceof Collection && !complexComponents.isEmpty()) && complexComponentsFile) {
+        def parsedComplexComponents = new groovy.json.JsonSlurper().parse(new File(complexComponentsFile.toString()))
+        complexComponents = parsedComplexComponents instanceof Map ? parsedComplexComponents.components : parsedComplexComponents
+    }
     def normalizedName = (sequence_name ?: 'esmfold2_prediction').toString().replaceAll(/[^A-Za-z0-9._-]+/, '_')
-    def sequenceArg = shellQuote(sequence?.toString()?.trim() ?: '')
+    def hasComplexComponents = complexComponents instanceof Collection && !complexComponents.isEmpty()
+    def sequenceArg = shellQuote(hasComplexComponents ? '' : (sequence?.toString()?.trim() ?: ''))
     def complexArg = complexComponents instanceof Collection && !complexComponents.isEmpty() ? shellQuote(groovy.json.JsonOutput.toJson(complexComponents)) : "''"
     def seedArg = seed == null || seed.toString().trim().isEmpty() ? '' : "--seed ${seed}"
     def telemetryPath = shellQuote("esmfold2_results/${normalizedName}.telemetry.json")

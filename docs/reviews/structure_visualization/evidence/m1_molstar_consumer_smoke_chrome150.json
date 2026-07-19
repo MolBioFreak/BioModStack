@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-19T03:30:37.799Z",
+  "command": "node browser-tests/runMolstarConsumerSmoke.mjs docs/reviews/structure_visualization/evidence/m1_molstar_consumer_smoke_chrome150.json",
+  "url": "http://127.0.0.1:39487/browser-tests/molstar-consumer-smoke.html",
+  "chromeBinary": "/usr/bin/google-chrome",
+  "pageReport": {
+    "currentInventory": {
+      "generic": 12,
+      "epitope": 3,
+      "total": 15,
+      "routeReachable": 12,
+      "orphanFixtures": [
+        "G1",
+        "G2",
+        "G3"
+      ],
+      "retiredHistoricalSites": [
+        "retired binder workflowTemplate (retired)",
+        "one pre-HEAD epitope site absent from current history"
+      ]
+    },
+    "generic": [
+      {
+        "id": "G1",
+        "source": "DockingComparePane:DiffDock orphan fixture",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G2",
+        "source": "DockingComparePane:Uni-Dock orphan fixture",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G3",
+        "source": "FloatingViewer orphan fixture",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G4",
+        "source": "JobDetailPage docking result",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G5",
+        "source": "MutagenesisTemplate FrustraMPNN",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G6",
+        "source": "OligoDesignerTemplate scaffold",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G7",
+        "source": "Dashboard QuickViewer",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G8",
+        "source": "ResultsViewer antibody binder info",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G9",
+        "source": "StructurePredictionTemplate target preview",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G10",
+        "source": "StructurePredictionTemplate modal preview",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "G11",
+        "source": "StructureViewerPane primary/overlay",
+        "ready": true,
+        "usable": true,
+        "structureCount": 2,
+        "disposed": true
+      },
+      {
+        "id": "G12",
+        "source": "StructureViewerPane reference",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      }
+    ],
+    "epitope": [
+      {
+        "id": "E1",
+        "source": "AntibodyDenovoTemplate target/framework",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "E2",
+        "source": "MutagenesisTemplate click-to-mutate",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      },
+      {
+        "id": "E3",
+        "source": "ProteinLocalRedesignTemplate region selection",
+        "ready": true,
+        "usable": true,
+        "structureCount": 1,
+        "disposed": true
+      }
+    ],
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "Symbol 'computed.accessible-surface-area.is-buried' already added. Call removeSymbol/removeCustomProps re-adding the symbol.",
+      "Symbol 'computed.accessible-surface-area.is-accessible' already added. Call removeSymbol/removeCustomProps re-adding the symbol.",
+      "Symbol 'computed.accessible-surface-area.is-buried' already added. Call removeSymbol/removeCustomProps re-adding the symbol.",
+      "Symbol 'computed.accessible-surface-area.is-accessible' already added. Call removeSymbol/removeCustomProps re-adding the symbol."
+    ],
+    "failures": []
+  },
+  "acceptance": {
+    "failures": [
+      "4 duplicate-symbol warnings"
+    ],
+    "severeBrowserEventCount": 0,
+    "duplicateSymbolWarningCount": 4,
+    "documentListenerGrowth": 7,
+    "domNodeGrowth": 292
+  },
+  "cdp": {
+    "domBefore": {
+      "documents": 1,
+      "nodes": 34,
+      "jsEventListeners": 146
+    },
+    "listenersBefore": {
+      "total": 1,
+      "byType": {
+        "selectionchange": 1
+      }
+    },
+    "domAfter": {
+      "documents": 1,
+      "nodes": 326,
+      "jsEventListeners": 933
+    },
+    "listenersAfter": {
+      "total": 8,
+      "byType": {
+        "selectionchange": 2,
+        "pointerlockchange": 3,
+        "pointerlockerror": 3
+      }
+    },
+    "browserEvents": [
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784431824135.618,
+            "url": "http://127.0.0.1:39487/browser-tests/molstar-consumer-smoke.html"
+          }
+        },
+        "sessionId": "AAEF679393DEC71BFDB9010512C4DD1F"
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784431824139.745,
+            "url": "http://127.0.0.1:39487/browser-tests/molstar-consumer-smoke.html"
+          }
+        },
+        "sessionId": "AAEF679393DEC71BFDB9010512C4DD1F"
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x139400136200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784431824139.785,
+            "url": "http://127.0.0.1:39487/browser-tests/molstar-consumer-smoke.html"
+          }
+        },
+        "sessionId": "AAEF679393DEC71BFDB9010512C4DD1F"
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+            "timestamp": 1784431824220.64,
+            "url": "http://127.0.0.1:39487/browser-tests/molstar-consumer-smoke.html"
+          }
+        },
+        "sessionId": "AAEF679393DEC71BFDB9010512C4DD1F"
+      }
+    ]
+  },
+  "logs": {
+    "vite": [
+      "  VITE v6.4.1  ready in 168 ms",
+      "  ➜  Local:   http://127.0.0.1:39487/",
+      "[BABEL] Note: The code generator has deoptimised the styling of /tmp/bms-molstar-consumers-fgo7Ps/vite-cache/deps/chunk-YKNUTTZU.js?v=91440451 as it exceeds the max of 500KB."
+    ],
+    "chrome": [
+      "[3735687:3735687:0718/223023.659357:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[3735687:3735687:0718/223023.957937:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[3735687:3735687:0718/223024.132008:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x139400136200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[3735687:3735687:0718/223024.141259:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x139400132000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+      "[3735649:3735673:0718/223024.186636:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "[3735649:3735673:0718/223024.322337:ERROR:google_apis/gcm/engine/mcs_client.cc:702]   Error code: 401  Error message: Authentication Failed: wrong_secret",
+      "[3735649:3735673:0718/223024.322354:ERROR:google_apis/gcm/engine/mcs_client.cc:704] Failed to log in to GCM, resetting connection.",
+      "Created TensorFlow Lite XNNPACK delegate for CPU."
+    ]
+  }
+}

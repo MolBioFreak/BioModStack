@@ -145,7 +145,7 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         boltz_anchor_target: false,
         boltz_anchor_strict: false,
         // Protenix
-        protenix_model_weights: 'protenix_mini_esm_v0.5.0',
+        protenix_model_weights: 'protenix-v2',
         protenix_seeds: '42',
         protenix_n_sample: 1,
         protenix_n_step: 100,
@@ -260,7 +260,7 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         boltz_anchor_target: false,
         boltz_anchor_strict: false,
         // Protenix
-        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_model_weights: 'protenix-v2',
         protenix_seeds: '42',
         protenix_n_sample: 3,
         protenix_n_step: 200,
@@ -375,7 +375,7 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         boltz_anchor_target: false,
         boltz_anchor_strict: false,
         // Protenix
-        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_model_weights: 'protenix-v2',
         protenix_seeds: '42',
         protenix_n_sample: 5,
         protenix_n_step: 200,
@@ -490,7 +490,7 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         boltz_anchor_target: false,
         boltz_anchor_strict: false,
         // Protenix
-        protenix_model_weights: 'protenix_base_20250630_v1.0.0',
+        protenix_model_weights: 'protenix-v2',
         protenix_seeds: '42',
         protenix_n_sample: 8,
         protenix_n_step: 300,

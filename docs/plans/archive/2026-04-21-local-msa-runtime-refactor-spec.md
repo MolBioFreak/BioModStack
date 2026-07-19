@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the provider split (`local` vs `colabfold_api`) and keep the user-facing CLI flags stable, but move the real implementation behind a package rooted at `scripts/lib/local_msa/`. The package becomes the sole owner of request normalization, runtime selection, batch planning, provider dispatch, cache/artifact handling, and reporting. Workflow and API surfaces become thin adapters: they describe work, but they do not own MMseqs orchestration policy.
 
-**Tech Stack:** `scripts/run_local_msa.py`, `scripts/batch_msa.py`, `scripts/prepare_protenix_msa.py`, `scripts/check_protenix_msa_preflight.py`, `platform/api/services/msa_server.py`, `platform/api/services/nextflow.py`, `platform/api/routers/msa.py`, `modules/structure_prediction.nf`, `modules/boltz_cp_experimental.nf`, `modules/protenix.nf`, `modules/antibody_batch.nf`, `workflows/antibody_denovo.nf`, pytest, MMseqs2 subprocess orchestration, and the existing host `/api/msa/server/*` control plane.
+**Tech Stack:** `scripts/run_local_msa.py`, `scripts/batch_msa.py`, `scripts/prepare_protenix_msa.py`, `scripts/check_protenix_msa_preflight.py`, `platform/api/services/msa_server.py`, `platform/api/services/nextflow.py`, `platform/api/routers/msa.py`, `modules/structure_prediction.nf`, `modules/boltz_cp_experimental.nf`, `modules/protenix.nf`, `modules/antibody_batch.nf`, `workflows/antibody_child.nf`, pytest, MMseqs2 subprocess orchestration, and the existing host `/api/msa/server/*` control plane.
 
 ---
 
@@ -836,7 +836,7 @@ Target state:
 - `modules/boltz_cp_experimental.nf`
 - `modules/protenix.nf`
 - `modules/antibody_batch.nf`
-- `workflows/antibody_denovo.nf`
+- `workflows/antibody_child.nf`
 - `platform/api/tests/test_msa_server.py`
 - `platform/api/tests/test_structure_prediction_batch.py`
 - `platform/api/tests/test_boltz_cp_experimental.py`

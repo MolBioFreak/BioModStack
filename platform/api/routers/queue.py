@@ -673,10 +673,15 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=400, detail=f"Max retries ({job.max_retries}) exceeded")
     
     job.retry_count += 1
+    job.status = 'queued'
     job.queue_status = 'queued'
     job.paused = False
     job.error_message = None
     job.assigned_gpu = None
+    job.started_at = None
+    job.completed_at = None
+    job.current_stage = None
+    job.stage_progress = None
     await session.commit()
     
     return {
@@ -779,11 +784,10 @@ async def force_launch_job(
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Force-launch a queued job, bypassing VRAM checks.
-    
-    This directly starts the job on the specified GPU without waiting for
-    the orchestrator's bin-packing algorithm. Use when you know there's
-    enough VRAM and want to manually control job placement.
+    Pin a queued/paused job to a specific GPU and requeue it.
+
+    The GPU orchestrator remains the only component that may admit and launch
+    the job; all VRAM, concurrency, and disabled-GPU checks still apply.
     """
     # Validate GPU index against live/proxied GPU status, not only the API
     # container's local nvidia-smi view.
@@ -796,10 +800,10 @@ async def force_launch_job(
             allowed_queue_statuses=["queued", "paused"],
             session=session,
         )
-        logger.info(f"[FORCE-LAUNCH] {job.name} on GPU {request.gpu_id}")
+        logger.info(f"[FORCE-LAUNCH] Pinned {job.name} to GPU {request.gpu_id}; queued for orchestrator")
         return {
             "success": True,
-            "message": f"Force-launched {job.name} on GPU {request.gpu_id}",
+            "message": f"Pinned {job.name} to GPU {request.gpu_id} and returned it to the scheduler queue",
             "job_id": job_id,
             "gpu_id": request.gpu_id
         }

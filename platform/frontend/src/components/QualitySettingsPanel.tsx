@@ -151,12 +151,7 @@ export type PPIFlowTuningProfile = 'stage_optimized' | 'manual';
 
 
 
-const normalizeProtenixModel = (model?: string) => {
-    if (!model) return 'protenix_base_20250630_v1.0.0';
-    if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
-    if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
-    return model;
-};
+const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
 
 const FAMPNN_CHECKPOINT_OPTIONS = [
     {
@@ -191,7 +186,7 @@ const MSA_PRESET_INFO: Record<QualitySettings['msa_preset'], { label: string; de
 interface QualitySettingsPanelProps {
     settings: QualitySettings;
     onSettingsChange: (settings: QualitySettings) => void;
-    structureValidator?: 'boltz2' | 'protenix';
+    structureValidator?: 'boltz2' | 'protenix' | 'esmfold2';
     allowPostPpiFlowRetry?: boolean;
     showRfantibodySettings?: boolean;
     showStructureValidationSettings?: boolean;
@@ -1175,14 +1170,10 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             onChange={(e) => updateSetting('protenix_model_weights', e.target.value)}
                                             className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                                         >
-                                            <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Default)</option>
-                                            <option value="protenix-v2">Protenix v2 (Shared weights required)</option>
-                                            <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
-                                            <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0</option>
-                                            <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
+                                            <option value="protenix-v2">Protenix v2 (required)</option>
                                         </select>
                                         <p className="mt-1 text-[10px] text-slate-600">
-                                            The stable default remains the 2025-06-30 v1 checkpoint. Protenix v2 stays selectable when its shared checkpoint has been staged.
+                                            Protenix is pinned to the staged V2 checkpoint for every run.
                                         </p>
                                     </div>
 
@@ -1267,11 +1258,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             type="checkbox"
                                             checked={settings.protenix_use_msa}
                                             onChange={(e) => {
-                                                const useMsa = e.target.checked;
-                                                updateSetting('protenix_use_msa', useMsa);
-                                                if (!useMsa && !normalizeProtenixModel(settings.protenix_model_weights).includes('esm')) {
-                                                    updateSetting('protenix_model_weights', 'protenix_mini_esm_v0.5.0');
-                                                }
+                                                updateSetting('protenix_use_msa', e.target.checked);
                                             }}
                                             className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
                                         />
@@ -1951,8 +1938,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300"
                                 >
                                     <option value="soluble_caliby_v1">soluble_caliby_v1</option>
-                                    <option value="soluble_caliby">soluble_caliby</option>
-                                    <option value="caliby">caliby</option>
                                 </select>
                             </div>
                             <div>

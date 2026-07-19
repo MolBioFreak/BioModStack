@@ -3,7 +3,7 @@
  * FAMPNN Child Workflow
  * 
  * Standalone entry point for FAMPNN sequence design on a batch of backbone PDBs.
- * Spawned by parent orchestrator (antibody_denovo.nf) for multi-GPU parallelization.
+ * Spawned by an authorized parent orchestrator for multi-GPU parallelization.
  * GPU assignment is handled by orchestrator/Nextflow scheduler, not hardcoded.
  * 
  * Usage:

@@ -13,11 +13,14 @@ node_modules
 **/node_modules
 platform/frontend/node_modules
 platform/frontend/dist
+platform/frontend/.test-dist
+platform/frontend/.artifacts
 **/dist
 platform/api/.venv
 platform/api/.pytest_cache
 work
 .nextflow
+.pytest-nextflow-*
 output
 backups
 apptainer

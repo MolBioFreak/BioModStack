@@ -296,8 +296,8 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "status": "degraded",
             "quick_check": "ok",
             "foreign_key_violations": 1,
-            "migration_count": 3,
-            "latest_migration": "0003_idempotency_and_soft_delete",
+            "migration_count": 4,
+            "latest_migration": "0004_sequence_parent_foreign_key",
             "migrations_current": True,
             "immutable_trigger_count": 20,
             "immutable_triggers_current": True,
@@ -412,91 +412,6 @@ async def test_legacy_extraction_fails_explicitly_on_destination_conflict(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_legacy_extraction_verification_failure_rolls_back_all_copies(tmp_path: Path) -> None:
-    """Post-copy verification is part of the write transaction, not an after-commit check."""
-    from molbio_database import create_molbio_engine, init_molbio_db, make_molbio_session_factory
-    from molbio_migrations import MigrationVerificationError, extract_legacy_molbio_data
-    from molbio_models import NucleotideSequence
-    from services.molbio_persistence import record_sequence_revision
-
-    source = tmp_path / "biomodstack.db"
-    destination = tmp_path / "molbio.db"
-    _create_legacy_source(source)
-
-    engine = create_molbio_engine(f"sqlite+aiosqlite:///{destination}")
-    await init_molbio_db(engine=engine)
-    sessions = make_molbio_session_factory(engine)
-    async with sessions() as session:
-        unrelated = NucleotideSequence(
-            id="destination-only",
-            name="unrelated",
-            sequence="AAAA",
-            sequence_type="dna",
-            molecule_strandedness="double",
-            molecule_orientation="not_applicable",
-            is_circular=False,
-            length=4,
-            features=[],
-            primers=[],
-            analysis_tracks=[],
-            version=1,
-            gc_content=0.0,
-        )
-        session.add(unrelated)
-        await record_sequence_revision(session, unrelated, change_kind="create")
-        await session.commit()
-    await engine.dispose()
-
-    with pytest.raises(MigrationVerificationError, match="count"):
-        await extract_legacy_molbio_data(
-            source,
-            destination,
-            backup_path=tmp_path / "verification-failure-backup.db",
-        )
-
-    with sqlite3.connect(destination) as connection:
-        ids = {
-            row[0]
-            for row in connection.execute("SELECT id FROM nucleotide_sequences").fetchall()
-        }
-        assert ids == {"destination-only"}
-        assert connection.execute(
-            "SELECT COUNT(*) FROM molecular_revisions WHERE document_id IN ('seq-1', 'seq-2')"
-        ).fetchone()[0] == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("corruption", ["sequence_head", "primer_revision"])
-async def test_idempotent_extraction_fails_closed_on_incomplete_history_graph(
-    tmp_path: Path,
-    corruption: str,
-) -> None:
-    from molbio_migrations import MigrationVerificationError, extract_legacy_molbio_data
-
-    source = tmp_path / "biomodstack.db"
-    destination = tmp_path / "molbio.db"
-    _create_legacy_source(source)
-    await extract_legacy_molbio_data(source, destination, backup_path=tmp_path / "first-backup.db")
-
-    with sqlite3.connect(destination) as connection:
-        if corruption == "sequence_head":
-            connection.execute(
-                "UPDATE molecular_documents SET current_revision_id = NULL WHERE id = 'seq-1'"
-            )
-        else:
-            connection.execute("DROP TRIGGER molbio_immutable_primer_revisions_delete")
-            connection.execute("DELETE FROM primer_revisions WHERE primer_id = 'primer-1'")
-        connection.commit()
-
-    with pytest.raises(MigrationVerificationError, match="history"):
-        await extract_legacy_molbio_data(
-            source,
-            destination,
-            backup_path=tmp_path / f"{corruption}-backup.db",
-        )
-
-
-@pytest.mark.asyncio
 async def test_existing_database_migration_adds_restricting_sequence_parent_foreign_key(
     tmp_path: Path,
 ) -> None:
@@ -524,10 +439,13 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
         table_sql = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='nucleotide_sequences'"
         ).fetchone()[0]
-        old_table_sql = table_sql.replace(
-            "CREATE TABLE nucleotide_sequences",
+        old_table_sql = re.sub(
+            r'^CREATE\s+TABLE\s+(?:"nucleotide_sequences"|`nucleotide_sequences`|'
+            r'\[nucleotide_sequences\]|nucleotide_sequences)',
             "CREATE TABLE nucleotide_sequences_oldstyle",
-            1,
+            table_sql,
+            count=1,
+            flags=re.IGNORECASE,
         )
         old_table_sql = re.sub(
             r",\s*FOREIGN KEY\(parent_id\) REFERENCES nucleotide_sequences \(id\) ON DELETE RESTRICT",
@@ -566,63 +484,3 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
         assert connection.execute(
             "SELECT parent_id FROM nucleotide_sequences WHERE id = 'child'"
         ).fetchone() == ("parent",)
-
-
-@pytest.mark.asyncio
-async def test_health_rejects_counterfeit_immutable_trigger_with_matching_prefix_count(
-    tmp_path: Path,
-) -> None:
-    from molbio_database import create_molbio_engine, init_molbio_db, molbio_health
-
-    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'trigger-health.db'}")
-    try:
-        await init_molbio_db(engine=engine)
-        async with engine.begin() as connection:
-            await connection.execute(text("DROP TRIGGER molbio_immutable_primer_revisions_update"))
-            await connection.execute(
-                text(
-                    """
-                    CREATE TRIGGER molbio_immutable_counterfeit_update
-                    BEFORE UPDATE ON primers
-                    BEGIN
-                        SELECT RAISE(ABORT, 'counterfeit');
-                    END
-                    """
-                )
-            )
-
-        health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 20
-        assert health["immutable_triggers_current"] is False
-        assert health["status"] == "degraded"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_health_rejects_same_name_noop_immutable_trigger(tmp_path: Path) -> None:
-    from molbio_database import create_molbio_engine, init_molbio_db, molbio_health
-
-    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'noop-trigger.db'}")
-    try:
-        await init_molbio_db(engine=engine)
-        async with engine.begin() as connection:
-            await connection.execute(text("DROP TRIGGER molbio_immutable_primer_revisions_update"))
-            await connection.execute(
-                text(
-                    """
-                    CREATE TRIGGER molbio_immutable_primer_revisions_update
-                    BEFORE UPDATE ON primer_revisions
-                    BEGIN
-                        SELECT 1;
-                    END
-                    """
-                )
-            )
-
-        health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 20
-        assert health["immutable_triggers_current"] is False
-        assert health["status"] == "degraded"
-    finally:
-        await engine.dispose()

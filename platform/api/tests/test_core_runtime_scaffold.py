@@ -26,6 +26,7 @@ def test_core_runtime_scaffold_files_exist() -> None:
         ".env.core-runtime.example",
         ".dockerignore",
         "docker/api.Dockerfile",
+        "docker/plannotate-conda-linux-64.lock",
         "docker/web.Dockerfile",
         "docker/web/nginx.conf",
         "scripts/run_biomodstack_core_runtime.sh",
@@ -43,14 +44,33 @@ def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
     assert "BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba" in dockerfile
     assert "BMS_MICROMAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX}" in dockerfile
     assert "BMS_PLANNOTATE_ENV=plannotate" in dockerfile
-    assert "https://micro.mamba.pm/api/micromamba/linux-64/latest" in dockerfile
+    assert "BMS_PLANNOTATE_VERSION=2.0.0" in dockerfile
+    assert "BMS_PLANNOTATE_STREAMLIT_VERSION=1.59.2" in dockerfile
+    assert "micromamba-releases/releases/download/2.5.0-2/micromamba-linux-64" in dockerfile
+    assert "sha256sum -c -" in dockerfile
     assert "micromamba --root-prefix \"${MAMBA_ROOT_PREFIX}\" create" in dockerfile
-    assert "-c conda-forge -c bioconda plannotate" in dockerfile
-    assert '"pandas<3"' in dockerfile
-    assert '"setuptools<81"' in dockerfile
-    assert "streamlit.web.cli" in dockerfile
-    assert ".any(axis=1) #only the rows that are in the columns of hit" in dockerfile
+    assert "--file /app/docker/plannotate-conda-linux-64.lock" in dockerfile
     assert "plannotate setupdb" in dockerfile
+    assert "plannotate databases" in dockerfile
+    assert "import plannotate.streamlit_app" in dockerfile
+    assert "streamlit.web.cli" not in dockerfile
+    assert ".any(axis=1) #only the rows that are in the columns of hit" not in dockerfile
+
+    lock_lines = (REPO_ROOT / "docker" / "plannotate-conda-linux-64.lock").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert lock_lines[0] == "@EXPLICIT"
+    assert len(lock_lines) == 215
+    assert any("python-3.12.13-" in line for line in lock_lines)
+    assert any("plannotate-2.0.0-" in line for line in lock_lines)
+    assert any("streamlit-1.59.2-" in line for line in lock_lines)
+    assert any("pandas-2.3.3-" in line for line in lock_lines)
+    assert any("bokeh-3.9.1-" in line for line in lock_lines)
+    for line in lock_lines[1:]:
+        url, sha256 = line.rsplit("#", 1)
+        assert url.startswith("https://")
+        assert len(sha256) == 64
+        assert all(character in "0123456789abcdef" for character in sha256)
 
 
 def test_compose_core_runtime_contract() -> None:
@@ -83,6 +103,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_STATS_TOOLS_COMPOSE_FILE"] == "/app/compose.core-runtime.yml"
     assert api["environment"]["BMS_DOCKER_COMPOSE_PROJECT"] == "${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
     assert "BMS_DOCKER_GID" not in api["environment"]
+    assert "BMS_FRONTEND_HEALTH_URL" not in api["environment"]
     assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
@@ -303,7 +324,7 @@ def test_one_command_ui_surface_smoke_checker_exists() -> None:
 def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     dockerfile = (REPO_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
 
-    assert "FROM python:3.10-slim-bookworm AS api-base" in dockerfile
+    assert dockerfile.startswith("FROM python:3.10-slim-bookworm@sha256:")
     assert "FROM api-base AS api-runtime" in dockerfile
     assert "FROM api-base AS stats-tools-runtime" in dockerfile
     assert dockerfile.index("FROM api-base AS api-runtime") < dockerfile.index("FROM api-base AS stats-tools-runtime")
@@ -315,6 +336,16 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     assert "ENV BMS_R_INSTALL_NCPUS=${BMS_R_INSTALL_NCPUS}" in dockerfile
     assert 'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]' in dockerfile
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
+
+
+def test_hosted_web_html_sets_strict_electron_compatible_csp() -> None:
+    nginx = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "add_header Content-Security-Policy" in nginx
+    assert "script-src 'self' 'wasm-unsafe-eval'" in nginx
+    assert "script-src 'self' 'unsafe-eval'" not in nginx
+    assert "object-src 'none'" in nginx
+    assert "frame-ancestors 'none'" in nginx
 
 
 def test_api_runtime_build_target_does_not_install_r_stats_stack() -> None:

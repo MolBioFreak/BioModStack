@@ -1,0 +1,137 @@
+{
+    "coordinate_plan_sha256": "2a399226da08b097524f9089b3391df34c984ed56292f0e4cfa326a8a28a4be7",
+    "entries": [
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "open",
+                "run_index": 0,
+                "sample_index": 0,
+                "saved_step": 5,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_000.cif",
+        "sha256": "6e8987977c2ad855136af61ecd368fef852d7f2763724e7e8e427839a7ef2629"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "open",
+                "run_index": 0,
+                "sample_index": 1,
+                "saved_step": 5,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_001.cif",
+        "sha256": "9f324cd50899f90cadc53e620d4da9405ac966a660693889f56e07cd987a4c32"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "open",
+                "run_index": 0,
+                "sample_index": 0,
+                "saved_step": 10,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_002.cif",
+        "sha256": "c0253d886aff8ef4e9bf0b99031f3edc12ac741a26a59b7dc295f500c11b3457"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "open",
+                "run_index": 0,
+                "sample_index": 1,
+                "saved_step": 10,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_003.cif",
+        "sha256": "9ab7175e48736f82ef38304842a08dc8117c750772de3faeac8c19bb155c1211"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "closed",
+                "run_index": 0,
+                "sample_index": 0,
+                "saved_step": 5,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_004.cif",
+        "sha256": "d3f7b82d932f754dc15397a8cdfbdad298f7726cf0c8154b0e0ad0cfed78ff8e"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "closed",
+                "run_index": 0,
+                "sample_index": 1,
+                "saved_step": 5,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_005.cif",
+        "sha256": "41abefd68d0a0f74c08c5038cb4e77568d03b6c80780776fd1b9a3193243d343"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "closed",
+                "run_index": 0,
+                "sample_index": 0,
+                "saved_step": 10,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_006.cif",
+        "sha256": "098966c1d2efe9380c2dfd4da83331705c3e273a4b57cc7c52ece4da12ca6edc"
+        },
+        {
+        "bytes": 679,
+            "coordinates": {
+                "backend": "confornets",
+                "confornet_index": 0,
+                "reference_id": "closed",
+                "run_index": 0,
+                "sample_index": 1,
+                "saved_step": 10,
+                "target_id": "target-a",
+                "task": "mse",
+                "test_case_id": "case-a"
+            },
+            "relative_path": "conformers/candidate_007.cif",
+        "sha256": "0697f0d832ff76bff5b07f5669c49b4a0fca44a5555be48d7353cb84bc32a155"
+        }
+    ],
+    "native_request_sha256": "9c9f62b6c8b716047929d49e6b82c2293b2287733ee5453787081dd449a6a957",
+    "request_sha256": "8afb329b74ec8218eaee06991f86f99b6b2460ed947d2e40d707f7097aeb53c8",
+    "schema_name": "cm_output_coordinate_ledger",
+    "schema_version": 1
+}

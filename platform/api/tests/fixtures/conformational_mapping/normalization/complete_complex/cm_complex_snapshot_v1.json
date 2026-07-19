@@ -1,0 +1,24 @@
+{
+  "schema_name": "cm_complex_snapshot",
+  "schema_version": 1,
+  "target_id": "target-phase2",
+  "target_order": 0,
+  "original_source_path": "inputs/complete-complex.json",
+  "original_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "normalized_source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entities": [
+    {"entity_type":"protein","source_entity_id":"1","count":2,"ordered_instance_ids":["repeat-copy-left","repeat-copy-right"],"sequence":"G"},
+    {"entity_type":"ligand_ccd","source_entity_id":"2","count":2,"ordered_instance_ids":["ligand-copy-1","ligand-copy-2"],"ccd":"ATP"},
+    {"entity_type":"ion","source_entity_id":"3","count":1,"ordered_instance_ids":["ion-copy-1"],"ccd":"ZN"}
+  ],
+  "bonds": [],
+  "instance_mappings": [
+    {"source_entity_id":"1","source_instance_id":"repeat-copy-left","runtime_target_id":"target-phase2","runtime_entity_id":"runtime-1","runtime_instance_id":"runtime-left","runtime_order":0,"candidate_id":"candidate-phase2","output_entity_id":"10","output_label_asym_id":"COPY_ALPHA","output_auth_asym_id":"LEFT","output_entity_order":0},
+    {"source_entity_id":"1","source_instance_id":"repeat-copy-right","runtime_target_id":"target-phase2","runtime_entity_id":"runtime-1","runtime_instance_id":"runtime-right","runtime_order":1,"candidate_id":"candidate-phase2","output_entity_id":"10","output_label_asym_id":"COPY_BETA","output_auth_asym_id":"RIGHT","output_entity_order":1},
+    {"source_entity_id":"2","source_instance_id":"ligand-copy-1","runtime_target_id":"target-phase2","runtime_entity_id":"runtime-2","runtime_instance_id":"runtime-ligand-1","runtime_order":2,"candidate_id":"candidate-phase2","output_entity_id":"20","output_label_asym_id":"LIGAND_ONE","output_auth_asym_id":"L1","output_entity_order":2},
+    {"source_entity_id":"2","source_instance_id":"ligand-copy-2","runtime_target_id":"target-phase2","runtime_entity_id":"runtime-2","runtime_instance_id":"runtime-ligand-2","runtime_order":3,"candidate_id":"candidate-phase2","output_entity_id":"20","output_label_asym_id":"LIGAND_TWO","output_auth_asym_id":"L2","output_entity_order":3},
+    {"source_entity_id":"3","source_instance_id":"ion-copy-1","runtime_target_id":"target-phase2","runtime_entity_id":"runtime-3","runtime_instance_id":"runtime-ion-1","runtime_order":4,"candidate_id":"candidate-phase2","output_entity_id":"30","output_label_asym_id":"ION_ONE","output_auth_asym_id":"Z1","output_entity_order":4}
+  ],
+  "admission": {"token_count": 5, "atom_count": 11, "token_limit": 20000, "conversion_omissions": []},
+  "unsupported_fields": []
+}

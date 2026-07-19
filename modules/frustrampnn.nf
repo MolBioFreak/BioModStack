@@ -7,7 +7,7 @@ process FrustrampnnQC {
     publishDir "${params.out_dir}/frustration", mode: 'copy'
     
     input:
-    tuple val(meta), path(pdb)
+    tuple val(meta), path(structure)
     
     output:
     tuple val(meta), path("${meta.id}_frustration.csv"), emit: frustration
@@ -15,7 +15,31 @@ process FrustrampnnQC {
     
     script:
     """
-    frustrampnn predict --pdb ${pdb} --checkpoint /opt/frustrampnn_weights/megascale.ckpt --output ${meta.id}_frustration.csv
+    python3 - "${structure}" "${meta.id}.pdb" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+suffix = source.suffix.lower()
+
+if suffix in {'.cif', '.mmcif'}:
+    from Bio.PDB import MMCIFParser, PDBIO
+
+    parsed = MMCIFParser(QUIET=True).get_structure(destination.stem, str(source))
+    writer = PDBIO()
+    writer.set_structure(parsed)
+    writer.save(str(destination))
+elif suffix == '.pdb':
+    shutil.copyfile(source, destination)
+else:
+    raise RuntimeError(f'Unsupported structure format for FrustraMPNN: {source.name}')
+
+if not destination.is_file() or destination.stat().st_size == 0:
+    raise RuntimeError(f'Failed to prepare non-empty PDB input from {source}')
+PY
+    frustrampnn predict --pdb ${meta.id}.pdb --checkpoint /opt/frustrampnn_weights/megascale.ckpt --output ${meta.id}_frustration.csv
     python3 -c "
 import pandas as pd, json
 df = pd.read_csv('${meta.id}_frustration.csv')

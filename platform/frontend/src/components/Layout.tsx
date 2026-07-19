@@ -24,8 +24,7 @@ import {
     useBmsFeatures,
 } from '../runtime/installFeatures';
 import { ThemeSelector } from './ThemeSelector';
-import { StatsToolsMenu } from './StatsToolsControlPanel';
-import { DbServiceMenu } from './DbServiceControlPanel';
+
 import { BioXpInterlinkMenu } from './BioXpInterlinkControlPanel';
 import {
     InfraControlStateCollector,
@@ -35,6 +34,7 @@ import {
     SHARED_FAN_CONTROL_QUERY_KEY,
     SHARED_POWER_CONTROL_QUERY_KEY,
 } from './infraTelemetryQueryKeys';
+import { shouldCollectTelemetryHistory } from './infraTelemetryHistory';
 import {
     fetchFanControl,
     fetchPowerControl,
@@ -356,16 +356,14 @@ function TopbarUtilityControls({
 }: TopbarUtilityControlsProps) {
     const bmsFeatureState = useBmsFeatureState();
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
-    const showStatsToolsDevFeature = isBmsFeatureVisible(bmsFeatureState, 'stats_tools', showDevFeatures);
-    const showAssayDbDevFeature = isBmsFeatureVisible(bmsFeatureState, 'assay_db', showDevFeatures);
+
 
     return (
         <>
             <ThemeSelector />
             {showBioXpDevFeature && <BioXpInterlinkMenu />}
             {showSystemMenus && <PowerControlMenu />}
-            {showSystemMenus && showAssayDbDevFeature && <DbServiceMenu />}
-            {showSystemMenus && showStatsToolsDevFeature && <StatsToolsMenu />}
+
             {showSystemMenus && <MSAServerSettingsMenu />}
             <DebugMenu
                 showSystemAnalyticsTab={showSystemAnalyticsTab}
@@ -508,7 +506,7 @@ export function Layout({ children }: LayoutProps) {
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
-            <InfraTelemetryCollector />
+            {shouldCollectTelemetryHistory(location.pathname) && <InfraTelemetryCollector />}
             <InfraControlStateCollector />
             {/* Top Navigation Bar */}
             <nav
@@ -619,17 +617,18 @@ export function Layout({ children }: LayoutProps) {
                                     NGS Toolkit
                                 </Link>
                                 <Link
-                                    to="/assay"
-                                    data-bms-primary-nav-active={isActive('/assay') ? 'true' : undefined}
+                                    to="/stats"
+                                    data-bms-primary-nav-active={isActive('/stats') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{
-                                        backgroundColor: isActive('/assay') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/assay') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        backgroundColor: isActive('/stats') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/stats') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                     }}
-                                    title="Stats Toolkit"
+                                    title="BioModStack Stats Toolkit"
                                 >
                                     Stats Toolkit
                                 </Link>
+
                                 {showSystemAnalyticsTab && (
                                     <Link
                                         to="/infra"
@@ -977,7 +976,7 @@ function DebugMenu({
                             <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
                                 <span>
                                     <span className="block text-sm text-slate-300">Show dev tools</span>
-                                    <span className="block text-[11px] text-slate-500">Reveals BioXP, BMS DB, and Stats Tools menus</span>
+                                    <span className="block text-[11px] text-slate-500">Reveals BioXP development controls</span>
                                 </span>
                                 <input
                                     type="checkbox"
@@ -1001,20 +1000,7 @@ function DebugMenu({
                                 >
                                     {bmsFeatures.bioxp ? 'Remove BioXP' : 'Add BioXP'}
                                 </button>
-                                <button
-                                    onClick={() => void setBmsFeature('stats_tools', !bmsFeatures.stats_tools)}
-                                    disabled={featureAction === 'stats_tools-add' || featureAction === 'stats_tools-remove'}
-                                    className={addOnButtonClass}
-                                >
-                                    {bmsFeatures.stats_tools ? 'Remove Stats Tools' : 'Add Stats Tools'}
-                                </button>
-                                <button
-                                    onClick={() => void setBmsFeature('assay_db', !bmsFeatures.assay_db)}
-                                    disabled={featureAction === 'assay_db-add' || featureAction === 'assay_db-remove'}
-                                    className={addOnButtonClass}
-                                >
-                                    {bmsFeatures.assay_db ? 'Remove BMS DB' : 'Add BMS DB'}
-                                </button>
+
                             </div>
                         </div>
 
