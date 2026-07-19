@@ -22,8 +22,21 @@ def test_result_contract_registry_definitions_are_explicit_and_inspectable() -> 
         "stage_modes": [],
         "artifact_classes": ["backbone_complex"],
         "result_sets": ["rfantibody_backbones"],
-        "supported_analyzers": ["antibody_backbone_v1"],
-        "viewer_capabilities": ["result_filter", "structure_viewer", "antibody_backbone_metrics"],
+        "supported_analyzers": [
+            "structure_summary",
+            "contact_map",
+            "chain_metrics",
+            "pae_matrix",
+            "ipsae_interface",
+            "antibody_annotation_pack",
+        ],
+        "viewer_capabilities": [
+            "result_filter",
+            "structure_viewer",
+            "structure_confidence_metrics",
+            "complex_interface_metrics",
+            "antibody_backbone_metrics",
+        ],
         "required_fields": ["artifact_class", "result_set"],
         "required_artifacts": ["structure"],
         "notes": "RFantibody/backbone generation outputs.",
@@ -42,12 +55,25 @@ def test_result_contract_registry_definitions_are_explicit_and_inspectable() -> 
 def test_result_contract_registry_maps_known_result_sets_to_analyzers_and_capabilities() -> None:
     assert resolve_result_contract(result_set="rfantibody_backbones").model_dump() == {
         "analysis_contract_id": "antibody_backbone_v1",
-        "supported_analyzers": ["antibody_backbone_v1"],
-        "viewer_capabilities": ["result_filter", "structure_viewer", "antibody_backbone_metrics"],
+        "supported_analyzers": [
+            "structure_summary",
+            "contact_map",
+            "chain_metrics",
+            "pae_matrix",
+            "ipsae_interface",
+            "antibody_annotation_pack",
+        ],
+        "viewer_capabilities": [
+            "result_filter",
+            "structure_viewer",
+            "structure_confidence_metrics",
+            "complex_interface_metrics",
+            "antibody_backbone_metrics",
+        ],
         "required_fields": ["artifact_class", "result_set"],
         "required_artifacts": ["structure"],
         "schema_version": 1,
-        "contract_source": "registry",
+        "contract_source": "legacy_result_set",
     }
     assert resolve_result_contract(result_set="sequence_designs").analysis_contract_id == "sequence_design_v1"
     assert resolve_result_contract(result_set="ppiflow_passed").analysis_contract_id == "ppiflow_maturation_v1"

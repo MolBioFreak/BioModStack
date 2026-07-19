@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
-from services.gpu_config import read_scheduler_config, write_scheduler_config
+from services.gpu_config import read_scheduler_config, mutate_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
 from services.stage_review import (
@@ -115,7 +115,7 @@ VRAM_PROFILES = {
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
-    'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
+
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
@@ -587,6 +587,19 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     if pending:
         await session.commit()
     return applied
+
+
+def _has_terminal_nextflow_history(history_entry: Any) -> bool:
+    """Return whether persisted Nextflow history is already authoritative.
+
+    GPU activity is only a liveness hint. After an API/reloader restart, an
+    unrelated process can keep the assigned GPU busy after this job's detached
+    Nextflow run has already written a terminal OK/ERR row.
+    """
+    if not history_entry:
+        return False
+    status = history_entry[0] if isinstance(history_entry, (tuple, list)) else history_entry
+    return str(status or "").strip().upper() in {"OK", "ERR"}
 
 
 def _reconcile_terminal_history_without_process(
@@ -2321,10 +2334,12 @@ class GPUOrchestrator:
                     job.error_message = str(e)
 
             if used_quick_enable_gpu_ids:
-                for gpu_id in used_quick_enable_gpu_ids:
-                    gpu_override = config.setdefault("overrides", {}).setdefault(str(gpu_id), {})
-                    gpu_override["quick_enable"] = False
-                write_scheduler_config(config)
+                def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
+                    overrides = latest_config.setdefault("overrides", {})
+                    for gpu_id in used_quick_enable_gpu_ids:
+                        overrides.setdefault(str(gpu_id), {})["quick_enable"] = False
+
+                mutate_scheduler_config(consume_quick_enable_tokens)
             
             await session.commit()
     
@@ -2436,8 +2451,14 @@ class GPUOrchestrator:
                     elif job.name in all_processes or job.name.replace(' ', '.') in all_processes:
                         job_is_running = True
                     
-                    # Method 2: Check if there's any activity on the job's assigned GPU
-                    if not job_is_running and job.assigned_gpu is not None:
+                    # Method 2: Check if there's any activity on the job's assigned GPU.
+                    # Terminal per-job history is stronger evidence than shared-GPU activity.
+                    terminal_history = history_status_by_job.get(str(job.id))
+                    if (
+                        not job_is_running
+                        and job.assigned_gpu is not None
+                        and not _has_terminal_nextflow_history(terminal_history)
+                    ):
                         if job.assigned_gpu in gpu_has_activity:
                             # GPU has activity - job might be running
                             # But we need to be more specific for FAMPNN
@@ -2447,11 +2468,12 @@ class GPUOrchestrator:
                             else:
                                 job_is_running = True
                     
-                    # Method 3: If job has been running > 1 minute and no process found, reconcile state
+                    # Method 3: Reconcile immediately from terminal per-job history; otherwise
+                    # retain the one-minute grace period for missing-process heuristics.
                     if not job_is_running and job.started_at:
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
-                        if age_seconds > 60:  # Only mark complete if running > 1 min
-                            history_status = history_status_by_job.get(str(job.id))
+                        if age_seconds > 60 or _has_terminal_nextflow_history(terminal_history):
+                            history_status = terminal_history
                             history_outcome = None
                             history_note = None
                             child_wait_success = None

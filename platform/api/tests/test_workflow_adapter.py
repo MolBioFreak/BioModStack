@@ -225,11 +225,13 @@ def test_generic_adapter_request_reads_json_from_gpu_path(monkeypatch: pytest.Mo
 
 
 def test_workflow_adapter_app_exposes_gpu_routes() -> None:
-    routes = {getattr(route, "path", "") for route in workflow_adapter_app.app.routes}
-
-    assert "/api/gpu/status" in routes
-    assert "/api/gpu/power-control" in routes
-    assert "/api/gpu/scheduler-config" in routes
+    with TestClient(workflow_adapter_app.app) as client:
+        for path in (
+            "/api/gpu/status",
+            "/api/gpu/power-control",
+            "/api/gpu/scheduler-config",
+        ):
+            assert client.get(path).status_code == 200
 
 
 def test_workflow_adapter_exposes_runtime_state_route(monkeypatch: pytest.MonkeyPatch) -> None:

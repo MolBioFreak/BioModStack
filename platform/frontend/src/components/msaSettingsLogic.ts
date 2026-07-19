@@ -20,12 +20,6 @@ export const MSA_DEFAULTS: Record<string, MSASettings> = {
         msa_min_depth_warning: 50,
         msa_min_depth_fail: 0,
     },
-    bindcraft: {
-        use_msa: true,
-        msa_preset: 'fast',
-        msa_min_depth_warning: 100,
-        msa_min_depth_fail: 0,
-    },
 };
 
 // Helper to extract MSA params for job submission

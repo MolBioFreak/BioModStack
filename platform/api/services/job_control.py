@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Iterable, Optional, Sequence
-import asyncio
 import json
 import logging
 
@@ -16,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session, Job
 from schemas import JobStatus
-from services.nextflow import cancel_nextflow_job, launch_nextflow_job
+from services.nextflow import cancel_nextflow_job
 
 logger = logging.getLogger(__name__)
 
@@ -156,27 +155,22 @@ async def _force_launch_with_session(
             detail=f"Job must be {', '.join(allowed_queue_statuses)} to force-run (current: {job.queue_status})",
         )
 
-    params = json.loads(job.params) if isinstance(job.params, str) else (job.params or {})
+    params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
     params["gpu_id"] = gpu_id
+    params["operator_force_run"] = True
 
-    job.queue_status = "running"
-    job.status = "running"
-    job.assigned_gpu = gpu_id
-    job.started_at = datetime.utcnow()
+    # Manual placement is a scheduler input, not an alternate launcher.  Persist
+    # the pin and return the job to the queue so the GPU orchestrator remains the
+    # sole owner of admission, VRAM/concurrency checks, and process launch.
+    job.params = params
+    job.pinned_gpu = gpu_id
+    job.queue_status = "queued"
+    job.status = "queued"
+    job.assigned_gpu = None
+    job.started_at = None
     job.paused = False
 
     await session.commit()
-
-    asyncio.create_task(
-        launch_nextflow_job(
-            job_id=job.id,
-            model_id=job.model_id,
-            mode=params.get("mode", job.mode),
-            params=params,
-            output_dir=job.child_output_dir or job.output_dir,
-        )
-    )
-
     return job
 
 

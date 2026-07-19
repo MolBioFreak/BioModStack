@@ -37,13 +37,11 @@ describe('workflow-only capability boundaries', () => {
         assert.equal(jobSubmission.includes("id: 'boltzgen_design'"), false);
     });
 
-    it('routes historical compatibility IDs into enclosing workflows', () => {
+    it('routes supported ESMFold2 compatibility IDs into structure prediction', () => {
         const jobSubmission = src('components/JobSubmission.tsx');
         assert.equal(jobSubmission.includes("esmfold2: 'structure_prediction'"), true);
         assert.equal(jobSubmission.includes("esmfold2_experimental: 'structure_prediction'"), true);
-        assert.equal(jobSubmission.includes("boltzgen: 'antibody_denovo'"), true);
         assert.equal(jobSubmission.includes("pred_method: 'esmfold2'"), true);
-        assert.equal(jobSubmission.includes("denovo_generator: 'boltzgen'"), true);
     });
 
     it('exposes ESMFold2 through structure prediction and mutagenesis selectors', () => {
@@ -59,12 +57,11 @@ describe('workflow-only capability boundaries', () => {
         assert.equal(jobSubmission.includes("? 'esmfold2'"), true);
     });
 
-    it('keeps BoltzGen and ESMFold2 documented on their parent workflows', () => {
+    it('keeps ESMFold2 documented on structure prediction without a standalone card', () => {
         const inventory = src('components/workflowModelInventory.ts');
         assert.equal(inventory.includes("id: 'boltzgen_design'"), false);
         assert.equal(inventory.includes("id: 'boltzgen_ligand'"), false);
         assert.equal(inventory.includes("id: 'esmfold2'"), false);
-        assert.match(inventory, /workflowId: 'antibody_denovo'[\s\S]*modelTopics: \[[^\]]*'boltzgen'[^\]]*'esmfold2'/);
         assert.equal(inventory.includes("modelTopics: ['boltz2', 'rf3', 'protenix', 'esmfold2']"), true);
     });
 });

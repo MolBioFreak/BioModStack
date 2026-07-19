@@ -87,7 +87,7 @@ def test_model_registry_loads_confornets_experimental_as_monomer_workflow() -> N
     model = registry.get_model("confornets_experimental")
 
     assert model is not None
-    assert model.name == "Conformational Mapping Experimental"
+    assert model.name == "Conformational Mapping"
     assert "ConforNets/OpenFold3" in model.description
     assert "first implemented backend" in model.description
     assert "memory is materially higher" in model.description
@@ -150,7 +150,7 @@ def test_template_registry_loads_confornets_experimental_card_with_monomer_only_
     template = registry.get_template("confornets_experimental")
 
     assert template is not None
-    assert template.name == "Conformational Mapping Experimental"
+    assert template.name == "Conformational Mapping"
     assert template.experimental is False
     assert template.preset_params["template_model_id"] == "confornets_experimental"
     assert template.preset_params["template_mode_id"] == "design"
@@ -241,7 +241,7 @@ def test_build_nextflow_command_maps_confornets_params_to_cn_namespace(tmp_path:
         job_id="job-cn-1",
     )
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/confornets_experimental.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/confornets_experimental.nf", "-profile"]
     assert "confornets_experimental,workstation_ryzen7960x" in cmd
     assert _flag_value(cmd, "--rfd_mode") == "confornets_experimental"
     assert _flag_value(cmd, "--cn_task") == "diversity"

@@ -2622,7 +2622,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 value={structureValidator}
                                 onChange={(e) => {
                                     setRefinementPreset('custom');
-                                    setStructureValidator(e.target.value as 'boltz2' | 'protenix');
+                                    setStructureValidator(e.target.value as 'boltz2' | 'protenix' | 'esmfold2');
                                 }}
                                 className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
                                 disabled={!runStructureValidation}
@@ -4738,7 +4738,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}
                         showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
-                        showPostValidationFiltering={effectiveRunStructureValidation}
+                        showPostValidationFiltering={effectiveRunStructureValidation && structureValidator !== 'esmfold2'}
                     />
                     )}
 

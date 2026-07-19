@@ -46,16 +46,16 @@ Authorization gate: execute after the workflow-only implementation is pushed to 
 
 ### R3 — De Novo → ESMFold2 validator
 
-- Parent: `workflows/antibody_denovo.nf`
-- API identity: `model_id=antibody_denovo`
+- Parent: `workflows/antibody_child.nf`
+- API identity: `model_id=antibody_child`
 - Parameters: minimal RFantibody generation, `run_structure_validation=true`, `structure_validator=esmfold2`, one retained candidate
 - Expected process: `BatchESMFold2Validation`
 - Pass: parent workflow reaches validation, normalized validation JSON forces `"workflow": "esmfold2"`, at least one validated candidate is ingested, no MSA requirement is introduced for ESMFold2
 
 ### R4 — De Novo → BoltzGen generator
 
-- Parent: `workflows/antibody_denovo.nf`
-- API identity: `model_id=antibody_denovo`
+- Parent: `workflows/antibody_child.nf`
+- API identity: `model_id=antibody_child`
 - Parameters: `denovo_generator=boltzgen`, minimal design count, supervised target/scaffold inputs
 - Expected internal processes: `PrepBoltzGenInput`, `RunBoltzGen` or approved child-orchestrator equivalents, aggregation into the parent job
 - Pass: no child or result is exposed as a standalone BoltzGen product; parent job owns status/artifacts; downstream gates remain reviewable

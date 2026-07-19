@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.local/schemas/md_job_v1.schema.json",
+  "title": "BioModStack MD Job v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "job_id", "engine", "replicas", "random_seed", "input", "preparation", "stages", "execution"],
+  "properties": {
+    "schema": {"const": "bms.md.job.v1"},
+    "job_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "engine": {"enum": ["gromacs", "openmm"]},
+    "replicas": {"type": "integer", "minimum": 1, "maximum": 8},
+    "random_seed": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "structure": {"type": "string", "minLength": 1},
+        "coordinates": {"type": "string", "minLength": 1},
+        "topology": {"type": "string", "minLength": 1},
+        "structure_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "coordinates_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "topology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "oneOf": [
+        {
+          "required": ["structure"],
+          "not": {
+            "anyOf": [
+              {"required": ["coordinates"]},
+              {"required": ["topology"]}
+            ]
+          }
+        },
+        {
+          "required": ["coordinates", "topology"],
+          "not": {"required": ["structure"]}
+        }
+      ]
+    },
+    "preparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chemistry_assurance", "force_field", "water_model", "box_type", "padding_nm", "salt_molar", "positive_ion", "negative_ion", "solvent_group", "solvent_coordinates", "neutralize"],
+      "properties": {
+        "chemistry_assurance": {"enum": ["smoke_fixture", "external_unreviewed"]},
+        "chemistry_profile_id": {"type": "string", "minLength": 1},
+        "chemistry_profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "chemistry_profile_scope": {"type": "string", "minLength": 1},
+        "force_field": {"type": "string", "minLength": 1},
+        "water_model": {"type": "string", "minLength": 1},
+        "box_type": {"enum": ["cubic", "triclinic", "dodecahedron", "octahedron"]},
+        "padding_nm": {"type": "number", "exclusiveMinimum": 0},
+        "salt_molar": {"type": "number", "minimum": 0},
+        "positive_ion": {"type": "string", "minLength": 1},
+        "negative_ion": {"type": "string", "minLength": 1},
+        "solvent_group": {"type": "string", "minLength": 1},
+        "solvent_coordinates": {"type": "string", "minLength": 1},
+        "neutralize": {"type": "boolean"}
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimization", "nvt", "npt", "production"],
+      "properties": {
+        "minimization": {"$ref": "#/$defs/minimizationStage"},
+        "nvt": {"$ref": "#/$defs/temperatureStage"},
+        "npt": {"$ref": "#/$defs/pressureStage"},
+        "production": {"$ref": "#/$defs/productionStage"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpu_id", "ntmpi", "ntomp", "gpu_offload", "pin"],
+      "properties": {
+        "gpu_id": {"type": "string", "minLength": 1},
+        "scheduler_gpu_id": {"type": "string", "minLength": 1},
+        "ntmpi": {"const": 1},
+        "ntomp": {"type": "integer", "minimum": 1, "maximum": 128},
+        "gpu_offload": {"enum": ["full", "auto", "none"]},
+        "pin": {"enum": ["on", "off", "auto"]}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"input": {"required": ["structure"]}}},
+      "then": {
+        "properties": {
+          "preparation": {
+            "required": ["chemistry_profile_id", "chemistry_profile_sha256", "chemistry_profile_scope"],
+            "properties": {"chemistry_assurance": {"const": "smoke_fixture"}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "preparation": {
+            "properties": {"chemistry_assurance": {"const": "external_unreviewed"}},
+            "not": {
+              "anyOf": [
+                {"required": ["chemistry_profile_id"]},
+                {"required": ["chemistry_profile_sha256"]},
+                {"required": ["chemistry_profile_scope"]}
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "baseStage": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "steps": {"type": "integer", "minimum": 1}
+      },
+      "required": ["enabled", "steps"]
+    },
+    "minimizationStage": {
+      "allOf": [
+        {"$ref": "#/$defs/baseStage"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "steps", "force_tolerance_kj_mol_nm"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "steps": {"type": "integer", "minimum": 1, "maximum": 5000000},
+            "force_tolerance_kj_mol_nm": {"type": "number", "exclusiveMinimum": 0}
+          }
+        }
+      ]
+    },
+    "temperatureStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "steps", "temperature_k"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "steps": {"type": "integer", "minimum": 1, "maximum": 5000000},
+        "temperature_k": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "pressureStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "steps", "temperature_k", "pressure_bar"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "steps": {"type": "integer", "minimum": 1, "maximum": 5000000},
+        "temperature_k": {"type": "number", "exclusiveMinimum": 0},
+        "pressure_bar": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "productionStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "steps", "timestep_fs", "temperature_k", "pressure_bar", "checkpoint_interval_minutes", "trajectory_interval_steps", "energy_interval_steps"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "steps": {"type": "integer", "minimum": 1, "maximum": 50000000},
+        "timestep_fs": {"type": "number", "exclusiveMinimum": 0, "maximum": 4.0},
+        "temperature_k": {"type": "number", "exclusiveMinimum": 0},
+        "pressure_bar": {"type": "number", "exclusiveMinimum": 0},
+        "checkpoint_interval_minutes": {"type": "number", "minimum": 1.0, "maximum": 1440},
+        "trajectory_interval_steps": {"type": "integer", "minimum": 1, "maximum": 50000000},
+        "energy_interval_steps": {"type": "integer", "minimum": 1, "maximum": 50000000}
+      }
+    }
+  }
+}

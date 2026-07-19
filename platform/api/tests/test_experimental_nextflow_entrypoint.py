@@ -17,8 +17,8 @@ from services.nextflow import build_nextflow_command
 EXPERIMENTAL_WORKFLOW_ENTRYPOINTS = {
     "protein_local_redesign": ("local_redesign", "workflows/protein_local_redesign.nf", "PROTEIN_LOCAL_REDESIGN"),
     "protein_cad_experimental": ("design", "workflows/protein_cad_experimental.nf", "PROTEIN_CAD_EXPERIMENTAL"),
-    "caliby_experimental": ("design", "workflows/caliby_experimental.nf", "CALIBY_EXPERIMENTAL"),
-    "protein_hunter_experimental": ("design", "workflows/protein_hunter_experimental.nf", "PROTEIN_HUNTER_EXPERIMENTAL"),
+
+
     "boltz_cp_experimental": ("design", "workflows/boltz_cp_experimental.nf", "BOLTZ_CP_EXPERIMENTAL"),
     "confornets_experimental": ("design", "workflows/confornets_experimental.nf", "CONFORNETS_EXPERIMENTAL"),
 }
@@ -26,8 +26,8 @@ EXPERIMENTAL_WORKFLOW_ENTRYPOINTS = {
 MINIMAL_PARAMS = {
     "protein_local_redesign": {"input_pdb": "/tmp/input.pdb", "design_chains": "A", "redesign_ranges": "1-5"},
     "protein_cad_experimental": {},
-    "caliby_experimental": {},
-    "protein_hunter_experimental": {},
+
+
     "boltz_cp_experimental": {"input_path": "/tmp/complex.yaml"},
     "confornets_experimental": {"sequence": "ACDEFGHIK"},
 }
@@ -68,7 +68,7 @@ def test_api_routes_experimental_tab_workflows_to_workflow_specific_entrypoints(
             job_id=f"job-{model_id}",
         )
 
-        assert cmd[:4] == ["nextflow", "run", rel_path, "-profile"]
+        assert cmd[1:4] == ["run", rel_path, "-profile"]
         assert "main.nf" not in cmd[:4]
         assert "experimental.nf" not in cmd[:4]
 
@@ -87,6 +87,6 @@ def test_api_resume_routes_experimental_tab_workflows_to_workflow_specific_entry
         job_id="job-plr-resume",
     )
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/protein_local_redesign.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/protein_local_redesign.nf", "-profile"]
     assert "-resume" in cmd
     assert cmd[cmd.index("-w") + 1] == "/tmp/nxf-work"

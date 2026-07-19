@@ -1,0 +1,21 @@
+{
+  "hierarchical_values": {"101": [1.0, 3.0], "202": [9.0]},
+  "expected": {
+    "hierarchical_mean": 5.5,
+    "flat_mean": 4.333333333333333,
+    "outer_support_fraction": 1.0,
+    "coordinate_support_fraction": 0.75
+  },
+  "formula": {
+    "mutant_score": 1.7,
+    "native_score": 0.2,
+    "context_b": 1.2,
+    "context_a": -0.3,
+    "coordinate_support": 0.8,
+    "context_transition_rate": 0.5,
+    "expected_d_sub": 1.5,
+    "expected_d_ctx": 1.5,
+    "expected_hotspot_score": 1.2,
+    "expected_switch_score": 0.6
+  }
+}

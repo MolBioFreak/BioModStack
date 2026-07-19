@@ -73,6 +73,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'iggm': 'IgGM',
     'antibody_denovo': 'De Novo Nanobody Toolkit',
     'template_antibody_denovo': 'De Novo Nanobody Toolkit',
+
     'antibody_child': 'Antibody Validation',
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',

@@ -31,44 +31,7 @@ DEFAULT_PROJECT = "biomodstack-core-runtime"
 DEFAULT_COMPOSE_FILE = REPO_ROOT / "compose.core-runtime.yml"
 SUPPORTED_ACTIONS = {"status", "health", "logs", "start", "restart", "stop"}
 
-SERVICES: dict[str, dict[str, Any]] = {
-    "bms-db-service": {
-        "service_id": "bms-db-service",
-        "component": "db-service",
-        "display_name": "BMS DB service",
-        "service_name": "bms-db",
-        "container_names": ["biomodstack-db", "biomodstack-analytical-postgres"],
-        "legacy_service_names": ["bms-analytical-postgres"],
-        "optional_at_boot": True,
-        "offline_message": "db_service_offline — use BMS DB service → Start",
-        "commands": [
-            "bms db-service status",
-            "bms db-service start",
-            "bms db-service restart",
-            "bms db-service logs --tail 120",
-        ],
-        "profile": None,
-        "stop_requires_advanced": True,
-    },
-    "bms-stats-tools": {
-        "service_id": "bms-stats-tools",
-        "component": "stats-tools",
-        "service_name": "bms-stats-tools",
-        "container_names": ["biomodstack-stats-tools"],
-        "externalized": True,
-        "optional_at_boot": True,
-        "offline_message": "stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools",
-        "commands": [
-            "bms stats-tools status",
-            "bms stats-tools start",
-            "bms stats-tools stop",
-            "bms stats-tools restart",
-            "bms stats-tools logs --tail 120",
-        ],
-        "profile": "stats-tools",
-        "stop_requires_advanced": False,
-    },
-}
+SERVICES: dict[str, dict[str, Any]] = {}
 
 
 def bounded_tail(raw: Any) -> int:
@@ -121,7 +84,7 @@ def compose_base() -> list[str]:
 
 
 def compose_file() -> Path:
-    return Path(os.getenv("BMS_HOST_AGENT_COMPOSE_FILE") or os.getenv("BMS_DB_COMPOSE_FILE") or os.getenv("BMS_STATS_TOOLS_COMPOSE_FILE") or DEFAULT_COMPOSE_FILE)
+    return Path(os.getenv("BMS_HOST_AGENT_COMPOSE_FILE") or DEFAULT_COMPOSE_FILE)
 
 
 def compose_project() -> str:

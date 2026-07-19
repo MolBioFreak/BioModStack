@@ -103,7 +103,7 @@ const generalizedJsonFormat = {
     }
   ],
   //only if parsing in an ab1 file
-  chromatogramData: {
+  traceData: {
     aTrace: [], //same as cTrace but for a
     tTrace: [], //same as cTrace but for t
     gTrace: [], //same as cTrace but for g
@@ -210,8 +210,8 @@ const results = await anyToJson(
 results[0].success; //either true or false
 results[0].messages; //either an array of strings giving any warnings or errors generated during the parsing process
 results[0].parsedSequence; //this will be the generalized json format as specified above :)
-//chromatogram data will be here (ab1 only):
-results[0].parsedSequence.chromatogramData;
+//trace data will be here (ab1 only):
+results[0].parsedSequence.traceData;
 ```
 
 ### Options (for anyToJson or xxxxToJson)
@@ -246,8 +246,8 @@ const results = await ab1ToJson(
 results[0].success; //either true or false
 results[0].messages; //either an array of strings giving any warnings or errors generated during the parsing process
 results[0].parsedSequence; //this will be the generalized json format as specified above :)
-//chromatogram data will be here (ab1 only):
-results[0].parsedSequence.chromatogramData;
+//trace data will be here (ab1 only):
+results[0].parsedSequence.traceData;
 ```
 
 ### snapgeneToJson (.dna files)

@@ -11,20 +11,6 @@ fi
 usage() {
   cat <<'EOF'
 Usage:
-  bms stats-tools status
-  bms stats-tools start
-  bms stats-tools stop
-  bms stats-tools restart
-  bms stats-tools health
-  bms stats-tools logs --tail 120
-
-  bms db-service status
-  bms db-service start
-  bms db-service restart
-  bms db-service health
-  bms db-service logs --tail 120
-  bms db-service stop --i-know-this-disables-db-backed-features
-
   bms api-image preflight
   bms api-image plan
 EOF
@@ -51,123 +37,18 @@ legacy_env_file="$repo_root/.env.core-runtime.local"
 core_env_file="${BMS_CORE_RUNTIME_ENV_FILE:-$profile_env_file}"
 if [[ -f "$core_env_file" ]]; then
   load_env_file_overrides "$core_env_file"
-  export BMS_DOCKER_COMPOSE_ENV_FILE="${BMS_DOCKER_COMPOSE_ENV_FILE:-$core_env_file}"
 elif [[ -f "$legacy_env_file" ]]; then
   load_env_file_overrides "$legacy_env_file"
-  export BMS_DOCKER_COMPOSE_ENV_FILE="${BMS_DOCKER_COMPOSE_ENV_FILE:-$legacy_env_file}"
 fi
 
-if [[ -z "${BMS_STATE_DIR:-}" ]]; then
-  if [[ -d /mnt/BioModStack ]]; then
-    export BMS_STATE_DIR=/mnt/BioModStack
-  else
-    export BMS_STATE_DIR="$HOME/.biomodstack"
-  fi
-fi
-export BMS_CONTAINER_STATE_PATH="${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}"
 export BMS_DOCKER_COMPOSE_PROJECT="${BMS_DOCKER_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-biomodstack-core-runtime}}"
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$BMS_DOCKER_COMPOSE_PROJECT}"
 
 tool="${1:-}"
-if [[ -z "$tool" ]]; then
+action="${2:-}"
+if [[ "$tool" != "api-image" || "$action" != "preflight" && "$action" != "plan" || $# -ne 2 ]]; then
   usage >&2
   exit 2
 fi
-shift
 
-action="${1:-status}"
-shift || true
-
-tail_lines=120
-advanced_args=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --tail)
-      tail_lines="${2:-120}"
-      shift 2
-      ;;
-    --i-know-this-disables-db-backed-features)
-      advanced_args+=("--i-know-this-disables-db-backed-features")
-      shift
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-done
-
-run_stats_tools_descriptor() {
-  local compose_file="${BMS_STATS_TOOLS_COMPOSE_FILE:-$repo_root/compose.core-runtime.yml}"
-  local service="${BMS_STATS_TOOLS_SERVICE:-bms-stats-tools}"
-  PYTHONPATH="$api_root" \
-  BMS_STATS_TOOLS_EXTERNALIZED="${BMS_STATS_TOOLS_EXTERNALIZED:-1}" \
-  BMS_STATS_TOOLS_COMPOSE_FILE="$compose_file" \
-  BMS_STATS_TOOLS_SERVICE="$service" \
-    "$python_bin" -m services.stats_tools "$action" --tail "$tail_lines"
-}
-
-run_db_service_descriptor() {
-  local compose_file="${BMS_DB_COMPOSE_FILE:-${BMS_STATS_TOOLS_COMPOSE_FILE:-$repo_root/compose.core-runtime.yml}}"
-  if [[ "$action" == "stop" && ${#advanced_args[@]} -eq 0 ]]; then
-    echo "db-service stop requires --i-know-this-disables-db-backed-features" >&2
-    exit 2
-  fi
-  PYTHONPATH="$api_root" \
-  BMS_DB_SERVICE_ID="${BMS_DB_SERVICE_ID:-bms-db-service}" \
-  BMS_DB_COMPOSE_FILE="$compose_file" \
-  BMS_DB_COMPOSE_SERVICES="${BMS_DB_COMPOSE_SERVICES:-bms-db}" \
-  BMS_DB_CONTAINER_NAMES="${BMS_DB_CONTAINER_NAMES:-biomodstack-db}" \
-  BMS_DB_LEGACY_COMPOSE_SERVICES="${BMS_DB_LEGACY_COMPOSE_SERVICES:-bms-analytical-postgres}" \
-  BMS_DB_LEGACY_CONTAINER_NAMES="${BMS_DB_LEGACY_CONTAINER_NAMES:-biomodstack-analytical-postgres}" \
-    "$python_bin" -m services.db_service "$action" --tail "$tail_lines" "${advanced_args[@]}"
-}
-
-run_api_image_proof() {
-  PYTHONPATH="$api_root" \
-    "$python_bin" "$repo_root/scripts/bms_api_image_proof.py" "$action"
-}
-
-case "$tool" in
-  stats-tools)
-    case "$action" in
-      status|health|logs|start|stop|restart)
-        run_stats_tools_descriptor
-        ;;
-      *)
-        echo "unsupported stats-tools action: $action" >&2
-        usage >&2
-        exit 2
-        ;;
-    esac
-    ;;
-  db-service)
-    case "$action" in
-      status|health|logs|start|restart|stop)
-        run_db_service_descriptor
-        ;;
-      *)
-        echo "unsupported db-service action: $action" >&2
-        usage >&2
-        exit 2
-        ;;
-    esac
-    ;;
-  api-image)
-    case "$action" in
-      preflight|plan)
-        run_api_image_proof
-        ;;
-      *)
-        echo "unsupported api-image action: $action" >&2
-        usage >&2
-        exit 2
-        ;;
-    esac
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
+PYTHONPATH="$api_root" \
+  "$python_bin" "$repo_root/scripts/bms_api_image_proof.py" "$action"

@@ -14,11 +14,7 @@ import uuid
 
 from molbio_database import get_molbio_session
 from molbio_models import NucleotideSequence
-from services.molbio_persistence import (
-    begin_immediate_molbio_write,
-    record_sequence_deletion,
-    record_sequence_revision,
-)
+from services.molbio_persistence import record_sequence_deletion, record_sequence_revision
 
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
@@ -564,7 +560,6 @@ async def update_sequence(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Update an existing sequence."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -656,7 +651,6 @@ async def delete_sequence(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Delete a sequence."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -683,7 +677,6 @@ async def add_feature(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Add a feature to a sequence."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -722,7 +715,6 @@ async def delete_feature(
     session: AsyncSession = Depends(get_molbio_session)
 ):
     """Delete a feature from a sequence."""
-    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )

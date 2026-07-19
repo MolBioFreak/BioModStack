@@ -21,11 +21,11 @@ process PrepProteinHunterRequest {
         --job-name "${params.name ?: params.batch_name ?: 'protein_hunter_experimental'}" \\
         --backend "${params.ph_backend ?: 'boltz'}" \\
         --task "${params.ph_task ?: 'protein_binder'}" \\
-        --num-designs ${params.ph_num_designs ?: 4} \\
-        --num-cycles ${params.ph_num_cycles ?: 7} \\
-        --min-protein-length ${params.ph_min_protein_length ?: 90} \\
-        --max-protein-length ${params.ph_max_protein_length ?: 150} \\
-        --percent-x ${params.ph_percent_x ?: 50} \\
+        --num-designs ${params.ph_num_designs != null ? params.ph_num_designs : 4} \\
+        --num-cycles ${params.ph_num_cycles != null ? params.ph_num_cycles : 7} \\
+        --min-protein-length ${params.ph_min_protein_length != null ? params.ph_min_protein_length : 90} \\
+        --max-protein-length ${params.ph_max_protein_length != null ? params.ph_max_protein_length : 150} \\
+        --percent-x ${params.ph_percent_x != null ? params.ph_percent_x : 50} \\
         --seed-binder-sequence "${params.ph_seed_binder_sequence ?: ''}" \\
         --target-protein-sequences "${params.ph_target_protein_sequences ?: ''}" \\
         --target-pdb "${params.ph_target_pdb ?: ''}" \\
@@ -37,19 +37,19 @@ process PrepProteinHunterRequest {
         --nucleic-sequence "${params.ph_nucleic_sequence ?: ''}" \\
         --nucleic-type "${params.ph_nucleic_type ?: 'rna'}" \\
         --contact-residues "${params.ph_contact_residues ?: ''}" \\
-        --cyclic "${params.ph_cyclic ?: false}" \\
-        --alanine-bias "${params.ph_alanine_bias ?: true}" \\
-        --temperature "${params.ph_temperature ?: 0.1}" \\
-        --high-iptm-threshold "${params.ph_high_iptm_threshold ?: 0.7}" \\
-        --high-plddt-threshold "${params.ph_high_plddt_threshold ?: 0.8}" \\
+        --cyclic "${params.ph_cyclic != null ? params.ph_cyclic : false}" \\
+        --alanine-bias "${params.ph_alanine_bias != null ? params.ph_alanine_bias : true}" \\
+        --temperature "${params.ph_temperature != null ? params.ph_temperature : 0.1}" \\
+        --high-iptm-threshold "${params.ph_high_iptm_threshold != null ? params.ph_high_iptm_threshold : 0.7}" \\
+        --high-plddt-threshold "${params.ph_high_plddt_threshold != null ? params.ph_high_plddt_threshold : 0.8}" \\
         --msa-mode "${params.ph_msa_mode ?: 'mmseqs'}" \\
         --boltz-model-version "${params.ph_boltz_model_version ?: 'boltz2'}" \\
         --boltz-model-path "${boltzModelPath}" \\
         --boltz-ccd-path "${boltzCcdPath}" \\
         --chai-hysteresis-mode "${params.ph_chai_hysteresis_mode ?: 'templates'}" \\
-        --chai-num-recycles ${params.ph_chai_num_recycles ?: 3} \\
-        --chai-num-diff-steps ${params.ph_chai_num_diff_steps ?: 200} \\
-        --chai-repredict "${params.ph_chai_repredict ?: true}" \\
+        --chai-num-recycles ${params.ph_chai_num_recycles != null ? params.ph_chai_num_recycles : 3} \\
+        --chai-num-diff-steps ${params.ph_chai_num_diff_steps != null ? params.ph_chai_num_diff_steps : 200} \\
+        --chai-repredict "${params.ph_chai_repredict != null ? params.ph_chai_repredict : true}" \\
         --output protein_hunter_request.json \\
         --input-dir protein_hunter_inputs
     """
@@ -94,7 +94,7 @@ TER
 END
 EOF
     cat > raw/metadata/generator_protein_hunter_stub_0001.json <<'EOF'
-{"design_id":"protein_hunter_stub_0001","source":"protein_hunter","source_model":"Protein Hunter (stub)","generator_family":"protein_hunter_experimental"}
+{"design_id":"protein_hunter_stub_0001","source":"protein_hunter","source_model":"Protein Hunter (stub)","generator_family":"protein_hunter"}
 EOF
     cat > design_manifest.json <<'EOF'
 [{"design_id":"protein_hunter_stub_0001","sequence":"G","structure_path":"raw/pdbs/protein_hunter_stub_0001.pdb","metadata_path":"raw/metadata/generator_protein_hunter_stub_0001.json"}]

@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
 import type { Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 interface DockingResult {
     name: string;
@@ -47,7 +48,7 @@ export function JobDetailPage() {
         refetchInterval: (query) => {
             const job = query.state.data;
             // Keep polling if job is running
-            return job?.status === 'running' || job?.status === 'queued' ? 3000 : false;
+            return job?.status === 'running' || job?.status === 'queued' ? jobPollingInterval(3000, query) : false;
         },
     });
 

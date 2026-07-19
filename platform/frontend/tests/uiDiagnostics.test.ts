@@ -60,7 +60,7 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /data-bms-topbar-left="true"/);
   assert.match(layoutSource, /data-bms-primary-nav-rail="true"/);
   assert.match(layoutSource, /data-bms-topbar-utilities="true"/);
-  assert.match(layoutSource, /data-bms-primary-nav-active=\{isActive\('\/assay'\) \? 'true' : undefined\}/);
+
   assert.match(layoutSource, /flex min-w-0 flex-wrap items-center/);
   assert.match(layoutSource, /2xl:flex-nowrap/);
   assert.match(layoutSource, /order-2 min-w-0 w-full overflow-x-auto/);

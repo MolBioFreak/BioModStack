@@ -96,6 +96,7 @@ process RunBoltz {
         boltz predict \
             ./yamls/ \
             --output_format pdb \
+            --write_full_pae \
             ${params.boltz_diffusion_samples ? '--diffusion_samples ' + params.boltz_diffusion_samples : ''} \
             ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \
             --recycling_steps ${params.boltz_recycling_steps ?: 3} \

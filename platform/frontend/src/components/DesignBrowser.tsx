@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchDesigns, toggleDesignFavorite, downloadDesignPdb, fetchJobs } from '../lib/api';
 import type { Design, DesignFilters, Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 export function DesignBrowser() {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -65,7 +66,7 @@ export function DesignBrowser() {
             rfd_rog_min: rfdRogMin.trim() === '' ? undefined : Number(rfdRogMin),
             rfd_rog_max: rfdRogMax.trim() === '' ? undefined : Number(rfdRogMax),
         }),
-        refetchInterval: 10000,
+        refetchInterval: (query) => jobPollingInterval(10000, query),
     });
 
     // Fetch jobs for filter dropdown

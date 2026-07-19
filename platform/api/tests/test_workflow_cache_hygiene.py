@@ -19,7 +19,7 @@ def test_antibody_batch_boltz_uses_shared_cache_not_task_fake_home() -> None:
 
 def test_nested_wf_clone_has_shared_singularity_and_nxf_caches() -> None:
     config_text = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
-    module_text = (REPO_ROOT / "modules" / "dorado.nf").read_text(encoding="utf-8")
+    module_text = (REPO_ROOT / "modules" / "ngs" / "clone_validation.nf").read_text(encoding="utf-8")
 
     assert "BMS_WF_CLONE_SINGULARITY_CACHE" in config_text
     assert 'wf_clone_singularity_cache = System.getenv(\'BMS_WF_CLONE_SINGULARITY_CACHE\') ?: "${bmsContainerRootFallback}/singularity_cache"' in config_text
