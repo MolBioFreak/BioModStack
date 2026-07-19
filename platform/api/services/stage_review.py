@@ -58,11 +58,16 @@ def _is_protein_local_redesign_job(job: Job | None, payload: Optional[dict] = No
     model_id = str(getattr(job, "model_id", "") or "").strip().lower()
     mode = str(getattr(job, "mode", "") or "").strip().lower()
     rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    modification_mode = str(params.get("modification_mode") or "").strip().lower()
     framework_type = str(current_payload.get("framework_type") or "").strip().lower()
 
     return (
         model_id == "protein_local_redesign"
         or mode == "local_redesign"
+        or (
+            model_id == "protein_modification_experimental"
+            and (mode == "region_redesign" or modification_mode == "region_redesign")
+        )
         or rfd_mode == "protein_local_redesign"
         or framework_type == "protein_local_redesign"
     )

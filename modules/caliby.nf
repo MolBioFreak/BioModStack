@@ -80,6 +80,50 @@ process RunCaliby {
     """
 }
 
+process RunCalibyBinder {
+    label 'Caliby'
+    label 'gpu'
+
+    publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
+
+    input:
+    path(pdb_files)
+
+    output:
+    path("results/*.pdb"), emit: pdbs
+    path("results/generator_*.json"), emit: jsons
+    path("caliby_metadata.jsonl"), emit: metadata
+    path("caliby_binder.log"), emit: log
+
+    script:
+    """
+    mkdir -p results
+    python3 ${params.code_root}/scripts/prep_caliby_binder_constraints.py \\
+        --input-dir ./ \\
+        --out-csv caliby_constraints.csv \\
+        --binder-chains "${params.binder_chains ?: 'A'}" \\
+        --target-chains "${params.target_chains ?: 'B'}"
+
+    python3 ${params.code_root}/scripts/run_caliby_sequence_design.py \\
+        --input-dir ./ \\
+        --output-dir results \\
+        --model-name "${params.caliby_model_name ?: 'soluble_caliby_v1'}" \\
+        --num-seqs-per-pdb ${params.num_sequences ?: 4} \\
+        --batch-size ${params.caliby_batch_size ?: 4} \\
+        --num-workers ${params.caliby_num_workers ?: 8} \\
+        --clean-num-workers ${params.caliby_clean_num_workers ?: 2} \\
+        --temperature ${params.caliby_temperature ?: 0.1} \\
+        --omit-aas "${params.caliby_omit_aas ?: 'C'}" \\
+        --pos-constraint-csv caliby_constraints.csv \\
+        --run-self-consistency-eval false \\
+        2>&1 | tee caliby_binder.log
+
+    cp results/caliby_metadata.jsonl caliby_metadata.jsonl
+    """
+}
+
 process FilterCaliby {
     label 'Caliby'
 

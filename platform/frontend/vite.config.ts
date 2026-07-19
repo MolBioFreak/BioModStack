@@ -3,13 +3,10 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import crypto from 'node:crypto'
-import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'path'
 
-const require = createRequire(import.meta.url)
 const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
-const stablePdbeMolstarPath = path.dirname(require.resolve('pdbe-molstar-stable/package.json'))
 
 function resolveViteCacheDir(): string {
   const explicitCacheDir = process.env.BMS_VITE_CACHE_DIR?.trim()
@@ -27,12 +24,6 @@ function resolveViteCacheDir(): string {
   const cacheBase = xdgCacheHome || homeCacheDir || path.resolve(__dirname, '.cache')
   return path.join(cacheBase, 'biomodstack', 'frontend-vite', `uid-${uid}`, repoKey)
 }
-
-const isExpectedPdbeMolstarEvalWarning = (warning: { code?: string; id?: string; message?: string }) =>
-  warning.code === 'EVAL' &&
-  (warning.id?.includes('pdbe-molstar') ||
-    warning.id?.includes('pdbe-molstar-stable') ||
-    warning.message?.includes('pdbe-molstar-component.js'))
 
 const normalizeChunkId = (id: string) => id.split(path.sep).join('/')
 
@@ -81,12 +72,7 @@ function manualChunks(id: string): string | undefined {
 
   if (normalized.includes('/node_modules/igv/')) return 'vendor-igv'
 
-  if (
-    normalized.includes('/node_modules/pdbe-molstar') ||
-    normalized.includes('/node_modules/molstar')
-  ) {
-    return 'vendor-molstar'
-  }
+  if (normalized.includes('/node_modules/molstar')) return 'vendor-molstar'
 
   if (
     normalized.includes('/node_modules/buffer/') ||
@@ -104,6 +90,15 @@ function manualChunks(id: string): string | undefined {
 }
 
 const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
+const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
+  ? process.env.VITE_BMS_BUILD_SHA!.trim()
+  : 'unknown'
+const buildMetadata = {
+  layer: 'frontend',
+  revision: buildRevision,
+  buildId: process.env.VITE_BMS_BUILD_ID?.trim() || 'development',
+  buildTime: process.env.VITE_BMS_BUILD_TIME?.trim() || 'unknown',
+}
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -111,6 +106,9 @@ export default defineConfig(({ mode }) => ({
   base: mode === 'production' ? '/bms/' : '/',
   cacheDir: resolveViteCacheDir(),
   plugins: [react(), tailwindcss()],
+  define: {
+    __BMS_BUILD_METADATA__: JSON.stringify(buildMetadata),
+  },
   optimizeDeps: {
     include: [
       '@blueprintjs/icons',
@@ -138,14 +136,12 @@ export default defineConfig(({ mode }) => ({
       events: path.resolve(__dirname, 'node_modules/events/events.js'),
       util: utilShimPath,
       'node:util': utilShimPath,
-      // The newer 3.9.x PDBe bundle has been causing Chromium renderer crashes
-      // on local structure views. Pin the frontend to the declared stable
-      // 3.3.0 alias package until we can safely re-upgrade Molstar.
-      'pdbe-molstar': stablePdbeMolstarPath,
     }
   },
   build: {
-    // Keep verification artifacts outside deployment-owned dist trees.
+    // Never require write access to the deployed `dist/` tree just to verify a
+    // candidate build. Release tooling can select a private staging directory;
+    // promotion into a deployment-owned directory remains an explicit action.
     outDir: process.env.BMS_FRONTEND_BUILD_OUT_DIR?.trim()
       ? path.resolve(__dirname, process.env.BMS_FRONTEND_BUILD_OUT_DIR)
       : path.resolve(__dirname, 'dist'),
@@ -159,13 +155,7 @@ export default defineConfig(({ mode }) => ({
       output: {
         manualChunks,
       },
-      onwarn(warning, warn) {
-        // The pinned PDBe Molstar 3.3.0 vendor bundle contains an eval shim.
-        // Keep the warning scoped to this known bundle instead of hiding
-        // Rollup warnings globally; the larger chunk-size warnings remain visible.
-        if (isExpectedPdbeMolstarEvalWarning(warning)) return
-        warn(warning)
-      },
+
     },
   },
   server: {

@@ -81,12 +81,15 @@ export function buildManageDesktopServicesInvocation(
   };
 }
 
+const SERVICE_MANAGER_TIMEOUT_MS = 25_000;
+
 async function defaultRun(invocation: ServiceManagerInvocation): Promise<ServiceManagerRunResult> {
   return await new Promise((resolve, reject) => {
     const options: ExecFileOptionsWithStringEncoding = {
       cwd: invocation.cwd,
       env: invocation.env,
       encoding: 'utf8',
+      timeout: SERVICE_MANAGER_TIMEOUT_MS,
     };
 
     execFile(invocation.command, invocation.args, options, (error, stdout, stderr) => {
@@ -120,9 +123,25 @@ function getFailureMessage(action: ServiceManagerAction, result: ServiceManagerR
   return `manage_desktop_services.py ${action} failed with exit code ${result.exitCode}`;
 }
 
+export class ServiceManagerActionError extends Error {
+  readonly action: ServiceManagerAction;
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(action: ServiceManagerAction, result: ServiceManagerRunResult) {
+    super(getFailureMessage(action, result));
+    this.name = 'ServiceManagerActionError';
+    this.action = action;
+    this.exitCode = result.exitCode;
+    this.stdout = result.stdout;
+    this.stderr = result.stderr;
+  }
+}
+
 function assertSuccessfulResult(action: ServiceManagerAction, result: ServiceManagerRunResult): void {
   if (result.exitCode !== 0) {
-    throw new Error(getFailureMessage(action, result));
+    throw new ServiceManagerActionError(action, result);
   }
 }
 

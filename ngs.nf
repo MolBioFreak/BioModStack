@@ -1,7 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include { NANOPORE_METHYLATION } from './workflows/ngs/nanopore_methylation.nf'
+// Legacy root compatibility wrapper. The canonical workflow and registry ID are
+// ont_methylation_analysis; retain the old callable name only at this boundary.
+include { ONT_METHYLATION_ANALYSIS as NANOPORE_METHYLATION } from './workflows/ngs/ont_methylation_analysis.nf'
 
 workflow {
     if (params.nanopore_enabled || params.rfd_mode == 'nanopore_methylation') {

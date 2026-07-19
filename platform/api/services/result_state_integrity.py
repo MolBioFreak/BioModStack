@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import math
 from pathlib import Path
 import re
 from typing import Any, Awaitable, Callable, Optional
@@ -99,19 +100,23 @@ def job_expects_design_results(job: Job) -> bool:
         "alphafold",
         "alphafold2",
         "alphafold3",
-        "bindcraft",
+
+        "binder_design",
         "boltz2",
         "boltz_cp_experimental",
         "boltzgen",
         "chai",
         "confornets_experimental",
         "esmfold",
+        "esmfold2",
         "esmfold2_experimental",
         "fampnn",
         "frustrampnn",
         "ligandmpnn",
         "ppiflow",
         "protein_local_redesign",
+        "protein_hunter_experimental",
+        "protein_modification_experimental",
         "proteinmpnn",
         "protenix",
         "rf3",
@@ -159,6 +164,42 @@ async def _existing_designs_are_usable(
         pdb_path = Path(str(design.pdb_path).strip()).expanduser()
         resolved = pdb_path.resolve() if pdb_path.is_absolute() else (output_root / pdb_path).resolve()
         if not resolved.is_relative_to(output_root) or not resolved.is_file():
+            return False
+    return True
+
+
+async def _binder_design_rows_are_authoritative(
+    session: AsyncSession, job_id: str, output_dir: str
+) -> bool:
+    rows = list(
+        (
+            await session.execute(
+                select(Design, Job)
+                .join(Job, Design.job_id == Job.id)
+                .where(or_(Design.job_id == job_id, Job.parent_job_id == job_id))
+            )
+        ).all()
+    )
+    if not rows:
+        return False
+    for design, owner in rows:
+        if (
+            design.review_profile_id != "binder_design_v1"
+            or design.artifact_class != "validated_binder_complex"
+            or not isinstance(design.ipsae, (int, float))
+            or not math.isfinite(float(design.ipsae))
+            or not 0.0 <= float(design.ipsae) <= 1.0
+            or not str(design.aligned_error_format or "").strip()
+            or not str(design.aligned_error_path or "").strip()
+        ):
+            return False
+        artifact_root = owner.child_output_dir or owner.output_dir or output_dir
+        if not artifact_root:
+            return False
+        output_root = Path(artifact_root).expanduser().resolve()
+        pae_path = Path(str(design.aligned_error_path)).expanduser()
+        resolved_pae = pae_path.resolve() if pae_path.is_absolute() else (output_root / pae_path).resolve()
+        if not resolved_pae.is_relative_to(output_root) or not resolved_pae.is_file():
             return False
     return True
 
@@ -217,6 +258,12 @@ async def finalize_successful_job(
             usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
             if not usable_results:
                 raise RuntimeError("workflow result rows lack usable, contained PDB artifacts")
+            if str(job.model_id or "").strip().lower() == "binder_design":
+                authoritative = await _binder_design_rows_are_authoritative(session, job_id, output_dir)
+                if not authoritative:
+                    raise RuntimeError(
+                        "binder workflow completed without authoritative PAE-derived ipSAE result rows"
+                    )
             idempotent_prior_results = int(ingested_count or 0) <= 0
     except Exception as exc:
         await session.rollback()

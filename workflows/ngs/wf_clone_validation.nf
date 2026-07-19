@@ -93,7 +93,7 @@ workflow WF_CLONE_VALIDATION {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { _ ->
+        DoradoBasecall.out.bam.subscribe { ignoredValue ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -190,7 +190,7 @@ workflow WF_CLONE_VALIDATION {
     println("Running wf-clone-validation assembly stage")
     def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
     RunCloneValidation(clone_input)
-    RunCloneValidation.out.out.subscribe { _ ->
+    RunCloneValidation.out.out.subscribe { ignoredValue ->
         reportStage(params, "wf_clone_validation", [
             "${params.out_dir}/assembly/wf_clone_out",
             "${params.out_dir}/assembly/wf_clone.log",
@@ -211,7 +211,7 @@ workflow WF_CLONE_VALIDATION {
             FastqDimerAnalysis.out.dimer_reference
         )
         FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
-        FastqPlasmidQC.out.summary.subscribe { _ ->
+        FastqPlasmidQC.out.summary.subscribe { ignoredValue ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
                 "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",

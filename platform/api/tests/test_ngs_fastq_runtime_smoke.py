@@ -82,8 +82,9 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     mode = _detect_execution_mode()
     assert mode in ("container", "local"), f"unexpected mode: {mode}"
 
-    # ── Fixtures inside repo (visible to container) ──────────────────
-    fixture_dir = REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
+    # Keep runtime artifacts under pytest's isolated, user-writable directory.
+    # /tmp is visible to the supported local and Apptainer test runtimes.
+    fixture_dir = tmp_path / "ngs_runtime_fixtures"
     fixture_dir.mkdir(exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")

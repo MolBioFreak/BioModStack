@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildManageDesktopServicesInvocation,
   createServiceControl,
+  ServiceManagerActionError,
 } from '../src/serviceControl.js';
 
 test('service control builds status invocations against the existing desktop manager cli', () => {
@@ -84,4 +85,23 @@ test('service control surfaces invalid status payloads as hard failures', async 
   });
 
   await assert.rejects(() => control.getStatus('container'), /Invalid service-manager status payload/);
+});
+
+test('service-control action errors preserve operator-safe structured diagnostics', async () => {
+  const control = createServiceControl({
+    projectRoot: '/work/biomodstack',
+    run: async () => ({ stdout: 'managed unit bms-api.service is blocked', stderr: 'foreign listener on 8000', exitCode: 17 }),
+  });
+
+  await assert.rejects(
+    () => control.startAll('container'),
+    (error: unknown) => {
+      assert.ok(error instanceof ServiceManagerActionError);
+      assert.equal(error.action, 'start');
+      assert.equal(error.exitCode, 17);
+      assert.match(error.message, /foreign listener on 8000/);
+      assert.match(error.stdout, /managed unit/);
+      return true;
+    },
+  );
 });

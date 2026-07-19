@@ -15,7 +15,7 @@ for root in (API_ROOT, REPO_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from routers import system  # noqa: E402
+from routers import system
 
 
 def build_client() -> TestClient:

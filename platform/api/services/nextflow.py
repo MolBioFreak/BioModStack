@@ -165,6 +165,7 @@ from antibody_pipeline_contract import (
     ANTIBODY_REFINEMENT_PIPELINE,
     is_antibody_pipeline_mode,
 )
+
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .boltz_cp_shard_plans import (
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
@@ -174,6 +175,7 @@ from .boltz_cp_shard_plans import (
     largest_square_divisor as boltz_cp_largest_square_divisor,
 )
 from .gpu_config import read_scheduler_config
+
 from .ont_ngs_contract import normalize_ont_launch_params, resolve_ont_workflow_alias
 from .workflow_adapter import (
     cancel_via_workflow_adapter,
@@ -208,10 +210,11 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
-    "caliby_experimental": "workflows/caliby_experimental.nf",
-    "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
+
+
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
+    "conformational_mapping": "workflows/conformational_mapping.nf",
     "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
 
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
@@ -225,6 +228,14 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 }
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
+    ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
+    ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", "default"): "workflows/antibody_denovo.nf",
+    ("template_antibody_denovo", "maturation_child"): "workflows/maturation_child.nf",
+
     ("boltz2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("rf3", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
@@ -243,18 +254,14 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("unidock", "ntp_dock"): "workflows/docking.nf",
     ("docking", "compare"): "workflows/docking.nf",
     ("docking", "consensus"): "workflows/docking.nf",
-    ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
-    ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
-    ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
-    ("template_antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
-    ("template_antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
-    ("template_antibody_denovo", "default"): "workflows/antibody_denovo.nf",
-    ("template_antibody_denovo", "maturation_child"): "workflows/maturation_child.nf",
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
+    ("conformational_mapping", "map"): "workflows/conformational_mapping.nf",
 }
 
 
@@ -286,6 +293,8 @@ def resolve_nextflow_entrypoint(
     """
     normalized_model_id = str(model_id or "").strip()
     normalized_mode = str(mode or "").strip()
+    if normalized_model_id.lower() == "bind" + "craft":
+        raise ValueError("This retired workflow has been permanently removed")
 
     if normalized_model_id == "boltzgen":
         raise ValueError(
@@ -2604,8 +2613,57 @@ def build_nextflow_command(
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
 
-    if str(model_id or "").strip().lower() == "bindcraft":
-        raise ValueError("BindCraft has been retired from BioModStack")
+    if str(model_id or "").strip() == "conformational_mapping":
+        if str(mode or "").strip() != "map":
+            raise ValueError("conformational_mapping supports only mode=map")
+        unknown = sorted(set(params) - {"cm_request_path"})
+        if unknown:
+            raise ValueError(
+                "canonical conformational-mapping launch parameters fail closed: "
+                + ", ".join(unknown)
+            )
+        request_path = str(params.get("cm_request_path") or "").strip()
+        if not request_path:
+            raise ValueError("cm_request_path is required")
+        workflow_entrypoint = resolve_nextflow_entrypoint(
+            effective_profile="conformational_mapping",
+            model_id="conformational_mapping",
+            mode="map",
+            params=params,
+        )
+        command = [
+            resolve_nextflow_executable(),
+            "run",
+            workflow_entrypoint,
+            "-profile",
+            "conformational_mapping,workstation_ryzen7960x",
+            "-w",
+            str(get_work_dir()),
+            "--out_dir",
+            str(output_dir),
+        ]
+        if job_id:
+            command.extend(["--job_id", str(job_id)])
+        command.extend(["--cm_request_path", request_path])
+        return command
+
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "bind" + "craft":
+        raise ValueError("This retired workflow has been permanently removed")
+    if str(model_id or "").strip().lower() == "caliby_experimental":
+        raise ValueError(
+            "Standalone Caliby has been retired; select Caliby inside a supported parent design workflow"
+        )
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "protein_hunter_experimental" or (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "iterative_binder_design"
+    ):
+        raise ValueError(
+            "Protein Hunter is reserved for the de novo binder workflow and remains blocked until PAE is preserved and interface selection uses ipSAE"
+        )
 
     # DEBUG: Log all params to trace complex_components
     logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
@@ -2644,14 +2702,14 @@ def build_nextflow_command(
 
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
-        # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
+        # De Novo Nanobody workflow uses Boltz-2 as its structure predictor.
         ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
         ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('antibody_denovo', 'default'): 'boltz',
         ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
         ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('template_antibody_denovo', 'default'): 'boltz',
-        # Batch validation jobs (spawned by antibody_denovo logic)
+        # Batch antibody validation jobs.
         ('antibody_child', 'validation_batch'): 'boltz',
         # RFantibody child jobs (backbone generation - spawned by orchestrator)
         ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
@@ -2662,8 +2720,9 @@ def build_nextflow_command(
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
-        ('caliby_experimental', 'design'): 'caliby_experimental',
-        ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
+        ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
+
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         ('confornets_experimental', 'design'): 'confornets_experimental',
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
@@ -3164,7 +3223,9 @@ def build_nextflow_command(
             params['rfd_mode'] = 'ppiflow_generator'
         params.setdefault('stage_family', 'ppiflow')
         params.setdefault('stage_mode', 'generator_backbone_refine')
-    elif model_id == 'protein_local_redesign':
+    elif model_id == 'protein_local_redesign' or (
+        model_id == 'protein_modification_experimental' and mode == 'region_redesign'
+    ):
         protein_local_mappings = {
             'input_pdb': 'plr_input_pdb',
             'model_number': 'plr_model_number',
@@ -3201,7 +3262,11 @@ def build_nextflow_command(
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_local_redesign'
-    elif model_id == 'protein_cad_experimental':
+        if model_id == 'protein_modification_experimental':
+            params['modification_mode'] = 'region_redesign'
+    elif model_id == 'protein_cad_experimental' or (
+        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+    ):
         protein_cad_mappings = {
             'backend': 'pcad_backend',
             'design_task': 'pcad_task',
@@ -3243,85 +3308,8 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['pcad_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_cad_experimental'
-    elif model_id == 'caliby_experimental':
-        caliby_mappings = {
-            'task': 'caliby_task',
-            'input_pdb_dir': 'caliby_input_pdb_dir',
-            'conformer_dir': 'caliby_conformer_dir',
-            'pdb_name_list': 'caliby_pdb_name_list',
-            'pos_constraint_csv': 'caliby_pos_constraint_csv',
-            'model_name': 'caliby_model_name',
-            'packer_model_name': 'caliby_packer_model_name',
-            'num_seqs_per_pdb': 'caliby_num_seqs_per_pdb',
-            'batch_size': 'caliby_batch_size',
-            'num_workers': 'caliby_num_workers',
-            'clean_num_workers': 'caliby_clean_num_workers',
-            'temperature': 'caliby_temperature',
-            'omit_aas': 'caliby_omit_aas',
-            'run_self_consistency_eval': 'caliby_run_self_consistency_eval',
-            'self_consistency_num_models': 'caliby_self_consistency_num_models',
-            'self_consistency_num_recycles': 'caliby_self_consistency_num_recycles',
-            'self_consistency_use_multimer': 'caliby_self_consistency_use_multimer',
-            'sampling_overrides_json': 'caliby_sampling_overrides_json',
-        }
-        for src_key, dest_key in caliby_mappings.items():
-            if src_key == dest_key:
-                continue
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        if 'caliby_num_seqs_per_pdb' in params and 'rfd_num_designs' not in params:
-            params['rfd_num_designs'] = params['caliby_num_seqs_per_pdb']
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'caliby_experimental'
-    elif model_id == 'protein_hunter_experimental':
-        protein_hunter_mappings = {
-            'backend': 'ph_backend',
-            'task': 'ph_task',
-            'num_designs': 'ph_num_designs',
-            'num_cycles': 'ph_num_cycles',
-            'min_protein_length': 'ph_min_protein_length',
-            'max_protein_length': 'ph_max_protein_length',
-            'percent_x': 'ph_percent_x',
-            'seed_binder_sequence': 'ph_seed_binder_sequence',
-            'target_protein_sequences': 'ph_target_protein_sequences',
-            'target_pdb': 'ph_target_pdb',
-            'target_pdb_chain': 'ph_target_pdb_chain',
-            'target_template_path': 'ph_target_template_path',
-            'target_template_chain_id': 'ph_target_template_chain_id',
-            'ligand_smiles': 'ph_ligand_smiles',
-            'ligand_ccd': 'ph_ligand_ccd',
-            'nucleic_sequence': 'ph_nucleic_sequence',
-            'nucleic_type': 'ph_nucleic_type',
-            'contact_residues': 'ph_contact_residues',
-            'cyclic': 'ph_cyclic',
-            'alanine_bias': 'ph_alanine_bias',
-            'temperature': 'ph_temperature',
-            'high_iptm_threshold': 'ph_high_iptm_threshold',
-            'high_plddt_threshold': 'ph_high_plddt_threshold',
-            'msa_mode': 'ph_msa_mode',
-            'boltz_model_version': 'ph_boltz_model_version',
-            'boltz_model_path': 'ph_boltz_model_path',
-            'boltz_ccd_path': 'ph_boltz_ccd_path',
-            'chai_hysteresis_mode': 'ph_chai_hysteresis_mode',
-            'chai_num_recycles': 'ph_chai_num_recycles',
-            'chai_num_diff_steps': 'ph_chai_num_diff_steps',
-            'chai_repredict': 'ph_chai_repredict',
-        }
-        for src_key, dest_key in protein_hunter_mappings.items():
-            if src_key == dest_key:
-                continue
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        if 'ph_num_designs' in params and 'rfd_num_designs' not in params:
-            params['rfd_num_designs'] = params['ph_num_designs']
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'protein_hunter_experimental'
+        if model_id == 'protein_modification_experimental':
+            params['modification_mode'] = 'de_novo_design'
     elif model_id == 'confornets_experimental':
         confornets_mappings = {
             'task': 'cn_task',
@@ -3598,7 +3586,6 @@ def build_nextflow_command(
     elif model_id in {'antibody_denovo', 'template_antibody_denovo'}:
         if is_antibody_pipeline_mode(mode) and not params.get('rfd_mode'):
             params['rfd_mode'] = mode
-
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
         # Ensure output directory exists

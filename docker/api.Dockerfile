@@ -1,8 +1,18 @@
 ARG SOURCE_DATE_EPOCH=1
 FROM python:3.10-slim-bookworm@sha256:9643927a6fc74bd81b0f1bbb5cce3cb4a491f46b4c5dbee770f28e575f180015 AS api-base
 ARG SOURCE_DATE_EPOCH
+ARG BMS_BUILD_SHA=unknown
+ARG BMS_BUILD_ID=development
+ARG BMS_BUILD_TIME=unknown
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+LABEL org.opencontainers.image.revision=$BMS_BUILD_SHA \
+      org.opencontainers.image.created=$BMS_BUILD_TIME \
+      org.opencontainers.image.version=$BMS_BUILD_ID
+
+ENV BMS_BUILD_SHA=$BMS_BUILD_SHA \
+    BMS_BUILD_ID=$BMS_BUILD_ID \
+    BMS_BUILD_TIME=$BMS_BUILD_TIME \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=0 \
@@ -78,7 +88,9 @@ ARG MICROMAMBA_SHA256=c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9
 ENV MAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX} \
     BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba \
     BMS_MICROMAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX} \
-    BMS_PLANNOTATE_ENV=plannotate
+    BMS_PLANNOTATE_ENV=plannotate \
+    BMS_PLANNOTATE_VERSION=2.0.0 \
+    BMS_PLANNOTATE_STREAMLIT_VERSION=1.59.2
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -96,7 +108,10 @@ RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
     && chmod 0755 /usr/local/bin/micromamba \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" create -y -n "${BMS_PLANNOTATE_ENV}" \
         --file /app/docker/plannotate-conda-linux-64.lock \
+    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" python -c "from importlib.metadata import version; expected={'plannotate': '2.0.0', 'streamlit': '1.59.2', 'pandas': '2.3.3', 'bokeh': '3.9.1'}; actual={name: version(name) for name in expected}; assert actual == expected, (actual, expected); import plannotate.streamlit_app" \
     && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" plannotate setupdb \
+    && micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" run -n "${BMS_PLANNOTATE_ENV}" plannotate databases >/tmp/plannotate-databases.json \
+    && test -s /tmp/plannotate-databases.json \
     && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
         /app/platform/api/.venv/lib/python3.10/site-packages \
         "${MAMBA_ROOT_PREFIX}/envs/${BMS_PLANNOTATE_ENV}/lib/python3.12/site-packages" \
@@ -110,6 +125,7 @@ RUN mkdir -p "${MAMBA_ROOT_PREFIX}" \
         /usr/local/lib/python3.10/site-packages/uv* \
         /usr/local/bin/pip* /usr/local/bin/uv /usr/local/bin/uvx \
     && rm -f "${MAMBA_ROOT_PREFIX}/envs/${BMS_PLANNOTATE_ENV}/conda-meta/history" \
+        /tmp/plannotate-databases.json \
         /tmp/uv-*.lock \
     && chown -R biomodstack:biomodstack "${MAMBA_ROOT_PREFIX}" \
     && python -c 'import os; from pathlib import Path; epoch=int(os.environ["SOURCE_DATE_EPOCH"]); excluded={"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}; roots=[Path(value) for value in ("/app", "/bin", "/etc", "/home", "/lib", "/lib64", "/opt", "/root", "/run", "/sbin", "/srv", "/tmp", "/usr", "/var") if Path(value).exists()]; [os.utime(path, (epoch, epoch), follow_symlinks=False) for root in roots for path in [root, *root.rglob("*")] if str(path) not in excluded]; os.utime(Path("/"), (epoch, epoch), follow_symlinks=False)'

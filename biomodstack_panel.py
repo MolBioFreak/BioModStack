@@ -38,23 +38,20 @@ from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
 from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
-    API_SERVICE,
     CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
     DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
-    FRONTEND_SERVICE,
     WORKFLOW_ADAPTER_LOG as WORKFLOW_ADAPTER_LOG_PATH,
     build_launch_ui_command,
     operator_frontend_url,
     operator_runtime_mode,
+    runtime_api_health_url,
     runtime_port_settings,
     save_runtime_port_settings,
-    service_is_active,
 )
 
 PROJECT_ROOT = get_code_root()
 API_PORT = 8000
-FRONTEND_PORT = 5173
 API_URL = f"http://localhost:{API_PORT}"
 
 # Paths
@@ -117,46 +114,42 @@ def save_config(config: dict):
 # SERVICE STATUS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_api_status() -> bool:
+def check_api_status(runtime_mode: str | None = None) -> bool:
+    """Return true only when the selected operator API health endpoint responds.
+
+    A systemd unit or matching process can remain alive while the service is
+    unavailable (or bound to an obsolete port).  It is therefore diagnostic
+    evidence, never a green-status fallback.
+    """
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
     try:
         import urllib.request
-        req = urllib.request.Request(f"{API_URL}/api/health", method="GET")
+        req = urllib.request.Request(
+            runtime_api_health_url(runtime_mode=selected_runtime, project_root=PROJECT_ROOT),
+            method="GET",
+        )
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
-        try:
-            return service_is_active(API_SERVICE)
-        except Exception:
-            pass
-        try:
-            result = subprocess.run(["pgrep", "-f", f"uvicorn.*:{API_PORT}"],
-                                    capture_output=True, timeout=2)
-            return result.returncode == 0
-        except Exception:
-            return False
+        return False
 
-def check_frontend_status() -> bool:
-    """Check if the frontend is responding on the active runtime hosted-web URL."""
-    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT)
+
+def check_frontend_status(runtime_mode: str | None = None) -> bool:
+    """Return true only when the selected operator frontend URL responds.
+
+    Do not paint the launcher green merely because a dev service manager or a
+    stale Vite process exists; neither establishes that operators can reach the
+    selected runtime surface.
+    """
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT, runtime_mode=selected_runtime)
     try:
         import urllib.request
+
         req = urllib.request.Request(frontend_url, method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
-        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
-        if runtime_mode == DEV_RUNTIME_MODE:
-            try:
-                return service_is_active(FRONTEND_SERVICE)
-            except Exception:
-                pass
-
-            try:
-                result = subprocess.run(["pgrep", "-f", f"vite.*{FRONTEND_PORT}"],
-                                        capture_output=True, timeout=2)
-                return result.returncode == 0
-            except Exception:
-                return False
         return False
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
@@ -421,8 +414,9 @@ class BioModStackPanel(Adw.Application):
         return group
     
     def _update_status_row(self):
-        api_ok = check_api_status()
-        frontend_ok = check_frontend_status()
+        selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
+        api_ok = check_api_status(selected_runtime)
+        frontend_ok = check_frontend_status(selected_runtime)
         
         api_icon = "✓" if api_ok else "✗"
         frontend_icon = "✓" if frontend_ok else "✗"

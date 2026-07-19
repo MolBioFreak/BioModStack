@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_complex_snapshot_v1.schema.json",
+  "title": "BioModStack complete complex snapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "target_id", "target_order", "original_source_path", "original_source_sha256", "normalized_source_sha256", "entities", "bonds", "instance_mappings", "admission", "unsupported_fields"],
+  "properties": {
+    "schema_name": {"const": "cm_complex_snapshot"},
+    "schema_version": {"const": 1},
+    "target_id": {"type": "string", "minLength": 1},
+    "target_order": {"type": "integer", "minimum": 0},
+    "original_source_path": {"$ref": "#/$defs/relative_path"},
+    "original_source_sha256": {"$ref": "#/$defs/sha256"},
+    "normalized_source_sha256": {"$ref": "#/$defs/sha256"},
+    "entities": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/entity"}},
+    "bonds": {"type": "array", "items": {"$ref": "#/$defs/bond"}},
+    "instance_mappings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/mapping"}},
+    "admission": {"$ref": "#/$defs/admission"},
+    "unsupported_fields": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$).+$"},
+    "instance_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "modification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "modification"],
+      "properties": {
+        "position": {"type": "integer", "minimum": 1},
+        "modification": {"enum": ["MSE", "SEP"]}
+      }
+    },
+    "entity": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "source_entity_id", "count", "ordered_instance_ids", "sequence"],
+          "properties": {
+            "entity_type": {"const": "protein"}, "source_entity_id": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "ordered_instance_ids": {"$ref": "#/$defs/instance_ids"},
+            "sequence": {"type": "string", "pattern": "^[ACDEFGHIKLMNPQRSTVWYX]+$"},
+            "modifications": {"type": "array", "items": {"$ref": "#/$defs/modification"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "source_entity_id", "count", "ordered_instance_ids", "sequence"],
+          "properties": {
+            "entity_type": {"const": "dna"}, "source_entity_id": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "ordered_instance_ids": {"$ref": "#/$defs/instance_ids"},
+            "sequence": {"type": "string", "pattern": "^[ACGTN]+$"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "source_entity_id", "count", "ordered_instance_ids", "sequence"],
+          "properties": {
+            "entity_type": {"const": "rna"}, "source_entity_id": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "ordered_instance_ids": {"$ref": "#/$defs/instance_ids"},
+            "sequence": {"type": "string", "pattern": "^[ACGUN]+$"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "source_entity_id", "count", "ordered_instance_ids", "ccd"],
+          "properties": {
+            "entity_type": {"enum": ["ligand_ccd", "ion"]}, "source_entity_id": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "ordered_instance_ids": {"$ref": "#/$defs/instance_ids"},
+            "ccd": {"type": "string", "pattern": "^[A-Z0-9]{1,8}$"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "source_entity_id", "count", "ordered_instance_ids", "smiles"],
+          "properties": {
+            "entity_type": {"const": "ligand_smiles"}, "source_entity_id": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "ordered_instance_ids": {"$ref": "#/$defs/instance_ids"},
+            "smiles": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "bond_endpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["instance_id", "position", "atom"],
+      "properties": {
+        "instance_id": {"type": "string", "minLength": 1}, "position": {"type": "integer", "minimum": 1}, "atom": {"type": "string", "minLength": 1}
+      }
+    },
+    "bond": {
+      "type": "object", "additionalProperties": false, "required": ["left", "right"],
+      "properties": {"left": {"$ref": "#/$defs/bond_endpoint"}, "right": {"$ref": "#/$defs/bond_endpoint"}}
+    },
+    "mapping": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_entity_id", "source_instance_id", "runtime_target_id", "runtime_entity_id", "runtime_instance_id", "runtime_order", "candidate_id", "output_entity_id", "output_label_asym_id", "output_auth_asym_id", "output_entity_order"],
+      "properties": {
+        "source_entity_id": {"type": "string", "minLength": 1}, "source_instance_id": {"type": "string", "minLength": 1},
+        "runtime_target_id": {"type": "string", "minLength": 1}, "runtime_entity_id": {"type": "string", "minLength": 1},
+        "runtime_instance_id": {"type": "string", "minLength": 1}, "runtime_order": {"type": "integer", "minimum": 0},
+        "candidate_id": {"type": "string", "minLength": 1}, "output_entity_id": {"type": "string", "minLength": 1},
+        "output_label_asym_id": {"type": "string", "minLength": 1},
+        "output_auth_asym_id": {"type": "string", "minLength": 1}, "output_entity_order": {"type": "integer", "minimum": 0}
+      }
+    },
+    "admission": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token_count", "atom_count", "token_limit", "conversion_omissions"],
+      "properties": {
+        "token_count": {"type": "integer", "minimum": 0}, "atom_count": {"type": "integer", "minimum": 0},
+        "token_limit": {"type": "integer", "minimum": 1}, "conversion_omissions": {"type": "array", "maxItems": 0}
+      }
+    }
+  }
+}

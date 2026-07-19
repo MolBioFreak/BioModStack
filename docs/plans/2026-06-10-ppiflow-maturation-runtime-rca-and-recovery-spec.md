@@ -321,7 +321,7 @@ git commit -m "fix(queue): reconcile stale PPIFlow maturation children"
 
 **Files:**
 
-- Modify: `workflows/antibody_denovo.nf`
+- Modify: `workflows/antibody_child.nf`
 - Modify: `scripts/spawn_maturation_children.py`
 - Create: `scripts/preflight_maturation_runtime.py`
 - Test: `tests/test_ppiflow_maturation_preflight_contract.py`
@@ -355,7 +355,7 @@ ${params.out_dir}/preflight/maturation_runtime_preflight.json
 **Commit:**
 
 ```bash
-git add workflows/antibody_denovo.nf scripts/preflight_maturation_runtime.py scripts/spawn_maturation_children.py tests/test_ppiflow_maturation_preflight_contract.py
+git add workflows/antibody_child.nf scripts/preflight_maturation_runtime.py scripts/spawn_maturation_children.py tests/test_ppiflow_maturation_preflight_contract.py
 git commit -m "feat(ppiflow): preflight maturation runtime before child spawn"
 ```
 

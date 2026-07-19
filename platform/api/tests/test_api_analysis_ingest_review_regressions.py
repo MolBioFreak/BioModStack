@@ -20,7 +20,7 @@ if str(API_ROOT) not in sys.path:
 from database import AnalysisRun, Base, Design, Job
 import paths
 from services import analysis_subprocess, result_ingester
-from services.analysis_registry import CHAIN_METRICS_ANALYSIS, PAE_MATRIX_ANALYSIS
+from services.analysis_registry import CHAIN_METRICS_ANALYSIS, JOB_AA_COMPOSITION_ANALYSIS, PAE_MATRIX_ANALYSIS
 from services.stage_review import _rfantibody_review_metadata_refresh_required
 
 
@@ -57,6 +57,9 @@ async def test_chain_metrics_analysis_persists_design_chain_metrics(
                 job_id="job-1",
                 name="design-1",
                 pdb_path=str(structure_path),
+                review_profile_id="structure_prediction_v1",
+                review_contract_version=1,
+                review_contract_source="job_identity",
                 created_at=datetime.utcnow(),
             )
         )
@@ -92,6 +95,11 @@ async def test_chain_metrics_analysis_persists_design_chain_metrics(
     )
     monkeypatch.setattr("services.analysis_subprocess.resolve_allowed_path", lambda raw: tmp_path / raw)
 
+    async def _queued_signature(*_args, **_kwargs) -> str:
+        return "sig"
+
+    monkeypatch.setattr("services.analysis_subprocess.build_analysis_input_signature", _queued_signature)
+
     assert await analysis_subprocess._run_analysis("run-1") == 0
 
     async with session_factory() as session:
@@ -101,6 +109,59 @@ async def test_chain_metrics_analysis_persists_design_chain_metrics(
     assert design.chain_metrics == expected_metrics
     assert run.status == "completed"
     assert (tmp_path / "analysis_cache" / "run-1" / "result.json").exists()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queued_job_analysis_stops_when_execution_authority_is_revoked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session_factory, engine = await _build_session_factory(tmp_path)
+    async with session_factory() as session:
+        session.add(
+            Job(
+                id="job-revoked",
+                name="revoked-analysis-job",
+                model_id="external_new_model",
+                mode="predict",
+                params={},
+                created_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            AnalysisRun(
+                id="run-revoked",
+                subject_kind="job",
+                subject_id="job-revoked",
+                analysis_type=JOB_AA_COMPOSITION_ANALYSIS,
+                status="queued",
+                params_json={},
+                params_hash="hash",
+                input_signature="unchanged-signature",
+                code_version="test",
+                cache_key="revoked-cache",
+            )
+        )
+        await session.commit()
+
+    async def _revoked(*_args, **_kwargs) -> str:
+        return "analysis is no longer allowed by persisted review profiles"
+
+    async def _must_not_compute(*_args, **_kwargs):
+        raise AssertionError("revoked job analysis reached computation")
+
+    monkeypatch.setattr("services.analysis_subprocess.async_session", session_factory)
+    monkeypatch.setattr("services.analysis_subprocess.validate_job_analysis_request", _revoked)
+    monkeypatch.setattr("services.analysis_subprocess._compute_job_aa_composition", _must_not_compute)
+
+    assert await analysis_subprocess._async_main("run-revoked") == 1
+
+    async with session_factory() as session:
+        run = (await session.execute(select(AnalysisRun).where(AnalysisRun.id == "run-revoked"))).scalar_one()
+    assert run.status == "failed"
+    assert "no longer allowed" in str(run.error_message)
 
     await engine.dispose()
 
@@ -135,6 +196,9 @@ def test_run_analysis_rewrites_legacy_host_structure_paths_to_active_runtime(
                     job_id="job-legacy",
                     name="design-legacy",
                     pdb_path=str(legacy_path),
+                    review_profile_id="structure_prediction_v1",
+                    review_contract_version=1,
+                    review_contract_source="job_identity",
                     created_at=datetime.utcnow(),
                 )
             )
@@ -169,6 +233,11 @@ def test_run_analysis_rewrites_legacy_host_structure_paths_to_active_runtime(
             },
         )
         monkeypatch.setattr("services.analysis_subprocess.resolve_allowed_path", lambda raw: tmp_path / raw)
+
+        async def _queued_signature(*_args, **_kwargs) -> str:
+            return "sig"
+
+        monkeypatch.setattr("services.analysis_subprocess.build_analysis_input_signature", _queued_signature)
         monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
         monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
         monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})

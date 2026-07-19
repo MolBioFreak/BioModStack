@@ -99,7 +99,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
     },
     protenix: {
         useMsa: true,
-        modelWeights: 'protenix_base_20250630_v1.0.0',
+        modelWeights: 'protenix-v2',
         seeds: '42',
         nSample: 5,
         nStep: 200,
@@ -144,12 +144,7 @@ const normalizeBoltzCpSeed = (value: unknown): string => {
     return normalized;
 };
 
-const normalizeProtenixModel = (model?: string): string => {
-    if (!model) return DEFAULTS.protenix.modelWeights;
-    if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
-    if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
-    return model;
-};
+const normalizeProtenixModel = (_model?: string): string => 'protenix-v2';
 
 const hasPredictorHints = (params: Record<string, unknown>, predictor: StructurePredictor): boolean => {
     if (predictor === 'boltz') {

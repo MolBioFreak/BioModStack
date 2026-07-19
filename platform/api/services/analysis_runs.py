@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AnalysisRun, Design, Job
 from paths import get_analysis_cache_dir, resolve_allowed_path, to_allowed_relative
-from services.analysis_registry import AnalysisDefinition, build_analysis_input_signature, get_analysis_definition
+from services.analysis_registry import (
+    AnalysisDefinition,
+    _design_supports_job_analysis,
+    build_analysis_input_signature,
+    get_analysis_definition,
+)
+from services.result_contracts import resolve_result_contract, validate_design_analysis_request
 
 
 ACTIVE_ANALYSIS_STATUSES = {"queued", "running"}
@@ -214,6 +220,9 @@ async def request_design_analysis(
     force_refresh: bool = False,
     requested_by: str = "ui",
 ) -> tuple[AnalysisRun, bool]:
+    contract_error = validate_design_analysis_request(design, analysis_type)
+    if contract_error:
+        raise ValueError(contract_error)
     return await request_analysis(
         session,
         subject=design,
@@ -226,6 +235,42 @@ async def request_design_analysis(
     )
 
 
+async def validate_job_analysis_request(
+    session: AsyncSession,
+    job: Job,
+    analysis_type: str,
+    raw_params: Optional[dict[str, Any]],
+) -> None:
+    definition = get_analysis_definition(analysis_type)
+    if definition is None or definition.subject_kind != "job":
+        raise ValueError(f"Unknown job analysis type: {analysis_type}")
+    params = definition.normalize_params(raw_params)
+    job_ids = [str(job.id)]
+    if bool(params.get("include_children", True)):
+        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == str(job.id)))
+        job_ids.extend(str(row[0]) for row in child_result.all())
+    query = select(Design).where(Design.job_id.in_(job_ids))
+    design_ids = params.get("design_ids") or []
+    if design_ids:
+        query = query.where(Design.id.in_(list(design_ids)))
+    design_result = await session.execute(query)
+    scoped_designs = list(design_result.scalars().all())
+    recognized_designs = [
+        design for design in scoped_designs
+        if resolve_result_contract(
+            review_profile_id=getattr(design, "review_profile_id", None),
+        ).analysis_contract_id not in {None, "unsupported_legacy"}
+    ]
+    if not recognized_designs:
+        raise ValueError("job analysis has no designs with an authoritative review profile")
+    eligible_designs = [
+        design for design in recognized_designs
+        if _design_supports_job_analysis(design, analysis_type)
+    ]
+    if not eligible_designs:
+        raise ValueError("job analysis has no review-compatible designs in scope")
+
+
 async def request_job_analysis(
     session: AsyncSession,
     job: Job,
@@ -235,6 +280,7 @@ async def request_job_analysis(
     force_refresh: bool = False,
     requested_by: str = "ui",
 ) -> tuple[AnalysisRun, bool]:
+    await validate_job_analysis_request(session, job, analysis_type, raw_params)
     return await request_analysis(
         session,
         subject=job,

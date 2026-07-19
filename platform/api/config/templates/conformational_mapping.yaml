@@ -1,0 +1,20 @@
+id: conformational_mapping
+name: Conformational Mapping
+icon: route
+color: "#F97316"
+experimental: true
+description: >
+  Canonical ConforNets preparation/finalization is implemented as an internal,
+  fail-closed adapter. Public generic launch is disabled; the current pinned
+  upstream also remains STOP because it lacks authoritative coordinate emission.
+goal: Validate request identity, seed authority, backend scope, and coordinate cardinality before scheduling.
+status: Public generic launch disabled pending an authenticated typed launcher. Internal ConforNets adapter present but current upstream STOP; Protenix and import remain stubs.
+stages:
+  - {name: Validate, tool: CM Request Builder, description: Reject unknown fields, seed conflicts, unsupported ConforNets inputs, and unknown backends.}
+  - {name: Materialize, tool: CM Request Builder, description: Atomically write canonical cm_request_v1 JSON and its exact coordinate plan.}
+  - {name: Dispatch, tool: Nextflow, description: ConforNets is internally adapted but hard-stops on the current uninstrumented upstream; Protenix and import are explicit stubs.}
+preset_params:
+  template_model_id: conformational_mapping
+  template_mode_id: map
+  workflow_model_topic: conformational_mapping
+user_params: []

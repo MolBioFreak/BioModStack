@@ -27,20 +27,18 @@ Every model integration usually touches some subset of:
 
 ### Antibody and binder workflows
 
-- `antibody_denovo`
-  primary de novo binder workflow for nanobody/VHH campaigns. Launch RFantibody, BoltzGen nanobody mode, or seeded PPIFlow generation, then reopen selected outputs in Antibody Refinement for loop-focused sequence redesign, PPIFlow reattempt/maturation, structure validation, and review.
+- `binder_design`
+  general de novo binder campaign workflow and first-priority integration target for Protein Hunter generation and Caliby fixed-backbone sequence design after full runtime/result acceptance.
+- `antibody_child`
+  retired antibody/VHH toolkit. Launch RFantibody, BoltzGen nanobody mode, or seeded PPIFlow generation, then use fixed-backbone sequence design (including Caliby), validation, and review.
 - `antibody_design`
   antibody toolkit / shell-driven modes for template-guided setup, nanobody/VHH refinement, ImmuneBuilder prediction, inverse-folding redesign, and resume/review flows.
-- `bindcraft`
-  generic de novo minibinder / peptide binder generation against hotspot-conditioned targets.
-- `protein_local_redesign`
-  constrained local remodel + redesign workflow for existing binders or complexes.
-- `protein_cad_experimental`
-  experimental La-Proteina / DISCO non-binder protein CAD family.
+- `protein_modification_experimental`
+  user-facing **De Novo Design** workbench. Current modes cover DISCO/La-Proteina fresh protein generation and RFdiffusion3 regional redesign; future candidates include RFD3, FrustraMPNN, LigandMPNN, and other protein-modification/design tools.
 - `caliby_experimental`
-  experimental structure-conditioned sequence-design surface that also appears as an optional redesign backend in nanobody refinement.
+  disabled compatibility metadata only. Caliby's current secondary use is fixed-backbone nanobody sequence design; its first-priority new product integration is `binder_design`.
 - `protein_hunter_experimental`
-  early experimental broad protein-hunting / exploration surface.
+  hidden internal development surface. Its first-priority product integration is `binder_design`; launches remain blocked until PAE preservation and ipSAE-based Boltz-2 interface selection pass.
 - `oligo_design`
   oligomer / nucleic-acid-aware generation surface (Oligo Designer / RFDpoly).
 
@@ -78,7 +76,7 @@ Every model integration usually touches some subset of:
 
 ### Generic binder generation and redesign
 
-- BindCraft
+- retired binder workflow
 - RFdiffusion
 - BoltzGen
 - Protein Local Redesign

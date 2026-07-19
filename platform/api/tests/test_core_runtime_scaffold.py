@@ -26,6 +26,7 @@ def test_core_runtime_scaffold_files_exist() -> None:
         ".env.core-runtime.example",
         ".dockerignore",
         "docker/api.Dockerfile",
+        "docker/plannotate-conda-linux-64.lock",
         "docker/web.Dockerfile",
         "docker/web/nginx.conf",
         "scripts/run_biomodstack_core_runtime.sh",
@@ -49,34 +50,38 @@ def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
     assert "BMS_MICROMAMBA_BIN=/usr/local/bin/micromamba" in dockerfile
     assert "BMS_MICROMAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX}" in dockerfile
     assert "BMS_PLANNOTATE_ENV=plannotate" in dockerfile
-    assert (
-        "micromamba-releases/releases/download/2.5.0-2/micromamba-linux-64"
-        in dockerfile
-    )
+    assert "BMS_PLANNOTATE_VERSION=2.0.0" in dockerfile
+    assert "BMS_PLANNOTATE_STREAMLIT_VERSION=1.59.2" in dockerfile
+    assert "micromamba-releases/releases/download/2.5.0-2/micromamba-linux-64" in dockerfile
     assert "sha256sum -c -" in dockerfile
-    assert "plannotate-conda-linux-64.lock" in dockerfile
-    assert 'micromamba --root-prefix "${MAMBA_ROOT_PREFIX}" create' in dockerfile
+    assert "micromamba --root-prefix \"${MAMBA_ROOT_PREFIX}\" create" in dockerfile
+    assert "--file /app/docker/plannotate-conda-linux-64.lock" in dockerfile
     assert "plannotate setupdb" in dockerfile
+    assert "plannotate databases" in dockerfile
+    assert "import plannotate.streamlit_app" in dockerfile
+    assert "streamlit.web.cli" not in dockerfile
+    assert ".any(axis=1) #only the rows that are in the columns of hit" not in dockerfile
+
+    lock_lines = (REPO_ROOT / "docker" / "plannotate-conda-linux-64.lock").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert lock_lines[0] == "@EXPLICIT"
+    assert len(lock_lines) == 215
+    assert any("python-3.12.13-" in line for line in lock_lines)
+    assert any("plannotate-2.0.0-" in line for line in lock_lines)
+    assert any("streamlit-1.59.2-" in line for line in lock_lines)
+    assert any("pandas-2.3.3-" in line for line in lock_lines)
+    assert any("bokeh-3.9.1-" in line for line in lock_lines)
+    for line in lock_lines[1:]:
+        url, sha256 = line.rsplit("#", 1)
+        assert url.startswith("https://")
+        assert len(sha256) == 64
+        assert all(character in "0123456789abcdef" for character in sha256)
     assert 'rm -rf "${MAMBA_ROOT_PREFIX}/pkgs"' in dockerfile
     assert "/usr/local/lib/python3.10/site-packages/setuptools*" in dockerfile
     assert "/usr/local/bin/uv /usr/local/bin/uvx" in dockerfile
     assert 'conda-meta/history"' in dockerfile
     assert "os.utime(path, (epoch, epoch), follow_symlinks=False)" in dockerfile
-    assert "streamlit.web.cli" not in dockerfile
-    assert (
-        ".any(axis=1) #only the rows that are in the columns of hit" not in dockerfile
-    )
-
-    conda_lock = (REPO_ROOT / "docker" / "plannotate-conda-linux-64.lock").read_text(
-        encoding="utf-8"
-    )
-    assert conda_lock.startswith("@EXPLICIT\n")
-    assert "plannotate-2.0.0-pyhdfd78af_0.conda#" in conda_lock
-    assert all(
-        line.count("#") == 1 and len(line.rsplit("#", maxsplit=1)[1]) == 64
-        for line in conda_lock.splitlines()
-        if line and not line.startswith("#") and line != "@EXPLICIT"
-    )
 
 
 def test_compose_core_runtime_contract() -> None:
@@ -122,30 +127,13 @@ def test_compose_core_runtime_contract() -> None:
         == "${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
     )
     assert "BMS_DOCKER_GID" not in api["environment"]
-    assert (
-        api["environment"]["CORS_ORIGINS"]
-        == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
-    )
-    assert (
-        api["environment"]["BMS_WEIGHTS"]
-        == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
-    )
-    assert (
-        api["environment"]["BMS_COLABFOLD_DB"]
-        == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
-    )
-    assert (
-        api["environment"]["BMS_MSA_CACHE"]
-        == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
-    )
-    assert (
-        api["environment"]["BMS_SABDAB_CACHE"]
-        == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
-    )
-    assert (
-        api["environment"]["BMS_WORK"]
-        == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
-    )
+    assert "BMS_FRONTEND_HEALTH_URL" not in api["environment"]
+    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
+    assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
+    assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
+    assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
+    assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
+    assert api["environment"]["BMS_WORK"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
     bioxp_environment = api["environment"]
     assert bioxp_environment["BMS_FEATURE_BIOXP"] == "${BMS_FEATURE_BIOXP:-1}"
     assert (
@@ -371,6 +359,16 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
         in dockerfile
     )
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
+
+
+def test_hosted_web_html_sets_strict_electron_compatible_csp() -> None:
+    nginx = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "add_header Content-Security-Policy" in nginx
+    assert "script-src 'self' 'wasm-unsafe-eval'" in nginx
+    assert "script-src 'self' 'unsafe-eval'" not in nginx
+    assert "object-src 'none'" in nginx
+    assert "frame-ancestors 'none'" in nginx
 
 
 def test_api_runtime_image_has_no_retired_analytical_build_stage() -> None:

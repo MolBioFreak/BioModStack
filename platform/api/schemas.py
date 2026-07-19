@@ -189,6 +189,11 @@ class DesignResponse(BaseModel):
     source_design_name: Optional[str] = None
     artifact_class: Optional[str] = None
     artifact_schema_version: Optional[int] = None
+    review_profile_id: Optional[str] = None
+    review_contract_version: Optional[int] = None
+    review_contract_source: Optional[str] = None
+    review_artifact_manifest: Optional[Any] = None
+    review_role_map: Optional[Any] = None
     selected_loop_scope: Optional[Any] = None
     provenance: Optional[Any] = None
     

@@ -152,7 +152,7 @@ def test_esmfold2_denovo_validation_preview_compiles_parent_workflow(tmp_path: P
 
         result = _run_nextflow(
             "run",
-            "workflows/antibody_denovo.nf",
+            "workflows/antibody_child.nf",
             "-preview",
             "-offline",
             "-profile",

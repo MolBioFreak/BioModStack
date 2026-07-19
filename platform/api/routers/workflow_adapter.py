@@ -29,6 +29,7 @@ from biomodstack_services import (
     stop_api,
 )
 from services import nextflow
+from services.md.feature_gate import require_molecular_dynamics_feature
 
 
 cancel_nextflow_job = nextflow.cancel_nextflow_job
@@ -224,6 +225,7 @@ async def workflow_adapter_runtime_action(
 
 @router.post("/launch", response_model=WorkflowAdapterLaunchResponse, status_code=202)
 async def workflow_adapter_launch(request: WorkflowAdapterLaunchRequest) -> WorkflowAdapterLaunchResponse:
+    require_molecular_dynamics_feature(request.model_id)
     nextflow.launch_nextflow_job_detached(
         job_id=request.job_id,
         model_id=request.model_id,
