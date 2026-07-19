@@ -30,6 +30,7 @@ import {
     reverseComplementSequence,
     sequenceUnitLabel,
 } from '../utils/nucleotides';
+import { getPrimerHighlightRegions } from '../utils/selectionActions';
 
 interface PrimerPanelProps {
     sequenceData: SequenceData;
@@ -378,22 +379,14 @@ export function PrimerPanel({
     };
 
     const highlightPrimer = (primer: Primer | null) => {
-        if (!primer) {
-            const regions: HighlightedRegion[] = (sequenceData.primers || []).map((existingPrimer) => ({
-                start: existingPrimer.start,
-                end: existingPrimer.end,
-                color: existingPrimer.strand === 1 ? '#22c55e' : '#ef4444',
-                label: existingPrimer.name,
-            }));
-            onHighlight(regions);
-            return;
-        }
-        onHighlight([{
-            start: primer.start,
-            end: primer.end,
-            color: primer.strand === 1 ? '#22c55e' : '#ef4444',
-            label: primer.name,
-        }]);
+        const primersToHighlight = primer ? [primer] : (sequenceData.primers || []);
+        onHighlight(primersToHighlight.flatMap((existingPrimer) => (
+            getPrimerHighlightRegions(
+                existingPrimer,
+                existingPrimer.strand === 1 ? '#22c55e' : '#ef4444',
+                existingPrimer.name,
+            )
+        )));
     };
 
     const addLibraryPrimerToSequence = async (libPrimer: LibraryPrimer) => {

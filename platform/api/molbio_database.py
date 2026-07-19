@@ -43,8 +43,35 @@ def _normalize_sql(sql: str) -> str:
     return " ".join(sql.strip().rstrip(";").split()).casefold()
 
 
+def _expected_immutable_triggers() -> dict[str, tuple[str, str]]:
+    return {
+        f"molbio_immutable_{table_name}_{operation.lower()}": (
+            table_name,
+            _normalize_sql(
+                _immutable_trigger_sql(
+                    table_name,
+                    operation,
+                    if_not_exists=False,
+                )
+            ),
+        )
+        for table_name in IMMUTABLE_TABLES
+        for operation in ("UPDATE", "DELETE")
+    }
+
+
+def _immutable_triggers_are_current(rows: Iterable[Sequence[object]]) -> bool:
+    expected = _expected_immutable_triggers()
+    observed = {str(row[0]): row for row in rows}
+    return set(observed) == set(expected) and all(
+        str(observed[name][1]) == table_name
+        and _normalize_sql(str(observed[name][2] or "")) == expected_sql
+        for name, (table_name, expected_sql) in expected.items()
+    )
+
+
 def _without_sequence_parent_foreign_keys(create_table_sql: str) -> str:
-    """Remove table-level FK clauses that involve ``parent_id``.
+    """Remove table-level and inline FK clauses that involve ``parent_id``.
 
     SQLite cannot alter a foreign key in place.  Rebuilds therefore preserve all
     top-level table clauses except parent-lineage constraints, then append the one
@@ -105,6 +132,41 @@ def _without_sequence_parent_foreign_keys(create_table_sql: str) -> str:
             }
             if "parent_id" in local_columns:
                 continue
+        inline_parent_column = re.match(
+            r'^\s*(?:"parent_id"|`parent_id`|\[parent_id\]|parent_id)(?:\s|$)',
+            clause,
+            flags=re.IGNORECASE,
+        )
+        if inline_parent_column and re.search(
+            r"\bREFERENCES\b",
+            clause,
+            flags=re.IGNORECASE,
+        ):
+            identifier = r'(?:"(?:""|[^"])+"|`(?:``|[^`])+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)'
+            inline_reference = (
+                r"\s+REFERENCES\s+" + identifier
+                + r"\s*(?:\(\s*" + identifier + r"\s*\))?"
+                + r"(?:\s+(?:ON\s+(?:DELETE|UPDATE)\s+"
+                + r"(?:SET\s+(?:NULL|DEFAULT)|CASCADE|RESTRICT|NO\s+ACTION)"
+                + r"|MATCH\s+" + identifier + r"))*"
+                + r"(?:\s+(?:NOT\s+)?DEFERRABLE"
+                + r"(?:\s+INITIALLY\s+(?:DEFERRED|IMMEDIATE))?)?"
+            )
+            clause, replacements = re.subn(
+                inline_reference,
+                "",
+                clause,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if replacements != 1 or re.search(
+                r"\bREFERENCES\b",
+                clause,
+                flags=re.IGNORECASE,
+            ):
+                raise RuntimeError(
+                    "Cannot safely rebuild nucleotide_sequences: unsupported inline parent foreign key"
+                )
         retained.append(clause)
 
     return create_table_sql[:opening + 1] + ",".join(retained) + create_table_sql[closing:]
@@ -234,9 +296,23 @@ async def _migration_append_only_guards(connection: AsyncConnection) -> None:
         raise RuntimeError("Mol Bio append-only guards are defined for SQLite")
     for table_name in IMMUTABLE_TABLES:
         for action in ("UPDATE", "DELETE"):
+            trigger_name = f"molbio_immutable_{table_name}_{action.lower()}"
+            await connection.execute(text(f'DROP TRIGGER IF EXISTS "{trigger_name}"'))
             await connection.execute(
-                text(_immutable_trigger_sql(table_name, action, if_not_exists=True))
+                text(_immutable_trigger_sql(table_name, action, if_not_exists=False))
             )
+    trigger_rows = (
+        await connection.execute(
+            text(
+                "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'molbio_immutable_%'"
+            )
+        )
+    ).fetchall()
+    if not _immutable_triggers_are_current(trigger_rows):
+        raise RuntimeError(
+            "Cannot enforce append-only scientific history: immutable trigger postcondition failed"
+        )
 
 
 async def _migration_idempotency_and_soft_delete(connection: AsyncConnection) -> None:
@@ -331,6 +407,13 @@ async def _migration_sequence_parent_foreign_key(connection: AsyncConnection) ->
         text("ALTER TABLE nucleotide_sequences_with_parent_fk RENAME TO nucleotide_sequences")
     )
 
+    repaired_fk_rows = (
+        await connection.execute(text("PRAGMA foreign_key_list(nucleotide_sequences)"))
+    ).fetchall()
+    if not _has_sequence_parent_foreign_key(repaired_fk_rows):
+        raise RuntimeError(
+            "Cannot safely rebuild nucleotide_sequences: parent foreign-key postcondition failed"
+        )
     violations = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
     if violations:
         raise RuntimeError(
@@ -495,26 +578,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             ).fetchall()
         versions = [str(row[0]) for row in migrations]
         migrations_current = versions == expected_versions
-        expected_triggers = {
-            f"molbio_immutable_{table_name}_{operation.lower()}": (
-                table_name,
-                _normalize_sql(
-                    _immutable_trigger_sql(
-                        table_name,
-                        operation,
-                        if_not_exists=False,
-                    )
-                ),
-            )
-            for table_name in IMMUTABLE_TABLES
-            for operation in ("UPDATE", "DELETE")
-        }
-        observed_triggers = {str(row[0]): row for row in trigger_rows}
-        triggers_current = set(observed_triggers) == set(expected_triggers) and all(
-            str(observed_triggers[name][1]) == table_name
-            and _normalize_sql(str(observed_triggers[name][2] or "")) == expected_sql
-            for name, (table_name, expected_sql) in expected_triggers.items()
-        )
+        triggers_current = _immutable_triggers_are_current(trigger_rows)
         sequence_parent_fk_current = _has_sequence_parent_foreign_key(
             sequence_parent_fk_rows
         )
