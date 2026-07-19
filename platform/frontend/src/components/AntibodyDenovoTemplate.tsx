@@ -597,6 +597,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const frameworkPdbObjectUrlRef = useRef<string | null>(null);
     const frameworkLoadControllerRef = useRef(createLatestAsyncResourceController());
     const targetLoadControllerRef = useRef(createLatestAsyncResourceController());
+    const targetParseControllerRef = useRef(createLatestAsyncResourceController());
     const replacePdbBlobUrl = useCallback((nextUrl: string | null) => {
         if (pdbBlobUrlRef.current) URL.revokeObjectURL(pdbBlobUrlRef.current);
         pdbBlobUrlRef.current = nextUrl;
@@ -614,6 +615,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         frameworkPdbObjectUrlRef.current = null;
         frameworkLoadControllerRef.current.dispose();
         targetLoadControllerRef.current.dispose();
+        targetParseControllerRef.current.dispose();
     }, []);
     const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
     const [boltzgenUseFrameworkTemplate, setBoltzgenUseFrameworkTemplate] = useState(
@@ -1440,13 +1442,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [initialValues, isRefinementMode, mergeQualitySettingsFromParams, queueRestoredSelection, restoreFrameworkPreview, restoreTargetFromSaved]);
 
-    // Parse the uploaded/selected target structure, preserving all available models.
+    // Parse the uploaded/selected target structure once per source, preserving all available models.
     useEffect(() => {
+        const parseToken = targetParseControllerRef.current.begin();
         if (!targetPdb) {
             setParsedTargetStructure(null);
             setParsedChains([]);
             setSelectedChain(null);
             setSelectedTargetModel(1);
+            setIsParsing(false);
             if (!restoringSelectionRef.current) {
                 setSelectedResidues(new Set());
             }
@@ -1457,27 +1461,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         parsePDBFile(targetPdb)
             .then((result) => {
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
-                const preferredModel =
-                    queuedModel
-                    ?? getSavedTargetModelNumber(initialValues || {})
-                    ?? selectedTargetModel;
-                const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
-                setSelectedTargetModel(resolvedModel?.modelNumber ?? 1);
-                if (!uploadedPath && !initialValues) setUploadedPath(null);
+                setSelectedTargetModel((currentModel) => {
+                    const preferredModel = queuedModel ?? currentModel;
+                    const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
+                    return resolvedModel?.modelNumber ?? 1;
+                });
                 console.log(
                     '[ANTIBODY_DENOVO] Parsed target PDB models:',
                     result.models.map((model) => `${model.label}:${model.chains.map((c) => `${c.id}:${c.length}aa`).join('|')}`)
                 );
             })
             .catch((err) => {
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
                 setParsedTargetStructure(null);
                 setParsedChains([]);
             })
-            .finally(() => setIsParsing(false));
-    }, [getSavedTargetModelNumber, initialValues, selectedTargetModel, targetPdb, uploadedPath]);
+            .finally(() => {
+                if (targetParseControllerRef.current.isCurrent(parseToken)) setIsParsing(false);
+            });
+    }, [targetPdb]);
 
     // Keep the active target chains/viewer content aligned to the currently selected model.
     // This effect depends only on its input model; functional updates prevent a
