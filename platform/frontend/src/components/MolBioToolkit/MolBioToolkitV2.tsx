@@ -36,6 +36,14 @@ import {
     resolveAnnotationSequenceAlignment,
     transformFeatureForAlignment,
 } from './utils/annotationTransfer';
+import {
+    assertAnnotationArtifactChecksum,
+    fetchAnnotationSourceStatus,
+    retrieveAddgeneAnnotationSource,
+    retrieveNcbiAnnotationSource,
+    type AnnotationSourceProvenance,
+    type AnnotationSourceStatus,
+} from './utils/annotationSources';
 import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
@@ -1131,6 +1139,25 @@ export function MolBioToolkitV2() {
     // Auto-annotation state
     const [isAnnotating, setIsAnnotating] = useState(false);
     const [showAnnotatePanel, setShowAnnotatePanel] = useState(false);
+    const [annotationSourceStatus, setAnnotationSourceStatus] = useState<AnnotationSourceStatus | null>(null);
+
+    useEffect(() => {
+        if (!showAnnotatePanel) return;
+        let cancelled = false;
+        setAnnotationSourceStatus(null);
+        void fetchAnnotationSourceStatus()
+            .then((status) => {
+                if (!cancelled) setAnnotationSourceStatus(status);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setAnnotationSourceStatus({ ncbi: { available: true }, addgene: { available: false } });
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [showAnnotatePanel]);
 
     // Display projection is workspace-local; every newly opened sequence starts in Both.
     type ViewMode = 'linear' | 'circular' | 'both';
@@ -1325,7 +1352,10 @@ export function MolBioToolkitV2() {
         setIsDirty(true);
     }, [sequenceData, setSequenceData]);
 
-    const importAnnotationsFromFile = useCallback(async (file: File): Promise<string> => {
+    const importAnnotationsFromFile = useCallback(async (
+        file: File,
+        publishedSource?: AnnotationSourceProvenance,
+    ): Promise<string> => {
         if (!sequenceData.sequence) {
             throw new Error('Open a construct before importing annotations.');
         }
@@ -1339,6 +1369,9 @@ export function MolBioToolkitV2() {
             return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
         };
         const sourceFileSha256 = await sha256Hex(fileBytes);
+        if (publishedSource) {
+            assertAnnotationArtifactChecksum(publishedSource, sourceFileSha256);
+        }
 
         const result = await anyToJson(file, {
             fileName: file.name,
@@ -1409,8 +1442,10 @@ export function MolBioToolkitV2() {
                 provenance: {
                     ...(transformed.provenance || {}),
                     annotation_import: {
-                        provider: 'user_file',
-                        source_origin: 'user_provided_origin_unknown',
+                        provider: publishedSource?.provider ?? 'user_file',
+                        source_origin: publishedSource?.source_url ?? 'user_provided_origin_unknown',
+                        source_id: publishedSource?.source_id,
+                        published_source: publishedSource,
                         source_file: file.name,
                         source_media_type: file.type || 'application/octet-stream',
                         source_byte_count: file.size,
@@ -1445,6 +1480,16 @@ export function MolBioToolkitV2() {
         const parserMessage = parserMessages.length > 0 ? ` Parser messages retained: ${parserMessages.length}.` : '';
         return `Imported ${transferredFeatures.length} feature annotations from ${file.name} using ${alignment.mode.replaceAll('_', ' ')} sequence alignment.${parserMessage}`;
     }, [sequenceData, setSequenceData]);
+
+    const retrieveNcbiAnnotations = useCallback(async (accession: string): Promise<string> => {
+        const retrieved = await retrieveNcbiAnnotationSource(accession);
+        return importAnnotationsFromFile(retrieved.file, retrieved.source);
+    }, [importAnnotationsFromFile]);
+
+    const retrieveAddgeneAnnotations = useCallback(async (plasmidId: string): Promise<string> => {
+        const retrieved = await retrieveAddgeneAnnotationSource(plasmidId);
+        return importAnnotationsFromFile(retrieved.file, retrieved.source);
+    }, [importAnnotationsFromFile]);
 
     // Run auto-annotation with user settings
     const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
@@ -2297,6 +2342,9 @@ export function MolBioToolkitV2() {
                 onAnnotate={runAutoAnnotate}
                 onClearAnnotations={clearAnnotations}
                 onImportAnnotations={importAnnotationsFromFile}
+                onRetrieveNcbi={retrieveNcbiAnnotations}
+                onRetrieveAddgene={retrieveAddgeneAnnotations}
+                annotationSourceStatus={annotationSourceStatus}
                 isAnnotating={isAnnotating}
                 hasSequence={!!sequenceData.sequence}
                 featureCount={sequenceData.features.length}
