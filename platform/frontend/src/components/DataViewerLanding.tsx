@@ -522,8 +522,8 @@ export function DataViewerLanding({
     });
 
     return (
-        <div className="mb-8 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
-            <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-2xl shadow-slate-950/40 backdrop-blur">
+        <div data-testid="data-viewer-landing" className="mb-8 w-full">
+            <section className="overflow-hidden rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-900/95 via-slate-900/80 to-cyan-950/20 p-5 shadow-2xl shadow-slate-950/40 ring-1 ring-white/[0.025] backdrop-blur sm:p-6">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <div className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300">Data hub</div>
@@ -535,14 +535,33 @@ export function DataViewerLanding({
                     <button
                         type="button"
                         onClick={onBrowseJobs}
-                        className="rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2 text-sm font-medium text-slate-100 transition-colors hover:border-slate-500 hover:bg-slate-800"
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-950/50 px-4 py-2.5 text-sm font-medium text-slate-100 transition-colors hover:border-cyan-500/40 hover:bg-slate-900"
                     >
-                        Browse workflows
+                        <span className="text-cyan-300">⌕</span>
+                        Open workflow
                     </button>
                 </div>
 
-                <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)]">
-                    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                <div className="mt-5 grid gap-2 rounded-2xl border border-slate-800/80 bg-slate-950/45 p-2 sm:grid-cols-3">
+                    {[
+                        ['01', 'Choose source', 'Select format and file'],
+                        ['02', 'Verify mapping', 'Preview fields and warnings'],
+                        ['03', 'Import', 'Create a viewer-ready job'],
+                    ].map(([step, title, detail]) => (
+                        <div key={step} className="flex items-center gap-3 rounded-xl px-3 py-2.5">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-xs font-semibold text-cyan-200">
+                                {step}
+                            </span>
+                            <div className="min-w-0">
+                                <div className="text-sm font-medium text-slate-100">{title}</div>
+                                <div className="truncate text-xs text-slate-500">{detail}</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/65 p-4 sm:p-5">
                         <div className="grid gap-4 md:grid-cols-2">
                             <label className="space-y-2 text-sm text-slate-200">
                                 <span className="block font-medium text-slate-100">Import format</span>
@@ -738,9 +757,15 @@ export function DataViewerLanding({
                                 View existing datasets
                             </button>
                         </div>
+
+                        <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-slate-800/80 pt-4 text-[11px] text-slate-400">
+                            <span className="inline-flex items-center gap-1.5"><span className="text-cyan-300">●</span> Local staged upload</span>
+                            <span className="inline-flex items-center gap-1.5"><span className="text-cyan-300">●</span> Preview before import</span>
+                            <span className="inline-flex items-center gap-1.5"><span className="text-cyan-300">●</span> Existing job pipeline</span>
+                        </div>
                     </div>
 
-                    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/65 p-4 sm:p-5">
                         <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Existing data</div>
                             <h3 className="mt-2 text-lg font-semibold text-white">Open a recent workflow or imported dataset</h3>
@@ -758,7 +783,7 @@ export function DataViewerLanding({
                                 No existing protein-design jobs yet. Import a ProteinBase bundle to seed the viewer.
                             </div>
                         ) : (
-                            <div className="space-y-3">
+                            <div className="max-h-[430px] space-y-2.5 overflow-y-auto pr-1">
                                 {recentJobs.map((job) => (
                                     <button
                                         key={job.id}
