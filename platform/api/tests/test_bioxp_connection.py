@@ -21,6 +21,10 @@ class FakeRobotClient:
     def __init__(self, target: Any, *, probe_result: dict[str, Any] | None = None, probe_error: Exception | None = None) -> None:
         self.target = target
         self.probe_result = probe_result or {
+            "status": "ok",
+            "available": True,
+            "cache_state": "fresh",
+            "freshness": {"state": "fresh", "age_s": 0.0, "fresh_for_s": 30.0},
             "runtime_ready": True,
             "hardware_connected": True,
             "capabilities": ["oem_xml_compile"],
@@ -39,7 +43,14 @@ class FakeRobotClient:
         self.closed = True
 
 
-def _service(tmp_path: Path, clients: list[FakeRobotClient], *, clock=None, **service_options):
+def _service(
+    tmp_path: Path,
+    clients: list[FakeRobotClient],
+    *,
+    clock=None,
+    probe_result: dict[str, Any] | None = None,
+    **service_options,
+):
     BioXpConnectionService, _, BioXpProfileStore, BioXpTargetPolicy = _load()
 
     async def resolver(_: str) -> tuple[str, ...]:
@@ -53,7 +64,7 @@ def _service(tmp_path: Path, clients: list[FakeRobotClient], *, clock=None, **se
     store = BioXpProfileStore(tmp_path / "bioxp" / "profile.json")
 
     def factory(target):
-        client = FakeRobotClient(target)
+        client = FakeRobotClient(target, probe_result=probe_result)
         clients.append(client)
         return client
 
@@ -152,6 +163,43 @@ def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     assert snapshot.observation_stale is True
     assert snapshot.reachable is None
     assert snapshot.last_observed_reachable is True
+
+
+def test_robot_stale_cache_cannot_be_relabelled_as_fresh_readiness(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    now = datetime(2026, 7, 18, tzinfo=timezone.utc)
+    clients: list[FakeRobotClient] = []
+    service = _service(
+        tmp_path,
+        clients,
+        clock=lambda: now,
+        probe_result={
+            "status": "ok",
+            "available": False,
+            "cache_state": "stale",
+            "freshness": {"state": "stale", "age_s": 600.0, "fresh_for_s": 30.0},
+            "runtime_available": True,
+            "hardware_connected": True,
+            "capabilities": [
+                "collect_hardware_snapshot",
+                "construct_pipettes",
+                "initialize_without_motion",
+                "run_initial_check",
+            ],
+        },
+    )
+    asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
+    snapshot = asyncio.run(service.connect())
+
+    assert snapshot.observation_fresh is False
+    assert snapshot.observation_stale is True
+    assert snapshot.reachable is None
+    assert snapshot.last_observed_reachable is True
+    assert snapshot.runtime_ready is None
+    assert snapshot.hardware_ready is None
+    assert snapshot.capabilities == ()
+    assert snapshot.last_error is not None
+    assert "stale" in snapshot.last_error.lower()
 
 
 def test_explicit_active_connection_monitor_renews_observation_and_stops_on_disconnect(tmp_path: Path) -> None:

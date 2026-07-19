@@ -1,86 +1,70 @@
-# Structure Visualization M0–M3 Source Closure
+# Structure Visualization M0–M3 Current-Tree Reassessment
 
 **Date:** 2026-07-19
-**Branch:** `fix/bms-runtime-cache-isolation-20260719`
-**Observed HEAD during final source review:** `596893692f2855535bdcd1271ef832d8bb6856e8`
-**Scope:** implementation closure; current-tree execution explicitly skipped
+**Scope:** direct Mol* integration/refactor and current-tree execution evidence
 
 ## Decision
 
-| Milestone | Source completion | Decision |
-|---|---:|---|
-| M0 — runtime contract and browser baseline | 100% | GO for remediated direct-runtime source contract; retained historical browser baseline separately labeled |
-| M1 — shared contracts, controller, direct engine adapter | 100% | GO for source architecture |
-| M2 — migrate consumers | 100% | GO for source migration |
-| M3 — metrics, filters, linked views, measurements | 100% | GO for source implementation |
+The previous source-only document claimed M0–M3 were each 100% complete. That claim is withdrawn. Source presence is not milestone acceptance.
 
-## M0
+| Milestone | Honest status | Decision |
+|---|---|---|
+| M0 — runtime contract and measured browser baseline | MVP path verified; formal current-tree 50-cycle plateau and independent review missing | **MVP GO / milestone OPEN** |
+| M1 — contracts, controller, owner, direct adapter | Core architecture runs and focused generation/teardown tests pass; full roadmap acceptance matrix is not re-executed | **Substantially implemented / acceptance OPEN** |
+| M2 — migrate existing consumers | 15-site browser inventory passes; 12 route-reachable sites and 3 retained orphan fixtures are explicit | **Focused migration GO / formal gate OPEN** |
+| M3 — metrics, filters, linked views, measurements | Residue pLDDT plus persisted structure scalars and sequence linkage work; pair-matrix/measurement acceptance remains artifact- and workflow-incomplete | **PARTIAL — not milestone complete** |
 
-- Historical PDBe STOP is superseded by `m0_direct_molstar_remediation_review.md`.
-- Exact `molstar@4.5.0` direct ownership remains authoritative.
-- Production no longer exposes `PluginUIContext`, `activePlugin`, a private viewer instance, or a mutable adapter probe.
-- Browser instrumentation uses diagnostics-only snapshots.
-- Retained 55-cycle evidence is not misrepresented as evidence for the current dirty tree.
+## What is now genuinely working
 
-## M1
+- direct owned `molstar@4.5.0` runtime;
+- shared host/workbench boundary for generic and epitope consumers;
+- StrictMode-safe raw-structure Blob ownership;
+- localized viewer error boundary instead of whole-page blanking;
+- real Results Viewer structure load and visible molecular render;
+- native Mol* toolbar/settings/control panels;
+- pLDDT coloring and linked sequence selection;
+- one shared metric workbench exposing every available metric layer rather than a pLDDT-only selector;
+- on the verified DRT4 route: pLDDT, pTM, complex ipLDDT, complex ipDE, radius of gyration, residue count, helix %, sheet %, and coil %;
+- structure-scalar values display their persisted value and provenance without fake residue coloring or opacity controls;
+- the shared workbench owns minimize/restore in normal and fullscreen modes;
+- sequence-only fullscreen state with the workbench minimized while pLDDT is active;
+- legacy top metric/quick-view/legend controls and the duplicate analytics sidebar/fullscreen panel are disabled;
+- removal of legacy result-table sort/contact/distance/H3 controls from the Structure surface;
+- removal of global table pagination chrome from the Structure surface;
+- deterministic actual-route teardown;
+- 15/15 consumer browser smoke with zero errors/warnings;
+- isolated production build and 54 viewer-focused tests passing.
 
-- Exact `runtime/MolstarEngineAdapter.ts` boundary exists.
-- `StructureSceneController` owns generation-safe reconciliation and normative mutation methods: reconcile, selection, hover, focus, camera, and snapshot capture.
-- Engine clicks enter the controller event bus with canonical document-scoped residue identity.
-- The direct scene adapter reconciles documents, canonical presentation, camera, and exact measurements in ordered phases.
-- React no longer calls direct `applyPresentation`, `setMeasurements`, or `setResidueClickHandler` methods.
-- Scene presentation contains canonical document-scoped color/tooltip queries, linked selection, filters, camera, and measurements.
-- Layer visibility and opacity are applied in Mol*; camera state is applied to Canvas3D.
-- Blob URLs are generation-owned by the shared host resource owner.
-- Public diagnostics do not expose the plugin.
+The verified DRT4 producer declared no aligned-error artifact and its persisted contact-map analysis is missing. PAE, contact distance, and ipSAE are therefore not invented as selectable layers for that result.
 
-## M2
+## Known whole-tree gates
 
-- `MolstarViewer` routes through `StructureViewerHost`.
-- Quick Viewer uses the compact workbench; Results/Structure Viewer uses the standard workbench and compact reference viewer.
-- Epitope integration uses canonical `ResidueRef` internally; compact residue strings are restricted to a deprecated compatibility boundary.
-- Remaining structure-derived React remount keys were removed.
-- Unreachable `DockingComparePane.tsx` and `FloatingViewer.tsx` were retired.
-- Frontend-local `package-lock.json` and `pnpm-lock.yaml` were removed; root pnpm authority is documented.
-- Active source scans found no PDBe custom element, loader alias, private `viewerInstance`, public `activePlugin`, or direct consumer adapter operation.
+The most recent canonical frontend run was 416/417 with one unrelated concurrent BioXP failure: `bioxpInterlinkStatus.test.ts` imports `isBioXpCommandAvailable`, which the concurrently edited module does not export. This viewer work did not modify that BioXP lane.
 
-## M3
+Canonical lint also remains red outside the viewer scope with five errors in `InfraLiveTelemetry.tsx`, `ModelDocumentationLinks.tsx`, `QualitySettingsPanel.tsx`, `StructurePredictionTemplate.tsx`, and `dashboard/reorchestrateStructureSettings.ts`. No Mol* or structure-viewer file produced a lint error.
 
-- Generic descriptors declare dimension, units, direction, projection policy, normalization, palette/domain, provenance, formulas, and semantics.
-- Metric values preserve explicit missingness and optional authoritative display colors.
-- Metric datasets declare document scope, shape, axes, artifact/provenance metadata, and downsampling disclosure.
-- Registry admission is identity-validating, duplicate-safe, dimension-specific, and byte-aware.
-- Projection fails closed for unsupported dimensions/policies; no matrix is silently projected to residue color.
-- Metric layers expose visibility, Mol* opacity, palette legend, provenance, reset, and filter controls.
-- Sequence linkage is window-virtualized and bidirectionally selection-linked.
-- Pair metrics render as a bounded 2D canvas heatmap with canonical axes, keyboard navigation, missing-state color, click linkage, and accessible table fallback.
-- Canvas clicks preserve the actual document ID.
-- Metric coloring and linked selection compose in deterministic order instead of replacing each other.
-- Exact-atom measurements preflight every singleton atom, stage a full replacement, roll staged objects back on failure, and retain the prior committed measurement set until staging succeeds.
+A formal M2 whole-frontend GO requires both canonical gates to return green after their owners resolve those lanes.
 
-## Source-only checks
+## Why M3 is not complete
 
-- `git diff --check`: pass
-- production consumer-bypass/remnant scan: zero disallowed consumer matches
-- structure-derived viewer remount-key scan: zero matches
-- nested frontend lockfiles: absent
-- current source SHA-256 values are recorded in the M0 remediation review
+The roadmap acceptance is broader than the current MVP. Remaining evidence/work includes:
 
-## Explicitly not executed
+- prove entity-type, repeated-instance, neighborhood, and missingness filters change authoritative 3D presentation rather than only UI state;
+- exercise real PAE/contact pair matrices and exact matrix → sequence → 3D → matrix round trips on route data;
+- expose and live-test exact-atom distance/angle/dihedral measurement UX;
+- verify metric provenance, units, direction, missingness, and tooltips for every admitted production metric;
+- test insertion codes, auth/label namespace differences, repeated operators, multiple models, altlocs, and non-protein components in browser flows;
+- prove keyboard, touch, and screen-reader behavior on essential controls;
+- execute admission/performance tests for large annotations and matrices.
 
-Per operator instruction, none of the following was run for this tree:
+## Ordered next steps
 
-- unit or integration tests
-- typecheck
-- lint suite
-- frontend build
-- Vite/browser startup
-- Chrome lifecycle probe
-- route acceptance
-- deployment or restart
+1. **Close M0/M1 evidence, not features.** Automate the current browser smoke as a package command, run at least 50 StrictMode replacement cycles on the exact tree, record plugins/canvases/listeners/Blob URLs/detached nodes/memory, run A→B→A and overlay reorder/removal, then obtain independent review.
+2. **Close M2 inventory and whole-app gates.** Decide whether G1–G3 orphan fixtures remain compatibility fixtures or are retired, run lint, clear the unrelated BioXP test failure with its owner, then rerun canonical tests/build/browser route acceptance.
+3. **Finish M3 linked-data correctness.** Start with one real pLDDT route and one real PAE route; make filter semantics authoritative, prove bidirectional exact selection, then wire measurement controls. Do not add new visual dimensions before these gates pass.
+4. **Consolidate remaining legacy analytics.** Move any still-useful `StructureViewerPane` analytics into shared workbench extensions and delete duplicate presentation paths; keep workflow-specific configuration declarative.
+5. **Stop before M4.** Complex/interface/interaction work does not begin until M0–M3 acceptance evidence is complete.
 
-No current-tree runtime-green claim is made. Completion percentages in this document mean the requested production source has been inserted and source-reviewed against the M0–M3 roadmap.
+## Release boundary
 
-## Concurrent workspace note
-
-HEAD changed concurrently during implementation and a separate molecular-dynamics lane remained dirty. That work was preserved and is outside this closure decision. No commit, push, reset, deployment, or service restart was performed.
+No commit, push, deployment, service restart, or package upgrade is included in this reassessment.

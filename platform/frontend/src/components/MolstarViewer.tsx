@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 
 import type { StructureViewerHostProps } from '../structureViewer/StructureViewerHost';
+import { StructureViewerErrorBoundary } from '../structureViewer/StructureViewerErrorBoundary';
 
 const LazyStructureViewerHost = lazy(() => import('../structureViewer/StructureViewerHost'));
 
@@ -23,6 +24,10 @@ export default function MolstarViewer(props: StructureViewerHostProps) {
     }
 
     return (
+        <StructureViewerErrorBoundary
+            resetKey={`${props.structureUrl}:${props.format ?? 'pdb'}`}
+            height={props.height}
+        >
         <Suspense
             fallback={(
                 <div
@@ -36,5 +41,6 @@ export default function MolstarViewer(props: StructureViewerHostProps) {
         >
             <LazyStructureViewerHost {...props} />
         </Suspense>
+        </StructureViewerErrorBoundary>
     );
 }

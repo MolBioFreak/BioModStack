@@ -15,6 +15,8 @@ export interface MetricLegendPanelProps {
 
 export function MetricLegendPanel({ layer, visible = true, opacity = 1, onVisibilityChange, onOpacityChange, onReset }: MetricLegendPanelProps) {
     const { descriptor } = layer;
+    const isStructureScalar = descriptor.dimension === 'structure-scalar';
+    const scalarValue = isStructureScalar ? layer.values[0]?.value : undefined;
     const missing = new Map<string, number>();
     for (const value of layer.values) {
         if (value.missingness) missing.set(value.missingness, (missing.get(value.missingness) ?? 0) + 1);
@@ -29,12 +31,20 @@ export function MetricLegendPanel({ layer, visible = true, opacity = 1, onVisibi
                     <div className="font-semibold">{descriptor.label}</div>
                     <div className="text-slate-400">{formatRange(descriptor)} · {descriptor.direction.replaceAll('_', ' ')}</div>
                 </div>
-                <div className="flex items-center gap-2"><label className="flex items-center gap-1"><input type="checkbox" checked={visible} onChange={(event) => onVisibilityChange?.(event.target.checked)} /> Show</label><button type="button" className="rounded border border-slate-600 px-1" onClick={onReset}>Reset</button></div>
+                {!isStructureScalar && <div className="flex items-center gap-2"><label className="flex items-center gap-1"><input type="checkbox" checked={visible} onChange={(event) => onVisibilityChange?.(event.target.checked)} /> Show</label><button type="button" className="rounded border border-slate-600 px-1" onClick={onReset}>Reset</button></div>}
             </div>
-            <div className="mt-2 h-2 rounded" style={{ background: `linear-gradient(to right, ${(descriptor.palette?.colors ?? ['#2563eb', '#f8fafc', '#dc2626']).join(', ')})` }} aria-hidden="true" />
-            <label className="mt-2 flex items-center gap-2">Opacity
+            {isStructureScalar && (
+                <div className="mt-3 rounded border border-blue-500/20 bg-blue-500/10 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400">Scalar value</div>
+                    <div className="font-mono text-lg font-semibold text-blue-100">
+                        {typeof scalarValue === 'number' ? scalarValue.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(scalarValue ?? '—')}{descriptor.units ? ` ${descriptor.units}` : ''}
+                    </div>
+                </div>
+            )}
+            {!isStructureScalar && <div className="mt-2 h-2 rounded" style={{ background: `linear-gradient(to right, ${(descriptor.palette?.colors ?? ['#2563eb', '#f8fafc', '#dc2626']).join(', ')})` }} aria-hidden="true" />}
+            {!isStructureScalar && <label className="mt-2 flex items-center gap-2">Opacity
                 <input aria-label={`${descriptor.label} opacity`} type="range" min={0} max={1} step={0.05} value={opacity} onChange={(event) => onOpacityChange?.(Number(event.target.value))} />
-            </label>
+            </label>}
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 text-slate-400">
                 {descriptor.description && <><dt>Description</dt><dd>{descriptor.description}</dd></>}
                 {descriptor.semantics && <><dt>Semantics</dt><dd>{descriptor.semantics}</dd></>}

@@ -1,44 +1,44 @@
 # M0 Direct Mol* Runtime Remediation Review
 
 **Date:** 2026-07-19
-**Decision:** **GO — source/runtime contract remediation complete**
-**Current-tree execution:** intentionally not performed by operator instruction
+**Decision:** **MVP runtime GO; formal M0 acceptance remains OPEN**
 
 ## Supersession
 
-This decision supersedes the `STOP` in `m0_runtime_contract_review.md` for the retired PDBe embedding. The STOP remains historical evidence of why that embedding was removed; it is not the active production decision.
+The historical PDBe STOP in `m0_runtime_contract_review.md` remains evidence for retiring that embedding. Production now owns direct `molstar@4.5.0`; this review does not reinterpret the old PDBe result as current-tree evidence.
 
-## Remediated contract
+## Current-tree runtime decision
 
-- Production owns direct `molstar@4.5.0`; no PDBe custom element or private-instance lifecycle remains.
-- `MolstarEngineOwner` owns each React root and plugin attempt and disposes both deterministically.
-- `StructureViewerHost` is the single public composition boundary.
-- `MolstarEngineAdapter` is the engine boundary; consumers do not receive `PluginUIContext`.
-- Scene generations own documents, presentation, selection, filters, camera, measurements, events, and resources.
-- Browser fixtures receive diagnostics-only probes; the production adapter and plugin are not exposed.
-- Process-global quality-query registration remains idempotent.
+The minimum direct-Mol* product path is usable:
 
-## Retained browser baseline
+- Results Viewer Structure tab loads a real result without unmounting the BMS page.
+- Mol* reaches `ready`, renders a canvas and molecule, and exposes native controls/settings.
+- linked sequence selection commits canonical residue selection;
+- fullscreen analytics and metric/filter controls minimize independently while the linked sequence remains visible;
+- leaving the Structure tab removes the Mol* mount, canvas, and plugin UI;
+- a viewer-level React error boundary localizes future synchronous viewer failures instead of blanking the whole application.
 
-The retained accepted baseline predates the current edits and is cited only as baseline evidence, not as execution of this tree:
+## Incident RCA and remediation
 
-- 55 lifecycle cycles
-- warnings: 0
-- listener growth: 0
-- retention failures: 0
-- final plugins: 0
-- final canvases: 0
-- evidence: `evidence/m1_direct_molstar_runtime_probe_final_chrome150.json`
-- evidence SHA-256: `1a93c222ee4077766473c23d86a224d10fe75b99994e1df773bb5484f5aa2607`
+The blank blue page was caused by `StructureViewerHost` retaining a `ViewerResourceOwner` in a ref while terminally disposing it in passive-effect cleanup. React StrictMode replay retained the ref and called `beginGeneration()` on the disposed owner, throwing synchronously before Mol* mounted.
 
-## Current source identities
+The owner is now effect-local to each raw-structure Blob generation. StrictMode cleanup disposes that generation, and replay creates a fresh owner. A workbench/facade error boundary provides a second containment layer.
 
-- `MolstarEngineAdapter.ts`: `f378811c1f10bd317171c7fcd7a611aa3b32d52b880852da5688b1833e19906a`
-- `StructureSceneController.ts`: `6695d5a911bfd661db830925f6973719e2cfc33893ecfda221a9b4e28e736266`
-- `MolstarDirectSceneEngineAdapter.ts`: `1485c0d5267ca095448035cf6a08bedca4ee81af509103bb01cced23ffd563fc`
-- `StructureViewerHost.tsx`: `55ea043e50802e279c19ed68837515c3713063d68b62561a200bd2e6f567023d`
-- `MolstarDirectAdapter.ts`: `489906b80290f3f32c35dabc4e6fb9f7f4788433289a589f2fc70839d9bfa069`
+## Executed evidence on this tree
 
-## Verification boundary
+- production isolated build: pass; 6,030 modules transformed;
+- viewer-focused tests: 45/45 pass;
+- dedicated consumer browser smoke: 15/15 sites ready, usable, and disposed;
+- browser-smoke console errors: 0;
+- browser-smoke console warnings: 0;
+- actual Results Viewer route: load/display/native settings/linked selection/fullscreen minimize+restore/teardown verified;
+- `git diff --check`: required before closure.
 
-`git diff --check` passed. No test, typecheck, build, browser probe, or route acceptance was run against these hashes, because the operator explicitly required code insertion while skipping all testing. The GO decision is therefore a source/runtime-contract decision, not a claim of newly executed browser evidence.
+## Formal M0 gap
+
+The roadmap requires at least 50 bounded StrictMode lifecycle cycles against the exact current tree, plateau evidence for retained resources/memory, and independent review. The retained 55-cycle artifact predates these edits. The current 15-site smoke is strong MVP evidence but is not a substitute for that formal gate.
+
+Therefore:
+
+- **MVP runtime:** GO;
+- **formal M0 milestone:** OPEN pending current-tree 50-cycle plateau evidence and independent review.

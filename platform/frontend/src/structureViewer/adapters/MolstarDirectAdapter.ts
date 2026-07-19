@@ -15,6 +15,7 @@ import { clearStructureTransparency, setStructureTransparency } from 'molstar/li
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
 import { Asset } from 'molstar/lib/mol-util/assets';
 import { Color } from 'molstar/lib/mol-util/color/color';
+import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { StateSelection } from 'molstar/lib/mol-state';
@@ -466,9 +467,9 @@ export class MolstarDirectAdapter {
         if (!canvas) return viewerUnsupported('Mol* canvas is unavailable for camera reconciliation', 'camera');
         canvas.setProps({ camera: { ...canvas.props.camera, mode: camera.mode } });
         canvas.camera.setState({
-            ...(camera.target ? { target: [...camera.target] as [number, number, number] } : {}),
-            ...(camera.position ? { position: [...camera.position] as [number, number, number] } : {}),
-            ...(camera.up ? { up: [...camera.up] as [number, number, number] } : {}),
+            ...(camera.target ? { target: Vec3.create(...camera.target) } : {}),
+            ...(camera.position ? { position: Vec3.create(...camera.position) } : {}),
+            ...(camera.up ? { up: Vec3.create(...camera.up) } : {}),
             ...(camera.radius !== undefined ? { radius: camera.radius } : {}),
         });
         return viewerOk(undefined);
