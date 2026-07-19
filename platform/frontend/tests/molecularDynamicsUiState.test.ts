@@ -122,6 +122,21 @@ describe('molecular dynamics launcher contract', () => {
         assert.equal(Object.keys(preparation).some((key) => key.startsWith('chemistry_profile_')), false);
     });
 
+    it('rejects prepared GROMACS with an explanatory validator error and never serializes it', () => {
+        const invalid = {
+            ...validForm(),
+            engine: 'gromacs' as const,
+            inputMode: 'prepared' as const,
+            structurePath: '',
+            coordinatesPath: '/data/system.gro',
+            topologyPath: '/data/topol.top',
+        };
+
+        const errors = validateMolecularDynamicsForm(invalid);
+        assert.equal(errors.some((error) => /prepared.*OpenMM|OpenMM.*prepared/i.test(error)), true);
+        assert.throws(() => buildMolecularDynamicsJobSpec(invalid, validProfile()), /prepared.*OpenMM|OpenMM.*prepared/i);
+    });
+
     it('rejects an attached profile that is incompatible with the selected engine', () => {
         const errors = validateMolecularDynamicsChemistryProfile(validProfile(), 'openmm', false);
         assert.equal(errors.some((error) => error.includes('not validated for openmm')), true);

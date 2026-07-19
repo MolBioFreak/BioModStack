@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import fcntl
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 
-from sqlalchemy import event, text
+from sqlalchemy import UniqueConstraint, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -20,6 +21,313 @@ from paths import get_data_root
 
 MOLBIO_BUSY_TIMEOUT_MS = 30_000
 Migration = tuple[str, str, Callable[[AsyncConnection], Awaitable[None]]]
+
+
+def _immutable_trigger_sql(
+    table_name: str,
+    action: str,
+    *,
+    if_not_exists: bool,
+) -> str:
+    trigger_name = f"molbio_immutable_{table_name}_{action.lower()}"
+    existence_guard = " IF NOT EXISTS" if if_not_exists else ""
+    return f'''CREATE TRIGGER{existence_guard} "{trigger_name}"
+                    BEFORE {action} ON "{table_name}"
+                    BEGIN
+                        SELECT RAISE(ABORT, '{table_name} is immutable');
+                    END'''
+
+
+def _normalize_sql(sql: str) -> str:
+    """Normalize insignificant formatting while retaining every SQL token."""
+
+    return " ".join(sql.strip().rstrip(";").split()).casefold()
+
+
+def _expected_immutable_triggers() -> dict[str, tuple[str, str]]:
+    return {
+        f"molbio_immutable_{table_name}_{operation.lower()}": (
+            table_name,
+            _normalize_sql(
+                _immutable_trigger_sql(
+                    table_name,
+                    operation,
+                    if_not_exists=False,
+                )
+            ),
+        )
+        for table_name in IMMUTABLE_TABLES
+        for operation in ("UPDATE", "DELETE")
+    }
+
+
+def _immutable_triggers_are_current(rows: Iterable[Sequence[object]]) -> bool:
+    expected = _expected_immutable_triggers()
+    observed = {str(row[0]): row for row in rows}
+    return set(observed) == set(expected) and all(
+        str(observed[name][1]) == table_name
+        and _normalize_sql(str(observed[name][2] or "")) == expected_sql
+        for name, (table_name, expected_sql) in expected.items()
+    )
+
+
+def _foreign_key_signature(payload: Mapping[str, Any]) -> tuple[object, ...]:
+    options = payload.get("options")
+    normalized_options = options if isinstance(options, Mapping) else {}
+    return (
+        tuple(str(column) for column in payload.get("constrained_columns") or ()),
+        str(payload.get("referred_table") or ""),
+        tuple(str(column) for column in payload.get("referred_columns") or ()),
+        str(normalized_options.get("ondelete") or "").upper(),
+        str(normalized_options.get("onupdate") or "").upper(),
+    )
+
+
+def _expected_foreign_key_signatures(table) -> Counter[tuple[object, ...]]:  # noqa: ANN001
+    signatures: Counter[tuple[object, ...]] = Counter()
+    for constraint in table.foreign_key_constraints:
+        elements = list(constraint.elements)
+        signatures[
+            (
+                tuple(str(element.parent.name) for element in elements),
+                str(elements[0].column.table.name),
+                tuple(str(element.column.name) for element in elements),
+                str(constraint.ondelete or "").upper(),
+                str(constraint.onupdate or "").upper(),
+            )
+        ] += 1
+    return signatures
+
+
+def _molbio_schema_issues_sync(sync_connection) -> list[str]:  # noqa: ANN001
+    """Return structural drift from the SQLAlchemy-owned SQLite contract."""
+
+    inspector = inspect(sync_connection)
+    actual_tables = set(inspector.get_table_names())
+    issues: list[str] = []
+    for table_name, table in MolBioBase.metadata.tables.items():
+        if table_name not in actual_tables:
+            issues.append(f"required table missing: {table_name}")
+            continue
+
+        actual_columns = {str(column["name"]): column for column in inspector.get_columns(table_name)}
+        expected_columns = {str(column.name): column for column in table.columns}
+        for column_name, expected_column in expected_columns.items():
+            actual_column = actual_columns.get(column_name)
+            if actual_column is None:
+                issues.append(f"required column missing: {table_name}.{column_name}")
+                continue
+            if not expected_column.primary_key and bool(actual_column.get("nullable")) != bool(expected_column.nullable):
+                issues.append(f"column nullability differs: {table_name}.{column_name}")
+        unexpected_columns = sorted(set(actual_columns).difference(expected_columns))
+        if unexpected_columns:
+            issues.append(f"unexpected columns in {table_name}: {unexpected_columns}")
+
+        expected_foreign_keys = _expected_foreign_key_signatures(table)
+        actual_foreign_keys = Counter(
+            _foreign_key_signature(foreign_key)
+            for foreign_key in inspector.get_foreign_keys(table_name)
+        )
+        if actual_foreign_keys != expected_foreign_keys:
+            issues.append(f"foreign keys differ: {table_name}")
+
+        actual_indexes = {
+            (
+                str(index.get("name") or ""),
+                tuple(str(column) for column in index.get("column_names") or ()),
+                bool(index.get("unique")),
+            )
+            for index in inspector.get_indexes(table_name)
+        }
+        for index in table.indexes:
+            expected_index = (
+                str(index.name or ""),
+                tuple(str(column.name) for column in index.columns),
+                bool(index.unique),
+            )
+            if expected_index not in actual_indexes:
+                issues.append(f"required index differs or is missing: {table_name}.{index.name}")
+
+        expected_unique_columns = {
+            tuple(str(column.name) for column in constraint.columns)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        actual_unique_columns = {
+            tuple(str(column) for column in constraint.get("column_names") or ())
+            for constraint in inspector.get_unique_constraints(table_name)
+        }
+        missing_unique = expected_unique_columns.difference(actual_unique_columns)
+        if missing_unique:
+            issues.append(
+                f"required unique constraint differs or is missing: {table_name} {sorted(missing_unique)}"
+            )
+    return issues
+
+
+async def _molbio_schema_issues(connection: AsyncConnection) -> list[str]:
+    return await connection.run_sync(_molbio_schema_issues_sync)
+
+
+def _without_sequence_parent_foreign_keys(create_table_sql: str) -> str:
+    """Remove table-level and inline FK clauses that involve ``parent_id``.
+
+    SQLite cannot alter a foreign key in place.  Rebuilds therefore preserve all
+    top-level table clauses except parent-lineage constraints, then append the one
+    authoritative standalone self-FK.  Splitting only on top-level commas avoids
+    confusing composite column lists or commas inside quoted defaults.
+    """
+
+    opening = create_table_sql.find("(")
+    closing = create_table_sql.rfind(")")
+    if opening < 0 or closing <= opening:
+        raise RuntimeError("Cannot safely rebuild nucleotide_sequences: malformed CREATE TABLE SQL")
+
+    body = create_table_sql[opening + 1:closing]
+    clauses: list[str] = []
+    start = 0
+    depth = 0
+    quote: str | None = None
+    index = 0
+    while index < len(body):
+        character = body[index]
+        if quote is not None:
+            if character == quote:
+                if index + 1 < len(body) and body[index + 1] == quote:
+                    index += 1
+                else:
+                    quote = None
+        elif character in {"'", '"', "`"}:
+            quote = character
+        elif character == "[":
+            quote = "]"
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0:
+                raise RuntimeError(
+                    "Cannot safely rebuild nucleotide_sequences: malformed CREATE TABLE SQL"
+                )
+        elif character == "," and depth == 0:
+            clauses.append(body[start:index])
+            start = index + 1
+        index += 1
+    if quote is not None or depth != 0:
+        raise RuntimeError("Cannot safely rebuild nucleotide_sequences: malformed CREATE TABLE SQL")
+    clauses.append(body[start:])
+
+    retained: list[str] = []
+    for clause in clauses:
+        foreign_key = re.search(
+            r"\bFOREIGN\s+KEY\s*\(([^)]*)\)",
+            clause,
+            flags=re.IGNORECASE,
+        )
+        if foreign_key:
+            local_columns = {
+                column.strip().strip('"`[]').casefold()
+                for column in foreign_key.group(1).split(",")
+            }
+            if "parent_id" in local_columns:
+                continue
+        inline_parent_column = re.match(
+            r'^\s*(?:"parent_id"|`parent_id`|\[parent_id\]|parent_id)(?:\s|$)',
+            clause,
+            flags=re.IGNORECASE,
+        )
+        if inline_parent_column and re.search(
+            r"\bREFERENCES\b",
+            clause,
+            flags=re.IGNORECASE,
+        ):
+            identifier = r'(?:"(?:""|[^"])+"|`(?:``|[^`])+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)'
+            inline_reference = (
+                r"\s+REFERENCES\s+" + identifier
+                + r"\s*(?:\(\s*" + identifier + r"\s*\))?"
+                + r"(?:\s+(?:ON\s+(?:DELETE|UPDATE)\s+"
+                + r"(?:SET\s+(?:NULL|DEFAULT)|CASCADE|RESTRICT|NO\s+ACTION)"
+                + r"|MATCH\s+" + identifier + r"))*"
+                + r"(?:\s+(?:NOT\s+)?DEFERRABLE"
+                + r"(?:\s+INITIALLY\s+(?:DEFERRED|IMMEDIATE))?)?"
+            )
+            clause, replacements = re.subn(
+                inline_reference,
+                "",
+                clause,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if replacements != 1 or re.search(
+                r"\bREFERENCES\b",
+                clause,
+                flags=re.IGNORECASE,
+            ):
+                raise RuntimeError(
+                    "Cannot safely rebuild nucleotide_sequences: unsupported inline parent foreign key"
+                )
+        retained.append(clause)
+
+    return create_table_sql[:opening + 1] + ",".join(retained) + create_table_sql[closing:]
+
+
+def _has_sequence_parent_foreign_key(
+    rows: Iterable[Sequence[object]],
+) -> bool:
+    constraints: dict[object, list[Sequence[object]]] = {}
+    for row in rows:
+        if len(row) < 7:
+            continue
+        constraints.setdefault(row[0], []).append(row)
+
+    parent_constraints = [
+        constraint_rows
+        for constraint_rows in constraints.values()
+        if any(str(row[3]) == "parent_id" for row in constraint_rows)
+    ]
+    if len(parent_constraints) != 1 or len(parent_constraints[0]) != 1:
+        return False
+
+    row = parent_constraints[0][0]
+    return (
+        str(row[1]) == "0"
+        and str(row[2]) == "nucleotide_sequences"
+        and str(row[3]) == "parent_id"
+        and str(row[4]) == "id"
+        and str(row[5]).upper() == "NO ACTION"
+        and str(row[6]).upper() == "RESTRICT"
+    )
+
+
+def _sequence_parent_cycles(
+    rows: Iterable[Sequence[object]],
+) -> list[tuple[str, ...]]:
+    """Return each cycle in a single-parent lineage graph exactly once."""
+
+    parents = {
+        str(row[0]): str(row[1]) if row[1] is not None else None
+        for row in rows
+    }
+    complete: set[str] = set()
+    cycles: set[tuple[str, ...]] = set()
+    for origin in sorted(parents):
+        trail: list[str] = []
+        positions: dict[str, int] = {}
+        current: str | None = origin
+        while current is not None and current in parents and current not in complete:
+            if current in positions:
+                cycle = trail[positions[current]:]
+                rotations = [
+                    tuple(cycle[index:] + cycle[:index])
+                    for index in range(len(cycle))
+                ]
+                cycles.add(min(rotations))
+                break
+            positions[current] = len(trail)
+            trail.append(current)
+            current = parents[current]
+        complete.update(trail)
+    return sorted(cycles)
 
 
 def get_molbio_path() -> Path:
@@ -88,15 +396,22 @@ async def _migration_append_only_guards(connection: AsyncConnection) -> None:
     for table_name in IMMUTABLE_TABLES:
         for action in ("UPDATE", "DELETE"):
             trigger_name = f"molbio_immutable_{table_name}_{action.lower()}"
+            await connection.execute(text(f'DROP TRIGGER IF EXISTS "{trigger_name}"'))
             await connection.execute(
-                text(
-                    f'''CREATE TRIGGER IF NOT EXISTS "{trigger_name}"
-                    BEFORE {action} ON "{table_name}"
-                    BEGIN
-                        SELECT RAISE(ABORT, '{table_name} is immutable');
-                    END'''
-                )
+                text(_immutable_trigger_sql(table_name, action, if_not_exists=False))
             )
+    trigger_rows = (
+        await connection.execute(
+            text(
+                "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'molbio_immutable_%'"
+            )
+        )
+    ).fetchall()
+    if not _immutable_triggers_are_current(trigger_rows):
+        raise RuntimeError(
+            "Cannot enforce append-only scientific history: immutable trigger postcondition failed"
+        )
 
 
 async def _migration_idempotency_and_soft_delete(connection: AsyncConnection) -> None:
@@ -124,13 +439,18 @@ async def _migration_sequence_parent_foreign_key(connection: AsyncConnection) ->
     fk_rows = (
         await connection.execute(text("PRAGMA foreign_key_list(nucleotide_sequences)"))
     ).fetchall()
-    if any(
-        str(row[2]) == "nucleotide_sequences"
-        and str(row[3]) == "parent_id"
-        and str(row[4]) == "id"
-        and str(row[6]).upper() == "RESTRICT"
-        for row in fk_rows
-    ):
+    lineage_rows = (
+        await connection.execute(
+            text("SELECT id, parent_id FROM nucleotide_sequences ORDER BY id")
+        )
+    ).fetchall()
+    parent_cycles = _sequence_parent_cycles(lineage_rows)
+    if parent_cycles:
+        raise RuntimeError(
+            "Cannot add nucleotide sequence parent foreign key while cyclic lineage exists: "
+            f"{parent_cycles}"
+        )
+    if _has_sequence_parent_foreign_key(fk_rows):
         return
 
     orphan_rows = (
@@ -170,6 +490,7 @@ async def _migration_sequence_parent_foreign_key(connection: AsyncConnection) ->
     )
     if replacement_sql == original_sql:
         raise RuntimeError("Cannot safely rebuild nucleotide_sequences: unexpected CREATE TABLE SQL")
+    replacement_sql = _without_sequence_parent_foreign_keys(replacement_sql)
     replacement_sql = (
         replacement_sql[:-1]
         + ",\n\tFOREIGN KEY(parent_id) REFERENCES nucleotide_sequences_with_parent_fk (id) "
@@ -185,6 +506,13 @@ async def _migration_sequence_parent_foreign_key(connection: AsyncConnection) ->
         text("ALTER TABLE nucleotide_sequences_with_parent_fk RENAME TO nucleotide_sequences")
     )
 
+    repaired_fk_rows = (
+        await connection.execute(text("PRAGMA foreign_key_list(nucleotide_sequences)"))
+    ).fetchall()
+    if not _has_sequence_parent_foreign_key(repaired_fk_rows):
+        raise RuntimeError(
+            "Cannot safely rebuild nucleotide_sequences: parent foreign-key postcondition failed"
+        )
     violations = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
     if violations:
         raise RuntimeError(
@@ -301,6 +629,12 @@ async def run_molbio_migrations(*, engine: AsyncEngine) -> list[str]:
                     await connection.commit()
             applied.add(version)
 
+        schema_issues = await _molbio_schema_issues(connection)
+        if schema_issues:
+            raise RuntimeError(
+                "Mol Bio schema drift detected after migration: " + "; ".join(schema_issues)
+            )
+
     return sorted(applied)
 
 
@@ -322,6 +656,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
     expected_versions = [version for version, _description, _apply in MOLBIO_MIGRATIONS]
     try:
         async with target_engine.connect() as connection:
+            schema_issues = await _molbio_schema_issues(connection)
             quick_check = str((await connection.execute(text("PRAGMA quick_check"))).scalar_one())
             foreign_key_rows = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
             migrations = (
@@ -337,29 +672,31 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
                     )
                 )
             ).fetchall()
+            sequence_parent_fk_rows = (
+                await connection.execute(
+                    text('PRAGMA foreign_key_list("nucleotide_sequences")')
+                )
+            ).fetchall()
+            sequence_parent_rows = (
+                await connection.execute(
+                    text("SELECT id, parent_id FROM nucleotide_sequences ORDER BY id")
+                )
+            ).fetchall()
         versions = [str(row[0]) for row in migrations]
         migrations_current = versions == expected_versions
-        expected_triggers = {
-            f"molbio_immutable_{table_name}_{operation.lower()}": (table_name, operation)
-            for table_name in IMMUTABLE_TABLES
-            for operation in ("UPDATE", "DELETE")
-        }
-        observed_triggers = {str(row[0]): row for row in trigger_rows}
-        triggers_current = set(observed_triggers) == set(expected_triggers) and all(
-            str(observed_triggers[name][1]) == table_name
-            and f"BEFORE {operation}" in " ".join(
-                str(observed_triggers[name][2] or "").upper().split()
-            )
-            and f"RAISE(ABORT, '{table_name.upper()} IS IMMUTABLE')" in " ".join(
-                str(observed_triggers[name][2] or "").upper().split()
-            )
-            for name, (table_name, operation) in expected_triggers.items()
+        triggers_current = _immutable_triggers_are_current(trigger_rows)
+        sequence_parent_fk_current = _has_sequence_parent_foreign_key(
+            sequence_parent_fk_rows
         )
+        sequence_parent_cycles = _sequence_parent_cycles(sequence_parent_rows)
         healthy = (
             quick_check.lower() == "ok"
             and not foreign_key_rows
             and migrations_current
+            and not schema_issues
             and triggers_current
+            and sequence_parent_fk_current
+            and not sequence_parent_cycles
         )
         return {
             "owner": "molbio",
@@ -370,8 +707,12 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "migration_count": len(versions),
             "latest_migration": versions[-1] if versions else None,
             "migrations_current": migrations_current,
+            "database_schema_current": not schema_issues,
+            "database_schema_issue_count": len(schema_issues),
             "immutable_trigger_count": len(trigger_rows),
             "immutable_triggers_current": triggers_current,
+            "sequence_parent_foreign_key_current": sequence_parent_fk_current,
+            "sequence_parent_cycle_count": len(sequence_parent_cycles),
         }
     except Exception as exc:  # health endpoints must report, not propagate
         return {
@@ -383,8 +724,12 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "migration_count": 0,
             "latest_migration": None,
             "migrations_current": False,
+            "database_schema_current": False,
+            "database_schema_issue_count": None,
             "immutable_trigger_count": 0,
             "immutable_triggers_current": False,
+            "sequence_parent_foreign_key_current": False,
+            "sequence_parent_cycle_count": None,
             "error": f"{type(exc).__name__}: database health query failed",
         }
 

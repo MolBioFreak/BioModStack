@@ -39,7 +39,17 @@ def _calculate_gc_percent(sequence: str) -> float:
 
 def _longest_contiguous_complement(left: str, right: str, *, anchor_left_3: bool = False, anchor_right_3: bool = False) -> int:
     left_sequence = clean_sequence(left)
-    right_sequence = reverse_complement(clean_sequence(right))
+    cleaned_right = clean_sequence(right)
+    if anchor_left_3 and anchor_right_3:
+        for length in range(min(len(left_sequence), len(cleaned_right)), 0, -1):
+            right_three_prime_complement = reverse_complement(
+                cleaned_right[-length:]
+            )[::-1]
+            if left_sequence[-length:] == right_three_prime_complement:
+                return length
+        return 0
+
+    right_sequence = reverse_complement(cleaned_right)
     best = 0
 
     for offset in range(-len(right_sequence) + 1, len(left_sequence)):
