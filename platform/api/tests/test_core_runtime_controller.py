@@ -182,4 +182,5 @@ def test_controller_source_has_no_unbounded_or_topology_mutating_recovery() -> N
     assert "while not _STOP_REQUESTED" in source
     assert "MAX_RECOVERIES" in source
     assert 'compose_command("restart", service)' in source
-    assert 'DATABASE_SERVICE = "bms-db"' in source
+    assert 'DATABASE_SERVICE = "bms-db"' not in source
+    assert '"bms-db"' not in source

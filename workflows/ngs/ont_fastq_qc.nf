@@ -89,7 +89,7 @@ workflow ONT_FASTQ_QC {
         FastqDimerAnalysis.out.breakpoint_screen,
         FastqDimerAnalysis.out.dimer_reference,
     )
-    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { ignoredValue ->
+    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
         reportStage(params, "dimer_qc", [
             "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
             "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
@@ -111,7 +111,7 @@ workflow ONT_FASTQ_QC {
             BuildDimerCanonicalOutputs.out.breakpoint_call,
             BuildDimerCanonicalOutputs.out.secondary_summary,
         )
-        ConstructVerify.out.manifest.subscribe { ignoredValue ->
+        ConstructVerify.out.manifest.subscribe { _ ->
             reportStage(params, "construct_verification", [
                 "${params.out_dir}/verification/qc_manifest.json",
                 "${params.out_dir}/verification/verification_summary.tsv",
@@ -121,7 +121,7 @@ workflow ONT_FASTQ_QC {
                 "${params.out_dir}/verification/topology_evidence.json",
             ])
         }
-        FastqPlasmidQC.out.summary.subscribe { ignoredValue ->
+        FastqPlasmidQC.out.summary.subscribe { _ ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
                 "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",

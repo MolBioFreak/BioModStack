@@ -224,9 +224,7 @@ def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:
         assert required in dockerignore
 
 
-def test_vite_config_uses_reproducible_stable_pdbe_alias_and_browser_safe_buffer_resolution() -> (
-    None
-):
+def test_vite_config_uses_direct_molstar_and_browser_safe_buffer_resolution() -> None:
     vite_config = (REPO_ROOT / "platform" / "frontend" / "vite.config.ts").read_text(
         encoding="utf-8"
     )
@@ -234,8 +232,9 @@ def test_vite_config_uses_reproducible_stable_pdbe_alias_and_browser_safe_buffer
         encoding="utf-8"
     )
 
-    assert "require.resolve('pdbe-molstar-stable/package.json')" in vite_config
-    assert "node_modules/.ignored/pdbe-molstar" not in vite_config
+    assert "pdbe-molstar" not in vite_config.casefold()
+    assert "normalized.includes('/node_modules/molstar')" in vite_config
+    assert '"molstar":' in frontend_package
     assert '"safe-buffer":' in frontend_package
     assert "safe-buffer" in vite_config
     assert "node_modules/safe-buffer/index.js" in vite_config

@@ -215,7 +215,8 @@ test('viewer labels expose molecule labels and SeqViz receives polymer type, not
     assert.match(headerSource, /onDisplayStrandChange/);
     assert.match(headerSource, /displayStrandSymbol\(strand\)/);
     assert.match(modalSource, /label=\{sequence\.molecule_label\}/);
-    assert.match(viewerSource, /const seqVizSeqType = sequenceData\.sequenceType === 'protein' \? 'aa' : sequenceData\.sequenceType/);
+    assert.match(viewerSource, /const normalizedSequenceType = sequenceData\.sequenceType\.toLowerCase\(\)/);
+    assert.match(viewerSource, /const seqVizSeqType = normalizedSequenceType === 'protein' \? 'aa' : nucleotideSequenceType/);
     assert.match(viewerSource, /sequenceForDisplayStrand\(/);
     assert.match(viewerSource, /const sourceSelection = mapSeqVizSelectionToSource\(/);
     assert.match(viewerSource, /shouldReverseComplementForDisplay\(sourceDisplayStrand, resolvedDisplayStrand\)/);
