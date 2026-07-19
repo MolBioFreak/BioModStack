@@ -69,6 +69,7 @@ def test_api_runtime_image_keeps_plannotate_runtime_available() -> None:
     assert len(lock_lines) == 215
     assert any("python-3.12.13-" in line for line in lock_lines)
     assert any("plannotate-2.0.0-" in line for line in lock_lines)
+    assert any("plannotate-2.0.0-pyhdfd78af_0.conda#" in line for line in lock_lines)
     assert any("streamlit-1.59.2-" in line for line in lock_lines)
     assert any("pandas-2.3.3-" in line for line in lock_lines)
     assert any("bokeh-3.9.1-" in line for line in lock_lines)
