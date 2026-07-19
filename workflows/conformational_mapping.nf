@@ -35,10 +35,9 @@ workflow {
     }
     def requestRootPath = file(requestPath.parent.toString(), checkIfExists: true)
     def requestTuples = Channel.value(tuple(request.request_id, requestRootPath))
-    def frustrationCheckpoint = file(
-        "${params.weights_root}/frustrampnn/megascale.ckpt",
-        checkIfExists: true,
-    )
+    // The pinned FrustraMPNN image is self-contained; do not require or stage a
+    // second host checkpoint that can drift from the image-embedded model.
+    def frustrationCheckpoint = '/opt/frustrampnn_weights/megascale.ckpt'
 
     switch (request.backend) {
         case 'protenix_v2_ensemble':
