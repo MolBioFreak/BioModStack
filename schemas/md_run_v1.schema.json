@@ -51,7 +51,9 @@
       "properties": {
         "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)"},
         "bytes": {"type": "integer", "minimum": 0},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "semantic_role": {"enum": ["analysis_topology", "analysis_trajectory", "representative_structure"]},
+        "atom_order_identity": {"type": "string", "minLength": 1}
       }
     }
   }
