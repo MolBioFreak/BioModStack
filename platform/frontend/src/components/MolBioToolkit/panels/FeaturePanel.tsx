@@ -14,6 +14,7 @@ import {
     featureLength,
     featureSegments,
 } from '../utils/features';
+import { createSelectionSnapshot } from '../utils/selectionActions';
 
 interface FeaturePanelProps {
     sequenceData: SequenceData;
@@ -319,6 +320,11 @@ export function FeaturePanel({
     const [editDraft, setEditDraft] = useState<FeatureDraft>(createEmptyDraft);
 
     const features = useMemo(() => sequenceData.features || [], [sequenceData.features]);
+    const selectionSnapshot = useMemo(() => createSelectionSnapshot(
+        selection,
+        sequenceData.sequence,
+        sequenceData.circular,
+    ), [selection, sequenceData.circular, sequenceData.sequence]);
 
     const usedTypes = useMemo(
         () => [...new Set(features.map((feature) => feature.type))].sort(),
@@ -398,8 +404,7 @@ export function FeaturePanel({
                 start: Number(segment.start),
                 end: Number(segment.end),
             }))
-            .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
-            .sort((left, right) => left.start - right.start || left.end - right.end);
+            .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start);
 
         if (!draft.name.trim()) {
             return null;
@@ -497,7 +502,7 @@ export function FeaturePanel({
 
     const jumpToFeature = (feature: Feature) => {
         highlightFeature(feature);
-        onJumpToPosition?.(feature.start);
+        onJumpToPosition?.(featureSegments(feature)[0]?.start ?? feature.start);
     };
 
     return (
@@ -522,7 +527,7 @@ export function FeaturePanel({
             {selection && selection.start !== selection.end && (
                 <div className="flex items-center justify-between rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">
                     <span>
-                        Selection {Math.min(selection.start, selection.end) + 1}–{Math.max(selection.start, selection.end)}
+                        Selection {selectionSnapshot?.coordinateLabel || 'unavailable'}
                     </span>
                     <button
                         onClick={useSelection}

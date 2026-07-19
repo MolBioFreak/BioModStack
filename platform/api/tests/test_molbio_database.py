@@ -17,6 +17,16 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 
+async def _extract_approved(source: Path, destination: Path, **kwargs):
+    from molbio_migrations import (
+        extract_legacy_molbio_data as _extract_legacy_molbio_data,
+        legacy_molbio_manifest_sha256,
+    )
+
+    kwargs.setdefault("expected_manifest_sha256", legacy_molbio_manifest_sha256(source))
+    return await _extract_legacy_molbio_data(source, destination, **kwargs)
+
+
 def _create_legacy_source(path: Path) -> None:
     connection = sqlite3.connect(path)
     try:
@@ -222,6 +232,8 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "migration_count": 4,
             "latest_migration": "0004_sequence_parent_foreign_key",
             "migrations_current": True,
+            "database_schema_current": True,
+            "database_schema_issue_count": 0,
             "immutable_trigger_count": 20,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
@@ -354,8 +366,8 @@ async def test_backup_first_legacy_extraction_is_verified_and_idempotent(tmp_pat
     backup = tmp_path / "backups" / "biomodstack.before-molbio.db"
     _create_legacy_source(source)
 
-    first = await extract_legacy_molbio_data(source, destination, backup_path=backup)
-    second = await extract_legacy_molbio_data(
+    first = await _extract_approved(source, destination, backup_path=backup)
+    second = await _extract_approved(
         source,
         destination,
         backup_path=tmp_path / "backups" / "biomodstack.before-second-pass.db",
@@ -405,14 +417,14 @@ async def test_legacy_extraction_fails_explicitly_on_destination_conflict(tmp_pa
     source = tmp_path / "biomodstack.db"
     destination = tmp_path / "molbio.db"
     _create_legacy_source(source)
-    await extract_legacy_molbio_data(source, destination, backup_path=tmp_path / "first-backup.db")
+    await _extract_approved(source, destination, backup_path=tmp_path / "first-backup.db")
 
     with sqlite3.connect(destination) as connection:
         connection.execute("UPDATE nucleotide_sequences SET sequence = 'AAAA', length = 4 WHERE id = 'seq-1'")
         connection.commit()
 
     with pytest.raises(MigrationConflictError, match="seq-1"):
-        await extract_legacy_molbio_data(source, destination, backup_path=tmp_path / "second-backup.db")
+        await _extract_approved(source, destination, backup_path=tmp_path / "second-backup.db")
 
 
 @pytest.mark.asyncio
@@ -452,7 +464,7 @@ async def test_legacy_extraction_verification_failure_rolls_back_all_copies(tmp_
     await engine.dispose()
 
     with pytest.raises(MigrationVerificationError, match="count"):
-        await extract_legacy_molbio_data(
+        await _extract_approved(
             source,
             destination,
             backup_path=tmp_path / "verification-failure-backup.db",
@@ -480,7 +492,7 @@ async def test_idempotent_extraction_fails_closed_on_incomplete_history_graph(
     source = tmp_path / "biomodstack.db"
     destination = tmp_path / "molbio.db"
     _create_legacy_source(source)
-    await extract_legacy_molbio_data(source, destination, backup_path=tmp_path / "first-backup.db")
+    await _extract_approved(source, destination, backup_path=tmp_path / "first-backup.db")
 
     with sqlite3.connect(destination) as connection:
         if corruption == "sequence_head":
@@ -493,7 +505,7 @@ async def test_idempotent_extraction_fails_closed_on_incomplete_history_graph(
         connection.commit()
 
     with pytest.raises(MigrationVerificationError, match="history"):
-        await extract_legacy_molbio_data(
+        await _extract_approved(
             source,
             destination,
             backup_path=tmp_path / f"{corruption}-backup.db",
