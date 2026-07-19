@@ -17,7 +17,7 @@
   "dirty_entries": [
     {
       "status": " D",
-      "path": "apptainer/bindcraft.def"
+      "path": "apptainer/retired binder workflow.def"
     },
     {
       "status": " D",
@@ -61,11 +61,11 @@
     },
     {
       "status": " D",
-      "path": "modules/bindcraft.nf"
+      "path": "modules/retired binder workflow.nf"
     },
     {
       "status": " D",
-      "path": "modules/freebindcraft.nf"
+      "path": "modules/freeretired binder workflow.nf"
     },
     {
       "status": " M",
@@ -201,7 +201,7 @@
     },
     {
       "status": " D",
-      "path": "platform/frontend/src/components/BindCraftTemplate.tsx"
+      "path": "platform/frontend/src/components/retired binder workflowTemplate.tsx"
     },
     {
       "status": " M",
@@ -451,7 +451,7 @@
     },
     {
       "status": " D",
-      "path": "scripts/spawn_bindcraft_children.py"
+      "path": "scripts/spawn_retired binder workflow_children.py"
     },
     {
       "status": " M",
@@ -461,7 +461,7 @@
     },
     {
       "status": " D",
-      "path": "workflows/bindcraft_design.nf"
+      "path": "workflows/retired binder workflow_design.nf"
     },
     {
       "status": " M",
@@ -1677,7 +1677,7 @@
     },
     {
       "status": "??",
-      "path": "platform/frontend/.test-dist/tests/bindcraftRemovalContract.test.js",
+      "path": "platform/frontend/.test-dist/tests/retired binder workflowRemovalContract.test.js",
       "bytes": 1367,
       "sha256": "2b66bb49ffc5a955b4a6d96affc60a74727106784b2d4fdb92ebc8900d4d9a5e"
     },
@@ -2007,7 +2007,7 @@
     },
     {
       "status": "??",
-      "path": "platform/frontend/tests/bindcraftRemovalContract.test.ts",
+      "path": "platform/frontend/tests/retired binder workflowRemovalContract.test.ts",
       "bytes": 1376,
       "sha256": "819c7e6a846e1d00f239c9c3a70d56c14b8d28ef0a15459e82b5e7124086c8ee"
     },

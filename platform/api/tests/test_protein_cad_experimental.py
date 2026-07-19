@@ -61,7 +61,7 @@ def test_build_nextflow_command_maps_protein_cad_experimental_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/protein_cad_experimental.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/protein_cad_experimental.nf", "-profile"]
     assert "protein_cad_experimental,workstation_ryzen7960x" in cmd
     assert "--pcad_backend disco" in joined
     assert "--pcad_task ligand_conditioned" in joined

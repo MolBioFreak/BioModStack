@@ -59,11 +59,7 @@ class NucleotideSequence(MolBioBase):
     organism = Column(String(255), nullable=True)
     accession = Column(String(100), nullable=True)
     source_file = Column(String(255), nullable=True)
-    parent_id = Column(
-        String(36),
-        ForeignKey("nucleotide_sequences.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
+    parent_id = Column(String(36), nullable=True)
     operation = Column(String(50), nullable=True)
     operation_params = Column(JSON, nullable=True)
     version = Column(Integer, nullable=False, default=1)

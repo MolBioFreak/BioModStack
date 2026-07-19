@@ -14,6 +14,7 @@ from caliby_runtime import (
     normalize_sampling_results,
     parse_omit_aas,
     parse_bool,
+    preflight_caliby_runtime,
     remap_constraint_dataframe_to_cleaned_paths,
 )
 
@@ -44,6 +45,7 @@ def main() -> None:
     raw_pdb_dir.mkdir(parents=True, exist_ok=True)
     raw_meta_dir.mkdir(parents=True, exist_ok=True)
 
+    preflight_caliby_runtime(task="sequence_design", model_name=args.model_name)
     pdb_paths = collect_structure_paths(input_dir)
     cleaned = maybe_clean_inputs(
         pdb_paths=pdb_paths,

@@ -15,6 +15,7 @@ import {
     forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
@@ -338,7 +339,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const { data: queueData, isLoading } = useQuery({
         queryKey: ['queue'],
         queryFn: () => fetchQueue(),
-        refetchInterval: 2000,
+        refetchInterval: (query) => jobPollingInterval(2000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
@@ -346,7 +347,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const { data: cancelledData } = useQuery({
         queryKey: ['cancelledJobs'],
         queryFn: () => fetchCancelledJobs(20),
-        refetchInterval: 10000,
+        refetchInterval: (query) => jobPollingInterval(10000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
         enabled: showCancelled,
@@ -355,7 +356,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const { data: systemData } = useQuery({
         queryKey: ['system'],
         queryFn: fetchSystemStatus,
-        refetchInterval: 5000,
+        refetchInterval: (query) => jobPollingInterval(5000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });

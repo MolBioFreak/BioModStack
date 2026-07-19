@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-19T03:51:59.597Z",
+  "error": "Error: M1 browser probe timed out; last status: probe module loading\n    at main (file:///home/dalab/biomodstack/biomodstack/platform/frontend/browser-tests/runMolstarRuntimeProbe.mjs:242:45)",
+  "lastProbeStatus": "probe module loading",
+  "cdpEvents": [
+    {
+      "method": "Target.attachedToTarget",
+      "params": {
+        "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C",
+        "targetInfo": {
+          "targetId": "A27433D2F8B972F3B53B43DC46828F5C",
+          "type": "page",
+          "title": "",
+          "url": "http://127.0.0.1:42971/browser-tests/molstar-runtime-probe.html",
+          "attached": true,
+          "canAccessOpener": false,
+          "browserContextId": "6DF7BD23791320A8D166ABF10EB24777"
+        },
+        "waitingForDebugger": false
+      }
+    },
+    {
+      "method": "Page.frameStartedNavigating",
+      "params": {
+        "frameId": "A27433D2F8B972F3B53B43DC46828F5C",
+        "url": "http://127.0.0.1:42971/browser-tests/molstar-runtime-probe.html",
+        "loaderId": "1551570577B328B0321030545C07DA2C",
+        "navigationType": "differentDocument"
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Page.frameNavigated",
+      "params": {
+        "frame": {
+          "id": "A27433D2F8B972F3B53B43DC46828F5C",
+          "loaderId": "1551570577B328B0321030545C07DA2C",
+          "url": "http://127.0.0.1:42971/browser-tests/molstar-runtime-probe.html",
+          "domainAndRegistry": "",
+          "securityOrigin": "http://127.0.0.1:42971",
+          "securityOriginDetails": {
+            "isLocalhost": true
+          },
+          "mimeType": "text/html",
+          "adFrameStatus": {
+            "adFrameType": "none"
+          },
+          "secureContextType": "SecureLocalhost",
+          "crossOriginIsolatedContextType": "NotIsolated",
+          "gatedAPIFeatures": []
+        },
+        "type": "Navigation"
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460033.822,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-G3RD6IHA.js?v=ee752144",
+          "networkRequestId": "3781131.36"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Page.domContentEventFired",
+      "params": {
+        "timestamp": 452779.253367
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Page.loadEventFired",
+      "params": {
+        "timestamp": 452779.253563
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Page.frameStoppedLoading",
+      "params": {
+        "frameId": "A27433D2F8B972F3B53B43DC46828F5C"
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.568,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-B6H2HAD4.js?v=ee752144",
+          "networkRequestId": "3781131.37"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.612,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-34SVLGRN.js?v=ee752144",
+          "networkRequestId": "3781131.38"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.663,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-HDGDZ5GY.js?v=ee752144",
+          "networkRequestId": "3781131.39"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.683,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-45OTN2KG.js?v=ee752144",
+          "networkRequestId": "3781131.40"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.707,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-3LBJPPAX.js?v=ee752144",
+          "networkRequestId": "3781131.41"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.727,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-N3D54K23.js?v=ee752144",
+          "networkRequestId": "3781131.42"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.744,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-TZKYPXXG.js?v=ee752144",
+          "networkRequestId": "3781131.43"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.762,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-HEHGSMZV.js?v=ee752144",
+          "networkRequestId": "3781131.44"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.783,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-YKNUTTZU.js?v=ee752144",
+          "networkRequestId": "3781131.45"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.841,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-GGUB34A7.js?v=ee752144",
+          "networkRequestId": "3781131.46"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460034.986,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-5QRSRNB7.js?v=ee752144",
+          "networkRequestId": "3781131.47"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.009,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-PAQLRY43.js?v=ee752144",
+          "networkRequestId": "3781131.48"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.03,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_extensions_mvs_behavior.js?v=f1bca62c",
+          "networkRequestId": "3781131.49"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.051,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_mol-plugin_behavior.js?v=0e8bc77e",
+          "networkRequestId": "3781131.50"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.072,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_mol-plugin_config.js?v=18d80ddd",
+          "networkRequestId": "3781131.51"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.105,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_mol-plugin-ui.js?v=2208c690",
+          "networkRequestId": "3781131.52"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.131,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_mol-plugin-ui_spec.js?v=f5328857",
+          "networkRequestId": "3781131.53"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.217,
+          "url": "http://127.0.0.1:42971/@fs/tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/molstar_lib_mol-plugin_spec.js?v=9c6c210b",
+          "networkRequestId": "3781131.54"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.554,
+          "url": "http://127.0.0.1:42971/src/structureViewer/runtime/MolstarEngineOwner.ts",
+          "networkRequestId": "3781131.55"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    },
+    {
+      "method": "Log.entryAdded",
+      "params": {
+        "entry": {
+          "source": "network",
+          "level": "error",
+          "text": "Failed to load resource: net::ERR_NETWORK_CHANGED",
+          "timestamp": 1784432460035.578,
+          "url": "http://127.0.0.1:42971/src/structureViewer/runtime/BmsPLDDTQualityAssessment.ts",
+          "networkRequestId": "3781131.56"
+        }
+      },
+      "sessionId": "F5C3F21EB6D9D682AD33BF182C82458C"
+    }
+  ],
+  "logs": {
+    "vite": [
+      "  VITE v6.4.1  ready in 209 ms",
+      "  ➜  Local:   http://127.0.0.1:42971/",
+      "[BABEL] Note: The code generator has deoptimised the styling of /tmp/bms-m1-direct-molstar-zWcDiu/vite-cache/deps/chunk-YKNUTTZU.js?v=ee752144 as it exceeds the max of 500KB."
+    ],
+    "chrome": [
+      "[3781039:3781063:0718/224101.879411:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "Created TensorFlow Lite XNNPACK delegate for CPU.",
+      "[3781039:3781063:0718/224125.111782:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "[3781039:3781063:0718/224209.227181:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "[3781039:3781063:0718/224334.412058:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.",
+      "Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.",
+      "WARNING: All log messages before absl::InitializeLog() is called are written to STDERR",
+      "I0000 00:00:1784432638.833697 3797831 environment.cc:558] Selected adapter: NVIDIA GeForce RTX 5060 Ti, arch=blackwell, vendor=nvidia, backend=Vulkan, adapterType=Discrete GPU",
+      "Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.",
+      "Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.",
+      "I0000 00:00:1784432639.902838 3797918 environment.cc:558] Selected adapter: NVIDIA GeForce RTX 5060 Ti, arch=blackwell, vendor=nvidia, backend=Vulkan, adapterType=Discrete GPU",
+      "[3781039:3781063:0718/224615.785758:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "[3781039:3781063:0718/225149.094443:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT"
+    ]
+  }
+}

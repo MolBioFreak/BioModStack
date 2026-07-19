@@ -8,7 +8,7 @@ Scope: workflows, modules, scripts, API configuration, assay/statistical tool re
 
 ## Executive verdict
 
-BioModStack should split **assay/statistics tools** into a dedicated optional `bms-stats-tools` service/image, but it should **not** try to move the de novo nanobody workflow stack into that container. The de novo workflow is deeply integrated with Nextflow plus workflow-native Apptainer/GPU containers and should remain workflow-native. The primary API should keep orchestration, auth, metadata, result ingestion, and light synchronous math; the stats-tools service should own heavyweight assay/statistical engines and advanced R-backed analysis.
+BioModStack should split **assay/statistics tools** into a dedicated optional `bms-stats-tools` service/image, but it should **not** try to move the retired antibody workflow stack into that container. The de novo workflow is deeply integrated with Nextflow plus workflow-native Apptainer/GPU containers and should remain workflow-native. The primary API should keep orchestration, auth, metadata, result ingestion, and light synchronous math; the stats-tools service should own heavyweight assay/statistical engines and advanced R-backed analysis.
 
 The safest target is therefore:
 
@@ -51,18 +51,18 @@ The repo contains three different classes of tools that should not be treated as
    - Includes lightweight NumPy/Biotite parsing, confidence metric extraction, CDR annotation, status/capability reporting, and result metadata. This should stay with `bms-api` unless a specific job becomes heavy/long-running.
 
 3. **Workflow-native scientific/model containers**
-   - `workflows/antibody_denovo.nf`
+   - `workflows/antibody_child.nf`
    - `workflows/maturation_child_core.nf`
    - `modules/*.nf`
    - `scripts/*` helpers invoked inside Nextflow tasks.
    - Tools include RFantibody, FAMPNN, Caliby, PPIFlow, ProteinMPNN, AntiFold, ANARCII, Boltz/Protenix, AntiBERTy, ThermoMPNN, OpenMM, FrustraMPNN, PyRosetta, Torch-heavy runtimes, etc.
    - These should remain Nextflow/Apptainer/runtime-native and not be pulled into `bms-stats-tools`.
 
-## De novo nanobody workflow pass
+## retired antibody workflow pass
 
 ### What is integrated
 
-`workflows/antibody_denovo.nf` includes and coordinates a broad stack:
+`workflows/antibody_child.nf` includes and coordinates a broad stack:
 
 - RFantibody backbone generation: `modules/rfantibody`
 - AntiFold / ANARCII sequence/numbering surfaces: `modules/antifold`, `modules/utils/anarci`
@@ -81,7 +81,7 @@ This is not “stats tooling” in the assay sense. It is a staged de novo desig
 
 The de novo PPIFlow maturation path is now explicit enough to classify:
 
-- Parent workflow spawns maturation children (`SpawnMaturationJobs`) from `antibody_denovo.nf`.
+- Parent workflow spawns maturation children (`SpawnMaturationJobs`) from `antibody_child.nf`.
 - Parent payload includes objective semantics:
   - `ppiflow_objective_mode: paramValueOrDefault(params, 'ppiflow_objective_mode', null)`
   - `ppiflow_objective_threshold: paramValueOrDefault(params, 'ppiflow_objective_threshold', null)`
@@ -310,7 +310,7 @@ Do not block the initial split on a full distributed job system.
 
 ## Explicit non-goals for this split
 
-- Do not containerize the whole de novo nanobody workflow into `bms-stats-tools`.
+- Do not containerize the whole retired antibody workflow into `bms-stats-tools`.
 - Do not make stats-tools mandatory for normal BMS launch.
 - Do not move BioXP/hardware control into stats-tools.
 - Do not move Nextflow ownership into stats-tools.
@@ -325,7 +325,7 @@ These are adjacent to the stats split, not part of the stats container itself:
    - Current score output already exposes `af3score_used: False` and lower-is-better direction; preserve that.
 
 2. Keep objective propagation tests around `SpawnMaturationJobs`.
-   - Parent `antibody_denovo.nf` now forwards objective mode/threshold to child payloads; protect it.
+   - Parent `antibody_child.nf` now forwards objective mode/threshold to child payloads; protect it.
 
 3. Do not use validator confidence metrics as implicit inner-loop objectives.
    - If AF3/Boltz/Protenix confidence reranking is desired, add it as outer-loop post-validation reranking, not inside every PPIFlow sample iteration by default.
@@ -379,6 +379,6 @@ Before claiming done:
 
 ## Bottom line
 
-The remaining “stats tools” to isolate are primarily assay/statistical engines, especially R-backed and heavier analytical packages. The de novo nanobody workflow contains many scoring/model components, but they are not the same boundary: they are workflow-native scientific executors and should stay under Nextflow/Apptainer control.
+The remaining “stats tools” to isolate are primarily assay/statistical engines, especially R-backed and heavier analytical packages. The retired antibody workflow contains many scoring/model components, but they are not the same boundary: they are workflow-native scientific executors and should stay under Nextflow/Apptainer control.
 
 Build the split as an **optional, controllable `bms-stats-tools` service**. Make it startable/stoppable independently like the primary runtime, but keep normal BMS and on-command de novo workflow function alive when it is off.

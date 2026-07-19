@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_native_artifacts_v1.schema.json",
+  "title": "BioModStack conformational mapping native artifact manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "request_id", "backend", "settings_sha256", "files"],
+  "properties": {
+    "schema_name": {"const": "cm_native_artifacts"},
+    "schema_version": {"const": 1},
+    "request_id": {"type": "string", "format": "uuid"},
+    "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]},
+    "settings_sha256": {"$ref": "#/$defs/sha256"},
+    "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/file"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$).+$"},
+    "protenix_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {
+        "backend": {"const": "protenix_v2_ensemble"}, "target_id": {"type": "string", "minLength": 1},
+        "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "confornets_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {
+        "backend": {"const": "confornets"}, "target_id": {"type": "string", "minLength": 1}, "task": {"type": "string", "minLength": 1},
+        "test_case_id": {"type": "string", "minLength": 1}, "reference_id": {"type": ["string", "null"]}, "run_index": {"type": "integer", "minimum": 0},
+        "saved_step": {"type": "integer", "minimum": 0}, "confornet_index": {"type": "integer", "minimum": 0}, "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "import_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {
+        "backend": {"const": "external_import"}, "target_id": {"type": "string", "minLength": 1}, "staged_index": {"type": "integer", "minimum": 0},
+        "source_content_sha256": {"$ref": "#/$defs/sha256"}, "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "coordinates": {"oneOf": [{"$ref": "#/$defs/protenix_coordinates"}, {"$ref": "#/$defs/confornets_coordinates"}, {"$ref": "#/$defs/import_coordinates"}]},
+    "file": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256", "bytes", "media_type", "semantic_role", "candidate_id", "backend_coordinates", "provenance_sha256", "related_paths"],
+      "properties": {
+        "relative_path": {"$ref": "#/$defs/relative_path"}, "sha256": {"$ref": "#/$defs/sha256"}, "bytes": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}, "semantic_role": {"enum": ["runtime_input", "feature_policy", "log", "runtime_config", "composition_audit", "request", "preprocess", "native_state", "loss", "optional_analytics", "command_log", "runtime_provenance", "receipt", "authoritative_cif", "confidence_json", "full_data_json"]},
+        "candidate_id": {"type": ["string", "null"], "minLength": 1}, "backend_coordinates": {"oneOf": [{"$ref": "#/$defs/coordinates"}, {"type": "null"}]},
+        "provenance_sha256": {"$ref": "#/$defs/sha256"}, "related_paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}
+      }
+    }
+  }
+}

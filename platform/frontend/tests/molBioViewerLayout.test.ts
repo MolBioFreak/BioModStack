@@ -156,7 +156,7 @@ test('sequence viewer remount key changes when RNA/DNA identity changes at same 
     const source = readFileSync(VIEWER_PATH, 'utf8');
 
     assert.match(source, /viewerSequenceKey/);
-    assert.match(source, /seqVizSeqType = sequenceData\.sequenceType === 'protein' \? 'aa' : sequenceData\.sequenceType/);
+    assert.match(source, /seqVizSeqType = normalizedSequenceType === 'protein' \? 'aa' : nucleotideSequenceType/);
     assert.match(source, /seqType=\{seqVizSeqType\}/);
     assert.match(source, /sequenceData\.sequenceType/);
     assert.match(source, /displaySequence\.slice\(0, 24\)/);

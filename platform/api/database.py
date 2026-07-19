@@ -4,14 +4,16 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 from pathlib import Path
+import json
 import os
-
+import uuid
+from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 
 # Database path - resolved via paths helper (supports env overrides)
@@ -171,6 +173,16 @@ class Design(Base):
     source_design_name = Column(String(255), nullable=True)
     artifact_class = Column(String(64), nullable=True, index=True)
     artifact_schema_version = Column(Integer, nullable=True)
+
+    # Authoritative Data Review identity and typed artifact/role envelope.
+    # Producer-declared values win; legacy rows are explicitly marked as
+    # ingestion/backfill rather than silently reinterpreted by the frontend.
+    review_profile_id = Column(String(64), nullable=True, index=True)
+    review_contract_version = Column(Integer, nullable=True)
+    review_contract_source = Column(String(32), nullable=True)
+    review_artifact_manifest = Column(JSON, nullable=True)
+    review_role_map = Column(JSON, nullable=True)
+
     selected_loop_scope = Column(JSON, nullable=True)
     provenance = Column(JSON, nullable=True)
     
@@ -365,6 +377,22 @@ class Design(Base):
     job = relationship("Job", back_populates="designs")
 
 
+@event.listens_for(Design, "before_insert")
+def _finalize_design_review_contract_before_insert(_mapper, _connection, target):
+    from services.result_contracts import apply_review_contract_to_design
+
+    apply_review_contract_to_design(target)
+
+
+@event.listens_for(Design, "before_update")
+def _refresh_inferred_design_review_contract_before_update(_mapper, _connection, target):
+    from services.result_contracts import apply_review_contract_to_design
+
+    if getattr(target, "review_contract_source", None) != "producer":
+        target.review_artifact_manifest = None
+    apply_review_contract_to_design(target)
+
+
 class AnalysisRun(Base):
     """Persisted on-demand analysis run for a design or job subject."""
     __tablename__ = "analysis_runs"
@@ -507,7 +535,7 @@ class Primer(Base):
     tm_settings = Column(JSON, nullable=True)
     
     # Primer type and usage
-    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing
+    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, quantitative PCR
     description = Column(Text, nullable=True)
     
     # Target binding info (optional)
@@ -551,7 +579,82 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
+    await _backfill_design_review_contracts(conn)
     await _ensure_sqlite_indexes(conn)
+
+
+async def _backfill_design_review_contracts(conn):
+    """Persist deterministic compatibility profiles; ambiguous rows fail closed."""
+    from services.result_contracts import (
+        REVIEW_CONTRACT_VERSION,
+        build_review_artifact_manifest,
+        resolve_result_contract,
+    )
+
+    result = await conn.execute(text(
+        "SELECT d.id, d.stage_family, d.stage_mode, d.artifact_class, d.pdb_path, "
+        "d.aligned_error_path, d.aligned_error_format, "
+        "d.review_profile_id, d.review_contract_version, d.review_contract_source, "
+        "d.review_artifact_manifest, d.review_role_map, "
+        "j.model_id AS job_model_id, j.mode AS job_mode, "
+        "j.stage_family AS job_stage_family, j.stage_mode AS job_stage_mode "
+        "FROM designs d LEFT JOIN jobs j ON j.id = d.job_id "
+        "WHERE d.review_profile_id IS NULL "
+        "OR d.review_profile_id = 'unsupported_legacy' "
+        "OR d.review_artifact_manifest IS NULL"
+    ))
+    for row in result.mappings().all():
+        values = dict(row)
+        stage_family = values.get("stage_family") or values.get("job_stage_family")
+        stage_mode = values.get("stage_mode") or values.get("job_stage_mode") or values.get("job_mode")
+        persisted_profile = values.get("review_profile_id")
+        stale_unsupported = persisted_profile in (None, "", "unsupported_legacy")
+        contract = resolve_result_contract(
+            review_profile_id=None if stale_unsupported else persisted_profile,
+            model_type=values.get("job_model_id") or stage_family,
+            stage_family=stage_family,
+            stage_mode=stage_mode,
+            artifact_class=values.get("artifact_class"),
+            provenance={"model_id": values.get("job_model_id")},
+        )
+        profile_id = (
+            contract.analysis_contract_id or "unsupported_legacy"
+            if stale_unsupported
+            else persisted_profile
+        )
+        role_map = values.get("review_role_map")
+        if isinstance(role_map, str):
+            try:
+                role_map = json.loads(role_map)
+            except json.JSONDecodeError:
+                role_map = None
+        design_values = {
+            **values,
+            "review_profile_id": profile_id,
+            "review_role_map": role_map if isinstance(role_map, dict) else {},
+            "pae_matrix": None,
+        }
+        design = SimpleNamespace(**design_values)
+        manifest = build_review_artifact_manifest(design)
+        await conn.execute(
+            text(
+                "UPDATE designs SET review_profile_id = :profile_id, "
+                "review_contract_version = :contract_version, "
+                "review_contract_source = CASE "
+                "WHEN review_contract_source IS NULL OR review_contract_source = 'unsupported_legacy' "
+                "THEN :contract_source ELSE review_contract_source END, "
+                "review_artifact_manifest = :artifact_manifest, "
+                "review_role_map = COALESCE(review_role_map, :role_map) WHERE id = :design_id"
+            ),
+            {
+                "profile_id": profile_id,
+                "contract_version": values.get("review_contract_version") or REVIEW_CONTRACT_VERSION,
+                "contract_source": "legacy_backfill" if contract.analysis_contract_id else "unsupported_legacy",
+                "artifact_manifest": json.dumps(manifest, sort_keys=True),
+                "role_map": json.dumps(design.review_role_map, sort_keys=True),
+                "design_id": values["id"],
+            },
+        )
 
 
 async def _ensure_sqlite_indexes(conn):

@@ -34,6 +34,7 @@ import {
     SHARED_FAN_CONTROL_QUERY_KEY,
     SHARED_POWER_CONTROL_QUERY_KEY,
 } from './infraTelemetryQueryKeys';
+import { shouldCollectTelemetryHistory } from './infraTelemetryHistory';
 import {
     fetchFanControl,
     fetchPowerControl,
@@ -505,7 +506,7 @@ export function Layout({ children }: LayoutProps) {
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
-            <InfraTelemetryCollector />
+            {shouldCollectTelemetryHistory(location.pathname) && <InfraTelemetryCollector />}
             <InfraControlStateCollector />
             {/* Top Navigation Bar */}
             <nav

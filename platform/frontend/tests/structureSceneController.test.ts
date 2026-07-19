@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import type { StructureSceneState } from '../src/structureViewer/contracts/sceneState.js';
+import { viewerOk, type ViewerResult } from '../src/structureViewer/contracts/viewerResults.js';
+import {
+    StructureSceneController,
+    type StructureSceneEngineAdapter,
+} from '../src/structureViewer/runtime/StructureSceneController.js';
+
+const deferred = <T>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+};
+
+const scene = (sceneId: string, generation: number): StructureSceneState => ({
+    schemaVersion: 1,
+    ref: { viewerId: 'viewer-1', sceneId, generation },
+    documents: [{ documentId: `${sceneId}-doc`, sourceKind: 'pdb' }],
+    activeDocumentId: `${sceneId}-doc`,
+    provenance: { createdBy: 'test', createdAt: '2026-07-18T00:00:00.000Z' },
+});
+
+test('stale scene completion cannot commit over a newer generation', async () => {
+    const first = deferred<ViewerResult<void>>();
+    const second = deferred<ViewerResult<void>>();
+    let calls = 0;
+    const adapter: StructureSceneEngineAdapter = {
+        loadScene: async () => (++calls === 1 ? first.promise : second.promise),
+        dispose: async () => undefined,
+    };
+    const controller = new StructureSceneController(adapter);
+    const events: string[] = [];
+    controller.subscribe((event) => events.push(`${event.type}:${event.sceneId}:${event.generation}`));
+
+    const a = controller.loadScene(scene('A', 1));
+    const b = controller.loadScene(scene('B', 2));
+    second.resolve(viewerOk(undefined));
+    assert.equal((await b).status, 'ok');
+    first.resolve(viewerOk(undefined));
+    assert.equal((await a).status, 'cancelled');
+    assert.equal(controller.currentScene?.ref.sceneId, 'B');
+    assert.deepEqual(events, [
+        'scene-loading:A:1',
+        'scene-loading:B:2',
+        'scene-ready:B:2',
+    ]);
+});
+
+test('dispose cancels in-flight work and emits one scoped terminal event', async () => {
+    const pending = deferred<ViewerResult<void>>();
+    let disposeCalls = 0;
+    const adapter: StructureSceneEngineAdapter = {
+        loadScene: async () => pending.promise,
+        dispose: async () => { disposeCalls += 1; },
+    };
+    const controller = new StructureSceneController(adapter);
+    const events: Array<{ type: string; sceneId: string; documentId: string }> = [];
+    controller.subscribe((event) => events.push({
+        type: event.type,
+        sceneId: event.sceneId,
+        documentId: event.documentId,
+    }));
+
+    const loading = controller.loadScene(scene('A', 4));
+    await controller.dispose();
+    await controller.dispose();
+    pending.resolve(viewerOk(undefined));
+
+    assert.equal((await loading).status, 'cancelled');
+    assert.equal(disposeCalls, 1);
+    assert.deepEqual(events.at(-1), { type: 'disposed', sceneId: 'A', documentId: 'A-doc' });
+});

@@ -71,11 +71,13 @@ test('application menu exposes shell navigation, service controls, runtime switc
     'Hide to Tray',
     'Quit Shell',
     'Services',
-    'Start Services',
-    'Start Dev + Stable Services',
-    'Stop Services',
-    'Restart Services',
-    'Restart API',
+    'Start Current Environment',
+    'Start Production (Stable Containers)',
+    'Start Development (Hot Reload)',
+    'Start Both Environments',
+    'Stop Current Environment',
+    'Restart Current Environment',
+    'Restart Current API',
     'Logs',
     'Open API Log',
     'Open Frontend Log',
@@ -149,4 +151,19 @@ test('tray menu mirrors important shell actions including runtime switching with
     'Switch to Stable /bms/',
     'Quit Shell',
   ]);
+});
+
+test('service lifecycle failures are reported from application and tray operator actions', async () => {
+  const failure = new Error('manager failed');
+  const control = { ...createControlStub(), startAll: async () => { throw failure; } };
+  const reported: unknown[] = [];
+  const deps = { reportActionError: (error: unknown) => reported.push(error) };
+  const appStart = findMenuItem(buildApplicationMenuTemplate(context, control, deps), 'Start Current Environment');
+  const trayStart = findMenuItem(buildTrayMenuTemplate(context, control, deps), 'Start Services');
+  assert.ok(appStart?.click);
+  assert.ok(trayStart?.click);
+  (appStart.click as () => void)();
+  (trayStart.click as () => void)();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(reported, [failure, failure]);
 });

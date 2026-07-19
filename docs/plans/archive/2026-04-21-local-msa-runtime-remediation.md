@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing local-vs-ColabFold-API provider split and preserve the current quality presets, but split responsibilities cleanly: a host-owned gpuserver control plane manages long-lived MMseqs servers; task-side helpers become stateless clients that either reuse a confirmed host server or launch a task-local transient gpuserver; workflow layers batch eligible local-fast queries instead of invoking one MMseqs subprocess chain per protein component. Do not add jackhmmer or change DB layout in this tranche.
 
-**Tech Stack:** `scripts/run_local_msa.py`, `scripts/batch_msa.py`, `scripts/prepare_protenix_msa.py`, new `scripts/local_msa_runtime.py`, `scripts/test_run_local_msa.py`, new `scripts/test_batch_msa.py`, new `scripts/test_local_msa_runtime.py`, `platform/api/services/msa_server.py`, `platform/api/routers/msa.py`, new `platform/api/tests/test_msa_server.py`, `modules/structure_prediction.nf`, `modules/boltz_cp_experimental.nf`, `modules/protenix.nf`, `modules/antibody_batch.nf`, `workflows/antibody_denovo.nf`, `platform/api/tests/test_structure_prediction_batch.py`, `platform/api/tests/test_boltz_cp_experimental.py`, and the canonical MSA/runtime docs.
+**Tech Stack:** `scripts/run_local_msa.py`, `scripts/batch_msa.py`, `scripts/prepare_protenix_msa.py`, new `scripts/local_msa_runtime.py`, `scripts/test_run_local_msa.py`, new `scripts/test_batch_msa.py`, new `scripts/test_local_msa_runtime.py`, `platform/api/services/msa_server.py`, `platform/api/routers/msa.py`, new `platform/api/tests/test_msa_server.py`, `modules/structure_prediction.nf`, `modules/boltz_cp_experimental.nf`, `modules/protenix.nf`, `modules/antibody_batch.nf`, `workflows/antibody_child.nf`, `platform/api/tests/test_structure_prediction_batch.py`, `platform/api/tests/test_boltz_cp_experimental.py`, and the canonical MSA/runtime docs.
 
 ---
 
@@ -74,7 +74,7 @@ The tranche is complete only when all of the following are true:
 - `modules/boltz_cp_experimental.nf`
 - `modules/protenix.nf`
 - `modules/antibody_batch.nf`
-- `workflows/antibody_denovo.nf`
+- `workflows/antibody_child.nf`
 - `platform/api/tests/test_structure_prediction_batch.py`
 - `platform/api/tests/test_boltz_cp_experimental.py`
 - `platform/api/services/nextflow.py` only if API-side default/normalization logic must pin the new local-MSA defaults
@@ -337,7 +337,7 @@ PY`
 - Modify: `modules/boltz_cp_experimental.nf`
 - Modify: `modules/protenix.nf`
 - Modify: `modules/antibody_batch.nf`
-- Modify: `workflows/antibody_denovo.nf`
+- Modify: `workflows/antibody_child.nf`
 - Modify: `platform/api/tests/test_structure_prediction_batch.py`
 - Modify: `platform/api/tests/test_boltz_cp_experimental.py`
 - Modify: `scripts/batch_msa.py`
@@ -373,7 +373,7 @@ Do not force downstream model stages to understand batch manifests. The workflow
 The current CP MSA materialization still shells out one `run_local_msa.py` call per protein sequence. Replace that with the same unique-sequence batching strategy for eligible local-fast jobs.
 
 ### 5. Align the other local-MSA module defaults
-Even if `protenix.nf`, `antibody_batch.nf`, and `workflows/antibody_denovo.nf` already use the batch helper, they still surface `db_load_mode 0` defaults. Update those surfaces to `2` so the repo stops fighting itself.
+Even if `protenix.nf`, `antibody_batch.nf`, and `workflows/antibody_child.nf` already use the batch helper, they still surface `db_load_mode 0` defaults. Update those surfaces to `2` so the repo stops fighting itself.
 
 **Acceptance gate:** multi-sequence local-fast jobs hit one batched search path and still produce the same downstream `.a3m` references the model stages expect.
 
