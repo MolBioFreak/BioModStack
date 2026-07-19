@@ -1,5 +1,7 @@
 # BioModStack stats/assay tooling inventory for isolation
 
+> **Historical / superseded:** This report records the former BioModStack-owned assay/statistics runtime. P1 retired that ownership from core; this is evidence, not current architecture or implementation guidance.
+
 Date: 2026-05-05
 Repo: `/home/dalab/biomodstack/biomodstack`
 

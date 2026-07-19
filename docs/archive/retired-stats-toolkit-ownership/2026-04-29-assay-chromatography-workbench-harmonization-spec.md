@@ -1,5 +1,7 @@
 # Assay Analytics Chromatography Workbench Harmonization Spec
 
+> **Historical / superseded:** This document records the former BioModStack-owned assay workbench. P1 retired that ownership from core; it is not active architecture or implementation guidance.
+
 Date: 2026-04-29
 Status: implementation-ready plan
 Scope: BioModStack `/bms/assay` chromatography workbench only, with qPCR/statistics checked for shared assay-shell consistency.

@@ -37,41 +37,15 @@ test('Data Viewer landing keeps import/open surfaces concise', () => {
     }
 });
 
-test('Stats Toolkit landing keeps tabs/status copy compact', () => {
-    const source = readSource('src', 'components', 'AssayAnalytics.tsx');
+test('BioXP top-bar control avoids explainer subtitles', () => {
+    const source = readSource('src', 'components', 'BioXpInterlinkControlPanel.tsx');
 
     for (const snippet of [
-        'Curves, QC, ΔCq/ΔΔCq.',
-        'Empower, peaks, calibration, isoforms.',
-        'QC, DOE/RSM, SPC, capability.',
-        'qPCR · chromatography · DOE/statistics',
-    ]) {
-        requireSnippet(source, snippet);
-    }
-
-    for (const stale of [
-        'Standard curves, spike recovery, replicate QC, ΔCq, ΔΔCq, fold-change, and MIQE-style qPCR metrics.',
-        'Manual analytical QC, DOE generation, RSM/regression, SPC, process capability, hypothesis testing, and Plotly visualization.',
-        'BMS-native analysis for QuantStudio, StepOnePlus, Waters Empower3',
-        'Container lifecycle control panel for optional assay/statistics runtime packages.',
-        'Actions + logs.',
-    ]) {
-        rejectSnippet(source, stale);
-    }
-});
-
-test('top-bar add-on controls avoid explainer subtitles', () => {
-    const source = readSource('src', 'components', 'StatsToolsControlPanel.tsx')
-        + readSource('src', 'components', 'DbServiceControlPanel.tsx')
-        + readSource('src', 'components', 'BioXpInterlinkControlPanel.tsx');
-
-    for (const snippet of [
-        'Stats Tools',
-        'BMS DB',
         'BioXP',
-        'Start',
-        'Start DB',
         'Profile',
+        'Connect',
+        'Disconnect',
+        'Probe',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -85,11 +59,10 @@ test('top-bar add-on controls avoid explainer subtitles', () => {
     }
 });
 
-test('analytics, BioXP USB, and assay QC panels keep copy terse', () => {
+test('analytics, BioXP USB, and quality panels keep copy terse', () => {
     const source = readSource('src', 'components', 'AnalyticsDashboard.tsx')
         + readSource('src', 'components', 'BioXpCockpit.tsx')
-        + readSource('src', 'components', 'QualitySettingsPanel.tsx')
-        + readSource('src', 'components', 'assay', 'AnalyticalQcWorkbench.tsx');
+        + readSource('src', 'components', 'QualitySettingsPanel.tsx');
 
     for (const snippet of [
         'Backbone screen: target contacts, hotspot coverage, RFA quality.',
@@ -97,7 +70,6 @@ test('analytics, BioXP USB, and assay QC panels keep copy terse', () => {
         'PAE matrix; chain bands when available.',
         'Status-first operator surface',
         'Stage presets tune start_t, samples, ranking, and anchor strictness.',
-        'Included/excluded rows, groups, runs.',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -111,45 +83,8 @@ test('analytics, BioXP USB, and assay QC panels keep copy terse', () => {
         'What the handler-side implementation must return before we trust a run.',
         'Stage-optimized mode follows the repo PPIFlow guidance for the selected stage.',
         'Core partial-flow controls below are currently managed by the selected stage strategy.',
-        'Included/excluded row counts, clean values, cross-run variability, and grouped statistics appear after QC runs.',
-        'Run means are rolled up by final group/bunch to show between-run drift and precision.',
-        'Manual decisions stay inspectable; export the sanitized row ledger for review or downstream analysis.',
     ]) {
         rejectSnippet(source, stale);
-    }
-});
-
-test('Stats Toolkit sub-workbenches keep import/QC copy compact', () => {
-    const qpcrSource = readSource('src', 'components', 'qpcr', 'index.tsx')
-        + readSource('src', 'components', 'qpcr', 'RawDataImport.tsx');
-    const hplcSource = readSource('src', 'components', 'hplc', 'index.tsx')
-        + readSource('src', 'components', 'hplc', 'EmpowerImport.tsx');
-    const statsSource = readSource('src', 'components', 'statistics', 'index.tsx')
-        + readSource('src', 'components', 'assay', 'AnalyticalQcWorkbench.tsx');
-    const combined = qpcrSource + hplcSource + statsSource;
-
-    for (const snippet of [
-        'Instrument exports or pasted Cq tables.',
-        'Plate, well QC, curves, standards, rows. Focus:',
-        'A-H × 1-12 visible. Click wells; Ctrl/Shift builds groups.',
-        'Imports, peaks, calibration, isoforms.',
-        'AIA/ARW/ZIP/CSV imports; injections, peaks, SST, plasmid logs.',
-        'DOE, RSM/regression, SPC, capability.',
-        'Paste rows → map columns → clean/exclude/bunch → QC stats.',
-    ]) {
-        requireSnippet(combined, snippet);
-    }
-
-    for (const stale of [
-        'Import actual instrument exports or paste explicit Cq tables for standard curves',
-        'BMS keeps the parsed QuantStudio/StepOnePlus import visible as a single scientific workbench',
-        'Fit-to-panel 96-well map; all A-H rows and 1-12 columns stay visible',
-        'Work from real Empower 3 AIA .cdf, ARW chromatogram text, ZIP batches',
-        'AIA .cdf provides raw chromatograms and native peak tables',
-        'Generate DOE layouts, fit RSM/regression models, run SPC/capability',
-        'Paste real assay rows, map value/run/group/sample columns',
-    ]) {
-        rejectSnippet(combined, stale);
     }
 });
 

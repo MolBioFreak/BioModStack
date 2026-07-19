@@ -138,7 +138,7 @@ External Plasmidsaurus whole-plasmid page observed on 2026-04-25 positions its s
 - plasmid map `.html`;
 - read-length histogram `.png`;
 - virtual gel `.png`;
-- chromatogram `.ab1`/`.gbk`;
+- trace artifact `.ab1`/`.gbk`;
 - coverage plot `.png`/`.gbk`;
 - per-base `.txt`/`.tsv`;
 - raw reads `.fastq.gz`;
@@ -146,7 +146,7 @@ External Plasmidsaurus whole-plasmid page observed on 2026-04-25 positions its s
 - coverage over roughly 20x as a strong-consensus rule of thumb;
 - mixture/mixed-peak behavior surfaced in `.ab1` when species are similar.
 
-BioModStack does not need to clone every Plasmidsaurus artifact literally, but any “Plasmidsaurus-class” claim must be backed by equivalent evidence. If BMS does not generate AB1/mixed-peak chromatograms, the report must say so and provide the alternate evidence source, such as allele-fraction/per-base support tables plus IGV loci.
+BioModStack does not need to clone every Plasmidsaurus artifact literally, but any “Plasmidsaurus-class” claim must be backed by equivalent evidence. If BMS does not generate AB1/mixed-peak trace artifacts, the report must say so and provide the alternate evidence source, such as allele-fraction/per-base support tables plus IGV loci.
 
 ---
 
@@ -200,7 +200,7 @@ BioModStack does not need to clone every Plasmidsaurus artifact literally, but a
    - Need a single report bundle with summary, pass/warn/fail calls, consensus, variants, coverage, read stats, modified-base status, contamination/multimer notes, IGV links, and exportable files.
 
 9. Deliverable parity and truthful exclusions
-   - Missing or not proven: consensus `.gbk`, plasmid map HTML, read-length histogram PNG, virtual gel PNG, chromatogram AB1/GBK, coverage PNG/GBK, raw FASTQ handoff/copy, formal `SAMPLE_summary.tsv`, Q60 estimate, mixed-peak representation.
+   - Missing or not proven: consensus `.gbk`, plasmid map HTML, read-length histogram PNG, virtual gel PNG, trace artifact AB1/GBK, coverage PNG/GBK, raw FASTQ handoff/copy, formal `SAMPLE_summary.tsv`, Q60 estimate, mixed-peak representation.
    - These must be planned or explicitly listed as intentionally out of scope.
 
 ---
@@ -548,7 +548,7 @@ Candidate frontend modules:
 
 **Truthfulness rules:**
 
-- No AB1/chromatogram artifact is advertised unless actually generated.
+- No AB1 trace artifact is advertised unless actually generated.
 - If BMS chooses not to synthesize AB1, report “BMS does not emit AB1; use per-base support/allele fraction and IGV loci instead.”
 - No Q60 or Q-score-like consensus claim unless the method is implemented and tested.
 - Reference-copy fallback consensus must fail “verified construct” status.
@@ -612,7 +612,7 @@ Candidate frontend modules:
 ### 6.2 Must not claim until separately implemented
 
 - Q60 consensus quality.
-- AB1 chromatogram / mixed-peak compatibility.
+- AB1 trace artifact / mixed-peak compatibility.
 - Virtual gel.
 - Plasmid map HTML parity with a dedicated commercial map renderer.
 - Amino-acid consequences unless CDS feature parsing and codon translation are implemented/test-covered.

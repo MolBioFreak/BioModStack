@@ -49,13 +49,9 @@ _CONFIG_FIELDS = (
 _INT_FIELDS = ("api_host_port", "dev_api_host_port", "dev_web_host_port", "web_host_port")
 _FEATURE_DEFAULTS = {
     "bioxp": True,
-    "stats_tools": True,
-    "assay_db": True,
 }
 _FEATURE_ENV_NAMES = {
     "bioxp": "BMS_FEATURE_BIOXP",
-    "stats_tools": "BMS_FEATURE_STATS_TOOLS",
-    "assay_db": "BMS_FEATURE_ASSAY_DB",
 }
 
 
@@ -450,8 +446,6 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export CORS_ORIGINS="${{CORS_ORIGINS:-{cors_origins}}}"',
         f'export BMS_CORE_RUNTIME_MODE="${{BMS_CORE_RUNTIME_MODE:-{core_runtime_mode}}}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
-        f'export BMS_FEATURE_STATS_TOOLS="${{BMS_FEATURE_STATS_TOOLS:-{1 if resolved["features"]["stats_tools"] else 0}}}"',
-        f'export BMS_FEATURE_ASSAY_DB="${{BMS_FEATURE_ASSAY_DB:-{1 if resolved["features"]["assay_db"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export COMPOSE_PROJECT_NAME="${{COMPOSE_PROJECT_NAME:-{resolved["compose_project_name"]}}}"',
         "",
@@ -483,8 +477,6 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'CORS_ORIGINS={cors_origins}',
         f'BMS_CORE_RUNTIME_MODE={core_runtime_mode}',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
-        f'BMS_FEATURE_STATS_TOOLS={1 if resolved["features"]["stats_tools"] else 0}',
-        f'BMS_FEATURE_ASSAY_DB={1 if resolved["features"]["assay_db"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'COMPOSE_PROJECT_NAME={resolved["compose_project_name"]}',
         "",

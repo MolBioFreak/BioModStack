@@ -9,7 +9,6 @@ from pydantic.warnings import PydanticDeprecatedSince20
 
 PYDANTIC_SCHEMA_MODULES = [
     "schemas",
-    "routers.assay_analytics",
     "routers.designs",
     "routers.molbio_ops",
     "routers.nucleotide_sequences",
