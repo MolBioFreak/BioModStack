@@ -467,7 +467,7 @@ export function SequenceViewer({
         });
     }, []);
 
-    const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
+    const resolvedViewerMode = viewMode || 'both';
     const seqVizSeqType = normalizedSequenceType === 'protein' ? 'aa' : nucleotideSequenceType;
     const viewerSequenceKey = useMemo(() => {
         const head = displaySequence.slice(0, 24);
@@ -566,6 +566,15 @@ export function SequenceViewer({
                 selectionPointerButtonRef.current = null;
             }}
         >
+            {!sequenceData.circular && resolvedViewerMode !== 'linear' && (
+                <div
+                    data-linear-circular-projection="true"
+                    className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-amber-500/40 bg-slate-950/90 px-2.5 py-1 text-[10px] font-medium text-amber-200 shadow"
+                    title="Display projection only; the stored molecule remains linear"
+                >
+                    Linear projection • break: end → 1
+                </div>
+            )}
             {showTouchRotationControls && (
                 <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2">
                     <button

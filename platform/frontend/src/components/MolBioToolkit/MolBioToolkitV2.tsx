@@ -79,6 +79,7 @@ import {
     resolvePersistentSelection,
     type SelectionSnapshot,
 } from './utils/selectionActions';
+import { applyImportedTopology, type ImportTopology } from './utils/topology';
 import {
     MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
     clampMolBioPanelWidth,
@@ -871,7 +872,7 @@ export function MolBioToolkitV2() {
     }, [handlePasteSequence]);
 
     // Import file using Teselagen bio-parsers
-    const handleImport = useCallback(async (file: File) => {
+    const handleImport = useCallback(async (file: File, topology: ImportTopology = 'preserve') => {
         try {
             const result = await anyToJson(file, {
                 fileName: file.name,
@@ -894,11 +895,12 @@ export function MolBioToolkitV2() {
             }
 
             const normalizedSequence = normalizeSequenceForType(parsed.sequence || '', inferredType);
+            const importedCircular = applyImportedTopology(Boolean(parsed.circular), topology);
             const sequenceData: SequenceData = {
                 name: parsed.name || file.name.replace(/\.[^.]+$/, ''),
                 description: parsed.description || undefined,
                 sequence: normalizedSequence,
-                circular: parsed.circular ?? false,
+                circular: importedCircular,
                 sequenceType: inferredType,
                 moleculeStrandedness: moleculeMetadata.moleculeStrandedness,
                 moleculeOrientation: moleculeMetadata.moleculeOrientation,
@@ -908,7 +910,7 @@ export function MolBioToolkitV2() {
                     p,
                     `p_${i}`,
                     normalizedSequence.length,
-                    parsed.circular ?? false,
+                    importedCircular,
                 )),
                 translations: [],
                 analysisTracks: [],
@@ -1136,12 +1138,16 @@ export function MolBioToolkitV2() {
     const [isAnnotating, setIsAnnotating] = useState(false);
     const [showAnnotatePanel, setShowAnnotatePanel] = useState(false);
 
-    // View mode state (for circular view toggle)
+    // Display projection is workspace-local; every newly opened sequence starts in Both.
     type ViewMode = 'linear' | 'circular' | 'both';
     type ResizeHandleSide = 'left' | 'right';
     const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
-    const [viewMode, setViewMode] = useState<ViewMode>('circular');
-    const effectiveViewMode: ViewMode = sequenceData.circular ? viewMode : 'linear';
+    const [workspaceViewModes, setWorkspaceViewModes] = useState<Record<string, ViewMode>>({});
+    const viewMode = workspaceViewModes[activeWorkspaceId] ?? 'both';
+    const setViewMode = useCallback((mode: ViewMode) => {
+        setWorkspaceViewModes((current) => ({ ...current, [activeWorkspaceId]: mode }));
+    }, [activeWorkspaceId]);
+    const effectiveViewMode: ViewMode = viewMode;
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
@@ -1951,11 +1957,11 @@ export function MolBioToolkitV2() {
                             <EditPanel
                                 sequenceData={sequenceData}
                                 selection={selection}
-                                onSequenceChange={(newData) => {
+                                onSequenceChange={(newData, actionLabel) => {
                                     setSequenceData({
                                         ...newData,
                                         features: normalizeFeatureList(newData.features || []),
-                                    });
+                                    }, actionLabel);
                                     setIsDirty(true);
                                 }}
                             />
