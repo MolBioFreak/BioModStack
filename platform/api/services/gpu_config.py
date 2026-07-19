@@ -32,6 +32,7 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         "auto_cpu_thread_job_threshold": 2,
         "enabled": True,
         "target_vram_fill": 0.90,
+        "vram_safety_margin_mb": 2048,
         "capacity_weight": 9.0,
         "emptiness_weight": 1.0,
         "max_launches_per_cycle": 3,
@@ -43,8 +44,22 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
     "overrides": {},
     "workflow_pins": {},
     "gpu_locks": {},
-    "concurrency_limits": {},
+    "concurrency_limits": {
+        # These workflows have high transient allocations and need bounded
+        # global admission even when several GPUs appear mostly idle.
+        "maturation_child": 2,
+        "ppiflow": 2,
+        "esmfold": 1,
+        "esmfold2": 1,
+        "esmfold2_experimental": 1,
+    },
 }
+
+# These defaults are mandatory safety caps. Operators may tune them through
+# the API, but may not remove them and expose an unlimited state.
+PROTECTED_CONCURRENCY_LIMITS = frozenset(
+    {"maturation_child", "ppiflow", "esmfold", "esmfold2", "esmfold2_experimental"}
+)
 
 
 def get_default_config() -> Dict[str, Any]:
@@ -56,10 +71,18 @@ def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     global_config = config.get("global")
     if isinstance(global_config, dict):
         merged["global"].update(global_config)
-    for key in ("overrides", "workflow_pins", "gpu_locks", "concurrency_limits"):
+    for key in ("overrides", "workflow_pins", "gpu_locks"):
         value = config.get(key)
         if isinstance(value, dict):
             merged[key] = value
+    concurrency_limits = config.get("concurrency_limits")
+    if isinstance(concurrency_limits, dict):
+        merged["concurrency_limits"].update(concurrency_limits)
+    for model_type in PROTECTED_CONCURRENCY_LIMITS:
+        if merged["concurrency_limits"].get(model_type) is None:
+            merged["concurrency_limits"][model_type] = DEFAULT_SCHEDULER_CONFIG[
+                "concurrency_limits"
+            ][model_type]
     return merged
 
 

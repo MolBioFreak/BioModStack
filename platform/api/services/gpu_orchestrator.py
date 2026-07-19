@@ -115,13 +115,24 @@ VRAM_PROFILES = {
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
+    'esmfold': {'base': 18000, 'scale': 30},  # ESMFold attention/workspace peaks
+    'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
+    'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
 # Models that need heavy GPUs (exclude 5060 Ti)
-HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3', 'maturation_child'}
+HEAVY_MODELS = {
+    'af2',
+    'rfdiffusion',
+    'rf3',
+    'maturation_child',
+    'esmfold',
+    'esmfold2',
+    'esmfold2_experimental',
+}
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 
 # Scheduler-side packing should follow observed live VRAM plus a modest surge
@@ -1295,10 +1306,17 @@ def _gpu_target_fill(gpu_index: int, config: Dict[str, Any]) -> float:
 
 
 def _gpu_safety_margin_mb(gpu_index: int, config: Dict[str, Any]) -> int:
+    global_margin = config.get("global", {}).get("vram_safety_margin_mb", 2048)
     try:
-        return max(0, int(_gpu_override(gpu_index, config).get("vram_safety_margin_mb", 500)))
+        return max(
+            0,
+            int(_gpu_override(gpu_index, config).get("vram_safety_margin_mb", global_margin)),
+        )
     except (TypeError, ValueError):
-        return 500
+        try:
+            return max(0, int(global_margin))
+        except (TypeError, ValueError):
+            return 2048
 
 
 def _gpu_max_concurrent_jobs(gpu_index: int, config: Dict[str, Any]) -> Optional[int]:

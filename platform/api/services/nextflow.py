@@ -24,9 +24,89 @@ CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
 DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
 DEFAULT_NEXTFLOW_JAVA_HOME = Path("/home/dalab/.local/jdks/temurin-17")
+DEFAULT_NEXTFLOW_LOG_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_NEXTFLOW_LOG_MAX_LINES = 4_000
+DEFAULT_NEXTFLOW_LOG_READ_BYTES = 256 * 1024
 NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
+
+
+def _bounded_env_int(name: str, default: int, minimum: int) -> int:
+    """Read a positive integer limit from the environment with a safe floor."""
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+class BoundedLogBuffer:
+    """Retain a diagnostic tail bounded by both UTF-8 bytes and line count."""
+
+    def __init__(self, max_bytes: int, max_lines: int) -> None:
+        self.max_bytes = max(1, int(max_bytes))
+        self.max_lines = max(1, int(max_lines))
+        self._lines: Deque[Tuple[str, int]] = deque()
+        self.byte_size = 0
+
+    def append(self, line: str) -> None:
+        text = str(line)
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) > self.max_bytes:
+            # Decode with "ignore" so starting in the middle of a multibyte
+            # character cannot expand to a replacement glyph beyond the cap.
+            text = encoded[-self.max_bytes :].decode("utf-8", errors="ignore")
+            encoded = text.encode("utf-8", errors="replace")
+        size = len(encoded)
+        self._lines.append((text, size))
+        self.byte_size += size
+        while len(self._lines) > self.max_lines or self.byte_size > self.max_bytes:
+            _discarded, discarded_size = self._lines.popleft()
+            self.byte_size -= discarded_size
+
+    def __iter__(self) -> Iterator[str]:
+        return (line for line, _size in self._lines)
+
+    def __len__(self) -> int:
+        return len(self._lines)
+
+    def tail(self, count: int) -> List[str]:
+        if count <= 0:
+            return []
+        return [line for line, _size in list(self._lines)[-count:]]
+
+
+def read_incremental_log_chunk(log_path: Path, offset: int, max_bytes: int) -> Tuple[bytes, int]:
+    """Read at most ``max_bytes`` from a log, tolerating active compaction."""
+    if not log_path.exists():
+        return b"", max(0, offset)
+    size = log_path.stat().st_size
+    safe_offset = max(0, min(offset, size))
+    with open(log_path, "rb") as reader:
+        reader.seek(safe_offset)
+        chunk = reader.read(max(1, max_bytes))
+    return chunk, safe_offset + len(chunk)
+
+
+def compact_log_file(log_path: Path, max_bytes: int) -> bool:
+    """Compact an active log in place so inherited writer descriptors stay valid."""
+    if not log_path.exists():
+        return False
+    max_bytes = max(1, int(max_bytes))
+    with open(log_path, "r+b", buffering=0) as log_file:
+        log_file.seek(0, os.SEEK_END)
+        size = log_file.tell()
+        if size <= max_bytes:
+            return False
+        log_file.seek(-max_bytes, os.SEEK_END)
+        tail = log_file.read(max_bytes)
+        first_newline = tail.find(b"\n")
+        if 0 <= first_newline < len(tail) - 1:
+            tail = tail[first_newline + 1 :]
+        log_file.seek(0)
+        log_file.write(tail)
+        log_file.truncate(len(tail))
+    return True
 
 
 class _BoundedLogTail:
@@ -2013,10 +2093,19 @@ async def launch_nextflow_job(
             # ═══════════════════════════════════════════════════════════════════
             log_path = Path(output_dir) / "nextflow.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            full_log = _BoundedLogTail(
-                max_lines=NEXTFLOW_LOG_TAIL_MAX_LINES,
-                max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+            retained_log_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES", DEFAULT_NEXTFLOW_LOG_MAX_BYTES, 1024
             )
+            retained_log_max_lines = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES", DEFAULT_NEXTFLOW_LOG_MAX_LINES, 10
+            )
+            log_read_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_LOG_READ_BYTES", DEFAULT_NEXTFLOW_LOG_READ_BYTES, 1024
+            )
+            log_file_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_LOG_MAX_BYTES", DEFAULT_NEXTFLOW_LOG_MAX_BYTES, 4096
+            )
+            full_log = BoundedLogBuffer(retained_log_max_bytes, retained_log_max_lines)
             last_resume_lock_line: Optional[str] = None
             last_oom_line: Optional[str] = None
 
@@ -2076,10 +2165,7 @@ async def launch_nextflow_job(
 
                 log_offset = log_path.stat().st_size if log_path.exists() else 0
                 pending_fragment = ""
-                attempt_log = _BoundedLogTail(
-                    max_lines=NEXTFLOW_ATTEMPT_LOG_MAX_LINES,
-                    max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
-                )
+                attempt_log = BoundedLogBuffer(retained_log_max_bytes, retained_log_max_lines)
                 attempt_resume_lock_seen = False
                 attempt_cuda_oom_seen = False
 
@@ -2235,32 +2321,39 @@ async def launch_nextflow_job(
                     nonlocal log_offset, pending_fragment
                     if not log_path.exists():
                         return
-                    with open(log_path, "rb") as reader:
-                        reader.seek(log_offset)
-                        chunk = reader.read()
-                    if chunk:
-                        log_offset += len(chunk)
-                        text = pending_fragment + chunk.decode("utf-8", errors="replace")
-                    elif final and pending_fragment:
-                        text = pending_fragment
-                    else:
-                        return
+                    while True:
+                        chunk, log_offset = read_incremental_log_chunk(
+                            log_path, log_offset, log_read_max_bytes
+                        )
+                        if chunk:
+                            text = pending_fragment + chunk.decode("utf-8", errors="replace")
+                        elif final and pending_fragment:
+                            text = pending_fragment
+                        else:
+                            break
 
-                    pending_fragment = ""
-                    lines = text.splitlines(keepends=True)
-                    if lines and not lines[-1].endswith(("\n", "\r")):
-                        pending_fragment = lines.pop()
-                        while len(pending_fragment) > NEXTFLOW_LOG_MAX_LINE_CHARS:
-                            fragment = pending_fragment[:NEXTFLOW_LOG_MAX_LINE_CHARS]
-                            pending_fragment = pending_fragment[NEXTFLOW_LOG_MAX_LINE_CHARS:]
-                            await handle_log_line(fragment + "...[continued]\n")
-
-                    if final and pending_fragment:
-                        lines.append(pending_fragment)
                         pending_fragment = ""
+                        lines = text.splitlines(keepends=True)
+                        if lines and not lines[-1].endswith(("\n", "\r")):
+                            pending_fragment = lines.pop()
+                            encoded_fragment = pending_fragment.encode("utf-8", errors="replace")
+                            if len(encoded_fragment) > retained_log_max_bytes:
+                                pending_fragment = encoded_fragment[-retained_log_max_bytes:].decode(
+                                    "utf-8", errors="ignore"
+                                )
 
-                    for line_str in lines:
-                        await handle_log_line(line_str)
+                        if final and not chunk and pending_fragment:
+                            lines.append(pending_fragment)
+                            pending_fragment = ""
+
+                        for line_str in lines:
+                            await handle_log_line(line_str)
+
+                        if not final or not chunk:
+                            break
+
+                    if compact_log_file(log_path, log_file_max_bytes):
+                        log_offset = min(log_offset, log_path.stat().st_size)
 
                 with open(log_path, "ab", buffering=0) as log_sink:
                     # Launch in a new session and write directly to a durable log file so
