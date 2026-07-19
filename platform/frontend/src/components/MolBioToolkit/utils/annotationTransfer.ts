@@ -4,11 +4,25 @@ export type AnnotationMatchMode =
     | 'reverse_complement'
     | 'reverse_complement_rotated';
 
+export type AnnotationSequenceType = 'dna' | 'rna';
+export type AnnotationMoleculeStrandedness = 'single' | 'double' | 'unknown';
+
 export interface AnnotationSequenceAlignment {
     length: number;
     mode: AnnotationMatchMode;
     reverseComplement: boolean;
     rotation: number;
+}
+
+export interface AnnotationAlignmentPolicy {
+    sequenceType: AnnotationSequenceType;
+    allowReverseComplement: boolean;
+}
+
+export interface AnnotationMoleculeMetadata {
+    sequenceType: AnnotationSequenceType;
+    moleculeStrandedness: AnnotationMoleculeStrandedness;
+    strandednessExplicit?: boolean;
 }
 
 export interface TransferFeature {
@@ -21,17 +35,64 @@ export interface TransferFeature {
     segments?: Array<{ start: number; end: number }>;
 }
 
-function normalizeSequence(sequence: string): string {
-    return sequence.replace(/\s+/g, '').toUpperCase();
+const DNA_ALPHABET = new Set('ATCGNRYMKSWHBVD'.split(''));
+const RNA_ALPHABET = new Set('AUCGNRYMKSWHBVD'.split(''));
+
+export function resolveAnnotationAlignmentPolicy(
+    source: AnnotationMoleculeMetadata,
+    target: AnnotationMoleculeMetadata,
+): AnnotationAlignmentPolicy {
+    if (source.sequenceType !== target.sequenceType) {
+        throw new Error(
+            `Annotated-file molecule type (${source.sequenceType.toUpperCase()}) does not match the open construct molecule type (${target.sequenceType.toUpperCase()}).`,
+        );
+    }
+    const sourceStrandednessExplicit = source.strandednessExplicit ?? true;
+    const targetStrandednessExplicit = target.strandednessExplicit ?? true;
+    if (
+        sourceStrandednessExplicit
+        && targetStrandednessExplicit
+        && source.moleculeStrandedness !== target.moleculeStrandedness
+    ) {
+        throw new Error(
+            `Annotated-file strandedness (${source.moleculeStrandedness}) does not match the open construct strandedness (${target.moleculeStrandedness}).`,
+        );
+    }
+    return {
+        sequenceType: source.sequenceType,
+        allowReverseComplement: source.sequenceType === 'dna'
+            && sourceStrandednessExplicit
+            && targetStrandednessExplicit
+            && source.moleculeStrandedness === 'double'
+            && target.moleculeStrandedness === 'double',
+    };
+}
+
+function normalizeSequence(sequence: string, sequenceType: AnnotationSequenceType): string {
+    const compact = sequence.replace(/\s+/g, '').toUpperCase();
+    const alphabet = sequenceType === 'dna' ? DNA_ALPHABET : RNA_ALPHABET;
+    const unsupported = [...new Set([...compact].filter((base) => !alphabet.has(base)))];
+    if (unsupported.length > 0) {
+        throw new Error(
+            `Annotated-file sequence contains unsupported characters for authoritative ${sequenceType.toUpperCase()} alignment: ${unsupported.join(', ')}.`,
+        );
+    }
+    return compact;
 }
 
 function reverseComplement(sequence: string): string {
     const complement: Record<string, string> = {
-        A: 'T', C: 'G', G: 'C', T: 'A', U: 'A',
+        A: 'T', C: 'G', G: 'C', T: 'A',
         R: 'Y', Y: 'R', M: 'K', K: 'M', S: 'S', W: 'W',
         H: 'D', B: 'V', V: 'B', D: 'H', N: 'N',
     };
-    return [...sequence].reverse().map((base) => complement[base] || base).join('');
+    return [...sequence].reverse().map((base) => {
+        const complemented = complement[base];
+        if (!complemented) {
+            throw new Error(`Cannot reverse-complement unsupported DNA character: ${base}.`);
+        }
+        return complemented;
+    }).join('');
 }
 
 function rotationOffsets(source: string, target: string): number[] {
@@ -58,44 +119,47 @@ export function resolveAnnotationSequenceAlignment(
     sourceSequence: string,
     targetSequence: string,
     circular: boolean,
+    policy: AnnotationAlignmentPolicy = { sequenceType: 'dna', allowReverseComplement: true },
 ): AnnotationSequenceAlignment {
-    const source = normalizeSequence(sourceSequence);
-    const target = normalizeSequence(targetSequence);
+    const source = normalizeSequence(sourceSequence, policy.sequenceType);
+    const target = normalizeSequence(targetSequence, policy.sequenceType);
     if (!source || source.length !== target.length) {
         throw new Error('Annotated-file sequence does not match the open construct length.');
     }
+
+    // Identical strings provide an explicit shared origin and forward orientation.
     if (source === target) {
         return { length: source.length, mode: 'exact', reverseComplement: false, rotation: 0 };
     }
 
-    const reversed = reverseComplement(source);
-    if (reversed === target) {
-        return { length: source.length, mode: 'reverse_complement', reverseComplement: true, rotation: 0 };
-    }
+    const reversed = policy.allowReverseComplement ? reverseComplement(source) : null;
     if (!circular) {
+        if (reversed === target) {
+            return { length: source.length, mode: 'reverse_complement', reverseComplement: true, rotation: 0 };
+        }
         throw new Error('Annotated-file sequence does not match the open linear construct.');
     }
 
-    const candidates = [
+    const candidates: AnnotationSequenceAlignment[] = [
         ...rotationOffsets(source, target).map((rotation) => ({
             length: source.length,
             mode: 'rotated' as const,
             reverseComplement: false,
             rotation,
         })),
-        ...rotationOffsets(reversed, target).map((rotation) => ({
+        ...(reversed ? rotationOffsets(reversed, target).map((rotation) => ({
             length: source.length,
             mode: 'reverse_complement_rotated' as const,
             reverseComplement: true,
             rotation,
-        })),
+        })) : []),
     ];
 
     if (candidates.length === 0) {
         throw new Error('Annotated-file sequence does not match the open circular construct.');
     }
     if (candidates.length > 1) {
-        throw new Error('Annotated-file sequence alignment is ambiguous because the construct contains repeated rotational matches.');
+        throw new Error('Annotated-file sequence alignment is ambiguous because multiple rotations or orientations match.');
     }
     return candidates[0];
 }

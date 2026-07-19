@@ -536,6 +536,32 @@ export function inferNucleotideMoleculeMetadataFromParsedRecord(
     };
 }
 
+export function hasExplicitNucleotideStrandednessMetadata(
+    parsed: ParsedSequenceMetadata | null | undefined,
+): boolean {
+    if (!parsed) return false;
+    if (
+        parsed.isSingleStranded === true
+        || parsed.isDoubleStranded === true
+        || parsed.isSingleStrandedDNA === true
+        || parsed.isDoubleStrandedDNA === true
+        || parsed.isSingleStrandedRNA === true
+        || parsed.isDoubleStrandedRNA === true
+    ) {
+        return true;
+    }
+    const candidates = [
+        parsed.moleculeStrandedness,
+        parsed.molecule_strandedness,
+        parsed.strandedness,
+        parsed.sequenceTypeFromLocus,
+        ...metadataValuesFor(parsed, STRANDEDNESS_METADATA_KEYS),
+    ];
+    return candidates.some((value) => (
+        metadataTextLooksSingleStranded(value) || metadataTextLooksDoubleStranded(value)
+    ));
+}
+
 export function inferSequenceTypeFromParsedRecord(parsed: ParsedSequenceMetadata | null | undefined): SequenceType {
     if (!parsed) {
         return 'dna';
