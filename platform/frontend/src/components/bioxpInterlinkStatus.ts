@@ -31,6 +31,17 @@ export interface BioXpDerivedStatus {
     detail: string;
 }
 
+export function isBioXpCommandAvailable(
+    availableCommands: readonly string[] | undefined,
+    command: string,
+    displayState: BioXpDisplayState | undefined,
+): boolean {
+    const freshTransportState = displayState === 'READY'
+        || displayState === 'RUNTIME NOT READY'
+        || displayState === 'HARDWARE NOT READY';
+    return freshTransportState && availableCommands?.includes(command) === true;
+}
+
 export function deriveBioXpStatus(
     connection: BioXpConnectionSnapshot,
     nowMs: number = Date.now(),

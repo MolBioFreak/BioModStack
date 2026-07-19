@@ -258,7 +258,7 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
     assert response.json() == {
         "features": {"bioxp": False},
         "configured_features": {"bioxp": False},
-        "dev_features": {"bioxp": True},
+        "dev_features": {"bioxp": False},
     }
 
 
@@ -294,7 +294,7 @@ def test_system_features_put_merges_feature_flags_into_install_profile(monkeypat
     assert response.json() == {
         "features": {"bioxp": False},
         "configured_features": {"bioxp": False},
-        "dev_features": {"bioxp": True},
+        "dev_features": {"bioxp": False},
     }
 
 

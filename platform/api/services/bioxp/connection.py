@@ -4,7 +4,8 @@ import asyncio
 import secrets
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from math import isfinite
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -147,6 +148,18 @@ class BioXpConnectionService:
         try:
             payload = await self._client.probe()
             self._last_reachable = True
+            observed_at, freshness_error = _robot_evidence_time(
+                payload,
+                now=self.clock(),
+                local_freshness_budget_seconds=self.freshness_budget_seconds,
+            )
+            self._observed_at = observed_at
+            if freshness_error is not None:
+                self._last_runtime_ready = None
+                self._last_hardware_ready = None
+                self._capabilities = ()
+                self._last_error = freshness_error
+                return
             self._last_runtime_ready = _optional_bool(payload, "runtime_ready", "runtime_available")
             self._last_hardware_ready = _optional_bool(payload, "hardware_ready", "hardware_connected")
             raw_capabilities = payload.get("capabilities")
@@ -162,7 +175,7 @@ class BioXpConnectionService:
             self._last_hardware_ready = None
             self._capabilities = ()
             self._last_error = str(exc) or exc.__class__.__name__
-        self._observed_at = self.clock()
+            self._observed_at = self.clock()
 
     async def disconnect(self) -> BioXpSnapshot:
         async with self._transition_lock:
@@ -281,3 +294,53 @@ def _optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:
         if isinstance(value, bool):
             return value
     return None
+
+
+def _robot_evidence_time(
+    payload: dict[str, Any],
+    *,
+    now: datetime,
+    local_freshness_budget_seconds: float,
+) -> tuple[datetime, str | None]:
+    """Preserve robot-owned cache age instead of renewing it at BMS receipt time."""
+
+    freshness = payload.get("freshness")
+    freshness = freshness if isinstance(freshness, dict) else {}
+    age_s = _non_negative_number(freshness.get("age_s"))
+    fresh_for_s = _positive_number(freshness.get("fresh_for_s"))
+    available = payload.get("available") is True
+    cache_state = payload.get("cache_state")
+    freshness_state = freshness.get("state")
+    upstream_fresh = (
+        available
+        and cache_state == "fresh"
+        and freshness_state == "fresh"
+        and age_s is not None
+        and fresh_for_s is not None
+        and age_s <= fresh_for_s
+    )
+    if upstream_fresh:
+        assert age_s is not None
+        return now - timedelta(seconds=age_s), None
+
+    stale_age_s = max(
+        age_s or 0.0,
+        local_freshness_budget_seconds + 1.0,
+    )
+    detail = (
+        "BioXP status evidence is stale or unavailable "
+        f"(available={available}, cache_state={cache_state!r}, freshness_state={freshness_state!r})"
+    )
+    return now - timedelta(seconds=stale_age_s), detail
+
+
+def _non_negative_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if isfinite(numeric) and numeric >= 0 else None
+
+
+def _positive_number(value: object) -> float | None:
+    numeric = _non_negative_number(value)
+    return numeric if numeric is not None and numeric > 0 else None

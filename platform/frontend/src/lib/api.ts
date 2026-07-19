@@ -329,6 +329,55 @@ export interface ProteinBaseBundleImportRequest {
     job_name?: string;
 }
 export const importProteinBaseBundle = (payload: ProteinBaseBundleImportRequest) => api.post<Job>('/api/jobs/imports/proteinbase', payload);
+
+export interface ExternalImportPreview {
+    provider: string;
+    resource_type: string;
+    provider_job_id: string;
+    model: string | null;
+    model_version: string | null;
+    status: string;
+    sample_count: number;
+    entities: Array<Record<string, unknown>>;
+    source_fingerprint: string;
+    run_metadata_sha256: string;
+    archive_sha256: string | null;
+    importable: boolean;
+    error_code: string | null;
+    errors: string[];
+    warnings: string[];
+    provider_metadata: Record<string, unknown>;
+}
+
+export interface ExternalResultImport {
+    id: string;
+    provider_id: string;
+    resource_type: string;
+    provider_job_id: string;
+    state: 'discovered' | 'validating' | 'staging' | 'normalizing' | 'committing' | 'completed' | 'failed';
+    source_fingerprint: string;
+    bms_job_id: string | null;
+    failure_code: string | null;
+    failure_message: string | null;
+    created_at: string;
+    updated_at: string;
+    imported_at: string | null;
+}
+
+export const previewExternalImport = (sourcePath: string) => api.post<ExternalImportPreview>(
+    '/api/jobs/imports/external/preview',
+    { source_path: sourcePath, provider_hint: 'boltz_api' },
+);
+export const createExternalImport = (payload: {
+    source_path: string;
+    provider: 'boltz_api';
+    preview_fingerprint: string;
+    dataset_name: string;
+    job_name?: string;
+}) => api.post<ExternalResultImport>('/api/jobs/imports/external', payload);
+export const fetchExternalImport = (importId: string) => api.get<ExternalResultImport>(
+    `/api/jobs/imports/external/${importId}`,
+);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
 export const deleteJobPermanently = (id: string) => api.delete<{
     message: string;

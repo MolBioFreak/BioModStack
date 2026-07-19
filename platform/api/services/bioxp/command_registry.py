@@ -47,7 +47,6 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="construct_pipettes",
             required_capability="construct_pipettes",
-            requires_hardware_ready=False,
         ),
         "initialize_without_motion": CommandDefinition(
             name="initialize_without_motion",

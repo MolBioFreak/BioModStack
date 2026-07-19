@@ -61,6 +61,8 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         assert registry[name].route_key == route_key
         assert registry[name].required_capability == name
 
+    assert registry["construct_pipettes"].requires_hardware_ready is True
+
     for name in set(registry) - set(enabled):
         assert registry[name].enabled is False
         assert registry[name].route_key is None
