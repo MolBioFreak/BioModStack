@@ -57,6 +57,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
+import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -5001,6 +5002,10 @@ export function ResultsViewer() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
+
+    if (activeJob?.model_id === 'conformational_mapping') {
+        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
