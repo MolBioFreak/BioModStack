@@ -301,7 +301,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
-    const normalizeProtenixModel = useCallback((_model?: string) => 'protenix-v2', []);
+    const normalizeProtenixModel = useCallback((model?: string) => {
+        void model;
+        return 'protenix-v2';
+    }, []);
     const mergeQualitySettingsFromParams = useCallback((params?: Record<string, UntypedApiValue>): QualitySettings => {
         const legacyPresetKey = typeof params?.quality_preset === 'string' && params.quality_preset in PRESETS
             ? (params.quality_preset as keyof typeof PRESETS)
