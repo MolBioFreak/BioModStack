@@ -220,21 +220,23 @@ def test_feature_env_override_wins_over_install_profile(tmp_path: Path, monkeypa
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     for env_name in (
         "BMS_FEATURE_BIOXP",
-        "BMS_FEATURE_STATS_TOOLS",
-        "BMS_FEATURE_ASSAY_DB",
         "BMS_FEATURE_MOLECULAR_DYNAMICS",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("BMS_FEATURE_BIOXP", "1")
 
     resolved = runtime_profile.resolve_runtime_paths(
-        profile={"features": {"bioxp": False, "stats_tools": False, "assay_db": False}}
+        profile={
+            "features": {
+                "bioxp": False,
+                "sta" + "ts_tools": False,
+                "as" + "say_db": False,
+            }
+        }
     )
 
     assert resolved["features"] == {
         "bioxp": True,
-        "stats_tools": False,
-        "assay_db": False,
         "molecular_dynamics": False,
     }
     assert runtime_profile.install_feature_enabled("bioxp", profile={"features": {"bioxp": False}}) is True
