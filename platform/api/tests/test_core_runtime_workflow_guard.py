@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request, Response
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +100,12 @@ async def test_resubmit_job_rejects_workflow_launches_in_core_runtime_mode(monke
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
 
     with pytest.raises(HTTPException) as exc_info:
-        await jobs.resubmit_job("job-123", session=_ExplodingSession())
+        await jobs.resubmit_job(
+            "job-123",
+            request=Request({"type": "http", "method": "POST", "scheme": "http", "path": "/"}),
+            response=Response(),
+            session=_ExplodingSession(),
+        )
 
     assert exc_info.value.status_code == 409
     assert "core-runtime" in str(exc_info.value.detail).lower()
@@ -111,7 +116,12 @@ async def test_resume_job_rejects_workflow_launches_in_core_runtime_mode(monkeyp
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
 
     with pytest.raises(HTTPException) as exc_info:
-        await jobs.resume_job("job-123", session=_ExplodingSession())
+        await jobs.resume_job(
+            "job-123",
+            request_context=Request({"type": "http", "method": "POST", "scheme": "http", "path": "/"}),
+            response=Response(),
+            session=_ExplodingSession(),
+        )
 
     assert exc_info.value.status_code == 409
     assert "resume" in str(exc_info.value.detail).lower()

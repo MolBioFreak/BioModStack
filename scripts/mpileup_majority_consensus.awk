@@ -70,7 +70,7 @@ function parse_bases(bases, ref,   i, c, n, len) {
 
     delete counts
     parse_bases(bases, ref)
-    best_base = ref
+    best_base = "N"
     best_count = -1
     for (b in counts) {
         if (counts[b] > best_count || (counts[b] == best_count && b < best_base)) {
@@ -78,7 +78,7 @@ function parse_bases(bases, ref,   i, c, n, len) {
             best_count = counts[b]
         }
     }
-    if (best_count < 0) best_base = ref
+    if (best_count < 0) best_base = "N"
     consensus_seq[chr] = consensus_seq[chr] best_base
 }
 
