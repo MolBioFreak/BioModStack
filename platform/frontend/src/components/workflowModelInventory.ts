@@ -16,7 +16,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'mutagenesis',
         label: 'Mutagenesis Library',
-        modelTopics: ['boltz2', 'rf3'],
+        modelTopics: ['boltz2', 'rf3', 'esmfold2'],
         sourceFiles: [
             'platform/frontend/src/components/JobSubmission.tsx',
             'platform/frontend/src/components/MutagenesisTemplate.tsx',
@@ -27,7 +27,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'structure_prediction',
         label: 'Structure Prediction',
-        modelTopics: ['boltz2', 'rf3', 'protenix'],
+        modelTopics: ['boltz2', 'rf3', 'protenix', 'esmfold2'],
         sourceFiles: [
             'platform/api/config/templates/structure_prediction.yaml',
             'platform/frontend/src/components/StructurePredictionTemplate.tsx',
@@ -38,7 +38,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'antibody_denovo',
         label: 'De Novo Nanobody Toolkit',
-        modelTopics: ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'],
+        modelTopics: ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'],
         sourceFiles: [
             'platform/api/config/models/antibody_denovo.yaml',
             'platform/frontend/src/components/AntibodyDenovoTemplate.tsx',
@@ -46,29 +46,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
             'nextflow.config',
         ],
     },
-    {
-        workflowId: 'boltzgen_design',
-        label: 'BoltzGEN',
-        modelTopics: ['boltzgen', 'diffdock', 'unidock'],
-        sourceFiles: [
-            'platform/api/config/models/boltzgen.yaml',
-            'platform/api/config/templates/boltzgen_ligand.yaml',
-            'platform/frontend/src/components/BoltzGenTemplate.tsx',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
-        workflowId: 'bindcraft',
-        label: 'BindCraft',
-        modelTopics: ['bindcraft', 'alphafold2', 'proteinmpnn'],
-        sourceFiles: [
-            'platform/frontend/src/components/JobSubmission.tsx',
-            'platform/frontend/src/components/BindCraftTemplate.tsx',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
+
     {
         workflowId: 'oligo_design',
         label: 'Oligo Designer',
@@ -105,7 +83,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     },
     {
         workflowId: 'confornets_experimental',
-        label: 'Conformational Mapping Experimental',
+        label: 'Conformational Mapping',
         modelTopics: ['confornets'],
         sourceFiles: [
             'platform/api/config/models/confornets_experimental.yaml',
@@ -114,18 +92,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
             'nextflow.config',
         ],
     },
-    {
-        workflowId: 'esmfold2_experimental',
-        label: 'ESMFold2 Experimental',
-        modelTopics: ['esmfold2'],
-        sourceFiles: [
-            'platform/api/config/models/esmfold2_experimental.yaml',
-            'platform/api/config/templates/esmfold2_experimental.yaml',
-            'workflows/esmfold2_experimental.nf',
-            'modules/esmfold2_experimental.nf',
-            'nextflow.config',
-        ],
-    },
+
     {
         workflowId: 'caliby_experimental',
         label: 'Caliby Experimental',
@@ -189,17 +156,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
             'nextflow.config',
         ],
     },
-    {
-        workflowId: 'boltzgen_ligand',
-        label: 'Ligand-Aware Binder',
-        modelTopics: ['boltzgen', 'diffdock'],
-        sourceFiles: [
-            'platform/api/config/templates/boltzgen_ligand.yaml',
-            'platform/frontend/src/components/BoltzGenTemplate.tsx',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
+
 ];
 
 export const UNIQUE_WORKFLOW_MODEL_TOPICS = Array.from(
@@ -208,7 +165,12 @@ export const UNIQUE_WORKFLOW_MODEL_TOPICS = Array.from(
 
 export const getWorkflowModelTopics = (workflowId: string | null | undefined): ModelDocumentationTopic[] => {
     if (!workflowId) return [];
-    return WORKFLOW_MODEL_INVENTORY.find((workflow) => workflow.workflowId === workflowId)?.modelTopics ?? [];
+    const canonicalWorkflowId = workflowId === 'esmfold2_experimental' || workflowId === 'esmfold2'
+        ? 'structure_prediction'
+        : workflowId === 'boltzgen_design' || workflowId === 'boltzgen_ligand'
+            ? 'antibody_denovo'
+            : workflowId;
+    return WORKFLOW_MODEL_INVENTORY.find((workflow) => workflow.workflowId === canonicalWorkflowId)?.modelTopics ?? [];
 };
 
 export const getUniqueWorkflowModelInventory = (): UniqueWorkflowModelEntry[] =>

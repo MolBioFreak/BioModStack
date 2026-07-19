@@ -4,6 +4,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
@@ -29,26 +31,26 @@ from services.nextflow import (  # noqa: E402
 
 EXPECTED_PROFILE_ENTRYPOINTS = {
     "oligo_design": "workflows/oligo_design.nf",
-    "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
     "caliby_experimental": "workflows/caliby_experimental.nf",
     "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
-    "esmfold2_experimental": "workflows/esmfold2_experimental.nf",
-    "boltzgen": "workflows/boltzgen_design.nf",
+    "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
+
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
     "antibody_child": "workflows/antibody_child.nf",
     "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
-    "bindcraft_child": "workflows/bindcraft_design.nf",
+
     "docking": "workflows/docking.nf",
     "unidock": "workflows/docking.nf",
     "dual_docking": "workflows/docking.nf",
@@ -58,13 +60,15 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
     ("boltz2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("rf3", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2_experimental", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2_experimental", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
     ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
-    ("bindcraft", "minibinder"): "workflows/bindcraft_design.nf",
-    ("bindcraft", "peptide"): "workflows/bindcraft_design.nf",
-    ("bindcraft", "bindcraft_child"): "workflows/bindcraft_design.nf",
+
     ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
-    ("boltzgen", "design"): "workflows/boltzgen_design.nf",
+
     ("diffdock", "dock"): "workflows/docking.nf",
     ("diffdock", "ntp_dock"): "workflows/docking.nf",
     ("unidock", "dock"): "workflows/docking.nf",
@@ -81,6 +85,8 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
+    ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
 }
 
 
@@ -121,13 +127,36 @@ def test_entrypoint_registry_is_explicit_and_current_files_exist() -> None:
     assert (REPO_ROOT / LEGACY_MAIN_ENTRYPOINT).exists()
 
 
+def test_boltzgen_modes_require_the_parent_de_novo_workflow() -> None:
+    for mode in ("nanobody_binder", "ligand_binder", "peptide_binder", "ntp_binder"):
+        with pytest.raises(ValueError, match="internal de-novo engine"):
+            resolve_nextflow_entrypoint(
+                effective_profile="boltzgen",
+                model_id="boltzgen",
+                mode=mode,
+            )
+
+
+def test_bindcraft_is_retired_and_not_routable() -> None:
+    assert "bindcraft_child" not in WORKFLOW_ENTRYPOINTS
+    assert not any(model_id == "bindcraft" for model_id, _mode in MODEL_MODE_WORKFLOW_ENTRYPOINTS)
+
+    with pytest.raises(ValueError, match="BindCraft has been retired"):
+        build_nextflow_command(
+            "bindcraft",
+            "minibinder",
+            {"target_pdb": "/tmp/target.pdb"},
+            "/tmp/out",
+            job_id="job-retired-bindcraft",
+        )
+
+
+
 def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
     _assert_command_profiles_exist(
         [
-            ("bindcraft", "minibinder", {"target_pdb": "/tmp/target.pdb"}),
-            ("bindcraft", "bindcraft_child", {"target_pdb": "/tmp/target.pdb"}),
             ("ppiflow", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}),
-            ("boltzgen", "design", {"target_pdb": "/tmp/target.pdb"}),
+
             ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
             ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
             ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
@@ -167,8 +196,13 @@ def test_resolver_keeps_profile_migrated_workflows_off_main() -> None:
         assert resolve_nextflow_entrypoint(effective_profile=workflow_id) == rel_path
 
 
+def test_resolver_preserves_legacy_ont_profile_aliases() -> None:
+    expected = "workflows/ngs/ont_methylation_analysis.nf"
+    assert resolve_nextflow_entrypoint(effective_profile="nanopore_methylation") == expected
+    assert resolve_nextflow_entrypoint(effective_profile="methylation_analysis") == expected
+
+
 def test_resolver_fallback_is_core_protein_design_not_main() -> None:
-    assert resolve_nextflow_entrypoint(effective_profile="bindcraft") == DEFAULT_WORKFLOW_ENTRYPOINT
     assert resolve_nextflow_entrypoint(effective_profile="binder_denovo") == DEFAULT_WORKFLOW_ENTRYPOINT
     assert resolve_nextflow_entrypoint(effective_profile="protenix") == DEFAULT_WORKFLOW_ENTRYPOINT
     assert resolve_nextflow_entrypoint(effective_profile="unknown_legacy") == DEFAULT_WORKFLOW_ENTRYPOINT
@@ -213,7 +247,7 @@ def test_standalone_structure_prediction_routes_direct_without_hijacking_complex
             "/tmp/out",
             job_id=f"job-{model_id}",
         )
-        assert cmd[:4] == ["nextflow", "run", STRUCTURE_PREDICTION_ENTRYPOINT, "-profile"]
+        assert cmd[1:4] == ["run", STRUCTURE_PREDICTION_ENTRYPOINT, "-profile"]
         assert _flag_value(cmd, "-profile") == f"{profile},workstation_ryzen7960x"
         assert _flag_value(cmd, "--sequence_input") == "MQIFVKTLTGKTITLEVEPSDTI"
         assert pred_method in _flag_value(cmd, "-profile") or model_id == "boltz2"
@@ -231,16 +265,14 @@ def test_standalone_structure_prediction_routes_direct_without_hijacking_complex
         "/tmp/out",
         job_id="job-boltz-complex",
     )
-    assert complex_cmd[:4] == ["nextflow", "run", COMPLEX_PREDICTION_ENTRYPOINT, "-profile"]
+    assert complex_cmd[1:4] == ["run", COMPLEX_PREDICTION_ENTRYPOINT, "-profile"]
     assert "--complex_json_path" in complex_cmd or "--complex_batch_dir" in complex_cmd
 
 
 def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume() -> None:
     cases = [
-        ("bindcraft", "minibinder", {"target_pdb": "/tmp/target.pdb"}, "workflows/bindcraft_design.nf"),
-        ("bindcraft", "bindcraft_child", {"target_pdb": "/tmp/target.pdb"}, "workflows/bindcraft_design.nf"),
         ("ppiflow", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}, "workflows/ppiflow_generator_design.nf"),
-        ("boltzgen", "design", {"target_pdb": "/tmp/target.pdb"}, "workflows/boltzgen_design.nf"),
+
         ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
         ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
         ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
@@ -257,8 +289,8 @@ def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume(
         resume_params = dict(params)
         resume_params["resume_work_dir"] = "/tmp/nxf-work"
         resume_cmd = build_nextflow_command(model_id, mode, resume_params, "/tmp/out", job_id=f"job-{model_id}-{mode}-resume")
-        assert fresh_cmd[:4] == ["nextflow", "run", rel_path, "-profile"], (model_id, mode, fresh_cmd[:4])
-        assert resume_cmd[:4] == ["nextflow", "run", rel_path, "-profile"], (model_id, mode, resume_cmd[:4])
+        assert fresh_cmd[1:4] == ["run", rel_path, "-profile"], (model_id, mode, fresh_cmd[:4])
+        assert resume_cmd[1:4] == ["run", rel_path, "-profile"], (model_id, mode, resume_cmd[:4])
         assert "-resume" not in fresh_cmd
         assert "-resume" in resume_cmd
 
@@ -283,7 +315,7 @@ def test_oligo_design_fresh_and_resume_launches_are_direct_entrypoint() -> None:
         job_id="job-oligo-resume",
     )
 
-    assert fresh_cmd[:4] == ["nextflow", "run", "workflows/oligo_design.nf", "-profile"]
-    assert resume_cmd[:4] == ["nextflow", "run", "workflows/oligo_design.nf", "-profile"]
+    assert fresh_cmd[1:4] == ["run", "workflows/oligo_design.nf", "-profile"]
+    assert resume_cmd[1:4] == ["run", "workflows/oligo_design.nf", "-profile"]
     assert "-resume" not in fresh_cmd
     assert "-resume" in resume_cmd

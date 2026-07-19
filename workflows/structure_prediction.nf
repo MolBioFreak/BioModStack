@@ -2,7 +2,8 @@
 /**
  * Structure Prediction Workflow
  * 
- * Standalone entry point for sequence-to-structure prediction using Boltz-2 or RF3.
+ * Standalone entry point for sequence-to-structure prediction using Boltz-2,
+ * RF3, Protenix, or ESMFold2.
  * 
  * Usage:
  *   nextflow run workflows/structure_prediction.nf -c nextflow.config \
@@ -51,18 +52,23 @@ workflow STRUCTURE_PREDICTION {
 // Entry point for direct invocation
 workflow {
     // Validate inputs
-    if (!params.sequence_input) {
-        error("--sequence_input is required. Provide amino acid sequence.")
+    def esmComplexComponents = params.esmf_complex_components ?: params.complex_components ?: []
+    if (!params.sequence_input && !(params.pred_method == 'esmfold2' && esmComplexComponents instanceof Collection && !esmComplexComponents.isEmpty())) {
+        error("--sequence_input is required. ESMFold2 complex jobs may instead provide --complex_components.")
+    }
+
+    if (!(params.pred_method in ['boltz', 'rf3', 'protenix', 'esmfold2', 'both', 'all'])) {
+        error("--pred_method must be one of: boltz, rf3, protenix, esmfold2, both, all")
     }
     
-    def seq = params.sequence_input
+    def seq = params.sequence_input ?: ''
     def name = params.sequence_name ?: 'predicted'
     def numJobs = params.num_parallel_jobs ?: 1
     
     println("=" * 60)
     println("Structure Prediction Workflow")
     println("=" * 60)
-    println("* Sequence: ${seq.take(50)}${seq.length() > 50 ? '...' : ''}")
+    println("* Sequence: ${seq ? seq.take(50) + (seq.length() > 50 ? '...' : '') : '[complex components]'}")
     println("* Name: ${name}")
     println("* Predictor: ${params.pred_method}")
     println("* Parallel jobs: ${numJobs}")

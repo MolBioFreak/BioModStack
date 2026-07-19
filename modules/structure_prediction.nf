@@ -1,8 +1,9 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
-// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
+// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix, ESMFold2
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
+include { ESMFold2Predict } from './esmfold2_experimental.nf'
 
 def resolveBooleanParam(value, defaultValue) {
     if (value == null) {
@@ -1227,6 +1228,11 @@ workflow structure_prediction_wf {
             // Protenix handles its own MSA via built-in protenix prep or ESM
             ProtenixPredict(input_ch)
             structures = structures.mix(ProtenixPredict.out.cifs)
+        }
+
+        if (pred_method == 'esmfold2') {
+            ESMFold2Predict(input_ch)
+            structures = structures.mix(ESMFold2Predict.out.cifs)
         }
     }
 

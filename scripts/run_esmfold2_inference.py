@@ -683,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # pragma: no cover - depends on external runtime image
         raise SystemExit(
             "ESMFold2 runtime import failed. Build/install the pinned Biohub esm + Biohub transformers "
-            f"runtime before launching this experimental workflow: {exc}"
+            f"runtime before launching this workflow: {exc}"
         ) from exc
 
     spi, manifest_components = build_structure_prediction_input(
@@ -706,6 +706,16 @@ def main(argv: list[str] | None = None) -> int:
     device = args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    device_event: dict[str, Any] = {
+        "event": "device_selected",
+        "requested_device": args.device,
+        "device": device,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device_count": int(torch.cuda.device_count()),
+    }
+    if device == "cuda":
+        device_event["cuda_device_name"] = torch.cuda.get_device_name(torch.cuda.current_device())
+    print(json.dumps(device_event, sort_keys=True), flush=True)
 
     try:
         model = ESMFold2Model.from_pretrained(
@@ -768,9 +778,29 @@ def main(argv: list[str] | None = None) -> int:
         (output_dir / metrics_name).write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
         samples.append({"sample_id": sample_id, "cif": cif_name, "metrics": metrics_name, **metrics})
 
+    summary_columns = [
+        "sample_id",
+        "sequence_name",
+        "sequence_length",
+        "plddt_mean",
+        "ptm",
+        "iptm",
+        "cif",
+        "metrics",
+    ]
+    summary_lines = ["\t".join(summary_columns)]
+    for sample in samples:
+        summary_lines.append(
+            "\t".join(
+                "" if sample.get(column) is None else str(sample.get(column, ""))
+                for column in summary_columns
+            )
+        )
+    (output_dir / "summary.tsv").write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+
     manifest = {
         "schema_version": 2,
-        "workflow": "esmfold2_experimental",
+        "workflow": "esmfold2",
         "sample_count": len(samples),
         "sequence_name": args.sequence_name,
         "sequence_length": sequence_length,
@@ -786,7 +816,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             {
-                "workflow": "esmfold2_experimental",
+                "workflow": "esmfold2",
                 "sample_count": len(samples),
                 "component_count": len(manifest_components),
                 "output_dir": str(output_dir),

@@ -10,10 +10,11 @@ import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 import { StructurePredictionTemplate } from './StructurePredictionTemplate';
-import { BoltzGenTemplate } from './BoltzGenTemplate';
-import { BindCraftTemplate } from './BindCraftTemplate';
+
+
 import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
+import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -149,11 +150,6 @@ const compactUiCopy = (value: unknown, maxLength = 118): string => {
     return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 };
 
-const ESMFOLD2_QUALITY_PRESETS: Record<string, { num_loops: number; num_sampling_steps: number; num_diffusion_samples: number }> = {
-    smoke: { num_loops: 1, num_sampling_steps: 25, num_diffusion_samples: 1 },
-    standard: { num_loops: 3, num_sampling_steps: 50, num_diffusion_samples: 1 },
-    thorough: { num_loops: 5, num_sampling_steps: 100, num_diffusion_samples: 2 },
-};
 
 // Reusable param field component for grouped rendering
 const canonicalStructureSourceName = (target: SelectedTarget): string => {
@@ -576,7 +572,7 @@ function ParamField({
 }
 
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
-    'alphafold2', 'bindcraft', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',
+    'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',
     'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'protein_hunter', 'proteinmpnn', 'protenix', 'rf3',
     'rfantibody', 'rfdiffusion', 'rfdpoly', 'unidock',
 ]);
@@ -603,8 +599,8 @@ const getTemplateDocumentationTopics = (
     if (identity.includes('confornets')) return ['confornets'];
     if (identity.includes('esmfold2')) return ['esmfold2'];
     if (identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
-    if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
-    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix'];
+    if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
+    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix', 'esmfold2'];
     if (identity.includes('boltz')) return ['boltz2'];
     if (identity.includes('rfdiffusion') || identity.includes('diffusion')) return ['rfdiffusion'];
     return [];
@@ -620,7 +616,7 @@ const getModelDocumentationTopics = (model: UntypedApiValue | null | undefined):
     if (identity.includes('esmfold2')) return ['esmfold2'];
     if (identity.includes('protenix')) return ['protenix'];
     if (identity.includes('rf3') || identity.includes('rosettafold')) return ['rf3'];
-    if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
+    if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
     if (identity.includes('rfdiffusion')) return ['rfdiffusion'];
     if (identity.includes('boltzgen')) return ['boltzgen'];
     if (identity.includes('boltz2') || identity.includes('boltz-2')) return ['boltz2'];
@@ -639,8 +635,9 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
             return 'Experimental conformational mapping; ConforNets backend first.';
+        case 'esmfold2':
         case 'esmfold2_experimental':
-            return 'Standalone ESMFold2 protein/complex fold.';
+            return 'ESMFold2 engine inside Structure Prediction.';
         case 'mutagenesis':
             return 'Build variant libraries and predict structures.';
         case 'oligo_design':
@@ -658,8 +655,9 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
             return 'Experimental Fold-CP large-protein path.';
         case 'confornets_experimental':
             return 'Experimental monomer conformational mapping.';
+        case 'esmfold2':
         case 'esmfold2_experimental':
-            return 'Standalone ESMFold2 folding alpha.';
+            return 'Local all-atom protein and complex folding.';
         case 'antibody_denovo':
             return 'Nanobody generation and refinement toolkit.';
         case 'rfdiffusion':
@@ -767,18 +765,27 @@ export function JobSubmission() {
                         structure_launch_variant: data.params?.structure_launch_variant || 'boltz_cp_experimental',
                     });
                 }
-                // 4. ESMFold2 experimental reuses the structure-prediction template with a fixed launch variant.
-                else if (data.model_id === 'esmfold2_experimental') {
-                    setWizardMode('experimental');
-                    setSelectedTemplateId('esmfold2_experimental');
+                // 4. ESMFold2 compatibility IDs reopen the parent Structure Prediction workflow.
+                else if (data.model_id === 'esmfold2' || data.model_id === 'esmfold2_experimental') {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('structure_prediction');
                     setClonedValues({
                         ...data.params,
                         name: data.name,
-                        template_model_id: 'esmfold2_experimental',
-                        structure_launch_variant: data.params?.structure_launch_variant || 'esmfold2_experimental',
+                        pred_method: 'esmfold2',
                     });
                 }
-                // 5. Conformational Mapping is API-template driven; retry/resume must reload the template form, not the hidden raw model picker.
+                // 5. Legacy BoltzGen jobs reopen the parent De Novo workflow with BoltzGen selected.
+                else if (data.model_id === 'boltzgen') {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('antibody_denovo');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        denovo_generator: 'boltzgen',
+                    });
+                }
+                // 6. Conformational Mapping is API-template driven; retry/resume must reload the template form, not the hidden raw model picker.
                 else if (data.model_id === 'confornets_experimental' || data.params?.template_model_id === 'confornets_experimental') {
                     setWizardMode('templates');
                     setSelectedTemplateId('confornets_experimental');
@@ -791,7 +798,7 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
                 }
-                // 6. Manual Mode
+                // 7. Manual Mode
                 else {
                     setWizardMode('manual');
                     setSelectedModelId(data.model_id);
@@ -820,11 +827,12 @@ export function JobSubmission() {
     // Dedicated launcher templates that use specialized components instead of API-driven config
     const dedicatedTemplateByModelId: Record<string, string> = {
         template_antibody_denovo: 'antibody_denovo',
-        boltzgen: 'boltzgen_design',
-        bindcraft: 'bindcraft',
+        boltzgen: 'antibody_denovo',
+
         protein_local_redesign: 'protein_local_redesign',
         boltz_cp_experimental: 'boltz_cp_experimental',
-        esmfold2_experimental: 'esmfold2_experimental',
+        esmfold2: 'structure_prediction',
+        esmfold2_experimental: 'structure_prediction',
     };
     const hardcodedWorkflowTemplates = useMemo(() => [
         {
@@ -857,22 +865,7 @@ export function JobSubmission() {
                 { tool: 'Review + QC' }
             ],
         },
-        {
-            id: 'boltzgen_design',
-            name: 'BoltzGEN',
-            description: 'Generate ligand-aware binder candidates.',
-            icon: 'pill',
-            color: '#EC4899',
-            stages: [{ tool: 'BoltzGen' }, { tool: 'Filtering' }, { tool: 'Docking' }],
-        },
-        {
-            id: 'bindcraft',
-            name: 'BindCraft',
-            description: 'Minibinders/peptides: AF2 + MPNN + filters.',
-            icon: 'binder',
-            color: '#10B981',
-            stages: [{ tool: 'AF2 Hallucination' }, { tool: 'MPNN' }, { tool: 'Filtering' }],
-        },
+
         {
             id: 'oligo_design',
             name: 'Oligo Designer',
@@ -901,7 +894,7 @@ export function JobSubmission() {
     const visibleApiTemplates = useMemo(() => {
         const templates = templatesData?.data ?? [];
         return templates.filter((t: UntypedApiValue) =>
-            !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
+            !['binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
             (t.id !== 'dna_polymerase' || (window as UntypedApiValue).__DEBUG_MODE__)
         );
     }, [templatesData]);
@@ -943,19 +936,21 @@ export function JobSubmission() {
         if (dedicatedTemplateId) {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
             const templateModelId = template.model_id || template.params?.template_model_id;
-            setWizardMode(['boltz_cp_experimental', 'esmfold2_experimental'].includes(dedicatedTemplateId) ? 'experimental' : 'templates');
+            const isLegacyEsmfold2 = templateModelId === 'esmfold2' || templateModelId === 'esmfold2_experimental';
+            const isLegacyBoltzGen = templateModelId === 'boltzgen';
+            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
             setDedicatedTemplateVersion((prev) => prev + 1);
             setClonedValues({
                 ...template.params,
                 name: loadedJobName,
                 job_name: loadedJobName,
-                template_model_id: templateModelId,
+                template_model_id: isLegacyEsmfold2 || isLegacyBoltzGen ? undefined : templateModelId,
+                ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
+                ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
                 structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
                     ? (template.params?.structure_launch_variant || 'boltz_cp_experimental')
-                    : dedicatedTemplateId === 'esmfold2_experimental'
-                        ? (template.params?.structure_launch_variant || 'esmfold2_experimental')
-                        : template.params?.structure_launch_variant,
+                    : template.params?.structure_launch_variant,
             });
             setJobName(loadedJobName);
             setSelectedModelId(null);
@@ -1004,7 +999,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'esmfold2_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
 
@@ -1047,24 +1042,7 @@ export function JobSubmission() {
 
     // Handle param change
     const updateParam = (key: string, value: UntypedApiValue) => {
-        setParams(prev => {
-            const next = { ...prev, [key]: value };
-            if (selectedTemplateId === 'esmfold2_experimental' && key === 'quality_preset') {
-                const preset = ESMFOLD2_QUALITY_PRESETS[String(value)] || null;
-                if (preset) {
-                    next.num_loops = preset.num_loops;
-                    next.num_sampling_steps = preset.num_sampling_steps;
-                    next.num_diffusion_samples = preset.num_diffusion_samples;
-                }
-            } else if (
-                selectedTemplateId === 'esmfold2_experimental' &&
-                ['num_loops', 'num_sampling_steps', 'num_diffusion_samples'].includes(key) &&
-                next.quality_preset !== 'custom'
-            ) {
-                next.quality_preset = 'custom';
-            }
-            return next;
-        });
+        setParams(prev => ({ ...prev, [key]: value }));
     };
 
     const getTemplateIconLabel = (template: UntypedApiValue) => {
@@ -1073,7 +1051,7 @@ export function JobSubmission() {
         if (template.id === 'protein_hunter_experimental') return 'PH';
         if (template.id === 'boltz_cp_experimental') return 'CP';
         if (template.id === 'confornets_experimental') return 'CN';
-        if (template.id === 'esmfold2_experimental') return 'EF';
+
         return template.icon === 'target' ? 'TG'
             : template.icon === 'flask' ? 'RF'
                 : template.icon === 'dna' ? 'MU'
@@ -1177,7 +1155,7 @@ export function JobSubmission() {
         if (identity.includes('proteinmpnn') || identity.includes('ligandmpnn') || identity.includes('fampnn') || identity.includes('full-atom mpnn')) {
             return 'SEQ';
         }
-        if (identity.includes('bindcraft') || identity.includes('rfantibody') || identity.includes('antibody')) {
+        if (identity.includes('rfantibody') || identity.includes('antibody')) {
             return 'BIND';
         }
         if (identity.includes('boltz2') || identity.includes('alphafold') || identity.includes('rosettafold') || identity.includes('protenix') || identity.includes('rf3')) {
@@ -1274,19 +1252,7 @@ export function JobSubmission() {
             })
             .map((param: UntypedApiValue) => param.label || param.name)
         : [];
-    const esmfold2HasInputSource = selectedTemplateId === 'esmfold2_experimental'
-        ? Boolean(
-            String(params.sequence || '').trim() ||
-            String(params.pdb_sequence_path || '').trim() ||
-            String(params.complex_components_json || '').trim()
-        )
-        : true;
-    const allMissingRequiredTemplateParams = [
-        ...missingRequiredTemplateParams,
-        ...(selectedTemplateId === 'esmfold2_experimental' && !esmfold2HasInputSource
-            ? ['Protein Sequence, PDB Sequence Source, or Components JSON']
-            : []),
-    ];
+    const allMissingRequiredTemplateParams = missingRequiredTemplateParams;
     const isReady = Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
         (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
@@ -1425,7 +1391,7 @@ export function JobSubmission() {
     };
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'esmfold2_experimental', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'oligo_design', 'protein_local_redesign', 'molecular_dynamics'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
@@ -1527,7 +1493,11 @@ export function JobSubmission() {
                                         try {
                                             await submitMutation.mutateAsync({
                                                 name: jobNamePrefix,
-                                                model_id: predictorConfig.predictor === 'rf3' ? 'rf3' : 'boltz2',
+                                                model_id: predictorConfig.predictor === 'rf3'
+                                                    ? 'rf3'
+                                                    : predictorConfig.predictor === 'esmfold2'
+                                                        ? 'esmfold2'
+                                                        : 'boltz2',
                                                 mode: 'predict',
                                                 params: batchParams
                                             });
@@ -1543,7 +1513,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' || selectedTemplateId === 'esmfold2_experimental' ? (
+                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' ? (
                                 <StructurePredictionTemplate
                                     key={`${selectedTemplateId}:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
@@ -1554,23 +1524,7 @@ export function JobSubmission() {
                                             ...(templateDetail?.preset_params || {}),
                                             ...(clonedValues || {}),
                                         }
-                                        : selectedTemplateId === 'esmfold2_experimental'
-                                            ? {
-                                                ...(getDedicatedTemplateInitialValues('esmfold2_experimental') || {}),
-                                                ...(templateDetail?.preset_params || {}),
-                                                ...(clonedValues || {}),
-                                            }
-                                            : clonedValues}
-                                />
-                            ) : selectedTemplateId === 'boltzgen_design' ? (
-                                <BoltzGenTemplate
-                                    onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
-                                />
-                            ) : selectedTemplateId === 'bindcraft' ? (
-                                <BindCraftTemplate
-                                    onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
+                                        : clonedValues}
                                 />
                             ) : selectedTemplateId === 'oligo_design' ? (
                                 <OligoDesignerTemplate
@@ -1579,6 +1533,11 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'protein_local_redesign' ? (
                                 <ProteinLocalRedesignTemplate
+                                    onBack={handleDedicatedTemplateBack}
+                                    initialValues={clonedValues}
+                                />
+                            ) : selectedTemplateId === 'molecular_dynamics' ? (
+                                <MolecularDynamicsTemplate
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
