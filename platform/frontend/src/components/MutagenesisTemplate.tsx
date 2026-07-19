@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary, normalizeAminoAcids, formatMutationLabel } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
@@ -10,6 +10,8 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import MolstarViewer from './MolstarViewer';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
 import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
+import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
+import { createResidueMetricLayer } from '../lib/molstar-metrics';
 
 const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 } as const;
 
@@ -58,15 +60,24 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         return { r: 156, g: 163, b: 175 };      // Gray: neutral
     }, []);
 
-    // Build frustration color map for Molstar viewer
-    const frustrationColorMap = useMemo(() => {
-        const colorMap = new Map<string, { r: number; g: number; b: number }>();
-        frustrampnnResults.forEach(result => {
-            // Assuming chain 'A' for now - will be updated with actual chain info
-            colorMap.set(`A${result.position}`, frustrationToColor(result.frustration));
-        });
-        return colorMap;
-    }, [frustrampnnResults, frustrationToColor]);
+    const frustrationMetricLayer = useMemo(() => createResidueMetricLayer({
+        descriptor: {
+            id: 'frustration-index',
+            label: 'Frustration index',
+            semanticType: 'energy',
+            units: 'dimensionless',
+            direction: 'higher_is_better',
+            source: 'FrustraMPNN affinity-maturation analysis',
+            provenance: { source: 'FrustraMPNN affinity-maturation analysis' },
+        },
+        points: frustrampnnResults
+            .filter((result) => Boolean(result.chain) && Number.isInteger(result.position))
+            .map((result) => ({
+                residue: { labelAsymId: result.chain, labelSeqId: result.position },
+                value: result.frustration,
+                color: frustrationToColor(result.frustration),
+            })),
+    }), [frustrampnnResults, frustrationToColor]);
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -107,7 +118,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
 
     // Predictor Config
-    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'both'>('boltz');
+    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'esmfold2' | 'both'>('boltz');
     const [predictorParams, setPredictorParams] = useState({
         recycling_steps: 3,
         diffusion_samples: 1,
@@ -130,6 +141,17 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [pdbImportTab, setPdbImportTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>('upload');
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
+    const pdbBlobUrlRef = useRef<string | null>(null);
+    const targetSelectionControllerRef = useRef(createLatestAsyncResourceController());
+    const replacePdbBlobUrl = useCallback((nextUrl: string | null) => {
+        if (pdbBlobUrlRef.current && pdbBlobUrlRef.current !== nextUrl) URL.revokeObjectURL(pdbBlobUrlRef.current);
+        pdbBlobUrlRef.current = nextUrl;
+        setPdbBlobUrl(nextUrl);
+    }, []);
+    useEffect(() => () => {
+        if (pdbBlobUrlRef.current) URL.revokeObjectURL(pdbBlobUrlRef.current);
+        targetSelectionControllerRef.current.dispose();
+    }, []);
     const [show3DViewer, setShow3DViewer] = useState(false);
     const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
 
@@ -880,7 +902,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     height={280}
                                     hideControls={true}
                                     alphafoldView={frustrampnnResults.length === 0} // pLDDT coloring if no frustration data
-                                    residueColors={frustrampnnResults.length > 0 ? frustrationColorMap : undefined}
+                                    residueMetricLayer={frustrampnnResults.length > 0 ? frustrationMetricLayer : undefined}
                                     label={frustrampnnResults.length > 0 ? 'Frustration Map' : undefined}
                                 />
                             </div>
@@ -1097,7 +1119,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 {/* 6. Predictor Settings */}
                 <section className="pt-6 border-t border-slate-800">
                     <h3 className="text-sm font-semibold text-slate-200 mb-4">Prediction Settings</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                         <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'boltz' ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
                             onClick={() => setPredictor('boltz')}
                         >
@@ -1108,6 +1130,12 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             onClick={() => setPredictor('rf3')}
                         >
                             <div className="font-bold mb-1">RoseTTAFold3</div>
+                            <div className="text-xs opacity-70">Single Model</div>
+                        </div>
+                        <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'esmfold2' ? 'bg-violet-600/20 border-violet-500 text-violet-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
+                            onClick={() => setPredictor('esmfold2')}
+                        >
+                            <div className="font-bold mb-1">ESMFold2</div>
                             <div className="text-xs opacity-70">Single Model</div>
                         </div>
                         <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'both' ? 'bg-accent/20 border-accent text-accent' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
@@ -1286,48 +1314,65 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         {parsedChains.length === 0 ? (
                             <TargetAntigenSelector
                                 onSelect={async (target) => {
+                                    const selectionToken = targetSelectionControllerRef.current.begin();
                                     if (target?.url) {
+                                        let blobUrl: string | null = null;
                                         try {
                                             const response = await fetch(target.url);
                                             const blob = await response.blob();
-                                            const blobUrl = URL.createObjectURL(blob);
+                                            blobUrl = URL.createObjectURL(blob);
                                             const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
                                             const parsed = await parsePDBFile(file);
+                                            if (!targetSelectionControllerRef.current.isCurrent(selectionToken)) {
+                                                if (blobUrl) URL.revokeObjectURL(blobUrl);
+                                                return;
+                                            }
                                             if (parsed.chains.length === 1) {
                                                 // Single chain - use directly
                                                 setBaseSequence(parsed.chains[0].sequence);
-                                                setPdbBlobUrl(blobUrl);
+                                                replacePdbBlobUrl(blobUrl);
                                                 setSelectedChainId(parsed.chains[0].id);
                                                 setShowPdbImport(false);
                                                 setParsedChains([]);
                                             } else if (parsed.chains.length > 1) {
                                                 // Multiple chains - let user select
                                                 setParsedChains(parsed.chains);
-                                                setPdbBlobUrl(blobUrl);  // Store for later use
+                                                replacePdbBlobUrl(blobUrl);  // Store for later use
                                             } else {
+                                                if (blobUrl) URL.revokeObjectURL(blobUrl);
                                                 alert('No protein chains found in PDB');
                                             }
                                         } catch (err) {
+                                            if (blobUrl) URL.revokeObjectURL(blobUrl);
+                                            if (!targetSelectionControllerRef.current.isCurrent(selectionToken)) return;
                                             console.error('Failed to parse PDB:', err);
                                             alert('Failed to parse PDB file');
                                         }
                                     } else if (target?.file) {
+                                        let blobUrl: string | null = null;
                                         try {
-                                            const blobUrl = URL.createObjectURL(target.file);
+                                            blobUrl = URL.createObjectURL(target.file);
                                             const parsed = await parsePDBFile(target.file);
+                                            if (!targetSelectionControllerRef.current.isCurrent(selectionToken)) {
+                                                if (blobUrl) URL.revokeObjectURL(blobUrl);
+                                                return;
+                                            }
                                             if (parsed.chains.length === 1) {
                                                 setBaseSequence(parsed.chains[0].sequence);
-                                                setPdbBlobUrl(blobUrl);
+                                                replacePdbBlobUrl(blobUrl);
                                                 setSelectedChainId(parsed.chains[0].id);
                                                 setShowPdbImport(false);
                                                 setParsedChains([]);
                                             } else if (parsed.chains.length > 1) {
                                                 setParsedChains(parsed.chains);
-                                                setPdbBlobUrl(blobUrl);  // Store for later use
+                                                replacePdbBlobUrl(blobUrl);  // Store for later use
                                             } else {
+                                                if (blobUrl) URL.revokeObjectURL(blobUrl);
                                                 alert('No protein chains found in PDB');
                                             }
                                         } catch (err) {
+                                            if (blobUrl) URL.revokeObjectURL(blobUrl);
+                                            if (!targetSelectionControllerRef.current.isCurrent(selectionToken)) return;
                                             console.error('Failed to parse PDB:', err);
                                             alert('Failed to parse PDB file');
                                         }

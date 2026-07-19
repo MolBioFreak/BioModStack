@@ -65,10 +65,10 @@ def _write_minimal_esmfold2_cif(path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_esmfold2_result_ingestion_uses_manifest_metrics_without_fampnn_synthesis(tmp_path: Path) -> None:
+async def test_esmfold2_result_ingestion_uses_nested_active_publish_dir_without_fampnn_synthesis(tmp_path: Path) -> None:
     session_factory, engine = await _build_session_factory(tmp_path)
     output_root = tmp_path / "rnaseh_esmfold2_full"
-    final_root = output_root / "final" / "esmfold2"
+    final_root = output_root / "final" / "esmfold2" / "esmfold2_results"
     cif_path = final_root / "rnaseh_000.cif"
     metrics_path = final_root / "rnaseh_000.metrics.json"
     manifest_path = final_root / "manifest.json"
@@ -99,7 +99,7 @@ async def test_esmfold2_result_ingestion_uses_manifest_metrics_without_fampnn_sy
         json.dumps(
             {
                 "schema_version": 2,
-                "workflow": "esmfold2_experimental",
+                "workflow": "esmfold2",
                 "sample_count": 1,
                 "sequence_name": "rnaseh",
                 "model_variant": "full",
@@ -116,7 +116,7 @@ async def test_esmfold2_result_ingestion_uses_manifest_metrics_without_fampnn_sy
             Job(
                 id="job-esmf2-ingest",
                 name="rnaseh-esmfold2-full",
-                model_id="esmfold2_experimental",
+                model_id="esmfold2",
                 mode="predict",
                 params={"model_variant": "full", "sequence_name": "rnaseh"},
                 output_dir=str(output_root),
@@ -138,11 +138,13 @@ async def test_esmfold2_result_ingestion_uses_manifest_metrics_without_fampnn_sy
         assert design.stage_family == "esmfold2"
         assert design.stage_mode == "predict"
         assert design.provenance["artifact_group"] == "esmfold2"
-        assert design.provenance["model_id"] == "esmfold2_experimental"
+        assert design.provenance["model_id"] == "esmfold2"
         assert design.provenance["model_variant"] == "full"
         assert design.provenance["model_id_or_path"] == "biohub/ESMFold2"
+        assert design.provenance["esmfold2"]["workflow"] == "esmfold2"
         assert design.confidence_metrics is not None
         assert "esmfold2" in design.confidence_metrics
+        assert design.confidence_metrics["esmfold2"]["workflow"] == "esmfold2"
         assert "fampnn" not in design.confidence_metrics
         assert design.fampnn_psce is None
         assert design.mpnn_score is None
@@ -183,15 +185,15 @@ async def test_esmfold2_ingestion_does_not_fall_through_to_loose_fampnn_synthesi
     await engine.dispose()
 
 
-def test_model_registry_loads_standalone_esmfold2_experimental() -> None:
+def test_model_registry_loads_historical_esmfold2_metadata_without_launch_entrypoint() -> None:
     registry = ModelRegistry()
 
     model = registry.get_model("esmfold2_experimental")
 
     assert model is not None
-    assert model.name == "ESMFold2 Experimental"
+    assert model.name == "ESMFold2"
     assert model.category == "structure_prediction"
-    assert model.experimental is True
+    assert model.experimental is False
     assert model.container == "esmfold2.sif"
     assert any(mode.id == "predict" for mode in model.modes)
     assert any(param.name == "sequence" and param.required is False for param in model.params)
@@ -223,35 +225,17 @@ def test_model_registry_loads_standalone_esmfold2_experimental() -> None:
     ) == ["Invalid value for model_variant: must be one of ['fast', 'full']"]
 
 
-def test_template_registry_loads_structure_launcher_esmf2_variant_without_generic_user_params() -> None:
+def test_template_registry_does_not_expose_esmfold2_as_a_standalone_launcher() -> None:
     registry = TemplateRegistry(API_ROOT / "config" / "templates")
 
-    template = registry.get_template("esmfold2_experimental")
-
-    assert template is not None
-    assert template.name == "ESMFold2 Experimental"
-    assert template.experimental is True
-    assert template.preset_params == {
-        "template_model_id": "esmfold2_experimental",
-        "template_mode_id": "predict",
-        "structure_launch_variant": "esmfold2_experimental",
-        "model_variant": "fast",
-    }
-    assert template.user_params == [], (
-        "ESMFold2 must reuse StructurePredictionTemplate inputs instead of rendering a duplicate generic form"
-    )
-    assert not any(key.startswith("esmf_") for key in template.preset_params), (
-        "prefixed ESMFold2 defaults in preset_params shadow canonical structure-launcher controls"
-    )
+    assert registry.get_template("esmfold2") is None
+    assert registry.get_template("esmfold2_experimental") is None
 
 
-def test_esmfold2_model_config_keeps_runtime_contract_while_template_delegates_ui_to_structure_launcher() -> None:
+def test_esmfold2_model_config_remains_available_for_runtime_and_historical_metadata() -> None:
     model_registry = ModelRegistry()
-    template_registry = TemplateRegistry(API_ROOT / "config" / "templates")
     model = model_registry.get_model("esmfold2_experimental")
-    template = template_registry.get_template("esmfold2_experimental")
     assert model is not None
-    assert template is not None
 
     model_param_names = {param.name for param in model.params}
     for required_runtime_param in {
@@ -273,13 +257,10 @@ def test_esmfold2_model_config_keeps_runtime_contract_while_template_delegates_u
     }:
         assert required_runtime_param in model_param_names, required_runtime_param
 
-    assert [param.name for param in template.user_params] == []
-    assert template.preset_params["structure_launch_variant"] == "esmfold2_experimental"
 
-
-def test_esmfold2_experimental_routes_as_direct_standalone_entrypoint(tmp_path) -> None:
-    assert WORKFLOW_ENTRYPOINTS["esmfold2_experimental"] == "workflows/esmfold2_experimental.nf"
-    assert resolve_nextflow_entrypoint(effective_profile="esmfold2_experimental") == "workflows/esmfold2_experimental.nf"
+def test_esmfold2_compatibility_id_routes_through_active_structure_prediction(tmp_path) -> None:
+    assert "esmfold2_experimental" not in WORKFLOW_ENTRYPOINTS
+    assert resolve_nextflow_entrypoint(effective_profile="esmfold2_experimental") == "workflows/structure_prediction.nf"
 
     cmd = build_nextflow_command(
         "esmfold2_experimental",
@@ -297,8 +278,8 @@ def test_esmfold2_experimental_routes_as_direct_standalone_entrypoint(tmp_path) 
         job_id="job-esmf2",
     )
 
-    assert cmd[:4] == ["nextflow", "run", "workflows/esmfold2_experimental.nf", "-profile"]
-    assert _flag_value(cmd, "-profile") == "esmfold2_experimental,workstation_ryzen7960x"
+    assert cmd[1:4] == ["run", "workflows/structure_prediction.nf", "-profile"]
+    assert _flag_value(cmd, "-profile") == "esmfold2,workstation_ryzen7960x"
     assert _flag_value(cmd, "--esmf_sequence") == "MQIFVKTLTGKTITLEVEPSDTI"
     assert _flag_value(cmd, "--esmf_sequence_name") == "ubiquitin_fragment"
     assert _flag_value(cmd, "--esmf_model_variant") == "fast"
@@ -308,7 +289,7 @@ def test_esmfold2_experimental_routes_as_direct_standalone_entrypoint(tmp_path) 
     assert _flag_value(cmd, "--esmf_num_diffusion_samples") == "1"
     assert _flag_value(cmd, "--esmf_local_files_only") == "true"
     assert _flag_value(cmd, "--esmf_device") == "auto"
-    assert "--sequence_input" not in cmd
+    assert _flag_value(cmd, "--sequence_input") == "MQIFVKTLTGKTITLEVEPSDTI"
 
     complex_cmd = build_nextflow_command(
         "esmfold2_experimental",
@@ -344,7 +325,6 @@ def test_esmfold2_experimental_routes_as_direct_standalone_entrypoint(tmp_path) 
     assert _flag_value(complex_cmd, "--esmf_rna_sequence") == "CGACACCUGAUUCC"
     assert _flag_value(complex_cmd, "--esmf_ligand_smiles") == "CCO"
     assert _flag_value(complex_cmd, "--esmf_complex_components_json").startswith('[{"type":"protein"')
-    assert "--sequence_input" not in complex_cmd
 
     canonical_complex_cmd = build_nextflow_command(
         "esmfold2_experimental",
@@ -377,7 +357,7 @@ def test_esmfold2_experimental_routes_as_direct_standalone_entrypoint(tmp_path) 
     assert _flag_value(canonical_complex_cmd, "--esmf_model_id_or_path") == "biohub/ESMFold2"
     assert "--esmf_sequence" not in canonical_complex_cmd
     assert "--complex_json_path" not in canonical_complex_cmd
-    assert "--pred_method" not in canonical_complex_cmd
+    assert _flag_value(canonical_complex_cmd, "--pred_method") == "esmfold2"
     assert "--primary_chain_id" not in canonical_complex_cmd
     assert "--target_chains" not in canonical_complex_cmd
     assert "--binder_chains" not in canonical_complex_cmd
@@ -447,30 +427,28 @@ def test_esmfold2_visible_ui_params_override_legacy_prefixed_defaults() -> None:
     assert _flag_value(preset_cmd, "--esmf_num_diffusion_samples") == "2"
 
 
-def test_esmfold2_experimental_static_runtime_contract() -> None:
-    workflow_text = (REPO_ROOT / "workflows" / "esmfold2_experimental.nf").read_text(encoding="utf-8")
+def test_esmfold2_internal_runtime_contract() -> None:
+    assert not (REPO_ROOT / "workflows" / "esmfold2_experimental.nf").exists()
     module_text = (REPO_ROOT / "modules" / "esmfold2_experimental.nf").read_text(encoding="utf-8")
     nextflow_config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
     runner_text = (REPO_ROOT / "scripts" / "run_esmfold2_inference.py").read_text(encoding="utf-8")
     apptainer_def = (REPO_ROOT / "apptainer" / "esmfold2.def").read_text(encoding="utf-8")
     main_text = (REPO_ROOT / "main.nf").read_text(encoding="utf-8")
 
-    assert "workflow ESMFOLD2_EXPERIMENTAL" in workflow_text
-    assert "workflow {" in workflow_text
-    assert "ESMFold2 Experimental Workflow" in workflow_text
-    assert "params.esmf_" not in workflow_text
+    assert "process ESMFold2Predict" in module_text
+    assert "process RunESMFold2Experimental" not in module_text
     assert "label 'ESMFold2'" in module_text
     assert "run_esmfold2_inference.py" in module_text
     assert "bms_gpu_run_telemetry.py" in module_text
-    assert "bms_run_telemetry_RunESMFold2Experimental.json" in module_text
-    assert "${params.out_dir}/run/telemetry" in module_text
-    assert "path 'bms_run_telemetry_*.json'" in module_text
-    assert "--label RunESMFold2Experimental" in module_text
-    assert "-- python3 /scripts/run_esmfold2_inference.py" in module_text
-    assert "cp -R esmfold2_results/." in module_text
+    assert 'path "esmfold2_results/*.telemetry.json", emit: telemetry' in module_text
+    assert "--output-json ${telemetryPath}" in module_text
+    assert "--label ESMFold2Predict" in module_text
+    assert "--workflow esmfold2" not in module_text
     assert "pdb_files" in module_text
-    assert "params.esmf_" not in module_text
-    assert "esmfold2_experimental {" in nextflow_config
+    active_process_text = module_text.split("process ESMFold2Predict {", 1)[1]
+    assert "def modelVariant = params.esmf_model_variant ?: params.model_variant ?: 'fast'" in active_process_text
+    assert "def modelIdOrPath = params.esmf_model_id_or_path ?: params.model_id_or_path ?: ''" in active_process_text
+    assert "esmfold2_experimental {" not in nextflow_config
     assert "withLabel: ESMFold2" in nextflow_config
     assert "${params.container_dir}/esmfold2.sif" in nextflow_config
     assert "HF_HOME=/weights/esmfold2/hf_home" in nextflow_config
@@ -479,6 +457,9 @@ def test_esmfold2_experimental_static_runtime_contract() -> None:
     assert "BMS_ESMFOLD2_MODEL" in nextflow_config
     assert "ESMFold2Model.from_pretrained" in runner_text
     assert "local_files_only=args.local_files_only" in runner_text
+    assert '"event": "device_selected"' in runner_text
+    assert '"workflow": "esmfold2"' in runner_text
+    assert '"workflow": "esmfold2_experimental"' not in runner_text
     assert "StructurePredictionInput" in runner_text
     assert "DNAInput" in runner_text
     assert "RNAInput" in runner_text
@@ -486,43 +467,33 @@ def test_esmfold2_experimental_static_runtime_contract() -> None:
     assert "from_a3m" in runner_text
     assert "parse_pdb_polymer_components" in runner_text
     assert "--complex-components-json" in runner_text
-    assert "--pdb-sequence-path" in module_text
-    assert "--msa-path" in module_text
-    assert "biohub.ai/developer-console" not in workflow_text + module_text + runner_text
-    assert "ESM_API_KEY" not in workflow_text + module_text + runner_text
+    assert "--pdb-sequence-path" in runner_text
+    assert "--msa-path" in runner_text
+    assert "biohub.ai/developer-console" not in module_text + runner_text
+    assert "ESM_API_KEY" not in module_text + runner_text
     assert "Biohub/esm.git@c94ed8d763bbd7088b296949e5b401e8ea12073a" in apptainer_def
     assert "BiohubTransformersCommit 3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf" in apptainer_def
     assert "HF_HOME=/weights/esmfold2/hf_home" in apptainer_def
     assert "esmfold2_experimental" not in main_text
 
 
-def test_esmfold2_experimental_live_api_contract_if_routers_are_loaded() -> None:
+def test_esmfold2_live_api_exposes_model_metadata_but_no_standalone_template() -> None:
     app = FastAPI()
     app.include_router(models_router, prefix="/api/models")
     app.include_router(templates_router, prefix="/api/templates")
     client = TestClient(app)
 
-    models_payload = client.get("/api/models", params={"include_experimental": "true"}).json()
+    models_payload = client.get("/api/models").json()
     templates_payload = client.get("/api/templates").json()
-
     models = models_payload.get("data", models_payload) if isinstance(models_payload, dict) else models_payload
     templates = templates_payload.get("data", templates_payload) if isinstance(templates_payload, dict) else templates_payload
+
     model = next((item for item in models if item["id"] == "esmfold2_experimental"), None)
     template = next((item for item in templates if item["id"] == "esmfold2_experimental"), None)
-
     assert model is not None
-    assert model["experimental"] is True
-    assert template is not None
-    assert template["experimental"] is True
-
-    detail = client.get("/api/templates/esmfold2_experimental").json()
-    assert detail["preset_params"] == {
-        "template_model_id": "esmfold2_experimental",
-        "template_mode_id": "predict",
-        "structure_launch_variant": "esmfold2_experimental",
-        "model_variant": "fast",
-    }
-    assert detail["user_params"] == []
+    assert model["experimental"] is False
+    assert template is None
+    assert client.get("/api/templates/esmfold2_experimental").status_code == 404
 
 
 def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(tmp_path) -> None:

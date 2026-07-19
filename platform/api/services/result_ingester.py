@@ -33,6 +33,7 @@ from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
+from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, resolve_result_contract
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
 
 
@@ -189,6 +190,23 @@ def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None)
     except Exception as e:
         print(f"[Ingester] Error parsing frustration CSV: {e}")
         return None
+
+
+def _normalize_boltzgen_design_name(design_name: str) -> str:
+    """Normalize upstream ``rankN_name`` artifacts to the UI/API ``name_N`` contract."""
+    import re
+
+    normalized = str(design_name or "").strip()
+    ranked = re.fullmatch(r"rank(\d+)_(.+)", normalized, flags=re.IGNORECASE)
+    if not ranked:
+        return normalized
+    rank, base_name = ranked.groups()
+    return f"{base_name}_{int(rank)}"
+
+
+def _boltzgen_filtered_output_dir(output_path: Path) -> Optional[Path]:
+    filtered = output_path / "collected" / "boltzgen_filtered"
+    return filtered if filtered.is_dir() else None
 
 
 def parse_backbone_id(design_name: str) -> Optional[int]:
@@ -566,6 +584,57 @@ def _load_json_payload(json_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[str, Any]:
+    """Accept canonical producer intent only within server-owned job boundaries.
+
+    Request parameters and arbitrary provenance never enter this path. The
+    producer declaration must use the current schema and a profile allowed for
+    the persisted job model. Artifact readiness is deliberately not copied;
+    it is rebuilt from the material Design paths during contract finalization.
+    """
+    if job is None or not isinstance(payload, dict):
+        return {}
+    profile_id = str(payload.get("review_profile_id") or "").strip().lower()
+    source = str(payload.get("review_contract_source") or "").strip().lower()
+    role_map = payload.get("review_role_map")
+    manifest = payload.get("review_artifact_manifest")
+    raw_version = payload.get("review_contract_version")
+    if raw_version is None:
+        return {}
+    try:
+        version = int(str(raw_version))
+    except (TypeError, ValueError):
+        return {}
+    if (
+        not profile_id
+        or source != "producer"
+        or version != REVIEW_CONTRACT_VERSION
+        or not isinstance(role_map, dict)
+        or not isinstance(manifest, dict)
+        or manifest.get("schema") != REVIEW_ARTIFACT_SCHEMA
+    ):
+        return {}
+
+    model_id = str(getattr(job, "model_id", None) or "").strip().lower()
+    if model_id == "protein_local_redesign":
+        allowed_profiles = {
+            "de_novo_generation_v1",
+            "sequence_design_v1",
+            "structure_prediction_v1",
+        }
+    else:
+        server_contract = resolve_result_contract(model_type=model_id, provenance={"model_id": model_id})
+        allowed_profiles = {server_contract.analysis_contract_id} if server_contract.analysis_contract_id else set()
+    if profile_id not in allowed_profiles:
+        return {}
+    return {
+        "review_profile_id": profile_id,
+        "review_contract_version": REVIEW_CONTRACT_VERSION,
+        "review_contract_source": "producer",
+        "review_role_map": role_map,
+    }
 
 
 def _default_fampnn_metrics() -> Dict[str, Any]:
@@ -1228,6 +1297,25 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     )
     artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION if artifact_class else None
 
+    inferred_review_contract = resolve_result_contract(
+        model_type=getattr(job, "model_id", None),
+        stage_family=stage_family,
+        stage_mode=stage_mode,
+        artifact_class=artifact_class,
+        provenance={"model_id": getattr(job, "model_id", None)},
+    )
+    review_profile_id = inferred_review_contract.analysis_contract_id
+    review_role_map = None
+    if review_profile_id in {"antibody_backbone_v1", "ppiflow_maturation_v1"}:
+        target_chains = params.get("antigen_chains") or params.get("target_chains")
+        if isinstance(target_chains, str):
+            target_chains = [chain.strip() for chain in target_chains.split(",") if chain.strip()]
+        review_role_map = {
+            "result_role": "antibody_binder",
+            "target_chains": target_chains if isinstance(target_chains, list) else [],
+        }
+    review_contract_source = "job_identity" if review_profile_id else None
+
     provenance = {
         "job_id": getattr(job, "id", None),
         "job_name": getattr(job, "name", None),
@@ -1252,6 +1340,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "selected_input_schema_version": selected_input_schema_version,
         "artifact_class": artifact_class,
         "artifact_schema_version": artifact_schema_version,
+        "review_profile_id": review_profile_id,
+        "review_contract_source": review_contract_source,
+        "review_role_map": review_role_map,
+        "review_artifact_manifest": None,
         "iteration_action": params.get("iteration_action"),
         "ppiflow_stage_target": params.get("ppiflow_stage_target"),
         "ppiflow_stage_mode": params.get("ppiflow_stage_mode"),
@@ -1274,6 +1366,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "selected_input_schema_version": selected_input_schema_version,
         "artifact_class": artifact_class,
         "artifact_schema_version": artifact_schema_version,
+        "review_profile_id": review_profile_id,
+        "review_contract_source": review_contract_source,
+        "review_role_map": review_role_map,
+        "review_artifact_manifest": None,
         "provenance": provenance,
         "selection_index": selection_index,
         "source_design_index": source_design_index,
@@ -1451,8 +1547,10 @@ def _design_lineage_fields(
     lineage: Dict[str, Any],
     *,
     artifact_class_override: Optional[str] = None,
+    producer_job: Optional[Job] = None,
+    producer_payload: Any = None,
 ) -> Dict[str, Any]:
-    return {
+    fields = {
         "lineage_root_job_id": context.get("lineage_root_job_id"),
         "parent_design_id": lineage.get("parent_design_id"),
         "origin_design_id": lineage.get("origin_design_id"),
@@ -1465,7 +1563,13 @@ def _design_lineage_fields(
         "source_design_name": lineage.get("source_design_name"),
         "artifact_class": artifact_class_override or context.get("artifact_class"),
         "artifact_schema_version": context.get("artifact_schema_version"),
+        "review_profile_id": context.get("review_profile_id"),
+        "review_contract_source": context.get("review_contract_source"),
+        "review_role_map": context.get("review_role_map"),
+        "review_artifact_manifest": context.get("review_artifact_manifest"),
     }
+    fields.update(_trusted_producer_review_fields(producer_job, producer_payload))
+    return fields
 
 
 def _parse_hlt_cdr_lengths(structure_path: Optional[Path]) -> Dict[str, int]:
@@ -1622,8 +1726,10 @@ def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
 
 def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
     candidates = [
+        output_path / "final" / "esmfold2" / "esmfold2_results",
         output_path / "final" / "esmfold2",
         output_path / "esmfold2_results",
+        output_path / "pdb_files" / "esmfold2_results",
         output_path,
     ]
     for candidate in candidates:
@@ -1766,6 +1872,10 @@ async def ingest_esmfold2_results(
             metrics_path=metrics_path,
             structure_path=structure_path,
         )
+        # Historical artifacts may retain the retired standalone workflow ID.
+        # Canonicalize capability provenance without mutating source files.
+        esmfold2_record["workflow"] = "esmfold2"
+        esmfold2_record["engine"] = "esmfold2"
         confidence_metrics = {
             "esmfold2": esmfold2_record,
             "esmfold2_components": combined_payload.get("components"),
@@ -2636,7 +2746,12 @@ async def ingest_job_results(
                         design.name,
                         cache=lineage_cache,
                     )
-                    for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+                    for field_name, field_value in _design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=fam_payload,
+                    ).items():
                         setattr(design, field_name, field_value)
                     design.stage_family = job_context.get("stage_family")
                     design.stage_mode = job_context.get("stage_mode")
@@ -3881,11 +3996,17 @@ async def ingest_loose_files(
             if candidate.exists():
                 plr_final_path = candidate
 
+    boltzgen_filtered_path = None
+    if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "boltzgen":
+        boltzgen_filtered_path = _boltzgen_filtered_output_dir(output_path)
+
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
     if plr_final_path is not None:
         search_paths = [plr_final_path]
+    elif boltzgen_filtered_path is not None:
+        search_paths = [boltzgen_filtered_path]
     else:
         search_paths = [
             output_path / "pdb_files" / "predictions",
@@ -3896,7 +4017,7 @@ async def ingest_loose_files(
         ]
     
     # Also search RF3 nested output directories
-    if plr_final_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None:
         rf3_base = output_path / "pdb_files" / "rf3" / "output"
         if rf3_base.exists():
             for subdir in rf3_base.iterdir():
@@ -3908,7 +4029,7 @@ async def ingest_loose_files(
                             search_paths.append(sample_dir)
 
     # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
-    if plr_final_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None:
         protenix_base = output_path / "pdb_files" / "predictions"
         if not protenix_base.exists():
             protenix_base = output_path / "run" / "protenix" / "predictions"
@@ -3942,9 +4063,15 @@ async def ingest_loose_files(
             try:
                 raw_name = json_file.stem
                 if raw_name.endswith("_boltzpred"):
-                    design_name = raw_name.replace("_boltzpred", "")
+                    artifact_name = raw_name.replace("_boltzpred", "")
                 else:
-                    design_name = raw_name.replace("confidence_", "")
+                    artifact_name = raw_name.replace("confidence_", "")
+
+                design_name = (
+                    _normalize_boltzgen_design_name(artifact_name)
+                    if job_context.get("stage_family") == "boltzgen"
+                    else artifact_name
+                )
                 
                 # Skip input templates (no numeric suffix) - these are not actual designs
                 # Actual designs are named like: boltzgen_input_0, boltzgen_input_1, etc.
@@ -3959,11 +4086,15 @@ async def ingest_loose_files(
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
                 structure_candidates = [
                     search_dir / f"{design_name}.cif",
+                    search_dir / f"{artifact_name}.cif",
                     output_path / "pdb_files" / f"{design_name}.cif",
+                    output_path / "pdb_files" / f"{artifact_name}.cif",
                     search_dir / f"{raw_name}.pdb",
+                    search_dir / f"{artifact_name}.pdb",
                     search_dir / f"{design_name}_boltzpred.pdb",
                     search_dir / f"{design_name}.pdb",
                     output_path / "pdb_files" / f"{raw_name}.pdb",
+                    output_path / "pdb_files" / f"{artifact_name}.pdb",
                     output_path / "pdb_files" / f"{design_name}_boltzpred.pdb",
                     output_path / "pdb_files" / f"{design_name}.pdb",
                     output_path / "pdb_files" / "predictions" / f"{raw_name}.pdb",
@@ -4102,7 +4233,12 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -4245,7 +4381,12 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),

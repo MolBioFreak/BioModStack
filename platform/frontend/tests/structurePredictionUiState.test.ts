@@ -37,7 +37,7 @@ type PredictorOption = {
 test('predict mode keeps all surfaced predictor combinations available', () => {
     const options = getStructurePredictorOptions('predict');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'both', 'all']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
     assert.equal(options.every((option: PredictorOption) => option.disabled !== true), true);
 });
 
@@ -45,7 +45,7 @@ test('complex mode only exposes truthful predictor choices and disables RF3 expl
     const options = getStructurePredictorOptions('complex');
     const rf3Option = options.find((option: PredictorOption) => option.id === 'rf3');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'boltz_protenix']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
     assert.equal(rf3Option?.disabled, true);
     assert.match(rf3Option?.disabledReason || '', /predict-only/i);
 });
@@ -86,20 +86,17 @@ test('boltz cp experimental launch config keeps the structure template locked to
     assert.equal(config.forcedPredictor, 'boltz');
 });
 
-test('esmfold2 experimental launch config reuses structure inputs without generic predictor or batch controls', () => {
-    const config = resolveStructureLaunchConfig({
-        template_model_id: 'esmfold2_experimental',
-        structure_launch_variant: 'esmfold2_experimental',
-    });
-
-    assert.equal(config.variant, 'esmfold2_experimental');
-    assert.equal(config.submitModelId, 'esmfold2_experimental');
-    assert.equal(config.submitMode, 'predict');
-    assert.equal(config.allowPredictorSelection, false);
-    assert.equal(config.showParallelJobs, false);
-    assert.equal(config.showSequenceBatch, false);
-    assert.equal(config.showMsaControls, false);
-    assert.equal(config.forcedPredictor, 'esmfold2');
+test('esmfold2 compatibility IDs no longer create dedicated structure launch variants', () => {
+    for (const compatibilityId of ['esmfold2', 'esmfold2_experimental']) {
+        const config = resolveStructureLaunchConfig({
+            template_model_id: compatibilityId,
+            structure_launch_variant: compatibilityId,
+        });
+        assert.equal(config.variant, 'default');
+        assert.equal(config.submitModelId, 'boltz2');
+        assert.equal(config.allowPredictorSelection, true);
+        assert.equal(config.forcedPredictor, null);
+    }
     assert.deepEqual(getPredictorFamiliesForSelection('complex', 'esmfold2'), ['esmfold2']);
 });
 
@@ -112,6 +109,14 @@ test('structure submit target preserves native predictor routing but forces bolt
             predictorSelection: 'protenix',
         }),
         { modelId: 'protenix', mode: 'complex' },
+    );
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: defaultConfig,
+            predictionMode: 'complex',
+            predictorSelection: 'esmfold2',
+        }),
+        { modelId: 'esmfold2', mode: 'complex' },
     );
 
     const cpConfig = resolveStructureLaunchConfig({
@@ -127,27 +132,16 @@ test('structure submit target preserves native predictor routing but forces bolt
         { modelId: 'boltz_cp_experimental', mode: 'design' },
     );
 
-    const esmfold2Config = resolveStructureLaunchConfig({
-        template_model_id: 'esmfold2_experimental',
-        structure_launch_variant: 'esmfold2_experimental',
-    });
-    assert.deepEqual(
-        resolveStructureSubmitTarget({
-            launchConfig: esmfold2Config,
-            predictionMode: 'complex',
-            predictorSelection: 'boltz',
-        }),
-        { modelId: 'esmfold2_experimental', mode: 'predict' },
-    );
 });
 
-test('esmfold2 structure variant is wired inside StructurePredictionTemplate instead of generic JobSubmission fields', () => {
+test('esmfold2 controls are driven by the parent structure predictor selection', () => {
     const source = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
 
-    assert.match(source, /data-bms-esmfold2-structure-variant="true"/);
-    assert.match(source, /structure_launch_variant = 'esmfold2_experimental'/);
+    assert.match(source, /usesEsmFold2 = predictorFamilies\.includes\('esmfold2'\)/);
     assert.match(source, /params\.model_variant = esmfold2Variant/);
-    assert.match(source, /Uses this structure launcher for sequence, PDB import, and complex components/);
+    assert.match(source, /params\.local_files_only = true/);
+    assert.doesNotMatch(source, /isEsmFold2Launch/);
+    assert.doesNotMatch(source, /structure_launch_variant = launchConfig\.variant/);
     assert.match(source, /PDB coordinates are not structural templates/);
 });
 

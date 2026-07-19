@@ -27,13 +27,12 @@ DIRECT_ENTRYPOINTS = {
     "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
-    "esmfold2_experimental": "workflows/esmfold2_experimental.nf",
+
     "protein_design": "workflows/protein_design.nf",
     "structure_prediction": "workflows/structure_prediction.nf",
     "complex_prediction": "workflows/complex_prediction.nf",
-    "bindcraft_design": "workflows/bindcraft_design.nf",
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
-    "boltzgen_design": "workflows/boltzgen_design.nf",
+
     "docking": "workflows/docking.nf",
     "antibody_denovo": "workflows/antibody_denovo.nf",
     "antibody_child": "workflows/antibody_child.nf",
@@ -53,7 +52,6 @@ MIGRATED_SYMBOLS = (
     "ESMFOLD2_EXPERIMENTAL",
     "STRUCTURE_PREDICTION",
     "COMPLEX_PREDICTION",
-    "BINDCRAFT_DESIGN",
     "PPIFLOW_GENERATOR_DESIGN",
     "BOLTZGEN_DESIGN",
     "DOCKING",

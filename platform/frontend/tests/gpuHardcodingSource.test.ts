@@ -5,7 +5,6 @@ import test from 'node:test';
 
 const productionGpuControlFiles = [
     'src/components/AntibodyDenovoTemplate.tsx',
-    'src/components/BoltzGenTemplate.tsx',
     'src/components/NanoporeTemplate.tsx',
     'src/components/StructurePredictionTemplate.tsx',
     'src/components/dashboard/StructureReorchestratePanel.tsx',
@@ -46,7 +45,6 @@ test('production GPU controls do not expose DALAB-specific GPU labels or VRAM sp
 test('template GPU pinning surfaces are wired to the live GPU catalog helper', () => {
     const pinningFiles = [
         'src/components/AntibodyDenovoTemplate.tsx',
-        'src/components/BoltzGenTemplate.tsx',
         'src/components/NanoporeTemplate.tsx',
         'src/components/StructurePredictionTemplate.tsx',
         'src/components/dashboard/StructureReorchestratePanel.tsx',
@@ -74,7 +72,6 @@ test('scheduler controls derive labels, VRAM bounds, and power totals from disco
 
 test('template GPU lock toggles hydrate saved lock state and clear lock when returning to auto', () => {
     const lockableTemplateFiles = [
-        'src/components/BoltzGenTemplate.tsx',
         'src/components/StructurePredictionTemplate.tsx',
     ];
 
