@@ -24,6 +24,8 @@ test('ui diagnostics payload includes channel-critical details without dumping a
     viteMode: 'production',
     viteBaseUrl: '/bms/',
     apiHealth: 'healthy',
+    frontendBuildRevision: 'abc1234',
+    apiBuildRevision: 'def5678',
     shellContext: {
       runtimeMode: 'container',
       frontendOrigin: 'http://127.0.0.1:18080',
@@ -37,8 +39,37 @@ test('ui diagnostics payload includes channel-critical details without dumping a
   assert.match(payload.text, /Origin: http:\/\/127\.0\.0\.1:18080/);
   assert.match(payload.text, /Router basename: \/bms\//);
   assert.match(payload.text, /API health: healthy/);
+  assert.match(payload.text, /Frontend build revision: abc1234/);
+  assert.match(payload.text, /API build revision: def5678/);
+  assert.match(payload.text, /Revision skew: detected/);
   assert.match(payload.text, /Shell runtime: container/);
   assert.doesNotMatch(payload.text, /SECRET|TOKEN|PASSWORD|KEY=/i);
+});
+
+test('ui diagnostics distinguishes matching revisions from indeterminate identity', () => {
+  const base = {
+    surfaceLabel: 'Stable hosted web',
+    origin: 'http://127.0.0.1:18080',
+    href: 'http://127.0.0.1:18080/bms/',
+    routerBasename: '/bms/',
+    viteMode: 'production',
+    viteBaseUrl: '/bms/',
+    apiHealth: 'healthy',
+  };
+
+  const matching = buildUiDiagnosticsPayload({
+    ...base,
+    frontendBuildRevision: 'abc1234',
+    apiBuildRevision: 'abc1234',
+  });
+  const indeterminate = buildUiDiagnosticsPayload({
+    ...base,
+    frontendBuildRevision: 'unknown',
+    apiBuildRevision: 'abc1234',
+  });
+
+  assert.equal(matching.fields['Revision skew'], 'none detected');
+  assert.equal(indeterminate.fields['Revision skew'], 'indeterminate');
 });
 
 test('layout exposes one far-left diagnostics top-bar entry with copy support', () => {

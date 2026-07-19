@@ -1,0 +1,188 @@
+{
+  "active_integration": {
+    "overlap_drift_files": [
+      "platform/frontend/package.json",
+      "platform/frontend/src/components/MolstarViewer.tsx",
+      "platform/frontend/tests/structureViewerSemantics.test.ts",
+      "platform/frontend/vite.config.ts",
+      "pnpm-lock.yaml",
+      "platform/frontend/src/lib/molstar-metrics.ts",
+      "platform/frontend/src/structureViewer/contracts/viewerCapabilities.ts",
+      "platform/frontend/src/structureViewer/runtime/molstarStable33Capabilities.ts",
+      "platform/frontend/tests/molstarMetrics.test.ts",
+      "platform/frontend/tests/molstarRuntimeContract.test.ts"
+    ],
+    "performed": false,
+    "reason": "Blocked: active checkout has divergent dirty edits on every overlapping M0/M1 integration surface; no files were overwritten."
+  },
+  "base_head": "188d69c2e266f82d14d4ac0778dc17785c2dfead",
+  "browser_acceptance": {
+    "console_errors": 0,
+    "console_warning_classes": [
+      "computed.accessible-surface-area.is-buried already added",
+      "computed.accessible-surface-area.is-accessible already added",
+      "ma.quality-assessment.pLDDT already added",
+      "ma.quality-assessment.qmean already added"
+    ],
+    "console_warnings": 20,
+    "document_listener_growth": 0,
+    "evidence": "docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_chrome150.json",
+    "listener_growth": 0,
+    "page_failures": [],
+    "replacement": {
+      "adapterReused": true,
+      "finalDisposed": true,
+      "finalPluginDisposed": true,
+      "firstReady": true,
+      "firstSceneGeneration": 1,
+      "overlayAdded": true,
+      "overlayRemoved": true,
+      "secondReady": true,
+      "secondSceneGeneration": 2,
+      "secondUsable": true,
+      "thirdReady": true,
+      "thirdSceneGeneration": 3,
+      "thirdUsable": true
+    },
+    "requested_cycles": 55,
+    "retention_failures": [],
+    "severe_browser_event_count": 0
+  },
+  "candidate_worktree": "/home/dalab/biomodstack/biomodstack-molstar-direct-188d69c",
+  "engine": "molstar@4.5.0-direct",
+  "excluded_generated_paths": [
+    "platform/frontend/.artifacts/",
+    "platform/frontend/.test-dist/"
+  ],
+  "files": {
+    "docs/plans/2026-07-18-structure-visualization-platform-roadmap.md": {
+      "bytes": 24227,
+      "sha256": "83ace11f713606321218dfc2835967f40d5922bcbce9e791f5473a6cd51921ef"
+    },
+    "docs/reviews/structure_visualization/evidence/m0_runtime_probe_chrome150.json": {
+      "bytes": 21147,
+      "sha256": "9ec260b15af5be1c966a98582f730030d49df60bd3b5beadd58c5d299fc35e21"
+    },
+    "docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_chrome150.json": {
+      "bytes": 27198,
+      "sha256": "014e7acb9d8ad427b1bb89203ac687452cd0a7e896e7c6c10bb778598d1d9b89"
+    },
+    "docs/reviews/structure_visualization/m0_runtime_contract_review.md": {
+      "bytes": 23618,
+      "sha256": "7acd3b7c8a8de858e18e8aea48c8b1f5af5d781485b5c732858783c75c970efc"
+    },
+    "docs/specs/structure_visualization/structure_visualization_contract_v1.md": {
+      "bytes": 25859,
+      "sha256": "df0b61993a57ec59a83d7f07ab46c6eca1b2ce28523bf9e713eee932ea8393a4"
+    },
+    "platform/frontend/browser-tests/molstar-runtime-probe.html": {
+      "bytes": 707,
+      "sha256": "bd370651f2f730fc5359711837deb9666616015a629b6debc389d75efe31ffd2"
+    },
+    "platform/frontend/browser-tests/molstarRuntimeProbe.ts": {
+      "bytes": 24917,
+      "sha256": "5756e2d0ebfc66850034afeb6308cbefcc1ae84d254eddcb9a19218eb61fb57d"
+    },
+    "platform/frontend/browser-tests/runMolstarRuntimeProbe.mjs": {
+      "bytes": 16530,
+      "sha256": "7ff817122942cbf4862e07d7dede99ff4e170524b9078dc8a3f721c3a2b39abc"
+    },
+    "platform/frontend/package.json": {
+      "bytes": 1923,
+      "sha256": "770bae0fe3e01615cc8befc4b8e5a4d186a102fb6407e6a37138d0e766559b0a"
+    },
+    "platform/frontend/src/components/MolstarViewer.tsx": {
+      "bytes": 13175,
+      "sha256": "ea5df0a4db9e517405233bc6fd47afe0ba1f47b797fe3464438f5878ff1e2251"
+    },
+    "platform/frontend/src/components/molstarLifecycle.ts": {
+      "bytes": 669,
+      "sha256": "0c0769b9b4998dd08bcd8e5e8d01e6500a5c62178d60df61b274370280f4c31c"
+    },
+    "platform/frontend/src/lib/molstar-metrics.ts": {
+      "bytes": 9670,
+      "sha256": "44e5b098fcd0cda8462fb87cc656fd6ad881571bffde2f699ab625bae52bd484"
+    },
+    "platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts": {
+      "bytes": 18431,
+      "sha256": "276fb607b87af71150d371e79800d9257b48c01dec419ccabfab6836c65cd543"
+    },
+    "platform/frontend/src/structureViewer/adapters/residueColorSelections.ts": {
+      "bytes": 2203,
+      "sha256": "6401b8ddbcd3187f8413296d65a385c734b5548e93ac156443962c0088ff7c11"
+    },
+    "platform/frontend/src/structureViewer/contracts/viewerCapabilities.ts": {
+      "bytes": 1958,
+      "sha256": "88254fad229dfdb6dcfbd37d7ea346ae0bafde30b594487ca48cbc8d50596f52"
+    },
+    "platform/frontend/src/structureViewer/runtime/MolstarEngineOwner.ts": {
+      "bytes": 7269,
+      "sha256": "f2c92882e97e102b4210c8e01e4507318739a913551872472cbe645c4f63b9da"
+    },
+    "platform/frontend/src/structureViewer/runtime/createDirectMolstarEngineOwner.ts": {
+      "bytes": 3924,
+      "sha256": "7ac0cdaeb640917f735692d7f86d90583d9548eff3c5f4b55e12f255ca1e9a2a"
+    },
+    "platform/frontend/src/structureViewer/runtime/molstarDirect45Capabilities.ts": {
+      "bytes": 8009,
+      "sha256": "aa413fbbcc2458c0e552c0d78331690df4cd1789dc2acaa6d5ba9989b3164a98"
+    },
+    "platform/frontend/src/structureViewer/runtime/molstarStable33Capabilities.ts": {
+      "bytes": 14854,
+      "sha256": "147e75e471bee990def8311bd7047d2a013e8c044404c6ae4edfb50c3091edc3"
+    },
+    "platform/frontend/tests/molstarEngineOwner.test.ts": {
+      "bytes": 7369,
+      "sha256": "b7697a57a495a1a6249548aaad351270ee7b25ae2afe84034817d736d8a0256e"
+    },
+    "platform/frontend/tests/molstarMetrics.test.ts": {
+      "bytes": 4650,
+      "sha256": "fcc8065e97085d759394b953e2a7e2cae880601f47ae8e33324a5bc3b76f0e15"
+    },
+    "platform/frontend/tests/molstarRuntimeContract.test.ts": {
+      "bytes": 11710,
+      "sha256": "1139e13703eea0ca4131c7de3ad7f386c31c8f742a4eb5086efa7384780aa992"
+    },
+    "platform/frontend/tests/molstarTouchInteraction.test.ts": {
+      "bytes": 1939,
+      "sha256": "68525340d8e388e40616b9de93f07a3db0606dc84ae83a1278a9e24d8748ba3e"
+    },
+    "platform/frontend/tests/residueColorSelections.test.ts": {
+      "bytes": 1340,
+      "sha256": "cb70dd771bc9999d76426496d7a176f3b429766e749ceba73f0d743424646a4c"
+    },
+    "platform/frontend/tests/structureViewerSemantics.test.ts": {
+      "bytes": 18267,
+      "sha256": "50b5b3e12ab19c6befc7ee81e892c2c99d8622ca636599bb71c432d192a8f238"
+    },
+    "platform/frontend/tsconfig.test.json": {
+      "bytes": 471,
+      "sha256": "3594a632e5ff8af5ed3e33eb781c6d25e7cded7d3d6c974e223252329840043d"
+    },
+    "platform/frontend/vite.config.ts": {
+      "bytes": 8014,
+      "sha256": "37093a1089ba83f0595c058d6b2e1e6532587cbfc8c0cfd6295552e632ce0c40"
+    },
+    "pnpm-lock.yaml": {
+      "bytes": 297754,
+      "sha256": "d14a84d55ed5074de789cdb4c613aec8dbe475cd492fc82441e46c382334faad"
+    }
+  },
+  "schema_version": 2,
+  "verification": {
+    "candidate_molstar_chunk_bytes": 8919523,
+    "existing_active_molstar_chunk_bytes": 5529148,
+    "focused_viewer_tests": {
+      "failed": 0,
+      "passed": 42
+    },
+    "full_frontend_tests": {
+      "failed": 1,
+      "known_unrelated_failure": "bioxpInterlinkMenuContract.test.ts",
+      "passed": 319
+    },
+    "production_build": "pass",
+    "scoped_eslint": "pass",
+    "typecheck": "pass"
+  }
+}
