@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
+import * as prepareAssets from '../scripts/prepare-bms-assets.mjs';
 
 import {
   buildBundleDescriptor,
@@ -208,13 +209,55 @@ test('buildPreflight assets expose endpoint, manual update, and rollback control
   assert.match(script, /Update UI/);
   assert.match(script, /UI update channel/);
   assert.match(script, /data-role="ui-update-channel"/);
-  assert.match(script, /APK stays bundled\/stable unless/);
+  assert.match(script, /UI bundle updates/);
+  assert.match(script, /Native APK update/);
+  assert.match(script, /window\.BmsAndroidUpdater/);
+  assert.match(script, /JSON\.stringify\(\{ action: command \}\)/);
+  assert.match(script, /biomodstack-apk-update-state/);
+  assert.match(script, /checkForApkUpdate/);
+  assert.match(script, /installApkUpdate/);
+  assert.doesNotMatch(script, /downloadUpdate/);
+  assert.doesNotMatch(script, /openUnknownSourcesSettings/);
   assert.match(script, /The APK never points at Vite dev automatically/);
   assert.match(script, /Revert to bundled UI/);
   assert.match(script, /window\.__BMS_CORDOVA_OPEN_PREFLIGHT__/);
   assert.doesNotThrow(() => new vm.Script(script));
   assert.match(css, /bms-cordova-preflight/);
   assert.match(css, /bms-cordova-preflight-toggle/);
+});
+
+test('native APK state reducer rejects malformed and stale events and normalizes valid bounded state', () => {
+  assert.equal(typeof prepareAssets.reduceNativeApkState, 'function');
+  const reduce = prepareAssets.reduceNativeApkState;
+  const manifest = {
+    channel: 'stable',
+    versionCode: 201,
+    versionName: '0.2.1',
+    minSdk: 24,
+    sizeBytes: 1024,
+    publishedAt: '2026-07-18T12:00:00Z',
+    changelog: ['Security update'],
+  };
+  assert.deepEqual(reduce(0, { sequence: 1, status: 'available', message: 'Ready', manifest }), {
+    accepted: true,
+    sequence: 1,
+    status: 'available',
+    message: 'Ready',
+    tone: 'success',
+    manifest,
+  });
+  for (const malformed of [
+    null,
+    { sequence: 1, status: 'unknown', message: 'bad' },
+    { sequence: 1, status: 'available', message: '' },
+    { sequence: 1, status: 'available', message: 'bad', manifest: { ...manifest, channel: 'beta' } },
+    { sequence: 1, status: 'available', message: 'bad', manifest: { ...manifest, changelog: ['x'.repeat(1001)] } },
+  ]) {
+    assert.equal(reduce(0, malformed).accepted, false);
+  }
+  assert.equal(reduce(1, { sequence: 1, status: 'checking', message: 'stale' }).accepted, false);
+  assert.equal(reduce(2, { sequence: 1, status: 'checking', message: 'older' }).accepted, false);
+  assert.equal(reduce(0, { sequence: 1, status: 'installer_opened', message: 'Pending', manifest }).tone, 'pending');
 });
 
 test('patchIndexHtmlContent injects the mobile shell and preflight assets exactly once and preserves runtime-specific viewport scaling', () => {
