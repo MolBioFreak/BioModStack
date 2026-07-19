@@ -9,7 +9,8 @@ nextflow.enable.dsl = 2
 //   BAM:  BamPrepare → ModkitPileup + ModkitSummary
 
 include { DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
-include { PrepareBamForAnalysis as Pod5PrepareBamForAnalysis; PrepareBamForAnalysis as BamPrepareBamForAnalysis; ValidateMappedBam; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
+include { DoradoAlign as Pod5DoradoAlign } from '../../modules/ngs/dorado_align.nf'
+include { PrepareBamForAnalysis as BamPrepareBamForAnalysis; ValidateMappedBam; PrepareReferenceForIGV } from '../../modules/ngs/bam_prepare.nf'
 include { ValidateModifiedBaseBam as Pod5ValidateModifiedBaseBam; ValidateModifiedBaseBam as BamValidateModifiedBaseBam; ModkitPileup as Pod5ModkitPileup; ModkitPileup as BamModkitPileup } from '../../modules/ngs/modkit_pileup.nf'
 include { ModkitSummary as Pod5ModkitSummary; ModkitSummary as BamModkitSummary } from '../../modules/ngs/modkit_summary.nf'
 
@@ -86,23 +87,26 @@ workflow ONT_METHYLATION_ANALYSIS {
         }
 
         if (runModkit) {
-            Pod5PrepareBamForAnalysis(DoradoBasecall.out.bam)
-            Pod5ValidateModifiedBaseBam(Pod5PrepareBamForAnalysis.out.aligned)
+            // Dorado basecaller emits unaligned BAM unless a reference is supplied.
+            // Align in the same workflow before enforcing mapped MM/ML-tagged input for modkit.
+            Pod5DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
+            Pod5ValidateModifiedBaseBam(Pod5DoradoAlign.out.aligned)
             Pod5ModkitPileup(Pod5ValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            Pod5ModkitPileup.out.bed.subscribe { bed, bedgz ->
+            Pod5ModkitPileup.out.log.subscribe { ignoredValue ->
                 reportStage(params, "modkit_pileup", [
-                    "${params.out_dir}/methylation/methylation.bed",
-                    "${params.out_dir}/methylation/modified_sites.tsv",
-                    "${params.out_dir}/methylation/modkit_pileup.log",
+                    "${params.out_dir}/methylation/modified_base_input.bam",
+                    "${params.out_dir}/methylation/modified_base_input.bam.bai",
                     "${params.out_dir}/methylation/modified_base_tag_check.log",
+                    "${params.out_dir}/methylation/methylation.bed",
+                    "${params.out_dir}/methylation/pileup.log",
                 ])
             }
 
             Pod5ModkitSummary(Pod5ValidateModifiedBaseBam.out.bam)
-            Pod5ModkitSummary.out.summary.subscribe { summary, ignoredValue ->
+            Pod5ModkitSummary.out.log.subscribe { ignoredValue ->
                 reportStage(params, "modkit_summary", [
-                    "${params.out_dir}/methylation/summary.tsv",
-                    "${params.out_dir}/methylation/modkit_summary.log",
+                    "${params.out_dir}/methylation/modkit_summary.tsv",
+                    "${params.out_dir}/methylation/summary.log",
                 ])
             }
         }
@@ -126,10 +130,13 @@ workflow ONT_METHYLATION_ANALYSIS {
             ])
         }
 
-        // Validate mapped reads before modkit
+        // Exact reference identity is validated when an expected reference is supplied.
+        // Basic quickcheck/index/mapped-read validation always runs in preparation.
         def prepared_bam = BamPrepareBamForAnalysis.out.aligned
-        ValidateMappedBam(prepared_bam)
-        prepared_bam = ValidateMappedBam.out.aligned
+        if (has_reference) {
+            ValidateMappedBam(prepared_bam, Channel.of(reference_file))
+            prepared_bam = ValidateMappedBam.out.aligned
+        }
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
@@ -139,20 +146,21 @@ workflow ONT_METHYLATION_ANALYSIS {
         if (runModkit) {
             BamValidateModifiedBaseBam(prepared_bam)
             BamModkitPileup(BamValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            BamModkitPileup.out.bed.subscribe { bed, bedgz ->
+            BamModkitPileup.out.log.subscribe { ignoredValue ->
                 reportStage(params, "modkit_pileup", [
-                    "${params.out_dir}/methylation/methylation.bed",
-                    "${params.out_dir}/methylation/modified_sites.tsv",
-                    "${params.out_dir}/methylation/modkit_pileup.log",
+                    "${params.out_dir}/methylation/modified_base_input.bam",
+                    "${params.out_dir}/methylation/modified_base_input.bam.bai",
                     "${params.out_dir}/methylation/modified_base_tag_check.log",
+                    "${params.out_dir}/methylation/methylation.bed",
+                    "${params.out_dir}/methylation/pileup.log",
                 ])
             }
 
             BamModkitSummary(BamValidateModifiedBaseBam.out.bam)
-            BamModkitSummary.out.summary.subscribe { summary, ignoredValue ->
+            BamModkitSummary.out.log.subscribe { ignoredValue ->
                 reportStage(params, "modkit_summary", [
-                    "${params.out_dir}/methylation/summary.tsv",
-                    "${params.out_dir}/methylation/modkit_summary.log",
+                    "${params.out_dir}/methylation/modkit_summary.tsv",
+                    "${params.out_dir}/methylation/summary.log",
                 ])
             }
         }

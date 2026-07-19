@@ -13,6 +13,10 @@ REVIEW_ARTIFACT_SCHEMA = "bms.review-artifacts.v1"
 REVIEW_CONTRACT_VERSION = 1
 
 
+REVIEW_ARTIFACT_SCHEMA = "bms.review-artifacts.v1"
+REVIEW_CONTRACT_VERSION = 1
+
+
 class ResultContract(BaseModel):
     analysis_contract_id: Optional[str] = None
     supported_analyzers: List[str] = Field(default_factory=list)

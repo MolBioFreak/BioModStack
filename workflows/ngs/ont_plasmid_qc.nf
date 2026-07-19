@@ -15,6 +15,7 @@ include { PrepareBamForAnalysis; PrepareReferenceForIGV; BamToFastqForQC as Pod5
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC as Pod5PlasmidQC; FastqPlasmidQC as BamPlasmidQC; FastqPlasmidQC as InputFastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDimerAnalysis; FastqDimerAnalysis as InputFastqDimerAnalysis; BuildDimerCanonicalOutputs as Pod5DimerCanonicalOutputs; BuildDimerCanonicalOutputs as BamDimerCanonicalOutputs; BuildDimerCanonicalOutputs as InputFastqDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
+include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify } from '../../modules/ngs/construct_verify.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -120,6 +121,15 @@ workflow ONT_PLASMID_QC {
                     Pod5DimerAnalysis.out.dimer_reference
                 )
                 Pod5PlasmidQC(DoradoAlign.out.aligned, Channel.of(reference_file), Pod5BamToFastqForQC.out.fastq)
+                Pod5ConstructVerify(
+                    Pod5PlasmidQC.out.reference,
+                    Pod5PlasmidQC.out.verification_input,
+                    Pod5PlasmidQC.out.per_base_support,
+                    DoradoAlign.out.aligned,
+                    Pod5PlasmidQC.out.alignment_stats,
+                    Pod5DimerCanonicalOutputs.out.breakpoint_call,
+                    Pod5DimerCanonicalOutputs.out.secondary_summary,
+                )
                 Pod5PlasmidQC.out.summary.subscribe { ignoredValue ->
                     reportStage(params, "fastq_qc", [
                         "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
@@ -194,6 +204,15 @@ workflow ONT_PLASMID_QC {
                 BamDimerAnalysis.out.dimer_reference
             )
             BamPlasmidQC(analysis_bam, Channel.of(reference_file), BamInputToFastqForQC.out.fastq)
+            BamConstructVerify(
+                BamPlasmidQC.out.reference,
+                BamPlasmidQC.out.verification_input,
+                BamPlasmidQC.out.per_base_support,
+                analysis_bam,
+                BamPlasmidQC.out.alignment_stats,
+                BamDimerCanonicalOutputs.out.breakpoint_call,
+                BamDimerCanonicalOutputs.out.secondary_summary,
+            )
             BamPlasmidQC.out.summary.subscribe { ignoredValue ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
@@ -238,6 +257,15 @@ workflow ONT_PLASMID_QC {
                 InputFastqDimerAnalysis.out.dimer_reference
             )
             InputFastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(fastq_input))
+            InputFastqConstructVerify(
+                InputFastqPlasmidQC.out.reference,
+                InputFastqPlasmidQC.out.verification_input,
+                InputFastqPlasmidQC.out.per_base_support,
+                FastqAlign.out.aligned,
+                InputFastqPlasmidQC.out.alignment_stats,
+                InputFastqDimerCanonicalOutputs.out.breakpoint_call,
+                InputFastqDimerCanonicalOutputs.out.secondary_summary,
+            )
             InputFastqPlasmidQC.out.summary.subscribe { ignoredValue ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/read_lengths.tsv",
