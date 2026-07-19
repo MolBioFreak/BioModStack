@@ -44,6 +44,7 @@ lib/NO_*
 # Nextflow/local run artifacts
 .nextflow/
 .nextflow.log*
+.nextflow-test-artifacts/
 .pytest-nextflow-*/
 work/
 tmp/
