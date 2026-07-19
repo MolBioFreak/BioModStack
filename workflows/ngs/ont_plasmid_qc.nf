@@ -89,7 +89,7 @@ workflow ONT_PLASMID_QC {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { _ ->
+        DoradoBasecall.out.bam.subscribe { _ignored ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -130,7 +130,7 @@ workflow ONT_PLASMID_QC {
                     Pod5DimerCanonicalOutputs.out.breakpoint_call,
                     Pod5DimerCanonicalOutputs.out.secondary_summary,
                 )
-                Pod5PlasmidQC.out.summary.subscribe { _ ->
+                Pod5PlasmidQC.out.summary.subscribe { _ignored ->
                     reportStage(params, "fastq_qc", [
                         "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
                         "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
@@ -189,7 +189,7 @@ workflow ONT_PLASMID_QC {
 
         if (has_reference) {
             PrepareReferenceForIGV(Channel.of(reference_file))
-            PrepareReferenceForIGV.out.log.subscribe { _ -> }
+            PrepareReferenceForIGV.out.log.subscribe { _ignored -> }
         }
 
         if (has_reference && runFastqQc && analysis_bam != null) {
@@ -213,7 +213,7 @@ workflow ONT_PLASMID_QC {
                 BamDimerCanonicalOutputs.out.breakpoint_call,
                 BamDimerCanonicalOutputs.out.secondary_summary,
             )
-            BamPlasmidQC.out.summary.subscribe { _ ->
+            BamPlasmidQC.out.summary.subscribe { _ignored ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
                     "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
@@ -266,7 +266,7 @@ workflow ONT_PLASMID_QC {
                 InputFastqDimerCanonicalOutputs.out.breakpoint_call,
                 InputFastqDimerCanonicalOutputs.out.secondary_summary,
             )
-            InputFastqPlasmidQC.out.summary.subscribe { _ ->
+            InputFastqPlasmidQC.out.summary.subscribe { _ignored ->
                 reportStage(params, "fastq_qc", [
                     "${params.out_dir}/fastq_qc/read_lengths.tsv",
                     "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
