@@ -1321,7 +1321,7 @@ def test_core_runtime_compose_disables_docker_restart_policy() -> None:
     compose = (services.get_project_root() / "compose.core-runtime.yml").read_text(encoding="utf-8")
 
     assert "restart: unless-stopped" not in compose
-    assert compose.count('restart: "no"') == 6
+    assert compose.count('restart: "no"') == 4
 
 
 def test_stop_all_container_mode_is_prod_scoped(monkeypatch, tmp_path: Path) -> None:
