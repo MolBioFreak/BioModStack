@@ -1,0 +1,71 @@
+{
+  "entries": [
+    {
+      "classification": "read_only_offline_helper",
+      "file": "tmp_bioxp_current_grep.py",
+      "line_count": 10,
+      "proposed_action": "migrate_to_tools_bioxp_offline",
+      "rationale": "Static source inspection for motor-current handling; no runtime calls.",
+      "sha256": "94390367ee117cff4582f765b4835f3d72e6f0c715eca17afeff74c043e5291f",
+      "tracked_references": []
+    },
+    {
+      "classification": "read_only_live_host_diagnostic",
+      "file": "tmp_bioxp_nomove_diag.sh",
+      "line_count": 10,
+      "proposed_action": "quarantine_under_explicit_live_tooling_or_remove",
+      "rationale": "Reads service, listener, process, journal, and kernel state on a live host.",
+      "sha256": "530504ff850627b350265c5fa497d494689fee34faf5695ac19f90e8e536bb8c",
+      "tracked_references": []
+    },
+    {
+      "classification": "read_only_offline_helper",
+      "file": "tmp_bioxp_rca_inspect.py",
+      "line_count": 31,
+      "proposed_action": "migrate_to_tools_bioxp_offline",
+      "rationale": "Git/source RCA inspection only; shell pipeline is read-only.",
+      "sha256": "59aa18e9d181f3a0fb4154df9e631976cd4f8e5d93d9300bba36e76f3e5d44b4",
+      "tracked_references": []
+    },
+    {
+      "classification": "one_off_live_motion",
+      "file": "tmp_bioxp_z_minus50k.py",
+      "line_count": 82,
+      "proposed_action": "remove_after_inventory_approval",
+      "rationale": "Commands a guarded Z relative move and captures live camera/runtime evidence.",
+      "sha256": "f3a60c8e0ee6c1f01f28124418ca0ad06d258ae0284eb3f821d242f475eb486f",
+      "tracked_references": []
+    },
+    {
+      "classification": "one_off_live_usb_and_motion",
+      "file": "tmp_bioxp_z_nonmotion_reset_retry.py",
+      "line_count": 328,
+      "proposed_action": "remove_after_inventory_approval",
+      "rationale": "Releases USB, writes controller home state, re-arms, and retries Z motion.",
+      "sha256": "d59df86a7494084ed293eece3d4da4c9d4d60799c06835e5507caf4c85f0a5e6",
+      "tracked_references": []
+    },
+    {
+      "classification": "one_off_live_motion",
+      "file": "tmp_bioxp_z_rehome_minus15k.py",
+      "line_count": 244,
+      "proposed_action": "remove_after_inventory_approval",
+      "rationale": "Commands Z homing and a guarded relative move.",
+      "sha256": "d4df19a82cf25423f9baaaaed97435e0e3d8a1564da07da895a14537a8bbddcd",
+      "tracked_references": []
+    },
+    {
+      "classification": "one_off_live_motion",
+      "file": "tmp_bioxp_z_zero_minus15k.py",
+      "line_count": 91,
+      "proposed_action": "remove_after_inventory_approval",
+      "rationale": "Commands a Z zero-return followed by a guarded relative move.",
+      "sha256": "7624cd85443f26697e2efea4953ccc9609c91a1b148690af210840ff0226a8ab",
+      "tracked_references": []
+    }
+  ],
+  "expected_but_missing": [],
+  "schema_version": "bioxp.phase0.temporary_scripts.v1",
+  "script_count": 7,
+  "unknown_scripts": []
+}

@@ -1,0 +1,2679 @@
+{
+  "schema_version": "bms.bioxp_phase0_baseline.v1",
+  "captured_at": "2026-07-17T19:23:46.670880-05:00",
+  "repository": "/home/dalab/biomodstack/biomodstack",
+  "branch": "test",
+  "head": "a69711f7e55786f3867e3952b546b3d6b8c48c11",
+  "roadmap": {
+    "path": ".hermes/plans/2026-07-17_190259-bioxp-bms-control-plane-simplification-roadmap.md",
+    "sha256": "553ab0a952e0c3159024740e29c7178e449649754e635f5f310b71375183b523"
+  },
+  "safety_scope": {
+    "robot_host_contacted": false,
+    "hardware_commands_executed": false,
+    "motion_scripts_executed": false
+  },
+  "dirty_entry_count": 396,
+  "dirty_entries": [
+    {
+      "status": " D",
+      "path": "apptainer/bindcraft.def"
+    },
+    {
+      "status": " D",
+      "path": "apptainer/peptide_tools.def"
+    },
+    {
+      "status": " M",
+      "path": "biomodstack_panel.py",
+      "bytes": 45017,
+      "sha256": "36610d242f8959178121637d33812cba6781cb712a6f685b21447cd1bd6a03e5"
+    },
+    {
+      "status": " M",
+      "path": "biomodstack_runtime_profile.py",
+      "bytes": 25304,
+      "sha256": "8e75e8667bb033baefce0216960c3d0b8d0a66a885e5b788270ecf1566e65390"
+    },
+    {
+      "status": " M",
+      "path": "biomodstack_services.py",
+      "bytes": 64783,
+      "sha256": "3badb155e0f8fa8fb2bbec7a9c8411bf5988d085dc82e4749cd30e76a1a695f1"
+    },
+    {
+      "status": " M",
+      "path": "biomodstack_tray.py",
+      "bytes": 24163,
+      "sha256": "5a0959e252fa1910b3058503004f0bd2b3db5a6e9804cdef7634bd41e45e4a3a"
+    },
+    {
+      "status": " M",
+      "path": "compose.core-runtime.yml",
+      "bytes": 9380,
+      "sha256": "22a121d1db0375d6983256606fb8d68505b8f557398f988eb6cefe0d1fabdff2"
+    },
+    {
+      "status": " M",
+      "path": "modules/antibody_batch.nf",
+      "bytes": 22197,
+      "sha256": "d474f5516a9cd1c96a451c4ad408ae9da030b3e2269f7126267f899a4bed817f"
+    },
+    {
+      "status": " D",
+      "path": "modules/bindcraft.nf"
+    },
+    {
+      "status": " D",
+      "path": "modules/freebindcraft.nf"
+    },
+    {
+      "status": " M",
+      "path": "modules/protenix.nf",
+      "bytes": 35252,
+      "sha256": "850ce140bdb326f4afd39708239822600567df2d7080484465287a031218057e"
+    },
+    {
+      "status": " M",
+      "path": "nextflow.config",
+      "bytes": 83961,
+      "sha256": "ab0a0622ef513c61f06397b4f377e75008243535755b33f3134f6bab4d584b19"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/routers/jobs.py",
+      "bytes": 303032,
+      "sha256": "e2b48b3574deb2160a8d18ebedc12e8b8472cb5e9d1b8a70c7c01649ffea89c4"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/services/nextflow.py",
+      "bytes": 162757,
+      "sha256": "80ba7132fe0dd4dde2bbccf390ccf2a398e083371314644935bbc8b454217df3"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_biomodstack_panel.py",
+      "bytes": 12820,
+      "sha256": "3cbaaeeebb41613e908e5e1ee933c2485ddc5b47912a444be9fe0c51e6b13a81"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_biomodstack_services.py",
+      "bytes": 61171,
+      "sha256": "f2dbc9a1f84a4efb91c695b2b6a0c6df0c87878fcc5c412deba197fc9b3664ec"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_biomodstack_tray.py",
+      "bytes": 5257,
+      "sha256": "4525f38059e9f0dee7447f24c75058c12190459e010dc01b46dafb4b8ea4e996"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_install_profile.py",
+      "bytes": 12565,
+      "sha256": "030b557584f316b94ed3300190736f3d6de143d3933d37bbb7c1012cb41a683e"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_nextflow_entrypoint_registry.py",
+      "bytes": 14174,
+      "sha256": "7b62daa406d196181e118b901db9cc0cff23db568ad6a600f0288ffe9c7d1fa2"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_nextflow_static_contracts.py",
+      "bytes": 7329,
+      "sha256": "ec55434045a9d57f216ebe34891c73c87820726dcb12612034e869c58a412e8b"
+    },
+    {
+      "status": " M",
+      "path": "platform/api/tests/test_structure_prediction_batch.py",
+      "bytes": 14158,
+      "sha256": "7976345018e4a40fa1f875029ef4a9411843cc317f55a7cececf12042e08887b"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/src/main.ts",
+      "bytes": 15588,
+      "sha256": "117c7b37952ff1f7e3b4d127fb1b8d5421911308106fef654138e4c7cb880cdd"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/src/menu.ts",
+      "bytes": 7881,
+      "sha256": "3e314088a134ece1d8be08d647f7cd014f29a1f3a9c283eeedbff3de22dd1796"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/src/serviceControl.ts",
+      "bytes": 6094,
+      "sha256": "109c721e34408533e3a083794e2738410661d2196bf4dd2cb4df25b542b4cb69"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/src/tray.ts",
+      "bytes": 11011,
+      "sha256": "bb30f493c89987cc806df7928109d756f413411556773a7ba80ec975237da553"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/src/windowDiagnostics.ts",
+      "bytes": 12119,
+      "sha256": "1292848b1be19ebfe342f81a38e2020dce3a4469e96508785116411181cb5e96"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/tests/menu.test.ts",
+      "bytes": 5150,
+      "sha256": "26c236ee5f992344798f0342ad40c267a1d2617a74b4e809b96aa174158db71b"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/tests/serviceControl.test.ts",
+      "bytes": 3525,
+      "sha256": "b5596335f00b964c9e2eae86cc6cce31dc6937f9d2b67d85f22c9d4d9cc27531"
+    },
+    {
+      "status": " M",
+      "path": "platform/desktop-electron/tests/windowDiagnostics.test.ts",
+      "bytes": 7668,
+      "sha256": "78831dd2c8f11c4024db90e51878afa8ff35956c96962decfa0c357582cb5b67"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/package.json",
+      "bytes": 1899,
+      "sha256": "434da2ecabbd5033899816122ef5f8f02621755c0f9ae5f2aaa759dc3a5031c9"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/AnalyticsDashboard.tsx",
+      "bytes": 125996,
+      "sha256": "fc2876c60151d18bdfc37411a43bc7d5614c3c9ba2c6a99174bead24eccb1a66"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/AntibodyDenovoTemplate.tsx",
+      "bytes": 391546,
+      "sha256": "f98cf35ddcb94b6b67aa7b96484154d68ab3392ccd7aba8a129af8cf80657e21"
+    },
+    {
+      "status": " D",
+      "path": "platform/frontend/src/components/BindCraftTemplate.tsx"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/Dashboard.tsx",
+      "bytes": 56549,
+      "sha256": "9b2a5bcbeddf2c5c9b1193860b1e75e0eba19290d4d85d7d15054ca61a85d993"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/DesignBrowser.tsx",
+      "bytes": 18747,
+      "sha256": "2d325b4bebffe3d2f5a4e571cde4269b69510e616ae776b8b588f30222abef3a"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/ExperimentalAnalyticsPane.tsx",
+      "bytes": 96081,
+      "sha256": "8cd27f6dc5fe92d21a7f670431c738351b8976b8f5dd6cecaea1bb0744467b8e"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/InfraLiveTelemetry.tsx",
+      "bytes": 80361,
+      "sha256": "74ef514bf633cb038236937ded884d68bdf0ef7d332a4dce363a84f80575165f"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/JobDetailPage.tsx",
+      "bytes": 18447,
+      "sha256": "dbbd881ad0e1e9a0faf8ab6d62fd07fb2acffcad5100376523c7b3e616faab0e"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/JobQueuePanel.tsx",
+      "bytes": 43701,
+      "sha256": "8a964e9e8802ebd569d76c22bb2ef7296c6fa03754554caa4447e80f8c05f0ba"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/JobSubmission.tsx",
+      "bytes": 112570,
+      "sha256": "ae33dda4cd89c5d9a2025b345197c6480bc323057b0d4725214f64320af60106"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/Layout.tsx",
+      "bytes": 97715,
+      "sha256": "cbc0f0523e13ff0d7ddebde97401a1681693f17e5675d78ab839a41747c6889f"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
+      "bytes": 97133,
+      "sha256": "3d2b942d39de2c9847330174e0941a35bb300fb5c6745e8b53bb31124fc0e0f9"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
+      "bytes": 21871,
+      "sha256": "8e5134e8b0885fd72bda5512cb768c42a2fb1b36baf5ad11fda62d6c39b4f250"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/MolstarViewer.tsx",
+      "bytes": 17687,
+      "sha256": "f64c6f0238dd19b5cf0606d36d7d47f5d92d2123304652b74f5ebb46b08d2856"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/MutagenesisTemplate.tsx",
+      "bytes": 89021,
+      "sha256": "3e2b24546a92e9a4f2bfd74e1b6146e7e2c212c3d1b522d33a8c6f3353fceabb"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/NGSToolkit.tsx",
+      "bytes": 268728,
+      "sha256": "b9fceba979bd7af606e8d9dc137b5cffc76a9c4868b9312a38fdfcc4cf862f5e"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/OligoDesignerTemplate.tsx",
+      "bytes": 74051,
+      "sha256": "85023a4150f3a19a190ed2e2e047761768f4dfd248f0ff47adc2fead87ef904c"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/PAEHeatmap.tsx",
+      "bytes": 15236,
+      "sha256": "ce1c8ce2b498e5084fcb688d83be6ad672cc008736faadd363c6df89b0f054b0"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx",
+      "bytes": 96065,
+      "sha256": "54a5946c5e628484dc72a1515ee64c621caee4e254c9b8127297a606b2165873"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/QualitySettingsPanel.tsx",
+      "bytes": 169030,
+      "sha256": "cf5ba6b02432ddbfc31f7355db01906a1c80790416fff27999b714673bf635eb"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/QuickViewer.tsx",
+      "bytes": 15326,
+      "sha256": "e8ec48243924ecbbf1439a0f3367ca69285d4be4c1e191c4d9c37a029ddf7b1a"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/ResultsViewer.tsx",
+      "bytes": 593123,
+      "sha256": "56f9c6ea7edaf5b46df07e0cc3a5b3ced88d211d3a6cd6ff8495e7eae497dbf1"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/StructurePredictionTemplate.tsx",
+      "bytes": 160223,
+      "sha256": "f49a2d5626d807ef04b63516b2b3971214d09bb4600f7ae3911f3b614dcdb3db"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/StructureViewerPane.tsx",
+      "bytes": 162854,
+      "sha256": "8eee28edacda8cffbe501a5a3d247e43c771e29c7049f48ba2a84a03d62368d2"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/dashboard/reorchestrateStructureSettings.ts",
+      "bytes": 16136,
+      "sha256": "5dcfa68cf78ca3a19a4a814003e3ba4e08f0370c05d55cf9040083b9efa71a02"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/jobSubmissionTemplateState.ts",
+      "bytes": 1686,
+      "sha256": "6ee1d1e29b5366758c558e08e7df8603e4c44ab8ee3a9abe006829e7262d40ba"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/modelDocumentationRegistry.ts",
+      "bytes": 5321,
+      "sha256": "aa064d287364c28a4d89e03f04657659a017d348bf736b2c297f33c2955bf878"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/msaSettingsLogic.ts",
+      "bytes": 2299,
+      "sha256": "afdb53da3fa5028d5701c158333ae7c352190a351cd8a6685b2c45cbb26b577f"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
+      "bytes": 26533,
+      "sha256": "16348247207574eff1bb132bfdf5ac8be1baed6d005630faf8bee0edd3aa43d2"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/qualitySettingsLogic.ts",
+      "bytes": 22286,
+      "sha256": "2b3bbd51fe1fb1680a49ffb49b531dc596264f22e59f8034c9b57ba37b24b759"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/components/workflowModelInventory.ts",
+      "bytes": 7218,
+      "sha256": "439c64a6dde966430ebb478b430f8e48b4569e98553b1d9c9ab502053df52c4e"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/lib/queryPolling.ts",
+      "bytes": 600,
+      "sha256": "7f426c4c35bb16e45d4a5e49d331f7f347a1f7965668c332bbb74b59fa290f48"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/src/main.tsx",
+      "bytes": 1650,
+      "sha256": "782a367954f3de028603bd0058b2e0ac162931aaab92c1f9d0e86e17f6e5ed94"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts",
+      "bytes": 12043,
+      "sha256": "a3efe7366cde5e76ed54f858df3a94c93a5e7873f34e4c407389ea68c2ef2ed1"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/jobDataPlaneHardeningContract.test.ts",
+      "bytes": 2145,
+      "sha256": "7964dd1fe26d140925ceeb2e5e5ed607cb7e498e845f32f0be47d42c2b212398"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/jobSubmissionTemplateState.test.ts",
+      "bytes": 2005,
+      "sha256": "db443726b894a847c62041cb9bdb97746873a34b0e4d7c97d93be1eff01e0939"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/modelDocumentationLinkoutsContract.test.ts",
+      "bytes": 15814,
+      "sha256": "d41c65a039d5696ba7577e57de4a704b4eb669e6ae9d11e5b694f8d97a0a7eed"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/molBioNucleotideHandling.test.ts",
+      "bytes": 8916,
+      "sha256": "53183dd1ebb0a07deea4f07d86e6ef7427561e14fb034ef93520ee46278a69d3"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/molBioViewerLayout.test.ts",
+      "bytes": 7905,
+      "sha256": "8f03e17f5ed44c1995e68af8ae0284376c8b0817ca1e2bbbc3e3466c83fb5520"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/tests/structureViewerSemantics.test.ts",
+      "bytes": 18120,
+      "sha256": "371577befa076a4c398fcb5c34f4c3238f0a0e783551cc760f4a727e3a701bcc"
+    },
+    {
+      "status": " M",
+      "path": "platform/frontend/vite.config.ts",
+      "bytes": 8014,
+      "sha256": "37093a1089ba83f0595c058d6b2e1e6532587cbfc8c0cfd6295552e632ce0c40"
+    },
+    {
+      "status": " M",
+      "path": "scripts/extract_chain.py",
+      "bytes": 7859,
+      "sha256": "7a9cbfca244ec2f92d09159f61d73ca37d4dbbe5fd4f7079a75297061b0a01d8"
+    },
+    {
+      "status": " M",
+      "path": "scripts/run_biomodstack_core_runtime.sh",
+      "bytes": 3605,
+      "sha256": "c7e6d471fddf333759efd1ecc36eebd07157df308590e8153f1156f1fec94396"
+    },
+    {
+      "status": " M",
+      "path": "scripts/run_protenix_inference.py",
+      "bytes": 8567,
+      "sha256": "c908071c651a6f3d9f6eb55a6616b8ff461d62600daf21f81731430480778c3a"
+    },
+    {
+      "status": " D",
+      "path": "scripts/spawn_bindcraft_children.py"
+    },
+    {
+      "status": " M",
+      "path": "scripts/validate_environment.py",
+      "bytes": 10207,
+      "sha256": "8320b60084ed9f7e7879369b0c53feffa9866f2d46e535926ae9aa867a576f27"
+    },
+    {
+      "status": " D",
+      "path": "workflows/bindcraft_design.nf"
+    },
+    {
+      "status": " M",
+      "path": "workflows/boltzgen_design.nf",
+      "bytes": 11375,
+      "sha256": "fd2bd19c5ed4dc15382d15322f0ebfcb5b322fccb10bc1b6481dcf92c40a1d84"
+    },
+    {
+      "status": " M",
+      "path": "workflows/protein_design.nf",
+      "bytes": 31504,
+      "sha256": "2c79e0283b4aa9d4fd54cf0d05be353aa5b301f6c905830f33909028bcd45c43"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libbz2.so.1.0",
+      "bytes": 74688,
+      "sha256": "c630f057efedc12f848710d71f40283895591e5b4608539f387895c64e0553da"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libc.so.6",
+      "bytes": 1995216,
+      "sha256": "adeedbc69ac402b762a3bd94759441e0546c33972cb2c0f5bc6869a2d32efed6"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libdeflate.so.0",
+      "bytes": 87944,
+      "sha256": "1f21f19cb8406b030cdf01b598ff399e084618e53164b56c813d8c2cd6e88aca"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libhts.so.3",
+      "bytes": 919664,
+      "sha256": "e4c6bc550789ea37c294c6478f57387da86af668be4e80bdc96691a3abac8be8"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libhtscodecs.so.2",
+      "bytes": 223096,
+      "sha256": "8e9b1d47915b8895a9dfc57c3eb2d676257b3db95183f19e7794d6a785f92a9d"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/liblzma.so.5",
+      "bytes": 198832,
+      "sha256": "b35963d122e850c48dc42be640731f4a48c963938229c8b0b159d7d2b7f2fd3e"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libm.so.6",
+      "bytes": 977112,
+      "sha256": "6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libncurses.so.6",
+      "bytes": 169984,
+      "sha256": "7f7c057d4a04af01365ebf056a59521499ab4454783c4f7b74bce9f53b80b471"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libtinfo.so.6",
+      "bytes": 220464,
+      "sha256": "4013e7651ac68f547d8333517def25b2366c97eec7de7f06e105dbf3444ffebf"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/lib/libz.so.1",
+      "bytes": 125376,
+      "sha256": "85590dd58edf5445e18bc7193e5ebc01ac5841f1ae187e97705a662e90c6421e"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/minimap2",
+      "bytes": 204416,
+      "sha256": "0542d036722c62da152ef8de9c4aa00aae39a59a85853cb989abe0884f900573"
+    },
+    {
+      "status": "??",
+      "path": ".ngs-tools/samtools",
+      "bytes": 791920,
+      "sha256": "3163fb5490fa8f3de0a358d903e2a8706ed748d46f48bd8dca1d6fbeaf2c983d"
+    },
+    {
+      "status": "??",
+      "path": "docs/plans/2026-07-06-conformational-mapping-orchestrator.md",
+      "bytes": 38248,
+      "sha256": "d3213ceadd9d465d891ba674d08dbb469734f698968b6fed579050ac271bf958"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit-evidence.tar.gz",
+      "bytes": 4508315,
+      "sha256": "a5b10e5b2711db3f93964d94c486ec76dec787824faea011de59338ed11e8eb1"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/AUDIT_REPORT.md",
+      "bytes": 12033,
+      "sha256": "35a8fe56fbf51529d453d1bd64ff5ecefb391429da48f722a30ee146c17b321d"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-after-failure-shot.json",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-after-failure-snapshot.json",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-fasta-import-flow.json",
+      "bytes": 32562,
+      "sha256": "3880ad1c5d123fad1c43336734c565f236689affb30915093858d0fd32b6f562"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-import-flow.json",
+      "bytes": 30010,
+      "sha256": "e06b08d209373dbb4331687a7a84f0b22569e2d23e02f93ecfd175635c080ecd"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-import-save.json",
+      "bytes": 569,
+      "sha256": "a365f56aa29d13f7533f2dd17e230809bb13aa80a18d23c1a1018c8a4966b26f"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-import-tab.json",
+      "bytes": 321,
+      "sha256": "949c7a7f714434c58278ca1a1611fe7b746144e4df91b3a50c021662d3473ef5"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-open.json",
+      "bytes": 335,
+      "sha256": "0b76b6f62c8834a1280659265cdc0ef0e08f256d8aedbdc823c7a4e0db4665e4"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-snapshot.json",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/J01749_1-upload.json",
+      "bytes": 3929,
+      "sha256": "7938d3f700c3087ebacdc295611b064f74a2f08db38a298956c83049d8ad5a97"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/L09137_2-import-flow.json",
+      "bytes": 18986,
+      "sha256": "4a583d6b0be15457e843946f4b593a490acb64984af30393ec5f9c68bbd8c279"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/U13853_1-fasta-import-flow.json",
+      "bytes": 24275,
+      "sha256": "d099111febbb985dc5896774ffcfa3d912df5b87ef2cf70ce294ff6c530d255b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/U13853_1-import-flow.json",
+      "bytes": 31801,
+      "sha256": "f410b282e84f36f75e13c33233d84edc2472a087673812044eaed57efbed7943"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/X52328_1-import-flow.json",
+      "bytes": 15844,
+      "sha256": "455420738c7af3ea8483b24c2f7752187bbc820cae9ccd442530fd1a4e4a9152"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/api-focused-tests.txt",
+      "bytes": 98,
+      "sha256": "ecacf709f1721639aa23a331427a914c5ada50d7e7b8ce3dfcb8ade4d769aa7b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/evidence-manifest.json",
+      "bytes": 6008,
+      "sha256": "8a67d31180c81b5e0f0a34d87fb3ea2eada4450a3c3a45c66e7616005f950dd8"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/frontend-focused-tests.txt",
+      "bytes": 5159,
+      "sha256": "e6375a960668096016e9a4cc1605b1a6c6a81d5d1b822d3e293e909656008c68"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pblue-reload-click.json",
+      "bytes": 3135,
+      "sha256": "59c06fee632a93abb7a5e4945bc3b1df11c1b80ea4b81bb7e7f0b00305689bff"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pblue-reload-snapshot.json",
+      "bytes": 15850,
+      "sha256": "92e02e645a434229ed920b11166d5725aafce4a1e81cfc0bdcfbc6ca50d88e6e"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbluescript-edit-flow.json",
+      "bytes": 21600,
+      "sha256": "356071be4608eb78d6be6f4575342046bcfb5b980da5af4f650349e768e8e02f"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbluescript-edit-flow.png",
+      "bytes": 270464,
+      "sha256": "fa5865511b5037918492fb1d9f9732bd82676d38355b13f351cea0c69ac4a2c7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbluescript-postedit-reload-action.json",
+      "bytes": 3159,
+      "sha256": "1dc8b5d09e4be21e35e02ba6224d1d97cb8436f1e5d4dd0bb0823a00682dfa18"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbluescript-postedit-reload-snapshot.json",
+      "bytes": 15993,
+      "sha256": "29cad9b0629650b93a6da1dfdc04f61076631638f635cab9e86cdc53783b0543"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-edit-flow-retry.json",
+      "bytes": 26499,
+      "sha256": "c2217d59c3ed51e7a23bbeb8c4230064cc0f30322d9db0b507e2a127e8c35437"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-edit-flow-retry.png",
+      "bytes": 243943,
+      "sha256": "e9af9e01852f5edc2d6857bd262c72ffe4c40e86812c26db63d432dcca9c493c"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-edit-flow.json",
+      "bytes": 24165,
+      "sha256": "7df84c7e50b2874c7b401dce140073e1e4661d98e613d3afb45289506efe08c7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-edit-flow.png",
+      "bytes": 126056,
+      "sha256": "55962428578ec4477bdd4a0bddc1bea91851ac09e0890d2ca2ec43e5a6cc22a7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-open-inspect-action.json",
+      "bytes": 3173,
+      "sha256": "6b44e5136864c8aa02fd357dc232df1083b58856e20aa93732f8280664be0e16"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-open-inspect-snapshot.json",
+      "bytes": 16008,
+      "sha256": "bf058a67c91b1d6e920a38468853566f599364c4f83b84ef567adfe37597d9ee"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-postedit-reload-action.json",
+      "bytes": 3192,
+      "sha256": "e75ec679f8dfb1f1a5c88b4d7806dc900ee0f3ab4f2e02a64291548449c18cc9"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-postedit-reload-snapshot.json",
+      "bytes": 15815,
+      "sha256": "e6faf1fa7c8d207ef4e01169a25bbe8c1504e11a2a6bbe6d636e8980977f9d42"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-reload-click.json",
+      "bytes": 3167,
+      "sha256": "6a6ebc8e6fe70cbf771d064818acb97d82f5dfcfc58f5708b824093e65b71df9"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-reload-snapshot.json",
+      "bytes": 15671,
+      "sha256": "2b417538c6b844b9659c1b8842d0b155e64b8fa560b5029be8f5bd41f2f15a4b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pbr322-tab-dom.json",
+      "bytes": 3736,
+      "sha256": "ea710f746ba67dda8e54b9b3aec57951f3cef894ee0f1f82aa9dfc80b60b94d1"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-pcr-flow.json",
+      "bytes": 41534,
+      "sha256": "15ff2351970bb0f612c10383a6845db962138271ac7b14e2bd3e4c936d5d04fe"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-pcr-flow.png",
+      "bytes": 289882,
+      "sha256": "417a481bc2cb0973eff2cffcf143ab4707188e57a2b8477d5dcd57d1ed28727b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-pcr-open-action.json",
+      "bytes": 3657,
+      "sha256": "f0a1cd43abfec849ce5b878bdc51ef92a60dd1e83dc712b50f77068a13a5241c"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-pcr-panel-snapshot.json",
+      "bytes": 18134,
+      "sha256": "3d9c4b7ac6694c4b03e89052b393642f850b6fcef1e70944c8d0c78d4d41a9dd"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-reload-click.json",
+      "bytes": 3167,
+      "sha256": "6c6ce92aa470b3bcda077253193d0969d8ef73d0e46564a6abff3abbff4c1a03"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex-reload-snapshot.json",
+      "bytes": 15678,
+      "sha256": "f982ced14faa020b3b816e236c197cced54e3c24ee574aa909b3c9ce3752363e"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex4t1-edit-flow.json",
+      "bytes": 23233,
+      "sha256": "d2ed34f149af5e5d23b553dfeddc0c794f14d1ac6e3ff9c2736093bd86b6dc29"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex4t1-edit-flow.png",
+      "bytes": 243345,
+      "sha256": "0de1af0e13d66d64c70fab1a916c4b0505d21d75a76419d8a6184734dda243e3"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex4t1-postedit-reload-action.json",
+      "bytes": 3194,
+      "sha256": "1174089789c8ddeb8757281041698301a4fda3cdd207d31f2d40b91c7b56b726"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/pgex4t1-postedit-reload-snapshot.json",
+      "bytes": 15824,
+      "sha256": "60fffe51bfa2e17ceba93eab11260c28af4e335a8d7ae5ff4d535060986b03b7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc-digest-open-action.json",
+      "bytes": 3419,
+      "sha256": "bc19af2f3667afd16dac7333b8c28054ea865a9cc91e7dd313cb634bd8025b1b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc-digest-panel-snapshot.json",
+      "bytes": 26997,
+      "sha256": "71f563abca852aadc692f6c046cb86b10336b1b9ad5145b7be844dc6e215e8d2"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-after-insert-before-save.json",
+      "bytes": 13584,
+      "sha256": "4f7535cceac506be1aaf1e913abf89c154d64d6903bc721507d25812630044f5"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-before-insert-snapshot.json",
+      "bytes": 25505,
+      "sha256": "7d3b3d55f7381452f67baf1fc26f5c6eb826af5d56a889281c397175ba3e2c8f"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-digest-flow.json",
+      "bytes": 29185,
+      "sha256": "e8c182826f4fa39d4eea5d2076cebab1202daf3ac80236049e0618ab30e3eb38"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-digest-flow.png",
+      "bytes": 314426,
+      "sha256": "d4ce8ab3a82f4a303142a83873ea116225a05ddbc8bc6de642919490c93dd12f"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-edit-flow.json",
+      "bytes": 20337,
+      "sha256": "504b4c56df03f3653471a73b119371340f0b77e6f39553afe3c187eee55c7092"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-edit-flow.png",
+      "bytes": 258387,
+      "sha256": "30e6bff066d980b6d488c2ea34c95b9a8573d22044811dd06bb0a9216584b73b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-edit-panel-snapshot.json",
+      "bytes": 16234,
+      "sha256": "c4a256fdd1cbe136af91a6c04faf5c724de0cf47d3cbee5c0f9b136e48a0c90b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-history-open-action.json",
+      "bytes": 3422,
+      "sha256": "3743e6ceca34dbbab34518b9a568753e110431864c94c2c15f394b08ef376935"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-history-snapshot.json",
+      "bytes": 15834,
+      "sha256": "1983ba7f1a5bf16f48a564d021d1fe45c5aa3c19e72cb551d49972821ec5201c"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-history.png",
+      "bytes": 273765,
+      "sha256": "4d14426bb4d55430ad673ab2eadd9295bd2df58ba10995be590cda59f0950410"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-import-shot.json",
+      "bytes": 173,
+      "sha256": "339dbdf9c06a335057c913b31f80b432aaf472a940c6de68f6aa80d5e5056d28"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-import-snapshot.json",
+      "bytes": 10239,
+      "sha256": "5e5091400527fbea19bd69c94989b4ac7b135560498545ecf1fb60c191bf5f92"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-insert-action.json",
+      "bytes": 4979,
+      "sha256": "8d9180498f64582344da682e366e4bfa6d08ccf4cafa725bc077ad0882f33ab8"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-insert-panel-snapshot.json",
+      "bytes": 19788,
+      "sha256": "5c9ac67d004599c0a2fdc832ef7e32daf5dc64730d1f1fd93a7f2503ad449ee6"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-insert-panel-snapshot2.json",
+      "bytes": 22629,
+      "sha256": "be8a595d1f18c2a475d27b01a8cce8d34db33acc201187530282713c0445f35a"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-postedit-reload-action.json",
+      "bytes": 3163,
+      "sha256": "cb2e36f2af2ef943018d95f349ed51b1c404f3b8d549846ef8e9e490ef8f0ab1"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-postedit-reload-snapshot.json",
+      "bytes": 15873,
+      "sha256": "d8ad9b9f3c779ef0c63ca3788f549c4aafdd02361c366afddf9c65903e68efe5"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-reload-click.json",
+      "bytes": 3140,
+      "sha256": "a93b93cbbe4b7d61418f2067fabbe45206c1a9d4422ed0f20a01940b4683ad10"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-reload-snapshot.json",
+      "bytes": 15731,
+      "sha256": "edc1944b632e943b4763c9d647e47f02bc56b06edd042da1bbfb2edb6eb03335"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/puc19-save-action.json",
+      "bytes": 4112,
+      "sha256": "4a16e5d803fe1fa2824df05bcdda300c494558e98828d2689faddbb450e5410d"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/reload-shelf-snapshot.json",
+      "bytes": 12881,
+      "sha256": "1b1daa089be6f4b0a8969aeeb3ad1c6adae586dcfcb66d0356675035dd2ca045"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/J01749_1-import-flow.png",
+      "bytes": 243095,
+      "sha256": "fc4a71ea7706a04dc65f9ab35f8b975ebd44f5f14b6e4c5b027ac63d42f54dc8"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/L09137_2-import-flow.png",
+      "bytes": 258529,
+      "sha256": "b90f63b4178cb6132d395b41319c7026fcc7b7b3e9eb3c00f93ff4517d562fe1"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/U13853_1-import-flow.png",
+      "bytes": 243339,
+      "sha256": "a57b25229ade507760db1381757ea0478d1cd7ed88dd20c6a3c39da200e3b1ca"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/X52328_1-import-flow.png",
+      "bytes": 271703,
+      "sha256": "1aa9ac282bc0ffe2e52de9aa541900ad9532f138b5e5d9de22cdada472b357ad"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/pblue-reload.png",
+      "bytes": 269341,
+      "sha256": "260dccbdd84211dd4b83ea8266775e253022d384a7a273a1a722b1aa7bc957e9"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/pbr322-reload.png",
+      "bytes": 241372,
+      "sha256": "09a5ad8cfa73285d551798e4fa50580f57381f3946cdbcbeaa4350d048b96060"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/pgex-reload.png",
+      "bytes": 241750,
+      "sha256": "39b3e8046f5971628d5f27c7987aac967daf67119062dc435347406af5d3fa12"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/puc19-import.png",
+      "bytes": 230068,
+      "sha256": "f18a86b341fda3c15337618f6ce4726cda5dabc9efb5f75d57a0238e3b7c30c5"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/puc19-reload.png",
+      "bytes": 258529,
+      "sha256": "b90f63b4178cb6132d395b41319c7026fcc7b7b3e9eb3c00f93ff4517d562fe1"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/screenshots/uppercase-DNA-reload.png",
+      "bytes": 231294,
+      "sha256": "f9f76545ffef80d86445057e96943b0ed86ec4858e3f81dc0937761a5fa388cb"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/J01749.1.fasta",
+      "bytes": 4476,
+      "sha256": "2d6aed656794577332720ffaac5352c56ba5cf34e3a173869fbc1aa705b33aeb"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/J01749.1.gb",
+      "bytes": 24806,
+      "sha256": "7660b0fe95a91d492b102192dc72924508a69fda762988aa0923b3d5cc2073f6"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/L09137.2.gb",
+      "bytes": 8367,
+      "sha256": "9498daed1c3703dd739c684a3a7bcd6770823aa4a500cf9b57cf59bbdc38f72a"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/U13853.1.fasta",
+      "bytes": 5094,
+      "sha256": "5249a8dd4a5a165240abbbdeba7f2070fb1b74f45538fd3b42b60b23ae5fa906"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/U13853.1.gb",
+      "bytes": 11905,
+      "sha256": "b6ccebec3672a192f2b9bef9de8f3d6f68df23ea20daf396193ba9e0c198022b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/sources/X52328.1.gb",
+      "bytes": 5150,
+      "sha256": "fccd26bcb578b25f4cb071728eba4e20f8f032bcf236085bb0005a25f51812f7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/uppercase-DNA-reload-click.json",
+      "bytes": 3144,
+      "sha256": "0310624dfc67d858ce8327abd03c45741d05c56ab553c046dbf479a2c3f06c80"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-plasmid-audit/uppercase-DNA-reload-snapshot.json",
+      "bytes": 15300,
+      "sha256": "af41052e54a3a268229bb1b373c406bd7dd8dfcb6d4088b4503b860eee32d6b6"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17.tar.gz",
+      "bytes": 46096,
+      "sha256": "b5b4b7cff5a9905bb79f527c2a84d39fd0ca519f786295ccd616c5693fd007d7"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/REPORT.md",
+      "bytes": 25657,
+      "sha256": "2ca4729e4a32322039fe0b809dad488cefb4511f441f0e8d242d7783bfa773d2"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/capability-matrix.csv",
+      "bytes": 14235,
+      "sha256": "e95c4e44a3c5f896f74b80b515accca1e3bb8e53bbbf841bd2dc870bfbcc3ff9"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/capability-matrix.json",
+      "bytes": 25304,
+      "sha256": "b6bac504a583967387aaf44777386956485d2cacb445968da99a222f7563e23b"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/official-help-center-index.json",
+      "bytes": 145805,
+      "sha256": "fd8372d5979fde70787e59439c5bb04edbdf098f0c973de2c1ccca1b065081c0"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/official-snapgene-sources.json",
+      "bytes": 9261,
+      "sha256": "af050201ba98b47577b3a895c5896dfde482aa28723dcf3006fed9291c753967"
+    },
+    {
+      "status": "??",
+      "path": "dogfood-output/molbio-snapgene-parity-2026-07-17/source-snapshot.json",
+      "bytes": 9918,
+      "sha256": "f9eb0632af8935255d050e48344cf3e5dd83c45e6603f181900d145667453330"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.10u7v8",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.5PKu31",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.5VpZXM",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.8EfDRX",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.8mignv",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.BhyD7i",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.IL7rXR",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.Ldvvgw",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.Rtfsgl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.S2cLf6",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.b55mVg",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.cEgnYg",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.ckwj61",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.hB1CW4",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.hz4jiF",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.kgfPQ3",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "nxf-tmp.myriCg",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "platform/api/tests/test_core_runtime_controller.py",
+      "bytes": 7586,
+      "sha256": "0864bb557608eab89f542661086070e5e54d06783be29ccf67e0717332e467f2"
+    },
+    {
+      "status": "??",
+      "path": "platform/desktop-electron/src/runtimeReadiness.ts",
+      "bytes": 2069,
+      "sha256": "9efa69e7e8668515f84fcfa21896e18cbd21ebed04d961ff83ae96ed859aca1a"
+    },
+    {
+      "status": "??",
+      "path": "platform/desktop-electron/tests/runtimeReadiness.test.ts",
+      "bytes": 2257,
+      "sha256": "260ced8e90eac7ad64742e592d591777cfa24a98bf63a0bb0e9eb8c01e24f1e8"
+    },
+    {
+      "status": "??",
+      "path": "platform/desktop-electron/tests/trayStatus.test.ts",
+      "bytes": 5357,
+      "sha256": "7036dbdf9b00667fe0faa532561a6bdaf413998a155969d2bc55154eb8c2124f"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/AssayAnalytics-wWsEjHm5.js",
+      "bytes": 183509,
+      "sha256": "f4571e99fb178c83155833ef0dd88a65964664e0f45cccef95f8544285b86d4f"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/BioXpCockpit-Dvr3sZWr.js",
+      "bytes": 127925,
+      "sha256": "5b60ff8a7f494f00bf30350592d4a91b36af4654229e8249acfb388e323da2a5"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/Dashboard-y5cZGbiX.js",
+      "bytes": 122285,
+      "sha256": "2457d126815adcbf9fd763aa32ffd83c5eb18b99a2aaa4035db3be4ac922df80"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/InfraMonitorPage-MsFRdh6o.js",
+      "bytes": 1305,
+      "sha256": "9ccd04a6d4e179561f11e31a3618b89b97866074a0a079bce768175c8cb3fa95"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/JobDetailPage-DYEoovgF.js",
+      "bytes": 9283,
+      "sha256": "57d102d7248a8d95f69fd73323830f23f86f1f03f4526c332ce33f0199b0288b"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/JobSubmission-Bh4gw5Ei.js",
+      "bytes": 741935,
+      "sha256": "c6ed03ee6d7cd27941dcc8ba9bc5534f3d8914814a8f30563a3ca8990dc477a3"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/MolstarViewer-Co3HmLkQ.js",
+      "bytes": 9644,
+      "sha256": "fa6ff234ae8a4d52e29d42ab78777127c1ed3dfdde750b7f16cfc62b4db567d8"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/NGSToolkit-CKysC9_u.js",
+      "bytes": 183693,
+      "sha256": "a667c154f78063b18ccc999053098c80aad54b655ca999256dd0874fabca84c0"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/ResultsViewer-De2X-cgl.js",
+      "bytes": 712533,
+      "sha256": "bdd474f71038d32501ebb40901c4a41a237ae5c9abab0261b4929b9bf05c852c"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/antibodyModes-D9_oglrB.js",
+      "bytes": 807,
+      "sha256": "10efdc72db66c8c72473f6bef08c53ea54cfbf8c0498a888effb3ca56105b334"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/bmsStyle-0PKrasqr.js",
+      "bytes": 570,
+      "sha256": "fc0e1622ca882c65166f1d43e3a8a011d91196e4f6d1f936b09b83a3e7e6074d"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/index-51CUDAl7.js",
+      "bytes": 183522,
+      "sha256": "062e12d690ca914be5949d9347090da770c6fa1f7fea0a78bc768065fd38bad7"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/index-CsN4sYE4.css",
+      "bytes": 205866,
+      "sha256": "3e7b2884020aa17203634cc52a30f5db90c2ed9316e269594f3dbe5a3f4a5441"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/indexV2-9SNCCOcJ.js",
+      "bytes": 544080,
+      "sha256": "a7383a553e2bb6b4c8a2500fe9067d74b9b1ece4741cb23055e53d7a19abe84c"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/molbio-demo-data-xSSzyTTA.js",
+      "bytes": 432489,
+      "sha256": "39771a765300482a3ae7f5bcdf2279c3a57652eadff2ab7870a0b4e7dc026e5e"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/structurePredictionUiState-DZoAVdki.js",
+      "bytes": 10467,
+      "sha256": "97a429121e9782dc1ee2edcb4b631e31107d7d26a09947738936a8c2d861b1ff"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/useLiveGpuCatalog-tdD_fgcb.js",
+      "bytes": 1697,
+      "sha256": "c722e6eb2d2bbd3952aaac47baaafd164910fc93d9cbf6568b9ab7344c156da0"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/useThemeColors-DS9VYb5e.js",
+      "bytes": 1553,
+      "sha256": "e868aecee9309f278e37aed10dfe763fd82fc5f6c8478167df34698470b381de"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-blueprint-Ddj36Yy_.js",
+      "bytes": 680362,
+      "sha256": "8bba6b0796e4a6d755f7531400891b03f3d1b2b03c3a52a5143a6e8c52e9a0ee"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-igv-B213zGO_.js",
+      "bytes": 1423493,
+      "sha256": "120a1e7ccec5e11acbdf6a17565d9a44aea81f706b2986078f6f1afd52bc2a30"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-molstar-DLZfnq8S.css",
+      "bytes": 72521,
+      "sha256": "eb147a65b5b61ae6e504cf712b661ea47b25b7a58d4e855f5cfc02ad5500dc92"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-molstar-DuWEg6-S.js",
+      "bytes": 5529148,
+      "sha256": "fd0810873e9a5cf4f04e07531927e4d89bd76fe01688bfda9ad499ddb0277eeb"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-node-shims-mfY1MOlR.js",
+      "bytes": 37945,
+      "sha256": "06327f0aa5833669272b47afd8075f15276ca0827524f271a9770d6629866358"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-plotly-BhpBLodR.js",
+      "bytes": 4934383,
+      "sha256": "c4cb592badfd445ed569a1f031a08ed1748f5f21fb6fcdfc537f019dcee84dfc"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-react-CwLU55Iw.js",
+      "bytes": 465162,
+      "sha256": "1d9a41d234213e282e24f70410bf8b7ece2a9080a79fb954afd6bc2aa3508343"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/assets/vendor-seqviz-BhPHJ-i8.js",
+      "bytes": 185448,
+      "sha256": "519b3305bb75697a7c030c2ecaedf948e540552f7ef8dc8e45c5d4d66a2f95a8"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/biomodstack.svg",
+      "bytes": 1410,
+      "sha256": "c1c2239ff344090303cd838ece5415cd91c0ac716cac99c2c6827cf141569607"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/index.html",
+      "bytes": 1139,
+      "sha256": "d0bcad90ec38ade54425d0664188b8a4e5b731d0fd0a44334a6e3fbccc9e3839"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.artifacts/frontend-dist/vite.svg",
+      "bytes": 1497,
+      "sha256": "4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/MolBioToolkit/utils/alignmentLabels.js",
+      "bytes": 704,
+      "sha256": "dd9fca4e8dd94ea6bef90e0898186f792409040f01b2bc2011d7c9b292f15997"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/MolBioToolkit/utils/nucleotides.js",
+      "bytes": 21927,
+      "sha256": "61929829c72777c59ba6d6ce3b586b076aedf136f095d63eab2138059d6b67a4"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/MolBioToolkit/utils/orfs.js",
+      "bytes": 2304,
+      "sha256": "c7f62819b4c11825327d8066963bf3e349c9735298b4a299f50f95460058cdde"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/MolBioToolkit/utils/seqVizTouch.js",
+      "bytes": 5007,
+      "sha256": "11e46ca6782ee988c55e76ebc2bd1e9da628141dde87ea1f4f0541a6cb46b471"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/MolBioToolkit/utils/viewerLayout.js",
+      "bytes": 3596,
+      "sha256": "3b1e726e7a9edd4c7df4c45a9e222994c67b66f9eaad127b1bc90308da778027"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/antibodyDenovoBoltzgenScaffold.js",
+      "bytes": 1091,
+      "sha256": "fa38296edb8ca1ae969a6b90e3281c6969652cab404d9274f48c0279941ca796"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/assay/analyticalQc.js",
+      "bytes": 16073,
+      "sha256": "278941ab602813dcc79093774f1b21fd27c5fbfdf7eaeeabe1db8b8c42fd50af"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/bioxpConnectionSemantics.js",
+      "bytes": 2495,
+      "sha256": "a46ff40669f5e8989a6b990fa3c788114d65beb26bca3a3ea92450d5f10616ad"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/bioxpInterlinkStatus.js",
+      "bytes": 3333,
+      "sha256": "3626a9f90bd9662cb12a4b14ff98512b0663869710e2d192c136c2553709c827"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/dashboard/reorchestrateStructureSettings.js",
+      "bytes": 13746,
+      "sha256": "5f15cb5a0437627f4d510afd85366089e391fbffad4c3fc9808ae2298b7aedcd"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/designOutputSource.js",
+      "bytes": 27246,
+      "sha256": "61a9e2b3b14ffc2ffed8440b7e2c56bb060860aa2befcc998c9fed8ad5bf03ea"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/gpuCatalog.js",
+      "bytes": 2888,
+      "sha256": "f75c4ff4c450c2bf5c473a7c7d5af62519c27df62bb72b9f1b97a03a680acada"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/gpuToggleState.js",
+      "bytes": 1401,
+      "sha256": "6e2cc48582638c8e6e26b502a3a3a29ed3ccf090f3ba424be46cb916c96b64c3"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/infraTelemetryScaling.js",
+      "bytes": 2215,
+      "sha256": "571e78d48e640ccdfe27590a726a9e7aadd780268f1c471141b126ce36df5a66"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/jobQueueGpuDisplay.js",
+      "bytes": 2078,
+      "sha256": "4129819fd34b562cb9f94123f91eabcf1b321dd9dad1d1bc9a6cb109862e9c9a"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/jobSubmissionTemplateState.js",
+      "bytes": 1262,
+      "sha256": "fe0b319de86e29a99ebb1d5a26d5e122d2023858a42a6e4b59bc30b86683cf49"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/modelDocumentationRegistry.js",
+      "bytes": 5084,
+      "sha256": "c5064ec12a86888a9e884b22e112a9c48316978ab8188a59d50d91f5c36d22c3"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/molstarTouchInteraction.js",
+      "bytes": 539,
+      "sha256": "cdeaf87b3136fc89c5da169f0e6131392011295d76fe520f7c87264e0a21d35f"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/ngs/sequenceQcManifestState.js",
+      "bytes": 2042,
+      "sha256": "f32dcb1acb49c04f2824e8bb21f1e7f1c86def19176dde208fe99a592434fe86"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/qpcr/plateMap.js",
+      "bytes": 23240,
+      "sha256": "c4e1d31f30017662ae07af10d4277428be985fd1039354f6bf3b528452cb034c"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/qpcr/plotHelpers.js",
+      "bytes": 4824,
+      "sha256": "94c0d577c840be7016d0bc33dd9cebb97f495d712318fc31005576f41fa02ae6"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/structurePredictionUiState.js",
+      "bytes": 16828,
+      "sha256": "9fff75ed64d999a4571b0fc974ad74445af56e68574188f27f884d307847a6da"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/structureViewerLayout.js",
+      "bytes": 2816,
+      "sha256": "ec4fea60660045d7863fc71c83870a574ff47a201f7404ec4ada4ef26fd0d495"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/structureViewerSemantics.js",
+      "bytes": 19046,
+      "sha256": "a9688c531d76f636a136aefa85443189374b40a88153a7e2f6c973c24bd9a7f5"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/components/workflowModelInventory.js",
+      "bytes": 6723,
+      "sha256": "94661e46976d94f16c35db3c0b2e8993732a416119c3712799bdd5768c534db2"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/api.js",
+      "bytes": 17521,
+      "sha256": "994c59e088ad4c58fc62956655127e2d987420ff3fbeb2df1d1495f347b91e03"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/bioxpClient.js",
+      "bytes": 43535,
+      "sha256": "591bd80057154be20baf61ae556846327e67571d75a4ade66445ed6db7d10c63"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/clientDerivedResultsPolicy.js",
+      "bytes": 690,
+      "sha256": "f1db933fad3657d76c39fd2f793ecb0f4ef0d7299439a608929085b60fc69570"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/latestAsyncResource.js",
+      "bytes": 469,
+      "sha256": "66f23bd847fd1abdf75a4ffe192382e67bae2678861b6257472ba5094ecde918"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/metricRegistry.js",
+      "bytes": 4603,
+      "sha256": "8b83b3c995a918079a46b7c2078ca00214276c7fbaa95addc933db7bd538039b"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/molstar-metrics.js",
+      "bytes": 6130,
+      "sha256": "7a5519413ab2ee5dd615489307e6fd674adac522170ba222ac5b5a4dc35f0ed6"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/queryPolling.js",
+      "bytes": 493,
+      "sha256": "4ede43b82f553ace72a329e12ba9932c2f134184f4a653954e70886bcd603f0a"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/lib/resultCapabilities.js",
+      "bytes": 1819,
+      "sha256": "91226899f8e68a51c245779720545cd8b8649c38f7e835140795743f727852ba"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/runtime/cordovaShell.js",
+      "bytes": 447,
+      "sha256": "cc2ad8f61155f2bbdd516227c62b8d91c4c732f5697b1edb3eb7f297af06f188"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/runtime/installFeatures.js",
+      "bytes": 3625,
+      "sha256": "07cd5686d6375fa7f8dca421a617632536bf855bc5bac4ab353461e49e249912"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/runtime/navigation.js",
+      "bytes": 2507,
+      "sha256": "0d7f9e3b2dfe7ae7a7fafe8ae56413091563274bbe0aab0e78c7501545d8e08d"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/runtime/runtimeSwitch.js",
+      "bytes": 1426,
+      "sha256": "751f23a456caa54aab49b0dcd6196cd1226dc2bb01da2a6f1ff053486cb860db"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/src/runtime/uiDiagnostics.js",
+      "bytes": 1683,
+      "sha256": "9cada3ea004b7e65ed3bbaf5aaecc248c300bf0dd54d14dcd10093ffd808fb20"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/alignmentLabels.test.js",
+      "bytes": 1791,
+      "sha256": "f0547045eb2d3b3e11310b3b4424e08d21b96ed78e466ed33384633a1c8094df"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/antibodyDenovoBoltzgenScaffold.test.js",
+      "bytes": 1794,
+      "sha256": "5e05a7f135d4ee53e8f6dc3a06dcf1a3eb4e5431a32dae393dbfa1668c3a2be7"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/assayAnalyticalQc.test.js",
+      "bytes": 3703,
+      "sha256": "86905631619e149530ce5234aa4ff0d06e59e095bdbc0491a6befb41ea52807a"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/assayAnalyticsNavigation.test.js",
+      "bytes": 1680,
+      "sha256": "c0e7e1cea71b6be6d2fe049ad4afaca85779dbad5ac09bc3ae5665d015d7d1f1"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/assayHarmonizationPrimitives.test.js",
+      "bytes": 7663,
+      "sha256": "44c490ff8679fb170b40d71c27c7c7a7d3d2007f04d3aabcbb5f06410aee6a1b"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/assayNoFakeSeedData.test.js",
+      "bytes": 3660,
+      "sha256": "7f585d494285648980849037da42d498888151b00ebf0aec7d0b020de94912ed"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bindcraftRemovalContract.test.js",
+      "bytes": 1367,
+      "sha256": "2b66bb49ffc5a955b4a6d96affc60a74727106784b2d4fdb92ebc8900d4d9a5e"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpAddonGating.test.js",
+      "bytes": 2570,
+      "sha256": "fdfdf5044c22f24b7068ec23232451807c63dd9b827b17b44a70cfde13fada8e"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpCockpitSafetySurface.test.js",
+      "bytes": 11611,
+      "sha256": "551fd7f9400c5c584082f0773eac941e0ccfa9fcc00e69eee590bc0fcf36af5c"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpConnectionSemantics.test.js",
+      "bytes": 2448,
+      "sha256": "d7a6c5c1e8ff6e2eeba25963f6d2b858149fb92225ff584d95b15321b47f07c8"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpControlSurfaceCompliance.test.js",
+      "bytes": 12033,
+      "sha256": "5db6a5bbc684d519c090ea243cdd046c1a2ad0faf8fd4a035cac0b7bf59f0bea"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpGripperContract.test.js",
+      "bytes": 2793,
+      "sha256": "8d79166aa1dc29b5b8bebcf24aded1435e29dde124932cf984b577d46aa63919"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpInterlinkMenuContract.test.js",
+      "bytes": 12029,
+      "sha256": "1468b6fd5d1871ad277858da6aaf66cb9ffadf9c192177fc1141686ce0db60cb"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/bioxpInterlinkStatus.test.js",
+      "bytes": 5256,
+      "sha256": "77f4e0b659357e4ad82f6ae55ff16497f9608a8945e8b562b76fd0f9fe0f1bab"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/buildWarningHygiene.test.js",
+      "bytes": 3602,
+      "sha256": "9c93bd20f864e3cc13c9909f83556af6c4b08e9e985286b90a5a0b0c9d7be198"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/clientDerivedResultsPolicy.test.js",
+      "bytes": 1085,
+      "sha256": "c6f9c34f010878abff910ac433f6ff41a30280b1e53624e6de9b6e2e7adac273"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/cordovaShell.test.js",
+      "bytes": 632,
+      "sha256": "075e4ed570a8f4721edf8872ba9492989d58406508bce7d3e9aa86d4172c3bae"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/dashboardSchedulerConfigContract.test.js",
+      "bytes": 1539,
+      "sha256": "2f7e684d951de1513c7d528d5588ab501c85ed899abd3d41f1283f5c61537545"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/dbServiceMenuContract.test.js",
+      "bytes": 2091,
+      "sha256": "757604d518af15ce2828538eb90aba0a80a386c0da43d268920fcaee6ffd0097"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/designOutputSource.imports.test.js",
+      "bytes": 8295,
+      "sha256": "cc889625e4f6f0ec7468fb6d6b97070690e0ee226f6926d565677b151b669482"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/frontfacingCopyContract.test.js",
+      "bytes": 12912,
+      "sha256": "401c841499d6168ef7cf1b255d402c3a980b6b5b5048e6e4473409e8cf724daa"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/gpuCatalog.test.js",
+      "bytes": 2156,
+      "sha256": "61852101e34d65bc61baf8899e86b43ed502d8c0c2cf207bf1e0815344af6954"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/gpuHardcodingSource.test.js",
+      "bytes": 6140,
+      "sha256": "3da539547a656a944a7a2d13c431c33546d0ba8fdb6b1b4c25b443f54bfa29b6"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/gpuToggleState.test.js",
+      "bytes": 1055,
+      "sha256": "9d1128fa10f4283adcecd891b31b83f5700ae8dfaae5a75799f86eedef396c09"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/hplcEmpowerImportBehavior.test.js",
+      "bytes": 2478,
+      "sha256": "7e2f9327714525bb40eb35bd9d5271365d772959d1dfa96e970410259ecbbe17"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/infraTelemetryScaling.test.js",
+      "bytes": 2848,
+      "sha256": "c86d80432f54f133ade414d56d577a3abbb1e1dac5af1f6b07574f9195e9eb90"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/installFeatures.test.js",
+      "bytes": 2048,
+      "sha256": "5872f6a6eaf7de80939aea88389a3bec5e28d7c9c8b7ce09e2b8026e57615ac8"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/jobDataPlaneHardeningContract.test.js",
+      "bytes": 2169,
+      "sha256": "0e8a43dddb0c3a853f1d7ce8ff22b013aff2fcf7bd739d459decef5159948782"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/jobQueueGpuDisplay.test.js",
+      "bytes": 1952,
+      "sha256": "7994280ad13b2e36d24c79914261adc9e41d9be016befe2121a6a40a3b2491f4"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/jobSubmissionExperimentalExposure.test.js",
+      "bytes": 10112,
+      "sha256": "42501df0f8c889b5f358719057e8f5ed7662a6af4150d7e3e654b73bc662f82e"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/jobSubmissionTemplateState.test.js",
+      "bytes": 2002,
+      "sha256": "66b749d7a804c70502c3ddaa8f086c7787cbc0b79ce9935881e4bff42226f991"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/latestAsyncResource.test.js",
+      "bytes": 580,
+      "sha256": "278a030362393d5ee02e8a00f43ec38051ea2757b935221b3a4759b73a7e8b99"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/metricRegistry.test.js",
+      "bytes": 2514,
+      "sha256": "efe3dc800980724fe777b20529db9084821aea13512ad76f0e405f57b21c73c9"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/metricReportingCopyContract.test.js",
+      "bytes": 885,
+      "sha256": "10737d9bb80b673e203f11e6a311f32298b4250144c3e9a1e0e0d72ff5ebf4b5"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/mobileJobsDataPathContract.test.js",
+      "bytes": 1589,
+      "sha256": "7d10a8a39e6603833550c293822dc7c47b375349f5c064a67b2b3ef9d597a8ed"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/modelDocumentationLinkoutsContract.test.js",
+      "bytes": 16136,
+      "sha256": "d985967aeb03aba571c40ffbf4094d9fe885199f4e7dfa1ac0052dc257a8338d"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/molBioNucleotideHandling.test.js",
+      "bytes": 8443,
+      "sha256": "5ca56a6a1e2c5bd25e9b91613e14ab9a532bda857f54695179f2bf6374439c72"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/molBioViewerLayout.test.js",
+      "bytes": 7849,
+      "sha256": "1cc89794797f23f0ff55661e74156e0977b8a30524bf11e58691677378387e05"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/molstarMetrics.test.js",
+      "bytes": 4221,
+      "sha256": "d82cd65895dfba6d870f845cd04245429888eadd4a9127ea84322e64f6446f63"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/molstarTouchInteraction.test.js",
+      "bytes": 1867,
+      "sha256": "b6d2038fd3eff5e5c0dbce0bfed6593b54dd42e767e918185126c8ddd3ab5fbd"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/nanoporeTemplateContract.test.js",
+      "bytes": 8176,
+      "sha256": "92697f21e639421d00bade620a3447f8e03b226e2ded7a34463d394ee88d2167"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/qpcrPlateMapBehavior.test.js",
+      "bytes": 12293,
+      "sha256": "48b0336056d50131db1c1032cd5379101f0628161ae18452d7917abc430b4297"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/qpcrRawDataImportBehavior.test.js",
+      "bytes": 8265,
+      "sha256": "07388c2fde7f454d1197823a7e26b6ff5d862ad0751640f3e650fad35e9a9f42"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/queryPolling.test.js",
+      "bytes": 1264,
+      "sha256": "36880120c347f7a35a849c2606178e230d41e84ec96b9711b1707f2439e5ae14"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/reorchestrateStructureSettings.test.js",
+      "bytes": 8176,
+      "sha256": "ea735a69427456d49c15d8cc44762a630987600085ad2d080591491c051a3d03"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/resourceOwnershipContract.test.js",
+      "bytes": 2768,
+      "sha256": "64e58398844d9dde2c3a130291c1e83f9aa3b98570c5cd16a71d57f59323be5a"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/resultCapabilities.test.js",
+      "bytes": 1914,
+      "sha256": "09456cd87dd03cfd263a141461e69d6860b1f546da34e9e84c3e3016485123bc"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/resultsViewerResultSetContract.test.js",
+      "bytes": 1987,
+      "sha256": "3ba1a24876e4784fac02c0b3813634ea390c20e6deb268ce61f03c69c64922e7"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/routerBasePath.test.js",
+      "bytes": 1775,
+      "sha256": "69dbf287e06a4c34bcc99c4a39626038265b3fde75908959f5ec6e962b092d54"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/runtimeSwitch.test.js",
+      "bytes": 1377,
+      "sha256": "a0b6210a6de4f24ca2397465509fa6caf4992c165f876299771bbd4af8453837"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/seqVizTouch.test.js",
+      "bytes": 2275,
+      "sha256": "31241d10f4eb955a841ae28c32f48c9f3979257e8b86295692b7f10a4087004b"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/sequenceQcManifestContract.test.js",
+      "bytes": 2386,
+      "sha256": "34bafae1885ab3aebf56f0720c40e3abf96f38fe3096637b9b4c1018e353d8c6"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/statsToolsMenuContract.test.js",
+      "bytes": 3309,
+      "sha256": "b3977a55f2cc81853797bde70bb8a0bc3d281b50406195be61a56bdc2a969e59"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/structurePredictionUiState.test.js",
+      "bytes": 15985,
+      "sha256": "2c8fe1c82587d95d329977e35aaad9d8322c1c82d5a45120be76bddc92ef714d"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/structureViewerLayout.test.js",
+      "bytes": 3973,
+      "sha256": "926b75fdbde2969e407e1f393f2e2a854d4ab927ea19f57c719b1225b71f0a6d"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/structureViewerSemantics.test.js",
+      "bytes": 17418,
+      "sha256": "c8130e9cbbd35fc37a629d43d2a4bf5d2f954ac883d5cbd4459a028803dd08ce"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/topbarResponsiveContract.test.js",
+      "bytes": 3991,
+      "sha256": "7d7b281edc3a650d048784592b9788cdf8524556533558e58e704ab62d7affb0"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/.test-dist/tests/uiDiagnostics.test.js",
+      "bytes": 5313,
+      "sha256": "071550cdc27df156f009abfc111e364177df97b3161905d7a380fa424ca4f86b"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/src/lib/clientDerivedResultsPolicy.ts",
+      "bytes": 995,
+      "sha256": "21d6d4ef4607ec403aa00612896668d68017cebaeb136116e5a4b8acf27479dc"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/src/lib/latestAsyncResource.ts",
+      "bytes": 643,
+      "sha256": "988e6e5acf16a45fb7a11e25e66f1f7b8ccc6ff391e7808cc2a7898c399ebeb1"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/src/lib/molstar-metrics.ts",
+      "bytes": 9574,
+      "sha256": "cf5e8bc9c9afbea32ea09aca8b692dc4e55226153a11d193f16f99984daf1f92"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/bindcraftRemovalContract.test.ts",
+      "bytes": 1376,
+      "sha256": "819c7e6a846e1d00f239c9c3a70d56c14b8d28ef0a15459e82b5e7124086c8ee"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/clientDerivedResultsPolicy.test.ts",
+      "bytes": 1053,
+      "sha256": "2b5e14d4776fad4b4bd1e14e0cfca297d99a7b55201d373e44dc60711ec09311"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/latestAsyncResource.test.ts",
+      "bytes": 584,
+      "sha256": "3c794f1d81eab9833dae1bd21e384a69d0f710a63573b61edfcee65ddb4dc67c"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/molstarMetrics.test.ts",
+      "bytes": 4207,
+      "sha256": "6654a1bef61f6a22c7db90bf3b93614714c6b7d1a48ce4aba99a11e9673cd306"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/queryPolling.test.ts",
+      "bytes": 1261,
+      "sha256": "e31052dd49d1863f33f4a6a010fe6674a45894ff7deea451a57da4ea1ed1a631"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tests/resourceOwnershipContract.test.ts",
+      "bytes": 2727,
+      "sha256": "fb29d7f85e92c40963238a2d95f74d1722561f1e7bee848487b0aa577f0892f0"
+    },
+    {
+      "status": "??",
+      "path": "platform/frontend/tsconfig.test.json",
+      "bytes": 425,
+      "sha256": "70ad4dcb0daccff133f663c4bfe25714f1f16568b466f77ecc10a7cb72557950"
+    },
+    {
+      "status": "??",
+      "path": "scripts/biomodstack_core_runtime_controller.py",
+      "bytes": 19738,
+      "sha256": "3a4d3995bcce17ea473e3788ad19c22c5e777f23f07a2e4a2d7bf2bebfe1b304"
+    },
+    {
+      "status": "??",
+      "path": "wf_test10/80/24f2ff178f7e46480722f28a0657c5/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test10/80/24f2ff178f7e46480722f28a0657c5/.command.log",
+      "bytes": 169,
+      "sha256": "2794bbc4513347cbc556d9567ca0f8f4f8427352af02d44639bcfe4d52d397cd"
+    },
+    {
+      "status": "??",
+      "path": "wf_test10/80/24f2ff178f7e46480722f28a0657c5/.command.run",
+      "bytes": 3303,
+      "sha256": "4d6885abae125306cc8be461af7458bf6277f60c5d505878ddd93a5f7079da8e"
+    },
+    {
+      "status": "??",
+      "path": "wf_test10/80/24f2ff178f7e46480722f28a0657c5/.command.sh",
+      "bytes": 157,
+      "sha256": "9edbcaabe2361fca8455452b078428169383c2761da74bed7190963a5cfe0284"
+    },
+    {
+      "status": "??",
+      "path": "wf_test10/80/24f2ff178f7e46480722f28a0657c5/.exitcode",
+      "bytes": 3,
+      "sha256": "922c7954216ccfe7a61def609305ce1dc7c67e225f873f256d30d7a8ee4f404c"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.log",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.out",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.run",
+      "bytes": 3094,
+      "sha256": "f2e05b49cab19942b65176ee5a2974709cff1eae21d36ccfb80b23cb00f0925a"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.command.sh",
+      "bytes": 193,
+      "sha256": "7fd6fc1c6b9cfabff858125238ee18842cb7495d98e0a4a3c27ece3898b17c82"
+    },
+    {
+      "status": "??",
+      "path": "wf_test3/87/b5dd12887af2d001f0e7af59802067/.exitcode",
+      "bytes": 1,
+      "sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.log",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.out",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.run",
+      "bytes": 3116,
+      "sha256": "4510d34db3e49191f3ca989d8da4cbb90d15e9180d71d5d97b05bca170b3aa26"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.command.sh",
+      "bytes": 193,
+      "sha256": "7fd6fc1c6b9cfabff858125238ee18842cb7495d98e0a4a3c27ece3898b17c82"
+    },
+    {
+      "status": "??",
+      "path": "wf_test4/90/5ed3b97118c5ec348d23b93b646876/.exitcode",
+      "bytes": 1,
+      "sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.log",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.out",
+      "bytes": 71,
+      "sha256": "4d5917d463932b6d1781970a9d927db3759a0a90f2208317283db13d23f40629"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.run",
+      "bytes": 3116,
+      "sha256": "e23da6ef9dfab8497041306b66555858747ffcbefa1f14fca0da39a2189a1621"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.command.sh",
+      "bytes": 94,
+      "sha256": "161ab9cc37fc879ff82cbd11d1cff60a2fea466d00aa3f785bb2aad0c9d8e750"
+    },
+    {
+      "status": "??",
+      "path": "wf_test5/ed/bebd315584512deccd540eb5b4476b/.exitcode",
+      "bytes": 1,
+      "sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.err",
+      "bytes": 132,
+      "sha256": "458fa29e99bf838ec5cc170a72faef86403efcfff13da1f423a7e369266ed9b1"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.log",
+      "bytes": 132,
+      "sha256": "458fa29e99bf838ec5cc170a72faef86403efcfff13da1f423a7e369266ed9b1"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.run",
+      "bytes": 3562,
+      "sha256": "e6f588ed61a21182cf2c7df2fa15e87e3a886b9141ee3316f42c7c93c40b11fa"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.command.sh",
+      "bytes": 94,
+      "sha256": "161ab9cc37fc879ff82cbd11d1cff60a2fea466d00aa3f785bb2aad0c9d8e750"
+    },
+    {
+      "status": "??",
+      "path": "wf_test6/12/6a9ec262c17330c9c75a1724756003/.exitcode",
+      "bytes": 3,
+      "sha256": "0f8ef3377b30fc47f96b48247f463a726a802f62f3faa03d56403751d2f66c67"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.log",
+      "bytes": 95,
+      "sha256": "6302a5ca282e24408ba34640043393dc64d4be458d9d24395dde389139855f92"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.out",
+      "bytes": 95,
+      "sha256": "6302a5ca282e24408ba34640043393dc64d4be458d9d24395dde389139855f92"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.run",
+      "bytes": 3094,
+      "sha256": "224ab10a8412dde500ea4d4ec9ca8490c37eefe957c9b9cf2367e4cab88cf962"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.command.sh",
+      "bytes": 91,
+      "sha256": "00ab56e80ccafeced262cc98d5dea6a26a2158aa5b2983a700006f8b85fe9d43"
+    },
+    {
+      "status": "??",
+      "path": "wf_test7/99/d7e2ef559bd9f49bf410aebabf856f/.exitcode",
+      "bytes": 1,
+      "sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.log",
+      "bytes": 252,
+      "sha256": "bda20ba64ae8ccdb8be4f9458354117d4ea26b8a98cf2c77a4eb0f78205a199f"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.out",
+      "bytes": 252,
+      "sha256": "bda20ba64ae8ccdb8be4f9458354117d4ea26b8a98cf2c77a4eb0f78205a199f"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.run",
+      "bytes": 3094,
+      "sha256": "8365afc68039fcc55d17755fc8dbda747c0ab040be7832186f0ca2b17d84d184"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.command.sh",
+      "bytes": 145,
+      "sha256": "6e71765d660916e978bfdb65bfb9107644791ba1d53819f8409562e0ee767768"
+    },
+    {
+      "status": "??",
+      "path": "wf_test8/6d/e620044231749b929ab5978525a028/.exitcode",
+      "bytes": 1,
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.begin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.log",
+      "bytes": 363,
+      "sha256": "46676696490397d1fec992c02e184ba76e2bc0e735fb6b9edbe322dcd1320e81"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.out",
+      "bytes": 363,
+      "sha256": "46676696490397d1fec992c02e184ba76e2bc0e735fb6b9edbe322dcd1320e81"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.run",
+      "bytes": 3220,
+      "sha256": "0cbc3cb7cc97bd663ac54b6070189b14d187250a67c4562164ee501b931e7559"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.command.sh",
+      "bytes": 157,
+      "sha256": "9edbcaabe2361fca8455452b078428169383c2761da74bed7190963a5cfe0284"
+    },
+    {
+      "status": "??",
+      "path": "wf_test9/c3/c4dd85f5150e331fa0dc06d12896b9/.exitcode",
+      "bytes": 1,
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    }
+  ],
+  "bioxp_scope_file_count": 59,
+  "bioxp_scope_files": [
+    {
+      "path": ".hermes/plans/2026-06-09-bioxp-oem-homing-replacement-spec.md",
+      "bytes": 27312,
+      "sha256": "00467ee2dcd797e4f294635da1084179ec170673d64b3c20521371983aa61b0c"
+    },
+    {
+      "path": ".hermes/plans/2026-07-17_190259-bioxp-bms-control-plane-simplification-roadmap.md",
+      "bytes": 36348,
+      "sha256": "553ab0a952e0c3159024740e29c7178e449649754e635f5f310b71375183b523"
+    },
+    {
+      "path": "docs/oem/bioxp_gripper_gap10_oem_harmonization_phase_plan_20260610.md",
+      "bytes": 5250,
+      "sha256": "840357441704b904425e51d6df4674dcb5ba5d56603e3e648ffebc44cc2ff396"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_config_backup_reinventory_20260610.md",
+      "bytes": 6387,
+      "sha256": "b866e80723a8b5b818c29583b2e9711af05aade7ca13457509a863eb88197c84"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_homing_call_graph.json",
+      "bytes": 70851,
+      "sha256": "e54ad170c5427df2c1a7d89a58f5df63f4198bc3d6871ce776689a503286049a"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_homing_call_graph.md",
+      "bytes": 3667,
+      "sha256": "a11170320e25dffc0aaa69c8ba755fec09f066489ce377a535e33a4164a959eb"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_homing_replacement_design.md",
+      "bytes": 2331,
+      "sha256": "4d50602e859995ff8809074c4cb6ec404ca5732730ee56ca2cc05d3fbd5af0bd"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_motion_constants.json",
+      "bytes": 2380,
+      "sha256": "a6fd8eb8204460585b8438043092e0b97255f9a1dbfeae82f51b7ed8fc461677"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_motion_constants.md",
+      "bytes": 1848,
+      "sha256": "fe05539403f51f88f938dea565c28ed2a5f67537b32b4322c88336924f24aed4"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_parity_e2e_comparison_20260609.md",
+      "bytes": 15786,
+      "sha256": "83a80d6accb49e75417b0f859e9c6886a06ed6f288d9d1f4c8b96338a0fdb53a"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_parity_fresh_attempt_phase_plan_20260609.md",
+      "bytes": 29458,
+      "sha256": "e98bc8d892465d1a3694697bbad3dbb68aeb4bf416e51a5a718fc46b22c53c38"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_parity_gap_assessment_phase_plan_20260609.md",
+      "bytes": 25666,
+      "sha256": "be94a4282743b15193f144d46cbc87f44e359fa359c9f40efe775a9269bd5cfa"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_source_to_target_matrix.json",
+      "bytes": 9200,
+      "sha256": "5fb4a783d078a50cd7d721986be0e06d3dabb470fc2e3a732315aa061978ec8a"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_source_to_target_matrix.md",
+      "bytes": 8683,
+      "sha256": "1b1cf1e3f6026bdf669df2969e0ee26afe057e7277683e17302023f02ff0d573"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_ssd_config_findings_20260610.md",
+      "bytes": 5924,
+      "sha256": "7035776aafc8ab629427122ab410c84d497683658c9f7f8a4761b5cc25a32ccb"
+    },
+    {
+      "path": "docs/oem/bioxp_phase0_current_iteration_freeze_20260609.md",
+      "bytes": 2665,
+      "sha256": "569385bc79ab9be6564e6bedc1da805de67523697f319a4fc8eee293f1913229"
+    },
+    {
+      "path": "docs/oem/bioxp_phase3_robot_quarantine_gate_20260609.md",
+      "bytes": 2298,
+      "sha256": "c211a2cd05bc2a0b0c572d20511a61aff707fe532462e5df6241b505c1c5ba67"
+    },
+    {
+      "path": "docs/oem/oracle/bioxp_oem_source_oracle_20260609.json",
+      "bytes": 27344,
+      "sha256": "647c97034439a0d1acc4119c873068aba7fbe4e020b3da1cbd2db6748651cde7"
+    },
+    {
+      "path": "docs/oem/oracle/bioxp_oem_source_oracle_20260609.md",
+      "bytes": 20335,
+      "sha256": "eddbc820f2111f25e364ff7b9fd7cf9dedf7cf5867f33b55c0e37269de94b959"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md",
+      "bytes": 27016,
+      "sha256": "afc17073de6cfdf7028427df55de9ec181ac94e4bb77d743904350cc747c9196"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-oem-control-surface-replacement-spec.md",
+      "bytes": 16950,
+      "sha256": "50936c7393d35d71d5b75b178baaaf11c12610a0a12da6ae2989cb3e0b78f374"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-robot-operations-console-spec.md",
+      "bytes": 17279,
+      "sha256": "8705cb725ed2195b2bd26c28303bf9f4584b606d60821575394c2bf2a15e8903"
+    },
+    {
+      "path": "docs/plans/2026-05-08-bioxp-workstation-interlink-control-panel-spec.md",
+      "bytes": 20416,
+      "sha256": "bb16a7d2e313b77a7f0e0d2877a4c41762fc811f4580bd417aadc0ff112bb8eb"
+    },
+    {
+      "path": "docs/reports/bioxp-hot-gripper-current-recurrence-rca-2026-06-09.md",
+      "bytes": 10046,
+      "sha256": "87506df09b3580a855feb6e14018478bc38d0c47c75dda380b5038bb346aa987"
+    },
+    {
+      "path": "docs/reports/bioxp-motor-current-hold-rca-2026-05-27.md",
+      "bytes": 9014,
+      "sha256": "de0592c33b3ea5cd19cdecd58ef762d80439b4f62d47a4d25a326de294ecb9e9"
+    },
+    {
+      "path": "platform/api/pyproject.toml",
+      "bytes": 1040,
+      "sha256": "2e457dc66975d2b9612080f89406ac4d51f4e199e744d022f4c03cd9d672f697"
+    },
+    {
+      "path": "platform/api/routers/bioxp.py",
+      "bytes": 98677,
+      "sha256": "0dc1f4aad48355cd4a1f79773b5d7cfc0c4d7e9016d3e99e82b513551be78053"
+    },
+    {
+      "path": "platform/api/services/bioxp_interlink.py",
+      "bytes": 16766,
+      "sha256": "16bc600dad40e646b4e1954f7ed18a6752f841d8f2648fd666f85ed904cce8b8"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_gripper_proxy.py",
+      "bytes": 8563,
+      "sha256": "aa1c36c67c4f9bd268e196f5abb99c625bd391dac9f9d36dae30751ac44a92cb"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_interlink_lifecycle.py",
+      "bytes": 7509,
+      "sha256": "34cd45f339e58fe8bde7bce3dfcf1bcc829d97bcc4a6d84daa85b3a2c336b38f"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_interlink_router.py",
+      "bytes": 10524,
+      "sha256": "e0957c62db7b45568311e4dffe5bfcdbeafd94b69eba05b947e4f51c624c4b0f"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_motion_safety.py",
+      "bytes": 10272,
+      "sha256": "acd4aabbf2b048ee6b10d3e820bb92528fccf1ba3d94d63f7d5dc0ee675d0f89"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_oem_shadow_proxy.py",
+      "bytes": 9653,
+      "sha256": "809a27582f283c805de0c2231b3d3ae30f805c9bd1387990bd969c0132b7513a"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_prepare_to_run_job_readiness.py",
+      "bytes": 3531,
+      "sha256": "eea902a2d3544d6204f71fa3ecb32380d282f2aff18a71aed10e7fb794ac31fe"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_protocol_jobs.py",
+      "bytes": 5312,
+      "sha256": "af45885630c40c12dfc1493f70e158c02180cf7e3a8a8cfc58a787dc42be19f8"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_router.py",
+      "bytes": 33455,
+      "sha256": "8f5f28abf314aa837cea5ada9ea1870247ce1328a913277dbedfe8701a3b462a"
+    },
+    {
+      "path": "platform/api/uv.lock",
+      "bytes": 922846,
+      "sha256": "78f20a4c5de7efc86052587cb9441880fa0b2b7bc793229e9df96e760717cefc"
+    },
+    {
+      "path": "platform/frontend/dist/assets/BioXpCockpit-DaO0myP0.js",
+      "bytes": 127925,
+      "sha256": "fc327ca5e0f9a02843090f6bbdc3be712cafb633f12e001aa30ab10418e20d50"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpArtifactsPanel.tsx",
+      "bytes": 8437,
+      "sha256": "3d8be117f0d0e820bc2c7f173d167f62c4a929ae6cf95c635f6143858b07ae16"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpCockpit.tsx",
+      "bytes": 207007,
+      "sha256": "e5b389a602142d6fe0c7c5a1c8e1a6aab14420ba5231a7dcdd68dd34667163e6"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpInterlinkControlPanel.tsx",
+      "bytes": 17054,
+      "sha256": "283d69ad1d091bcdf7d55da4b6a7870d8dd8a7de6e1f9af4c4e5bc8ded1cc62e"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpProtocolRunner.tsx",
+      "bytes": 25874,
+      "sha256": "58c5354f71ee3e7f37f29e5717d0447ebca0eddf79d333108a69b8a8bec68af0"
+    },
+    {
+      "path": "platform/frontend/src/components/bioxpConnectionSemantics.ts",
+      "bytes": 3313,
+      "sha256": "f5d8cc291b18a571f6cc2e1c0670e2ee6ff07c187a707b634f97149b6fc2cb09"
+    },
+    {
+      "path": "platform/frontend/src/components/bioxpInterlinkStatus.ts",
+      "bytes": 4715,
+      "sha256": "948e658fc65693e92364872cd27169998d261f088021d14c5dfa59518902783d"
+    },
+    {
+      "path": "platform/frontend/src/lib/bioxpClient.ts",
+      "bytes": 69012,
+      "sha256": "257330bc0450a4ac18ce805d0cb1eca268a1061fefbce5ccebbaab1f9b0a4351"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpAddonGating.test.ts",
+      "bytes": 2611,
+      "sha256": "e6606b87108b954011a41c55472ac17bac4f0f4a9ffa8dfef1998bacd043d5d9"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpCockpitSafetySurface.test.ts",
+      "bytes": 11657,
+      "sha256": "27dd812d051c2358a5a138b6d09a0833bfba49ffae16901063f4efe57a3c4f7e"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpConnectionSemantics.test.ts",
+      "bytes": 2455,
+      "sha256": "d80dc20ce78e32c3f92e3a5a564e0e32039ebc62b8ac40cf5b50143e026b4bb9"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpControlSurfaceCompliance.test.ts",
+      "bytes": 12079,
+      "sha256": "84a4ee68372c960a43db5867750d57a22568dc1d7771eefd84c61de294cb018f"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpGripperContract.test.ts",
+      "bytes": 2822,
+      "sha256": "ee2e8d9093bb1196d7a30e9480a57dcd750566772d42d63c96ce0475440510c5"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts",
+      "bytes": 12043,
+      "sha256": "a3efe7366cde5e76ed54f858df3a94c93a5e7873f34e4c407389ea68c2ef2ed1"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpInterlinkStatus.test.ts",
+      "bytes": 5274,
+      "sha256": "d3d775cf0fdf779d5499eb4828043ff6070ce61829163e8c2e5d15ab955bec8e"
+    },
+    {
+      "path": "tmp_bioxp_current_grep.py",
+      "bytes": 522,
+      "sha256": "94390367ee117cff4582f765b4835f3d72e6f0c715eca17afeff74c043e5291f"
+    },
+    {
+      "path": "tmp_bioxp_nomove_diag.sh",
+      "bytes": 759,
+      "sha256": "530504ff850627b350265c5fa497d494689fee34faf5695ac19f90e8e536bb8c"
+    },
+    {
+      "path": "tmp_bioxp_rca_inspect.py",
+      "bytes": 1928,
+      "sha256": "59aa18e9d181f3a0fb4154df9e631976cd4f8e5d93d9300bba36e76f3e5d44b4"
+    },
+    {
+      "path": "tmp_bioxp_z_minus50k.py",
+      "bytes": 5877,
+      "sha256": "f3a60c8e0ee6c1f01f28124418ca0ad06d258ae0284eb3f821d242f475eb486f"
+    },
+    {
+      "path": "tmp_bioxp_z_nonmotion_reset_retry.py",
+      "bytes": 13987,
+      "sha256": "d59df86a7494084ed293eece3d4da4c9d4d60799c06835e5507caf4c85f0a5e6"
+    },
+    {
+      "path": "tmp_bioxp_z_rehome_minus15k.py",
+      "bytes": 10066,
+      "sha256": "d4df19a82cf25423f9baaaaed97435e0e3d8a1564da07da895a14537a8bbddcd"
+    },
+    {
+      "path": "tmp_bioxp_z_zero_minus15k.py",
+      "bytes": 7071,
+      "sha256": "7624cd85443f26697e2efea4953ccc9609c91a1b148690af210840ff0226a8ab"
+    }
+  ]
+}

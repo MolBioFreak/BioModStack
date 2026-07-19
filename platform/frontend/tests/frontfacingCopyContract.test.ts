@@ -71,7 +71,7 @@ test('top-bar add-on controls avoid explainer subtitles', () => {
         'BioXP',
         'Start',
         'Start DB',
-        'Diagnostics',
+        'Profile',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -95,7 +95,7 @@ test('analytics, BioXP USB, and assay QC panels keep copy terse', () => {
         'Backbone screen: target contacts, hotspot coverage, RFA quality.',
         'Generator-native confidence, affinity priors, batch shape.',
         'PAE matrix; chain bands when available.',
-        'Capture-only. No motion.',
+        'Status-first operator surface',
         'Stage presets tune start_t, samples, ranking, and anchor strictness.',
         'Included/excluded rows, groups, runs.',
     ]) {
@@ -241,12 +241,12 @@ test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs',
     const source = readSource('src', 'components', 'BioXpCockpit.tsx');
 
     for (const snippet of [
-        'Runtime link, motion, jobs, recipes, camera.',
-        'Live axes: X/Y/Z + grabber. Zero ≠ switch-home.',
-        'Limits: step',
-        'Switch Home disabled here; use supervised OEM recipe.',
-        'Lifecycle: BIOXP LINK. Interlocks: Commissioning Motion.',
-        'Default view: interlink, protocol, handler readback.',
+        'Status-first operator surface',
+        'UNKNOWN or STALE evidence never authorizes controls.',
+        'Normal Commands',
+        'No normal OEM commands are available.',
+        'Offline Protocol Validation',
+        'Local Jobs',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -259,6 +259,9 @@ test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs',
         'Switch Home requires capture_bundle=true and operator_note evidence',
         'Runtime lifecycle actions are governed by the top-right BIOXP LINK panel.',
         'Default live testing uses Governed Interlink, Protocol Operator, and Handler Controls.',
+        'Runtime link, motion, jobs, recipes, camera.',
+        'Live axes: X/Y/Z + grabber. Zero ≠ switch-home.',
+        'Switch Home disabled here; use supervised OEM recipe.',
     ]) {
         rejectSnippet(source, stale);
     }

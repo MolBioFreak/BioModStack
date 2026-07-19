@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 export const DEFAULT_BMS_FEATURES = {
-    bioxp: true,
+    bioxp: false,
     stats_tools: true,
     assay_db: true,
 } as const;
@@ -116,14 +116,24 @@ export function useBmsFeatures(): BmsFeatures {
     return useBmsFeatureState().features;
 }
 
+export function resolveBmsFeatureQueryState(
+    data: BmsFeatureState | undefined,
+    failed: boolean,
+): BmsFeatureState {
+    if (failed || !data) {
+        return {
+            features: { ...DEFAULT_BMS_FEATURES },
+            devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
+        };
+    }
+    return data;
+}
+
 export function useBmsFeatureState(): BmsFeatureState {
     const query = useQuery({
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
     });
-    return query.data ?? {
-        features: { ...DEFAULT_BMS_FEATURES },
-        devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
-    };
+    return resolveBmsFeatureQueryState(query.data, query.isError);
 }

@@ -22,7 +22,7 @@ import sqlite3
 import shutil
 import webbrowser
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -274,60 +274,45 @@ def call_local_api_json(method: str, path: str, payload: Optional[dict] = None, 
         raise RuntimeError(f"{method.upper()} {path} failed ({exc.code}): {detail}") from exc
 
 
-def get_bioxp_interlink_state(probe: bool = False, timeout: float = 3.0) -> dict:
-    query = "?probe=true" if probe else ""
-    return call_local_api_json("GET", f"/api/bioxp/interlink/state{query}", timeout=timeout)
+def get_bioxp_status(timeout: float = 3.0) -> dict:
+    return call_local_api_json("GET", "/api/bioxp/status", timeout=timeout)
 
 
-def _bioxp_probe_is_fresh(last_probe_at: object, window_seconds: int = 60) -> bool:
-    if not last_probe_at:
-        return False
-    try:
-        parsed = datetime.fromisoformat(str(last_probe_at).replace("Z", "+00:00"))
-    except Exception:
-        return False
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
-    return 0 <= age_seconds <= window_seconds
-
-
-def summarize_bioxp_interlink_state(state: dict) -> str:
-    if not state:
+def summarize_bioxp_status(payload: dict) -> str:
+    if not payload:
         return "BMS API unavailable"
-    active = bool(state.get("active"))
+    nested = payload.get("connection")
+    state: dict = nested if isinstance(nested, dict) else payload
     configured = bool(state.get("configured"))
+    active = bool(state.get("active"))
+    fresh = state.get("fresh")
     reachable = state.get("reachable")
-    hardware = state.get("hardware_connected")
-    probe_stale = bool(state.get("probe_stale"))
-    if not probe_stale and active and state.get("last_probe_reachable") is True and reachable is not False:
-        window = int(state.get("probe_fresh_window_seconds") or 60)
-        probe_stale = not _bioxp_probe_is_fresh(state.get("last_probe_at"), window)
-    if active:
-        if reachable is False:
-            label = "UNREACHABLE"
-        elif probe_stale:
-            label = "STALE"
-        elif reachable is True:
-            label = "LINKED"
-        else:
-            label = "UNVERIFIED"
-    elif configured:
-        label = "SAVED / inactive"
+    runtime_ready = state.get("runtime_ready")
+    hardware = state.get("hardware_ready")
+    if not configured:
+        label = "NOT CONFIGURED"
+    elif not active:
+        label = "SAVED / DISCONNECTED"
+    elif fresh is False:
+        label = "STALE"
+    elif reachable is False:
+        label = "UNREACHABLE"
+    elif fresh is not True or reachable is not True:
+        label = "UNKNOWN"
+    elif runtime_ready is False:
+        label = "API REACHABLE / RUNTIME NOT READY"
+    elif runtime_ready is not True:
+        label = "API REACHABLE / RUNTIME UNKNOWN"
+    elif hardware is False:
+        label = "API REACHABLE / HARDWARE NOT READY"
+    elif hardware is not True:
+        label = "API REACHABLE / HARDWARE UNKNOWN"
     else:
-        label = "not configured"
-    parts = [label]
-    if reachable is not None:
-        parts.append(f"reachable={'yes' if reachable else 'no'}")
-    elif probe_stale:
-        parts.append("reachable=stale")
-    if hardware is not None:
-        parts.append(f"hardware={'yes' if hardware else 'no'}")
-    elif probe_stale:
-        parts.append("hardware=unknown")
-    url = state.get("robot_api_url") or state.get("recommended_url")
-    if url:
-        parts.append(str(url))
+        label = "READY"
+    parts = [label, f"generation={int(state.get('generation') or 0)}"]
+    target = state.get("target_url")
+    if target:
+        parts.append(str(target))
     return "  |  ".join(parts)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -543,154 +528,39 @@ class BioModStackPanel(Adw.Application):
         )
 
     def _build_bioxp_section(self) -> Gtk.Widget:
-        """BioXP robot interlink controls exposed in the native control panel."""
+        """Read-only BioXP status; configuration and controls live in the web cockpit."""
         group = Adw.PreferencesGroup()
-        group.set_title("BioXP Robot Runtime")
+        group.set_title("BioXP")
 
         self.bioxp_row = Adw.ActionRow()
-        self.bioxp_row.set_title("Interlink")
-        self._update_bioxp_row(probe=False)
+        self.bioxp_row.set_title("Control-plane status")
+        self._update_bioxp_row()
         group.add(self.bioxp_row)
 
-        settings_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        settings_box.set_halign(Gtk.Align.START)
-        self.bioxp_url_entry = Gtk.Entry()
-        self.bioxp_url_entry.set_width_chars(32)
-        self.bioxp_url_entry.set_placeholder_text("Robot API URL, e.g. http://100.124.140.56:8123")
-        try:
-            state = get_bioxp_interlink_state(probe=False, timeout=1.5)
-            self.bioxp_url_entry.set_text(str(state.get("robot_api_url") or state.get("recommended_url") or ""))
-        except Exception:
-            self.bioxp_url_entry.set_text(os.environ.get("BIOXP_SERVER_URL", ""))
-        settings_box.append(self.bioxp_url_entry)
-
-        btn_bioxp_connect = Gtk.Button(label="Connect")
-        btn_bioxp_connect.add_css_class("suggested-action")
-        btn_bioxp_connect.connect("clicked", self._on_bioxp_connect)
-        settings_box.append(btn_bioxp_connect)
-
-        btn_bioxp_disconnect = Gtk.Button(label="Disconnect")
-        btn_bioxp_disconnect.connect("clicked", self._on_bioxp_disconnect)
-        settings_box.append(btn_bioxp_disconnect)
-
-        settings_row = Adw.ActionRow()
-        settings_row.set_title("Robot API endpoint")
-        settings_row.set_subtitle("Uses BMS /api/bioxp/interlink/* proxy routes, not the raw container-internal FastAPI port.")
-        settings_row.set_child(settings_box)
-        group.add(settings_row)
-
-        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        action_box.set_halign(Gtk.Align.START)
-
-        btn_refresh = Gtk.Button(label="Refresh")
-        btn_refresh.connect("clicked", self._on_bioxp_refresh)
-        action_box.append(btn_refresh)
-
-        btn_diagnostics = Gtk.Button(label="Diagnostics")
-        btn_diagnostics.connect("clicked", self._on_bioxp_diagnostics)
-        action_box.append(btn_diagnostics)
-
-        btn_logs = Gtk.Button(label="Robot Logs")
-        btn_logs.connect("clicked", self._on_bioxp_logs)
-        action_box.append(btn_logs)
-
-        btn_runtime_reset = Gtk.Button(label="Restart API Runtime")
-        btn_runtime_reset.add_css_class("destructive-action")
-        btn_runtime_reset.set_tooltip_text("Requires the BMS API/robot deployment to support /api/bioxp/interlink/runtime-reset.")
-        btn_runtime_reset.connect("clicked", self._on_bioxp_runtime_reset)
-        action_box.append(btn_runtime_reset)
+        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        button_box.set_halign(Gtk.Align.START)
+        refresh = Gtk.Button(label="Refresh")
+        refresh.connect("clicked", self._on_bioxp_refresh)
+        button_box.append(refresh)
 
         action_row = Adw.ActionRow()
-        action_row.set_title("Runtime controls")
-        action_row.set_subtitle("No homing, arming, USB motion recovery, or axis movement is performed by these controls.")
-        action_row.set_child(action_box)
+        action_row.set_title("Status only")
+        action_row.set_subtitle("Use the BioXP web cockpit for profile and connection actions. This panel does not control the robot host or collect remote logs.")
+        action_row.set_child(button_box)
         group.add(action_row)
         return group
 
-    def _bioxp_settings_payload(self) -> dict:
-        url = str(self.bioxp_url_entry.get_text()).strip() if hasattr(self, "bioxp_url_entry") else ""
-        return {
-            "robot_api_url": url,
-            "robot_ssh_host": "robot",
-            "connection_mode": "direct_http",
-            "display_name": "BioXP3200",
-        }
-
-    def _update_bioxp_row(self, probe: bool = False):
+    def _update_bioxp_row(self):
         if not hasattr(self, "bioxp_row"):
             return
         try:
-            state = get_bioxp_interlink_state(probe=probe, timeout=4.0 if probe else 1.5)
-            self.bioxp_row.set_subtitle(summarize_bioxp_interlink_state(state))
-            if hasattr(self, "bioxp_url_entry") and not str(self.bioxp_url_entry.get_text()).strip():
-                self.bioxp_url_entry.set_text(str(state.get("robot_api_url") or state.get("recommended_url") or ""))
+            self.bioxp_row.set_subtitle(summarize_bioxp_status(get_bioxp_status(timeout=2.0)))
         except Exception as exc:
-            self.bioxp_row.set_subtitle(f"BMS API/BioXP interlink unavailable: {exc}")
-
-    def _show_bioxp_result(self, title: str, result: dict):
-        status = "ok" if result.get("ok", True) is not False and result.get("supported", True) is not False else "not complete"
-        detail = result.get("runtime_note") or result.get("reason") or result.get("detail") or summarize_bioxp_interlink_state(result)
-        show_notification(title, f"{status}: {detail}")
-        if hasattr(self, "log_view"):
-            buffer = self.log_view.get_buffer()
-            buffer.set_text(json.dumps(result, indent=2, sort_keys=True))
+            self.bioxp_row.set_subtitle(f"BMS API/BioXP status unavailable: {exc}")
 
     def _on_bioxp_refresh(self, button):
-        self._update_bioxp_row(probe=True)
+        self._update_bioxp_row()
 
-    def _on_bioxp_connect(self, button):
-        payload = self._bioxp_settings_payload()
-        if not payload["robot_api_url"]:
-            show_notification("BioXP Connect", "Robot API URL is required.")
-            return
-        try:
-            result = call_local_api_json("POST", "/api/bioxp/interlink/connect", payload, timeout=20.0)
-        except Exception as exc:
-            show_notification("BioXP Connect Failed", str(exc))
-            return
-        self._update_bioxp_row(probe=False)
-        self._show_bioxp_result("BioXP Connected", result)
-
-    def _on_bioxp_disconnect(self, button):
-        try:
-            result = call_local_api_json("POST", "/api/bioxp/interlink/disconnect", {}, timeout=8.0)
-        except Exception as exc:
-            show_notification("BioXP Disconnect Failed", str(exc))
-            return
-        self._update_bioxp_row(probe=False)
-        self._show_bioxp_result("BioXP Disconnected", result)
-
-    def _on_bioxp_diagnostics(self, button):
-        try:
-            result = call_local_api_json("POST", "/api/bioxp/interlink/diagnostics?probe=true", {}, timeout=20.0)
-        except Exception as exc:
-            show_notification("BioXP Diagnostics Failed", str(exc))
-            return
-        self._update_bioxp_row(probe=False)
-        self._show_bioxp_result("BioXP Diagnostics", result)
-
-    def _on_bioxp_logs(self, button):
-        try:
-            result = call_local_api_json("POST", "/api/bioxp/interlink/logs", {"tail": 120}, timeout=20.0)
-        except Exception as exc:
-            show_notification("BioXP Logs Failed", str(exc))
-            return
-        self._show_bioxp_result("BioXP Logs", result)
-
-    def _on_bioxp_runtime_reset(self, button):
-        try:
-            result = call_local_api_json(
-                "POST",
-                "/api/bioxp/interlink/runtime-reset",
-                {"operator_ack": "RESET BIOXP RUNTIME", "tail": 120},
-                timeout=30.0,
-            )
-        except Exception as exc:
-            show_notification("BioXP Runtime Restart Failed", str(exc))
-            return
-        self._update_bioxp_row(probe=False)
-        self._show_bioxp_result("BioXP Runtime Restart", result)
-    
     def _build_actions_section(self) -> Gtk.Widget:
         """Quick action buttons."""
         group = Adw.PreferencesGroup()
@@ -798,19 +668,19 @@ class BioModStackPanel(Adw.Application):
         target = self._selected_runtime_target()
         show_notification("Starting", f"Starting BioModStack runtime target: {target}")
         subprocess.Popen(["bash", str(START_SCRIPT), "start-target", "--target", target], env=self._script_env())
-        GLib.timeout_add_seconds(5, self._refresh_status)
+        GLib.timeout_add_seconds(5, self._refresh_status_once)
     
     def _on_restart_all(self, button):
         show_notification("Restarting", "Restarting all services...")
         runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
         subprocess.Popen(["bash", str(START_SCRIPT), "restart", "--runtime", runtime_mode], env=self._script_env())
-        GLib.timeout_add_seconds(3, self._refresh_status)
+        GLib.timeout_add_seconds(3, self._refresh_status_once)
     
     def _on_stop_all(self, button):
         show_notification("Stopping", "Stopping all services...")
         runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
         subprocess.Popen(["bash", str(STOP_SCRIPT), "--runtime", runtime_mode], env=self._script_env())
-        GLib.timeout_add_seconds(2, self._refresh_status)
+        GLib.timeout_add_seconds(2, self._refresh_status_once)
 
     def _script_env(self) -> dict:
         env = os.environ.copy()
@@ -1052,8 +922,13 @@ X-GNOME-Autostart-enabled=true
         self._update_status_row()
         self._update_jobs_row()
         self._update_db_info()
-        self._update_bioxp_row(probe=False)
+        self._update_bioxp_row()
         return True  # Keep timer running
+
+    def _refresh_status_once(self):
+        """Refresh once after an action without creating another poller."""
+        self._refresh_status()
+        return False
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CSS STYLING

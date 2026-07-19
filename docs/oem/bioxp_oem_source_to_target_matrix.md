@@ -1,5 +1,10 @@
 # BioXP OEM Source-to-Target Matrix (Phase 2)
 
+> **SUPERSEDED — HISTORICAL DESIGN EVIDENCE ONLY.** The proxy, motion,
+> commissioning, and hardware route targets below are not present operator
+> contracts and must not be restored from this matrix. The current implemented
+> contract is [`../BioXP_Compact_Control_Plane.md`](../BioXP_Compact_Control_Plane.md).
+
 Scope: design-only matrix. No robot code, BMS runtime, or live hardware was modified.
 
 ## Status labels

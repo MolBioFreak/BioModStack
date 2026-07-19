@@ -1,0 +1,158 @@
+{
+  "authorization": {
+    "later_phases": "2-8 not authorized or started",
+    "phase": "Phase 1 after Phase 0 closure",
+    "review": "Independent review explicitly waived by Christian; verification retained"
+  },
+  "canonical_sha256": "10ac494c87fd7d56286d079fef39f6c13c8cfa819d6e014eb1d86cf91f2e508b",
+  "date": "2026-07-17",
+  "git_numstat_against_head": {
+    "compose.core-runtime.yml": {
+      "added": "62",
+      "deleted": "6"
+    },
+    "platform/api/routers/bioxp.py": {
+      "added": "111",
+      "deleted": "66"
+    },
+    "platform/api/services/bioxp_interlink.py": {
+      "added": "107",
+      "deleted": "226"
+    },
+    "platform/api/tests/test_bioxp_interlink_lifecycle.py": {
+      "added": "9",
+      "deleted": "165"
+    },
+    "platform/api/tests/test_bioxp_router.py": {
+      "added": "34",
+      "deleted": "25"
+    },
+    "platform/frontend/src/components/BioXpInterlinkControlPanel.tsx": {
+      "added": "4",
+      "deleted": "48"
+    },
+    "platform/frontend/src/lib/bioxpClient.ts": {
+      "added": "0",
+      "deleted": "38"
+    },
+    "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts": {
+      "added": "29",
+      "deleted": "21"
+    }
+  },
+  "implementation_fingerprint_sha256": "411c7651dfaf51e3d99ab2ca274065fd495bebcfa4365c73d32a0f018a0cdd73",
+  "inventory": {
+    "dependency_contract": "Every registered non-GET APIRoute carries require_bioxp_mutation_access; exact exemptions and dry-run/review rules are regression-tested.",
+    "frontend_consumers": 0,
+    "non_get_routes": 94,
+    "removed_lifecycle_routes": [
+      "/interlink/logs",
+      "/interlink/runtime-reset",
+      "/interlink/robot-reboot"
+    ],
+    "routes_total": 142
+  },
+  "not_run": [
+    "robot host access/probes",
+    "SSH/systemd/journalctl/reboot",
+    "hardware motion/integration",
+    "deployment/migration/restart/service-unit validation"
+  ],
+  "operator_note": "Mutations require explicit enablement plus a token from an authorized client or trusted proxy; no token is embedded in frontend code.",
+  "ownership": {
+    "full_phase1": [
+      "platform/api/routers/bioxp.py",
+      "platform/api/services/bioxp_interlink.py",
+      "platform/frontend/src/components/BioXpInterlinkControlPanel.tsx",
+      "platform/frontend/src/lib/bioxpClient.ts",
+      "platform/api/tests/test_bioxp_phase1_containment.py",
+      "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts"
+    ],
+    "generated_downstream": [
+      "docs/audits/bioxp-phase0-route-manifest.json",
+      "docs/audits/bioxp-phase0-frontend-consumer-manifest.json",
+      "docs/audits/bioxp-phase0-temporary-script-manifest.json"
+    ],
+    "partial_note": "compose.core-runtime.yml had pre-existing/concurrent image, mount, feature, and stats changes; Phase 1 owns only five BMS_BIOXP_* environment lines.",
+    "partial_phase1_only": [
+      "compose.core-runtime.yml"
+    ],
+    "shared_with_phase0": [
+      "platform/api/tests/test_bioxp_interlink_lifecycle.py",
+      "platform/api/tests/test_bioxp_router.py"
+    ]
+  },
+  "repository": {
+    "authorization_baseline_head": "a69711f7e55786f3867e3952b546b3d6b8c48c11",
+    "branch": "test",
+    "current_dirty_entries": 526,
+    "head": "188d69c2e266f82d14d4ac0778dc17785c2dfead",
+    "phase1_baseline_dirty_entries": 206,
+    "policy": "Preserved shared dirty tree; no reset, stash, clean, broad format, or unrelated remediation"
+  },
+  "schema": "bms.bioxp.phase1.verification.v1",
+  "security_contract": {
+    "frontend_lifecycle_controls": "removed",
+    "headers": [
+      "X-BMS-BioXP-Operator-Token",
+      "Authorization: Bearer"
+    ],
+    "mutation_switch": "BMS_BIOXP_MUTATIONS_ENABLED defaults to 0",
+    "token_sources": [
+      "BMS_BIOXP_OPERATOR_TOKEN_FILE (strict precedence)",
+      "BMS_BIOXP_OPERATOR_TOKEN"
+    ],
+    "trusted_defaults": [
+      "RFC1918",
+      "100.64.0.0/10",
+      "fd00::/8",
+      "intrinsic robot alias"
+    ],
+    "url_policy": "HTTP(S), root-only, no credentials/query/fragment; loopback, unspecified, link-local, multicast, reserved, public-by-default, and mixed/untrusted DNS answers rejected; proxy-time revalidation"
+  },
+  "sha256": {
+    "compose.core-runtime.yml": "d40ffa6dfed9d3586e2a3d518e2cdce513ff800e50939482210a73d6511bfb10",
+    "docs/audits/bioxp-phase0-frontend-consumer-manifest.json": "5bce8dab471edaa4f04f2f4f72c12b47323b7196155f1547574b86afff54193f",
+    "docs/audits/bioxp-phase0-route-manifest.json": "9d768e9de72e4631aa61ee47056db5afc789445fdd016ffafaeaea432fff7797",
+    "docs/audits/bioxp-phase0-temporary-script-manifest.json": "cbfba44d7c94ecc1b9a738b67f56c4bc161b207ea05f1327b42b3e49870b01ab",
+    "platform/api/routers/bioxp.py": "b8c5d29166fe419d191971693cbd45f65e611069271ffc18e3753a99957ae427",
+    "platform/api/services/bioxp_interlink.py": "7b2f9e4ed414302f0f2e77dd3b825e6d701b6dcafc21fdc029b8be0dc8a49071",
+    "platform/api/tests/test_bioxp_interlink_lifecycle.py": "310caa60191da8a1918bc6bb3c00ccef8ae08674f5f6bfdc27bcc5c4b777c0bb",
+    "platform/api/tests/test_bioxp_phase1_containment.py": "b2c1c9d047dbc073b7ca79249fbc35070909a5be1d4b1ff3157916c3e97dd8ba",
+    "platform/api/tests/test_bioxp_router.py": "fabdaba0e8ec77e649296b1e8a7900a7fa1a5ca2b1ec306666e4ca0ab2407472",
+    "platform/frontend/src/components/BioXpInterlinkControlPanel.tsx": "9e9cb31520f7f13acab10bcf55560c3dac535b4e74d06b9660624d173747b961",
+    "platform/frontend/src/lib/bioxpClient.ts": "6e660e6c2a4b722aea8284c0b0870af0edbc10abcbabc74e4111d32e84cf4050",
+    "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts": "2ecdb9c9bd9dbd523befbf52722c360fb6a6a2139c0638dccdd17b3404adc37c"
+  },
+  "verification": [
+    {
+      "gate": "Phase 1 containment",
+      "result": "29 passed in 1.98s"
+    },
+    {
+      "gate": "Focused BioXP + strace",
+      "result": "137 passed, 2 skipped in 9.33s",
+      "seed": 20260723
+    },
+    {
+      "AF_INET": 0,
+      "AF_INET6": 0,
+      "AF_NETLINK": 0,
+      "AF_PACKET": 0,
+      "AF_UNIX": 231,
+      "gate": "Network syscalls"
+    },
+    {
+      "gate": "Full API",
+      "result": "1024 passed, 4 skipped, 11 warnings in 51.83s"
+    },
+    {
+      "gate": "Frontend",
+      "result": "319 passed; isolated production build passed"
+    },
+    {
+      "gate": "Static/config",
+      "result": "Ruff, py_compile, compose parse, real/prospective manifests, retired-source scan, scoped diff check passed"
+    }
+  ]
+}

@@ -6,10 +6,8 @@ Main application entry point.
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
-import asyncio
 import logging
 
 from database import init_db, async_session
@@ -57,6 +55,7 @@ async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
     global _orchestrator
     global _analysis_worker
+    bioxp_runtime = None
     
     # Initialize independently owned persistence stores.
     await init_db()
@@ -106,10 +105,20 @@ async def lifespan(app: FastAPI):
     
     await _analysis_worker.start()
     logger.info("[STARTUP] Analysis worker started")
+
+    if install_feature_enabled("bioxp"):
+        from services.bioxp.runtime import create_bioxp_runtime
+
+        bioxp_runtime = create_bioxp_runtime()
+        app.state.bioxp_runtime = bioxp_runtime
+        logger.info("[STARTUP] BioXP control plane initialized disconnected")
     
     yield
     
     # Cleanup on shutdown
+    if bioxp_runtime is not None:
+        await bioxp_runtime.close()
+        logger.info("[SHUTDOWN] BioXP control plane closed")
     if _orchestrator:
         await _orchestrator.stop()
         logger.info("[SHUTDOWN] GPU Orchestrator stopped")
