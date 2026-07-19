@@ -44,7 +44,12 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
         "generated_json_ordered_seeds": [101, 202, 303, 404, 505],
         "cli_ordered_seeds": [101, 202, 303, 404, 505],
         "samples_per_seed": 5,
-        "feature_policy": {"mode": "regenerate_mutated_protein_v1"},
+        "feature_policy": {
+            "mode": "regenerate_mutated_protein_v1",
+            "protein_msa_enabled": True,
+            "templates_enabled": True,
+            "rna_msa_enabled": True,
+        },
         "runtime_policy": {"use_default_params": True},
         "analysis_policy": {
             "sign_zero_epsilon": 0.000001,
@@ -58,7 +63,17 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
             "minimum_common_ranked_universe_size": 3,
         },
     }
-    if backend == "confornets":
+    if backend == "protenix_v2_ensemble":
+        params["protenix_snapshot_id"] = "snapshot-7"
+    elif backend == "external_import":
+        params["import_receipt_id"] = "9" * 64
+        params["resolved_import_entries"] = [
+            {
+                "staged_index": 0,
+                "source_content_sha256": "8" * 64,
+            }
+        ]
+    elif backend == "confornets":
         params["ordered_seeds"] = [101]
         params["generated_json_ordered_seeds"] = [101]
         params["cli_ordered_seeds"] = [101]
@@ -139,12 +154,22 @@ def test_cm3_001_model_and_template_discoverable() -> None:
     }
 
 
-def test_cm3_002_generic_template_hides_untyped_contract_controls() -> None:
+def test_cm3_002_launcher_exposes_only_typed_contract_controls() -> None:
     template = TemplateRegistry(API_ROOT / "config" / "templates").get_template(
         "conformational_mapping"
     )
     assert template is not None
-    assert template.user_params == []
+    launcher_controls = {param.name for param in template.user_params}
+    assert launcher_controls >= {
+        "backend",
+        "ordered_seeds",
+        "samples_per_seed",
+        "runtime_policy",
+        "analysis_policy",
+    }
+    assert launcher_controls.isdisjoint(
+        {"source", "created_by", "path", "staged_path", "runtime_identity"}
+    )
     assert "typed" in template.status.lower()
     model = ModelRegistry().get_model("conformational_mapping")
     assert model is not None
@@ -319,7 +344,16 @@ def test_cm3_004b_caller_cannot_set_server_authority(authority: str) -> None:
     [
         ({"confornet_count": 1}, "at least 2"),
         ({"task": "mse", "references": []}, "staged reference"),
-        ({"task": "transfer", "transfer_source": None}, "transfer source"),
+        (
+            {
+                "task": "transfer",
+                "saved_steps": [0],
+                "runs": 1,
+                "confornet_count": 1,
+                "transfer_source": None,
+            },
+            "transfer source",
+        ),
     ],
 )
 def test_cm3_004c_task_invariants_fail_before_schedule(
@@ -336,7 +370,7 @@ def test_cm3_004c_task_invariants_fail_before_schedule(
 def test_cm3_004d_future_backend_controls_are_hash_bound(tmp_path: Path) -> None:
     for backend, field, value, request_id in (
         ("protenix_v2_ensemble", "protenix_snapshot_id", "snapshot-7", "00000000-0000-4000-8000-000000000017"),
-        ("external_import", "import_receipt_id", "receipt-9", "00000000-0000-4000-8000-000000000018"),
+        ("external_import", "import_receipt_id", "9" * 64, "00000000-0000-4000-8000-000000000018"),
     ):
         params = _request_params(backend)
         params[field] = value

@@ -1,0 +1,521 @@
+{
+  "attempt_id": "20260719T204039Z",
+  "contract": {
+    "definitions_path": "docs/specs/conformational_mapping/cm_contract_definitions_v1.md",
+    "definitions_sha256": "f264173c03fd5feccd070995cdeb20c249badec4d54e8a9186bcf27cd943e17f",
+    "registry_canonical_sha256": "1b87e9014a226f8b845c694b90c04c9602830518e0d192d6e1791778a630e895",
+    "registry_file_sha256": "ad0c4df03387a3bd8609275f57790e54e13fb933c7dd9a83e46d02a15b788c20",
+    "registry_path": "docs/specs/conformational_mapping/cm_contract_test_vectors_v1.json",
+    "vector_count": 53
+  },
+  "evidence": {
+    "authenticated_file_count": 425,
+    "hash_ledger": "/mnt/BioModStack/bms_results/conformational_mapping_phase0/20260719T204039Z/runtime_evidence_hashes.json",
+    "hash_ledger_sha256": "6564542cae033ba1b66447e4390f7648610eb293ff0c92e90da0c0fe20cd8b8a",
+    "pass_count": 49,
+    "root": "/mnt/BioModStack/bms_results/conformational_mapping_phase0/20260719T204039Z",
+    "stop_count": 4
+  },
+  "final_decision": "STOP",
+  "independent_factual_review_roles": [
+    {
+      "method": "stdlib strict registry and fixture validator",
+      "result": "PASS",
+      "role": "registry_integrity"
+    },
+    {
+      "method": "live file and embedded-checkpoint SHA-256 rederivation",
+      "result": "PASS",
+      "role": "runtime_identity"
+    },
+    {
+      "method": "artifact hash trees plus write-time coordinate ledgers compared with frozen sets",
+      "result": "STOP",
+      "role": "artifact_and_coordinate"
+    },
+    {
+      "method": "37-case current admission and effective-configuration adjudication",
+      "result": "PASS",
+      "role": "negative_security_defaults"
+    },
+    {
+      "method": "four frozen command strings with current JUnit/TAP counts",
+      "result": "STOP",
+      "role": "baseline_attribution"
+    }
+  ],
+  "phase": 0,
+  "repo": {
+    "branch": "feat/conformational-mapping-complete-20260719",
+    "head": "8ac5d61967f0d6c5f5252230b94570623aa2aabf",
+    "head_tree": "aa4f5f2b409e672f3af52e8a0673217a634c364a",
+    "root": "/home/dalab/bms-cm-complete-20260719",
+    "worktree_status_sha256_before_review_write": "2add83ae1b5342451594da4b73786334e60cfc2012fbcf20f6a9da41521a3f4a"
+  },
+  "runtime_identity": {
+    "confornets_image": {
+      "available": true,
+      "bytes": 4562665472,
+      "label": "confornets_image",
+      "path": "/mnt/BioModStack/apptainer/confornets-canonical-4e0ec2136f2625327b45317881e1309c7c218c3e5b1bef4a077e5ac56905d3c6.sif",
+      "sha256": "4e0ec2136f2625327b45317881e1309c7c218c3e5b1bef4a077e5ac56905d3c6"
+    },
+    "confornets_openfold3_checkpoint": {
+      "available": true,
+      "bytes": 2287928196,
+      "label": "confornets_openfold3_checkpoint",
+      "path": "/mnt/BioModStack/weights/openfold3/of3-p2-155k.pt",
+      "sha256": "af09eac4f29cef856633af07558cb143226fe95ebbef2c20921769d4a5f4bee4"
+    },
+    "frustrampnn_checkpoint": {
+      "authentication_command": [
+        "apptainer",
+        "exec",
+        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "sha256sum",
+        "/opt/frustrampnn_weights/megascale.ckpt"
+      ],
+      "authentication_exit_code": 0,
+      "authentication_output_sha256": "37c5f89f725e01d5aabf0eab99f42aac2bcbaba79ac32f1153de85b808dfb0e1",
+      "available": true,
+      "label": "frustrampnn_megascale_checkpoint",
+      "path": "container:/opt/frustrampnn_weights/megascale.ckpt",
+      "sha256": "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b"
+    },
+    "frustrampnn_image": {
+      "available": true,
+      "bytes": 10201653248,
+      "label": "frustrampnn_image",
+      "path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+      "sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+    },
+    "protenix_image": {
+      "available": true,
+      "bytes": 9801170944,
+      "label": "protenix_image",
+      "path": "/mnt/BioModStack/apptainer/protenix.sif",
+      "sha256": "a7458325d37cca00b2f63a75e1334e5bf43e6f694eb6f9d3e820a6194e4ea060"
+    },
+    "protenix_v2_checkpoint": {
+      "available": true,
+      "bytes": 1859785497,
+      "label": "protenix_v2_checkpoint",
+      "path": "/mnt/BioModStack/weights/protenix/checkpoint/protenix-v2.pt",
+      "sha256": "8f931f9774a396b67033d0e58628e1834f4a1448165e04254b40a780b0c0d599"
+    },
+    "usalign": {
+      "available": true,
+      "bytes": 3571808,
+      "label": "usalign_candidate",
+      "path": "/mnt/BioModStack/build/confornets/confornets_sandbox/opt/confornets/packages/USalign",
+      "sha256": "7397c6246ef651a8a010015a44636da5941b2e47849c346ef3a44c287d08956b"
+    }
+  },
+  "runtime_rows": [
+    {
+      "cif": 25,
+      "confidence": 25,
+      "full_data": 25,
+      "lane": "Protenix 5x5",
+      "result": "PASS"
+    },
+    {
+      "lane": "Protenix composition",
+      "mandatory_artifacts_per_vector": 3,
+      "result": "PASS",
+      "vectors": 9
+    },
+    {
+      "coordinate_ledger_sha256": "5d1ade8a8ed5bc92431725927d8a3b7ff3e5560374ca4cb9312edb976e910d37",
+      "expected_cardinality": 8,
+      "lane": "ConforNets diversity",
+      "observed_cardinality": 4,
+      "result": "STOP"
+    },
+    {
+      "coordinate_ledger_sha256": "ee18f4965c2bc4c74c7955bb644df93ea46108461007c314b688caf4b1197f8e",
+      "expected_cardinality": 4,
+      "lane": "ConforNets MSE/reference",
+      "observed_cardinality": 4,
+      "result": "STOP"
+    },
+    {
+      "coordinate_ledger_sha256": "bc95ccdfc4e90dd93380ed7cfff9fa9b7e67603a7e9f9e6b74cf902ff0fd3c22",
+      "expected_cardinality": 4,
+      "lane": "ConforNets transfer",
+      "observed_cardinality": 2,
+      "result": "STOP"
+    },
+    {
+      "chains": [
+        "A"
+      ],
+      "lane": "FrustraMPNN",
+      "positions": 20,
+      "result": "PASS",
+      "rows": 400
+    },
+    {
+      "atom_count": 8,
+      "lane": "normalization",
+      "result": "pass"
+    },
+    {
+      "binary_sha256": "7397c6246ef651a8a010015a44636da5941b2e47849c346ef3a44c287d08956b",
+      "cases": 2,
+      "lane": "USalign",
+      "result": "PASS",
+      "version": "20260328"
+    },
+    {
+      "command_count": 4,
+      "commands_passed": 3,
+      "failures": 22,
+      "lane": "frozen baselines",
+      "result": "STOP",
+      "tests": 2199
+    }
+  ],
+  "schema_name": "cm_phase0_spec_check",
+  "schema_version": 1,
+  "stop_ids": [
+    "P0-CONFORNETS-LAYOUT-001",
+    "P0-CONFORNETS-LAYOUT-002",
+    "P0-CONFORNETS-LAYOUT-003",
+    "P0-BASELINE-001"
+  ],
+  "stop_root_causes": {
+    "P0-BASELINE-001": "the full API baseline recorded 22 failures: 12 nextflow lint/preview, 4 retired-workflow removal, 2 ProteinBase importer, 2 BioXP compact API, 1 BioXP containment, and 1 NGS runtime smoke",
+    "P0-CONFORNETS-LAYOUT-001": "registry requires 8 coordinates over saved steps 1 and 2; the authenticated ledger has 4 coordinates at saved step 1",
+    "P0-CONFORNETS-LAYOUT-002": "registry requires reference refA with ConforNet indices 0 and 1; the authenticated 4-row ledger instead records references 4ZRB_C and 4ZRB_H with ConforNet index 0",
+    "P0-CONFORNETS-LAYOUT-003": "registry requires 4 coordinates over runs 0 and 1 at saved step 5 with reference refB; the authenticated ledger has 2 coordinates at run 0, saved step 0, and no reference ID"
+  },
+  "vector_results": [
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-001"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-002",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-002"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-003",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-003"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-004",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-004"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-005",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-005"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-006",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-006"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-007",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-007"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-008",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-008"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-009",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-009"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-010",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-010"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-011",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-011"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-012",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-012"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-001",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-001"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-002",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-002"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-003",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-003"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-004",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-004"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-005",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-005"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-006",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-006"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-007",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-007"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-008",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-008"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-009",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-009"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-VECTOR-COMPLEX-NEG-010",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-VECTOR-COMPLEX-NEG-010"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-LAYOUT-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "fresh Protenix layout produced and parsed 25 CIF + 25 summary-confidence + 25 full-data sidecars over five seeds and five samples"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-002",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-003",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-004",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-005",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-006",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-007",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-008",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-PROTENIX-COMPOSITION-009",
+      "observed_disposition": "accept_contract",
+      "rationale": "matching composition report authenticates checks, artifacts, and live runtime identities"
+    },
+    {
+      "gate": "STOP",
+      "id": "P0-CONFORNETS-LAYOUT-001",
+      "observed_disposition": "unsupported",
+      "rationale": "fresh diversity evidence failed checks: exact_registry_coordinate_set"
+    },
+    {
+      "gate": "STOP",
+      "id": "P0-CONFORNETS-LAYOUT-002",
+      "observed_disposition": "unsupported",
+      "rationale": "fresh mse evidence failed checks: exact_registry_coordinate_set"
+    },
+    {
+      "gate": "STOP",
+      "id": "P0-CONFORNETS-LAYOUT-003",
+      "observed_disposition": "unsupported",
+      "rationale": "fresh transfer evidence failed checks: exact_registry_coordinate_set"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-CONFORNETS-NEG-001",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-CONFORNETS-NEG-001"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-CONFORNETS-NEG-002",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-CONFORNETS-NEG-002"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-CONFORNETS-NEG-003",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-CONFORNETS-NEG-003"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-CONFORNETS-NEG-004",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-CONFORNETS-NEG-004"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-001"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-002",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-002"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-003",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-003"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-004",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-004"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-005",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-005"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-006",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-006"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-DEFAULTS-007",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-DEFAULTS-007"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-FRUSTRAMPNN-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-FRUSTRAMPNN-001"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-FRUSTRAMPNN-002",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-FRUSTRAMPNN-002"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-FRUSTRAMPNN-003",
+      "observed_disposition": "accept_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-FRUSTRAMPNN-003"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-FRUSTRAMPNN-004",
+      "observed_disposition": "reject_contract",
+      "rationale": "authenticated Phase 0 contract runtime passed P0-FRUSTRAMPNN-004"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-NORMALIZE-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "selected model, both mapped instances, multi-character source asym IDs, insertion-coded residues, and selected altloc survive while unselected model/chain/altloc, hydrogens, water, and hetero records are removed"
+    },
+    {
+      "gate": "PASS",
+      "id": "P0-USALIGN-001",
+      "observed_disposition": "accept_contract",
+      "rationale": "live USalign candidate hash matches and every rc=0 case has exactly two finite normalized TM scores"
+    },
+    {
+      "gate": "STOP",
+      "id": "P0-BASELINE-001",
+      "observed_disposition": "unsupported",
+      "rationale": "authenticated baseline counts or artifact hashes failed validation"
+    }
+  ],
+  "verification": {
+    "authenticated_evidence_validation": "PASS including authenticated STOP dispositions",
+    "focused_cm_tests": "PASS",
+    "patch_parse": "PASS",
+    "registry_validation": "PASS",
+    "ruff_changed_python_paths": "PASS",
+    "whitespace": "PASS"
+  }
+}
