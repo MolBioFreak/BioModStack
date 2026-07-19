@@ -1,5 +1,10 @@
 # BioXP Gripper GAP10 OEM harmonization phase plan — 2026-06-10
 
+> **SUPERSEDED — HISTORICAL PLAN ONLY.** The BMS gripper proxy/status/action
+> routes described below were retired and are not current operator targets.
+> Do not execute this plan against the compact control plane. See
+> [`../BioXP_Compact_Control_Plane.md`](../BioXP_Compact_Control_Plane.md).
+
 ## Scope
 
 No live robot motion in this code tranche. The goal is to make BMS/robot-facing surfaces stop treating generic G GAP9/GAP10 as proven two-ended physical gripper limits, while keeping GAP10 visible as an unresolved raw/inhibit signal. Completion means the code is ready for a supervised robot-local passive/status test and then an explicitly acknowledged OEM-shaped gripper-clear test.

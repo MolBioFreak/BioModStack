@@ -1,155 +1,43 @@
-import * as assert from 'node:assert/strict';
-import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import test from 'node:test';
 
-import { deriveBioXpInterlinkMenuStatus, isFreshBioXpProbe, isFreshPositiveBioXpSignal } from '../src/components/bioxpInterlinkStatus.js';
+import { deriveBioXpStatus } from '../src/components/bioxpInterlinkStatus.js';
 
-const NOW = Date.parse('2026-05-23T21:00:00.000Z');
-const freshProbe = '2026-05-23T20:59:30.000Z';
-const staleProbe = '2026-05-23T20:58:00.000Z';
+const base = {
+    configured: true,
+    active: true,
+    generation: 2,
+    target_url: 'http://ro***:8123',
+    reachable: true,
+    runtime_ready: true,
+    hardware_ready: true,
+    capabilities: [],
+    observed_at: '2026-07-18T00:00:00Z',
+    freshness_budget_seconds: 30,
+    fresh: true,
+    last_error: null,
+    command_active: false,
+};
 
-test('BioXP interlink only shows LINKED for a fresh successful robot API probe', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: true,
-        lastProbeAt: freshProbe,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'linked');
-    assert.equal(status.statusLabel, 'LINKED');
-    assert.equal(status.humanStatusLabel, 'Robot API reachable');
-    assert.equal(status.isRobotReachabilityProven, true);
-    assert.match(status.indicatorClass, /emerald/);
+test('ready requires active, fresh, reachable, runtime-ready and hardware-ready', () => {
+    const observed = Date.parse(base.observed_at);
+    const withinBudget = observed + 29_000;
+    assert.equal(deriveBioXpStatus(base, withinBudget).label, 'READY');
+    assert.equal(deriveBioXpStatus({ ...base, fresh: false }, withinBudget).label, 'STALE');
+    assert.equal(deriveBioXpStatus({ ...base, reachable: null }, withinBudget).label, 'UNKNOWN');
+    assert.equal(deriveBioXpStatus({ ...base, reachable: false }, withinBudget).label, 'UNREACHABLE');
+    assert.equal(deriveBioXpStatus({ ...base, runtime_ready: null }, withinBudget).label, 'UNKNOWN');
+    assert.equal(deriveBioXpStatus({ ...base, hardware_ready: null }, withinBudget).label, 'UNKNOWN');
 });
 
-test('BioXP interlink does not show LINKED when active but unprobed', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: null,
-        lastProbeAt: null,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'unverified');
-    assert.equal(status.statusLabel, 'UNVERIFIED');
-    assert.equal(status.isRobotReachabilityProven, false);
-    assert.match(status.reachabilityText, /hardware state unknown/);
-    assert.notEqual(status.statusLabel, 'LINKED');
+test('cached ready evidence expires locally at the server freshness budget', () => {
+    const observed = Date.parse(base.observed_at);
+    assert.equal(deriveBioXpStatus(base, observed + 30_001).label, 'STALE');
+    assert.equal(deriveBioXpStatus({ ...base, observed_at: null }, observed).label, 'UNKNOWN');
 });
 
-test('BioXP interlink shows unreachable when the robot API probe fails or times out', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: false,
-        lastProbeAt: freshProbe,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'unreachable');
-    assert.equal(status.statusLabel, 'UNREACHABLE');
-    assert.equal(status.humanStatusLabel, 'Robot API unreachable');
-    assert.equal(status.isRobotReachabilityProven, false);
-    assert.match(status.indicatorClass, /red/);
-    assert.match(status.reachabilityText, /timed out/);
-});
-
-test('BioXP interlink marks old successful probes as stale instead of linked', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: true,
-        lastProbeAt: staleProbe,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'stale');
-    assert.equal(status.statusLabel, 'STALE');
-    assert.equal(status.isRobotReachabilityProven, false);
-    assert.match(status.reachabilityText, /stale/);
-});
-
-test('BioXP interlink saved profile remains separate from live robot reachability', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: false,
-        configured: true,
-        reachable: true,
-        lastProbeAt: freshProbe,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'saved');
-    assert.equal(status.statusLabel, 'SAVED');
-    assert.equal(status.isRobotReachabilityProven, false);
-});
-
-test('BioXP probe freshness helper rejects missing, future, or old timestamps', () => {
-    assert.equal(isFreshBioXpProbe({ lastProbeAt: freshProbe, nowMs: NOW }), true);
-    assert.equal(isFreshBioXpProbe({ lastProbeAt: staleProbe, nowMs: NOW }), false);
-    assert.equal(isFreshBioXpProbe({ lastProbeAt: null, nowMs: NOW }), false);
-    assert.equal(isFreshBioXpProbe({ lastProbeAt: '2026-05-23T21:01:00.000Z', nowMs: NOW }), false);
-});
-
-test('BioXP interlink treats a fresh query failure as unreachable even if React Query retains old positive data', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: true,
-        lastProbeAt: freshProbe,
-        probeFailed: true,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'unreachable');
-    assert.equal(status.statusLabel, 'UNREACHABLE');
-    assert.equal(status.isRobotReachabilityProven, false);
-});
-
-test('BioXP interlink marks backend-suppressed stale positives as stale, not linked', () => {
-    const status = deriveBioXpInterlinkMenuStatus({
-        active: true,
-        configured: true,
-        reachable: null,
-        probeStale: true,
-        lastProbeAt: staleProbe,
-        nowMs: NOW,
-    });
-
-    assert.equal(status.state, 'stale');
-    assert.equal(status.statusLabel, 'STALE');
-    assert.equal(status.isRobotReachabilityProven, false);
-});
-
-test('BioXP cockpit positive query helper rejects stale cached online data', () => {
-    assert.equal(isFreshPositiveBioXpSignal({
-        value: true,
-        isFetchedAfterMount: true,
-        isError: false,
-        dataUpdatedAt: NOW - 30_000,
-        nowMs: NOW,
-    }), true);
-    assert.equal(isFreshPositiveBioXpSignal({
-        value: true,
-        isFetchedAfterMount: true,
-        isError: false,
-        dataUpdatedAt: NOW - 120_000,
-        nowMs: NOW,
-    }), false);
-    assert.equal(isFreshPositiveBioXpSignal({
-        value: true,
-        isFetchedAfterMount: true,
-        isError: true,
-        dataUpdatedAt: NOW,
-        nowMs: NOW,
-    }), false);
-    assert.equal(isFreshPositiveBioXpSignal({
-        value: true,
-        isFetchedAfterMount: true,
-        isError: false,
-        dataUpdatedAt: NOW,
-        nowMs: NOW,
-        blocked: true,
-    }), false);
+test('saved profile remains disconnected after restart', () => {
+    const status = deriveBioXpStatus({ ...base, active: false, reachable: null, runtime_ready: null, hardware_ready: null });
+    assert.equal(status.label, 'SAVED / DISCONNECTED');
+    assert.equal(status.ready, false);
 });

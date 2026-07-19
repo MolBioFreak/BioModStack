@@ -16,7 +16,7 @@ for root in (API_ROOT, REPO_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from routers import system
+from routers import system  # noqa: E402
 
 
 def build_client() -> TestClient:
@@ -237,6 +237,7 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
     assert response.status_code == 200
     assert response.json() == {
         "features": {"bioxp": False, "stats_tools": True, "assay_db": False},
+        "configured_features": {"bioxp": False, "stats_tools": True, "assay_db": False},
         "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
     }
 
@@ -272,6 +273,7 @@ def test_system_features_put_merges_feature_flags_into_install_profile(monkeypat
     ]
     assert response.json() == {
         "features": {"bioxp": False, "stats_tools": True, "assay_db": True},
+        "configured_features": {"bioxp": False, "stats_tools": True, "assay_db": True},
         "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
     }
 

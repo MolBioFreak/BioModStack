@@ -58,7 +58,7 @@ The API currently includes routers for:
 - framework lookup and MSA helpers
 - nucleotide sequence storage and mol bio operations
 - RCSB and Ribocentre helpers
-- BioXP linkage plus the currently exposed robot-proxy routes
+- the compact BioXP profile/status/connection/protocol/job/command control plane
 - mobile UI update/feed endpoints for optional phone shells
 
 Router registration lives in [main.py](main.py).
@@ -148,14 +148,13 @@ The API is responsible for:
 - exposing runtime/install-profile state to local control surfaces
 - brokering host-native workflow execution through the workflow adapter
 - serving optional mobile shell update metadata/assets
-- proxying BioXP linkage and robot-adjacent actions
+- enforcing the bounded BioXP control-plane and mutation-admission contract
 
-The BioXP router is intentionally centered on the current cockpit/proxy surface,
-not on a guarantee that every robot-local endpoint is mirrored. It currently
-covers linkage/status plus reference-state, liquid-handling, motion/power,
-latch/LED, thermal/chiller, camera, vision, and protocol route families under
-`/api/bioxp/*` when linkage is configured. Verify route parity before treating a
-new robot-local capability as BMS-supported.
+The BioXP router is intentionally compact and is not a generic robot proxy. It
+contains bounded profile, status, explicit connection, BMS-local logs, offline
+protocol, durable local job, typed command, and emergency-delivery routes.
+Hardware-family, arbitrary-path, host-lifecycle, shell, and remote-log routes are
+absent. See [../../docs/BioXP_Compact_Control_Plane.md](../../docs/BioXP_Compact_Control_Plane.md).
 
 ## Related docs
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import importlib.util
+import tomllib
 
 import yaml
 
@@ -88,7 +89,15 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert api["environment"]["BMS_WORK"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work"
-    assert "BIOXP_SERVER_URL" in api["environment"]
+    bioxp_environment = api["environment"]
+    assert bioxp_environment["BMS_FEATURE_BIOXP"] == "${BMS_FEATURE_BIOXP:-1}"
+    assert bioxp_environment["BMS_BIOXP_MUTATIONS_ENABLED"] == "${BMS_BIOXP_MUTATIONS_ENABLED:-0}"
+    assert bioxp_environment["BMS_BIOXP_OPERATOR_TOKEN_FILE"] == "${BMS_BIOXP_OPERATOR_TOKEN_FILE:-}"
+    assert bioxp_environment["BMS_BIOXP_OPERATOR_TOKEN"] == "${BMS_BIOXP_OPERATOR_TOKEN:-}"
+    assert bioxp_environment["BMS_BIOXP_ALLOWED_HOSTS"] == "${BMS_BIOXP_ALLOWED_HOSTS:-robot}"
+    assert bioxp_environment["BMS_BIOXP_ALLOWED_CIDRS"] == "${BMS_BIOXP_ALLOWED_CIDRS:-}"
+    for retired in ("BIOXP_SERVER_URL", "BIOXP_LINKAGE_URL", "BIOXP_LINKAGE_STATE_PATH"):
+        assert retired not in bioxp_environment
     assert not any(
         volume.get("source") == "/var/run/docker.sock" or volume.get("target") == "/var/run/docker.sock"
         for volume in api.get("volumes", [])
@@ -215,7 +224,12 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_ANALYTICAL_DB_PASSWORD=",
         "BMS_ANALYTICAL_DATABASE_URL=postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT}/bms_analytical_data",
         "BMS_ANALYTICAL_INIT_ON_STARTUP=1",
-        "BIOXP_SERVER_URL=",
+        "BMS_FEATURE_BIOXP=1",
+        "BMS_BIOXP_MUTATIONS_ENABLED=0",
+        "BMS_BIOXP_OPERATOR_TOKEN_FILE=",
+        "BMS_BIOXP_OPERATOR_TOKEN=",
+        "BMS_BIOXP_ALLOWED_HOSTS=robot",
+        "BMS_BIOXP_ALLOWED_CIDRS=",
         "BMS_DOCKER_COMPOSE_PROJECT=biomodstack-core-runtime",
 
         "BMS_STATS_TOOLS_EXTERNALIZED=1",
@@ -323,10 +337,16 @@ def test_assay_r_package_installer_caps_parallel_compilation_by_default() -> Non
 
 
 def test_httpx_is_a_runtime_dependency_for_container_api_startup() -> None:
-    pyproject = (REPO_ROOT / "platform" / "api" / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject_path = REPO_ROOT / "platform" / "api" / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert '    "httpx>=0.27.0",' in pyproject
-    assert 'dev = [\n    "pytest>=8.0.0",\n    "pytest-asyncio>=0.23.0",\n]' in pyproject
+    assert "httpx>=0.27.0" in pyproject["project"]["dependencies"]
+    assert {
+        "pytest>=8.0.0",
+        "pytest-asyncio>=0.23.0",
+        "pytest-randomly>=3.15.0",
+        "pytest-socket>=0.7.0",
+    }.issubset(set(pyproject["dependency-groups"]["dev"]))
 
 
 def test_core_runtime_image_proof_script_reports_safe_api_runtime_contract() -> None:

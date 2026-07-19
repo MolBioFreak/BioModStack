@@ -40,4 +40,12 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-randomly>=3.15.0",
+    "pytest-socket>=0.7.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--disable-socket --allow-unix-socket"
+markers = [
+    "live_bioxp: exact-live contract marker; the default pytest harness remains route-free and live endpoint execution uses a separately authorized host lane",
 ]

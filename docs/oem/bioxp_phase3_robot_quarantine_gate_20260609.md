@@ -1,5 +1,9 @@
 # BioXP Phase 3 Gate — Robot-Local Quarantine Required Before Implementation
 
+> **HISTORICAL EVIDENCE — NOT THE CURRENT BMS CONTRACT.** Retained for audit
+> provenance only. Current BioXP ownership and routes are defined by
+> [`../BioXP_Compact_Control_Plane.md`](../BioXP_Compact_Control_Plane.md).
+
 ## Status
 
 Phase 3 is **blocked** in this environment.
@@ -24,10 +28,10 @@ Read-only connection attempts from this sandbox:
 
 ```text
 bioxp -> DNS resolution failed
-robot -> TCP/SSH timeout to 100.124.140.56:22
+robot -> TCP/SSH timeout to [REDACTED-ROBOT-HOST]:22
 bioxp3200 -> DNS resolution failed
 molbiofreak@bioxp -> DNS resolution failed
-molbiofreak@robot -> TCP/SSH timeout to 100.124.140.56:22
+molbiofreak@robot -> TCP/SSH timeout to [REDACTED-ROBOT-HOST]:22
 ```
 
 ## Required next step before code implementation
