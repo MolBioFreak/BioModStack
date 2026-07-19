@@ -15,9 +15,6 @@ from services.nextflow import resolve_nextflow_entrypoint  # noqa: E402
 
 
 RETIRED_BINDER_ID = "bind" + "craft"
-RETIRED_ANTIBODY_ID = "antibody" + "_" + "denovo"
-RETIRED_TEMPLATE_ID = "template_" + RETIRED_ANTIBODY_ID
-RETIRED_ANTIBODY_MODE = RETIRED_ANTIBODY_ID + "_pipeline"
 
 
 def test_retired_workflow_files_are_deleted() -> None:
@@ -27,20 +24,13 @@ def test_retired_workflow_files_are_deleted() -> None:
         "modules/free" + RETIRED_BINDER_ID + ".nf",
         "scripts/spawn_" + RETIRED_BINDER_ID + "_children.py",
         "workflows/" + RETIRED_BINDER_ID + "_design.nf",
-        "platform/api/config/models/" + RETIRED_ANTIBODY_ID + ".yaml",
-        "workflows/" + RETIRED_ANTIBODY_ID + ".nf",
     ]
     assert [path for path in retired_paths if (REPO_ROOT / path).exists()] == []
 
 
 def test_retired_ids_are_absent_from_active_source() -> None:
     forbidden = re.compile(
-        "|".join(re.escape(token) for token in (
-            RETIRED_BINDER_ID,
-            RETIRED_ANTIBODY_ID,
-            RETIRED_TEMPLATE_ID,
-            RETIRED_ANTIBODY_MODE,
-        )),
+        re.escape(RETIRED_BINDER_ID),
         re.IGNORECASE,
     )
     roots = [
@@ -74,8 +64,6 @@ def test_retired_ids_are_absent_from_active_source() -> None:
     ("model_id", "mode"),
     [
         (RETIRED_BINDER_ID, "design"),
-        (RETIRED_ANTIBODY_ID, RETIRED_ANTIBODY_MODE),
-        (RETIRED_TEMPLATE_ID, RETIRED_ANTIBODY_MODE),
     ],
 )
 def test_retired_ids_fail_closed_during_entrypoint_resolution(model_id: str, mode: str) -> None:

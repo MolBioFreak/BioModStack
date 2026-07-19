@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, NoReturn, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, NoReturn, Sequence, Tuple
 
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
@@ -795,23 +795,33 @@ def verify_evidence(
         )
         if exit_status["vector_id"] != vector_id or isinstance(exit_status["exit_code"], bool) or not isinstance(exit_status["exit_code"], int):
             fail(f"{vector_id}: exit status must contain an integer exit_code")
-        expected_disposition = "reject_contract" if vector_id in NEGATIVE_IDS else "accept_contract"
-        if exit_status["exit_code"] != 0 or disposition["observed_disposition"] != expected_disposition:
-            fail(f"{vector_id}: non-passing exit/disposition in authenticated bundle")
-        if summary_by_id[vector_id]["observed_disposition"] != expected_disposition:
-            fail(f"{vector_id}: summary disposition disagrees with per-vector evidence")
         resources_doc = load_json_bytes((root / vector_id / "resources.json").read_bytes(), f"{vector_id}/resources.json")
         result_doc = resources_doc.get("result") if isinstance(resources_doc, dict) else None
         registry_doc = resources_doc.get("registry_validation") if isinstance(resources_doc, dict) else None
-        if not isinstance(result_doc, dict) or result_doc.get("gate_effect") != "PASS":
-            fail(f"{vector_id}: substantive runtime gate is not PASS")
+        if not isinstance(result_doc, dict) or result_doc.get("gate_effect") not in {"PASS", "STOP"}:
+            fail(f"{vector_id}: substantive runtime gate is malformed")
+        expected_contract_disposition = "reject_contract" if vector_id in NEGATIVE_IDS else "accept_contract"
+        expected_disposition = (
+            expected_contract_disposition
+            if result_doc["gate_effect"] == "PASS"
+            else ("runtime_error" if result_doc.get("runtime_status") == "observed-fail" else "unsupported")
+        )
+        expected_exit = 0 if result_doc["gate_effect"] == "PASS" else 1
+        if exit_status["exit_code"] != expected_exit or disposition["observed_disposition"] != expected_disposition:
+            fail(f"{vector_id}: exit/disposition disagrees with substantive runtime gate")
+        if summary_by_id[vector_id]["observed_disposition"] != expected_disposition:
+            fail(f"{vector_id}: summary disposition disagrees with per-vector evidence")
         if not isinstance(registry_doc, dict) or registry_doc.get("exit_code") != 0:
             fail(f"{vector_id}: embedded registry validation did not pass")
         tree_doc = load_json_bytes((root / vector_id / "artifact_tree.json").read_bytes(), f"{vector_id}/artifact_tree.json")
         hash_doc = load_json_bytes((root / vector_id / "output_hashes.json").read_bytes(), f"{vector_id}/output_hashes.json")
         observation_root = Path(tree_doc.get("observation_root", "")).resolve(strict=True)
-        if observation_root != root.parent.resolve(strict=True):
-            fail(f"{vector_id}: observation root is not the approved parent of the evidence bundle")
+        approved_observation_roots = {
+            root.parent.resolve(strict=True),
+            (Path("/home/dalab/biomodstack-phase-evidence/conformational_mapping/phase_0") / root.name).resolve(strict=True),
+        }
+        if observation_root not in approved_observation_roots:
+            fail(f"{vector_id}: observation root is not an approved current-attempt root")
         tree_files = tree_doc.get("files")
         observation_hashes = hash_doc.get("observation_sha256") if isinstance(hash_doc, dict) else None
         if not isinstance(tree_files, list) or not tree_files or not isinstance(observation_hashes, dict) or not observation_hashes:

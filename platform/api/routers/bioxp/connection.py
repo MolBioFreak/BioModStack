@@ -13,9 +13,10 @@ from .dependencies import (
     get_bioxp_runtime,
     mutations_enabled,
     operator_token_configured,
+    require_bioxp_mutation_access,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
 
 def _public_snapshot(snapshot: Any) -> dict[str, Any]:

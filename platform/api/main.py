@@ -14,7 +14,7 @@ from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness
-from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, boltzgen, conformational_mapping, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -151,6 +151,7 @@ app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(conformational_mapping.router)
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])

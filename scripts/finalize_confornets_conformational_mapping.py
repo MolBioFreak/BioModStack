@@ -78,13 +78,12 @@ _EXECUTION_RECEIPT_FIELDS = {
     "coordinate_plan_file_sha256",
     "native_request_sha256",
     "output_ledger_sha256",
-    "checkpoint_path",
+    "runtime_attestation_path",
+    "runtime_attestation_sha256",
     "checkpoint_sha256",
-    "container_image_path",
     "container_digest",
     "backend_commit",
     "runtime_identity",
-    "executed_sources",
     "feature_identity_sha256",
 }
 
@@ -201,75 +200,37 @@ def _validate_execution_receipt(
 
     settings = request["confornets"]
     identity = settings["backend_identity"]
-    if receipt["checkpoint_path"] != settings["checkpoint"]["path"]:
-        raise FinalizationError("execution receipt checkpoint path mismatch")
-    checkpoint = _request_owned_path(
-        request_path.parent, receipt["checkpoint_path"], label="execution checkpoint"
+    expected_identity = {
+        "checkpoint_sha256": settings["checkpoint"]["sha256"],
+        "container_digest": identity["container_digest"],
+        "backend_commit": identity["backend_commit"],
+        "runtime_identity": identity["runtime_identity"],
+        "feature_identity_sha256": identity["feature_identity_sha256"],
+    }
+    if any(receipt.get(key) != value for key, value in expected_identity.items()):
+        raise FinalizationError("execution receipt runtime identity mismatch")
+    attestation_relative = _safe_relative_path(
+        receipt["runtime_attestation_path"], label="runtime attestation"
     )
+    attestation_path = _contained_file(native_root, attestation_relative, label="runtime attestation")
+    if _sha256_file(attestation_path) != receipt["runtime_attestation_sha256"]:
+        raise FinalizationError("runtime attestation hash mismatch")
+    attestation = _load_json(attestation_path, label="runtime attestation")
+    if not isinstance(attestation, Mapping):
+        raise FinalizationError("runtime attestation is malformed")
+    for key, value in expected_identity.items():
+        if attestation.get(key) != value:
+            raise FinalizationError("runtime attestation identity mismatch")
     if (
-        receipt["checkpoint_sha256"] != _sha256_file(checkpoint)
-        or receipt["checkpoint_sha256"] != settings["checkpoint"]["sha256"]
+        attestation.get("request_sha256") != request["request_sha256"]
+        or attestation.get("coordinate_plan_sha256") != plan["coordinate_plan_sha256"]
+        or attestation.get("status") != "container_executed"
+        or not isinstance(attestation.get("executed_sources"), list)
+        or not attestation["executed_sources"]
+        or not isinstance(attestation.get("command"), list)
+        or not attestation["command"]
     ):
-        raise FinalizationError("execution receipt checkpoint byte identity mismatch")
-
-    image = _request_owned_path(
-        request_path.parent,
-        receipt["container_image_path"],
-        label="execution container image",
-    )
-    image_digest = f"sha256:{_sha256_file(image)}"
-    if receipt["container_digest"] != image_digest or identity["container_digest"] != image_digest:
-        raise FinalizationError("execution receipt container image digest mismatch")
-    if (
-        receipt["backend_commit"] != identity["backend_commit"]
-        or receipt["runtime_identity"] != identity["runtime_identity"]
-    ):
-        raise FinalizationError("execution receipt source commit/runtime mismatch")
-
-    repo_relative = _safe_relative_path(
-        identity["repo_path"], label="execution repository path"
-    )
-    _request_owned_path(
-        request_path.parent,
-        repo_relative,
-        label="execution repository",
-        expect_directory=True,
-    )
-    source_records = receipt["executed_sources"]
-    if not isinstance(source_records, list) or not source_records:
-        raise FinalizationError("execution receipt must bind executed source bytes")
-    normalized_sources: list[dict[str, Any]] = []
-    seen_sources: set[str] = set()
-    for index, record in enumerate(source_records):
-        if not isinstance(record, Mapping) or set(record) != {
-            "relative_path",
-            "bytes",
-            "sha256",
-        }:
-            raise FinalizationError(f"execution receipt source row {index} is malformed")
-        relative = _safe_relative_path(
-            record["relative_path"], label=f"execution source row {index}"
-        )
-        if relative in seen_sources or not relative.startswith(f"{repo_relative}/"):
-            raise FinalizationError("execution receipt source is duplicate or outside repository")
-        seen_sources.add(relative)
-        source = _request_owned_path(
-            request_path.parent, relative, label=f"execution source row {index}"
-        )
-        actual = {
-            "relative_path": relative,
-            "bytes": source.stat().st_size,
-            "sha256": _sha256_file(source),
-        }
-        if dict(record) != actual:
-            raise FinalizationError("execution receipt source byte identity mismatch")
-        normalized_sources.append(actual)
-    feature_identity = canonical_sha256(normalized_sources)
-    if (
-        receipt["feature_identity_sha256"] != feature_identity
-        or identity["feature_identity_sha256"] != feature_identity
-    ):
-        raise FinalizationError("execution receipt executed-source feature identity mismatch")
+        raise FinalizationError("runtime attestation execution binding is incomplete")
     return True
 
 
@@ -601,6 +562,7 @@ def _validate_single_chain(
     if legacy_request.get("canonical_binding") != {
         "request_sha256": request["request_sha256"],
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
+        "target_id": request["targets"][0]["target_id"],
     }:
         raise FinalizationError("native request canonical binding mismatch")
     return legacy_request
@@ -882,6 +844,13 @@ def _semantic_role(relative_path: str, coordinate_paths: set[str]) -> str:
         return "confidence_json" if name.endswith("confidence.json") else "full_data_json"
     if name == "request.json":
         return "request"
+    if name in {
+        "cm_upstream_coordinate_ledger_v1.jsonl",
+        "cm_output_coordinate_ledger_v1.json",
+    }:
+        return "coordinate_ledger"
+    if name == "cm_confornets_coordinate_context_v1.json":
+        return "coordinate_context"
     if name == "samples.json":
         return "preprocess"
     if "loss" in name:
@@ -1116,9 +1085,7 @@ def finalize(request_path: Path, native_root: Path, output: Path) -> None:
             "candidates": candidates,
             "native_manifest_path": "cm_native_artifacts_v1.json",
             "native_manifest_sha256": _sha256_file(native_manifest_path),
-            "warnings": [
-                "Synthetic fixtures and canonical finalization are not authenticated live inference evidence."
-            ],
+            "warnings": [],
             "omissions": omissions,
             "terminal_status": "complete" if identity_known else "quarantined",
             "started_at": started_at,

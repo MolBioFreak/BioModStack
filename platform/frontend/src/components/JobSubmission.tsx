@@ -17,6 +17,7 @@ import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { ProteinModificationTemplate } from './ProteinModificationTemplate';
 
 import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
+import { ConformationalMappingLauncher } from './conformationalMapping/ConformationalMappingLauncher';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -647,6 +648,8 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
             return 'Experimental conformational mapping; ConforNets backend first.';
+        case 'conformational_mapping':
+            return 'Complete-complex Protenix v2 ensembles, canonical ConforNets/import alternatives, residue mapping, FrustraMPNN landscapes, and support-ranked comparison.';
         case 'esmfold2':
         case 'esmfold2_experimental':
             return 'ESMFold2 engine inside Structure Prediction.';
@@ -806,6 +809,17 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
                 }
+                else if (data.model_id === 'conformational_mapping') {
+                    sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('conformational_mapping');
+                    setClonedValues({
+                        ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
+                        ...data.params,
+                        name: data.name || data.params?.name || 'Conformational mapping',
+                    });
+                    setJobName(data.name || 'Conformational mapping');
+                }
                 // 7. Manual Mode
                 else {
                     setWizardMode('manual');
@@ -841,6 +855,7 @@ export function JobSubmission() {
         protein_local_redesign: 'protein_modification_experimental',
         protein_cad_experimental: 'protein_modification_experimental',
         boltz_cp_experimental: 'boltz_cp_experimental',
+        conformational_mapping: 'conformational_mapping',
         esmfold2: 'structure_prediction',
         esmfold2_experimental: 'structure_prediction',
     };
@@ -927,6 +942,9 @@ export function JobSubmission() {
             : null;
         if (matchedApiTemplate) {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
+            if (apiTemplateId === 'conformational_mapping') {
+                sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
+            }
             setWizardMode(matchedApiTemplate.experimental ? 'experimental' : 'templates');
             setSelectedTemplateId(apiTemplateId);
             setClonedValues({
@@ -951,7 +969,10 @@ export function JobSubmission() {
             const templateModelId = template.model_id || template.params?.template_model_id;
             const isLegacyEsmfold2 = templateModelId === 'esmfold2' || templateModelId === 'esmfold2_experimental';
             const isLegacyBoltzGen = templateModelId === 'boltzgen';
-            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
+            if (dedicatedTemplateId === 'conformational_mapping') {
+                sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
+            }
+            setWizardMode(['boltz_cp_experimental', 'conformational_mapping'].includes(dedicatedTemplateId) ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
             setDedicatedTemplateVersion((prev) => prev + 1);
             setClonedValues({
@@ -1012,7 +1033,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
 
@@ -1064,6 +1085,7 @@ export function JobSubmission() {
 
         if (template.id === 'boltz_cp_experimental') return 'CP';
         if (template.id === 'confornets_experimental') return 'CN';
+        if (template.id === 'conformational_mapping') return 'CM';
 
         return template.icon === 'target' ? 'TG'
             : template.icon === 'flask' ? 'RF'
@@ -1404,7 +1426,7 @@ export function JobSubmission() {
     };
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
@@ -1559,6 +1581,16 @@ export function JobSubmission() {
                                 <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
                                     Conformational Mapping selected. Configure the workflow below.
                                 </div>
+                            ) : selectedTemplateId === 'conformational_mapping' ? (
+                                <ConformationalMappingLauncher
+                                    key={`conformational_mapping:${dedicatedTemplateVersion}`}
+                                    onBack={handleDedicatedTemplateBack}
+                                    initialValues={{
+                                        ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
+                                        ...(templateDetail?.preset_params || {}),
+                                        ...(clonedValues || {}),
+                                    }}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">
