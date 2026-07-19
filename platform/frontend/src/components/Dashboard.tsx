@@ -264,7 +264,7 @@ export function Dashboard() {
             return;
         }
         if (detailedJob.status === 'awaiting_input') {
-            handleResumeWithSettings(detailedJob);
+            await handleResumeWithSettings(detailedJob);
             return;
         }
         const completed = detailedJob.completed_stages || [];
@@ -276,14 +276,23 @@ export function Dashboard() {
         }
     };
 
-    const handleResumeWithSettings = (job: Job) => {
-        const p = job.params || {};
-        const structureRetryJob = isStructureReorchestrateJob(job);
+    const handleResumeWithSettings = async (job: Job) => {
+        let detailedJob: Job;
+        try {
+            detailedJob = await hydrateJobForDetail(job);
+        } catch (error) {
+            const apiError = error as UntypedApiValue;
+            alert(`Could not load full job settings: ${apiError.response?.data?.detail || apiError.message}`);
+            return;
+        }
+
+        const p = detailedJob.params || {};
+        const structureRetryJob = isStructureReorchestrateJob(detailedJob);
         setResumeDialogMode(structureRetryJob ? 'reorchestrate' : 'resume');
-        setResumeSettingsJob(job);
-        setResumeSettingsFromStage(mapAwaitingStageToResumeStage(job.awaiting_stage));
-        setResumeSettingsNameSuffix(job.status === 'awaiting_input' ? 'continued' : structureRetryJob ? 'reorchestrated' : 'retuned');
-        setStructureReorchestrateSettings(structureRetryJob ? deriveStructureReorchestrateSettings(job) : null);
+        setResumeSettingsJob(detailedJob);
+        setResumeSettingsFromStage(mapAwaitingStageToResumeStage(detailedJob.awaiting_stage));
+        setResumeSettingsNameSuffix(detailedJob.status === 'awaiting_input' ? 'continued' : structureRetryJob ? 'reorchestrated' : 'retuned');
+        setStructureReorchestrateSettings(structureRetryJob ? deriveStructureReorchestrateSettings(detailedJob) : null);
         setResumeSettingsForm({
             rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
             seqsPerDesign: clamp(Math.round(toNumber(p.seqs_per_design, DEFAULT_RESUME_SETTINGS_FORM.seqsPerDesign)), 1, 32),
