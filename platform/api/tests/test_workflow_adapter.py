@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -374,6 +377,53 @@ async def test_gpu_status_routes_to_adapter_in_core_runtime_mode(monkeypatch: py
 
     assert response == expected
     assert captured == [("GET", "/api/gpu/status", None)]
+
+
+@pytest.mark.asyncio
+async def test_slow_gpu_adapter_does_not_block_api_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+
+    def slow_request(_method: str, _path: str, _payload: object | None = None):
+        time.sleep(0.4)
+        return {"gpus": [], "cpu": {}, "ram": {}}
+
+    monkeypatch.setattr(gpu, "request_via_workflow_adapter", slow_request, raising=False)
+
+    request_task = asyncio.create_task(gpu.get_system_status())
+    started = time.monotonic()
+    await asyncio.sleep(0.03)
+    event_loop_delay = time.monotonic() - started
+
+    assert event_loop_delay < 0.2
+    assert await request_task == {"gpus": [], "cpu": {}, "ram": {}}
+
+
+@pytest.mark.asyncio
+async def test_slow_runtime_descriptor_does_not_block_adapter_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import workflow_adapter as workflow_adapter_router
+
+    def slow_descriptor(*, runtime_mode: str):
+        time.sleep(0.4)
+        return {
+            "runtime_mode": runtime_mode,
+            "health": {"adapter_ready": True},
+            "services": [],
+        }
+
+    monkeypatch.setattr(workflow_adapter_router, "runtime_descriptor", slow_descriptor)
+    request = Request({"type": "http"})
+
+    request_task = asyncio.create_task(
+        workflow_adapter_router.workflow_adapter_runtime_state(request, runtime="container")
+    )
+    started = time.monotonic()
+    await asyncio.sleep(0.03)
+    event_loop_delay = time.monotonic() - started
+
+    assert event_loop_delay < 0.2
+    response = await request_task
+    assert response["runtime_mode"] == "container"
+    assert response["control_mode"] == "host-adapter"
 
 
 @pytest.mark.asyncio

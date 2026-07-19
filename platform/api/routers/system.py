@@ -3,6 +3,7 @@ System administration routes for cache cleanup, runtime control, and install-pro
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sqlite3
@@ -345,13 +346,15 @@ async def get_runtime_state(request: Request, runtime: str | None = None):
     try:
         if _system_control_should_proxy_to_workflow_adapter():
             try:
-                return _mark_current_api_ready(_runtime_state_via_workflow_adapter(runtime_mode))
+                response = await asyncio.to_thread(_runtime_state_via_workflow_adapter, runtime_mode)
+                return _mark_current_api_ready(response)
             except WorkflowAdapterRequestError as exc:
                 if exc.status_code != 404:
                     raise
             except RuntimeError:
                 pass
-        return _mark_current_api_ready(runtime_descriptor(runtime_mode=runtime_mode))
+        descriptor = await asyncio.to_thread(runtime_descriptor, runtime_mode=runtime_mode)
+        return _mark_current_api_ready(descriptor)
     except WorkflowAdapterRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
@@ -360,12 +363,12 @@ async def get_runtime_state(request: Request, runtime: str | None = None):
 
 @router.post("/runtime/start")
 async def start_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "start", start_all)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "start", start_all)
 
 
 @router.post("/runtime/start-api")
 async def start_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "start-api", start_api)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "start-api", start_api)
 
 
 @router.post("/runtime/start-target")
@@ -378,8 +381,8 @@ async def start_runtime_target_route(
     normalized_target = str(target or (payload.target if payload else None) or "prod").strip().lower()
     try:
         if _system_control_should_proxy_to_workflow_adapter():
-            return _start_runtime_target_via_workflow_adapter(normalized_target)
-        start_runtime_target(target=normalized_target)
+            return await asyncio.to_thread(_start_runtime_target_via_workflow_adapter, normalized_target)
+        await asyncio.to_thread(start_runtime_target, target=normalized_target)
     except WorkflowAdapterRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
@@ -391,22 +394,22 @@ async def start_runtime_target_route(
 
 @router.post("/runtime/stop")
 async def stop_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "stop", stop_all)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "stop", stop_all)
 
 
 @router.post("/runtime/stop-api")
 async def stop_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "stop-api", stop_api)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "stop-api", stop_api)
 
 
 @router.post("/runtime/restart")
 async def restart_runtime(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "restart", restart_all)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "restart", restart_all)
 
 
 @router.post("/runtime/restart-api")
 async def restart_runtime_api(request: Request, runtime: str | None = None):
-    return _run_runtime_action(request, runtime, "restart-api", restart_api)
+    return await asyncio.to_thread(_run_runtime_action, request, runtime, "restart-api", restart_api)
 
 
 @router.get("/install-profile")
