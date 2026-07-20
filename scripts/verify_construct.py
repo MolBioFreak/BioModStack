@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -807,6 +808,8 @@ def recompute_alignment_semantics(
             if qname in primary_by_read:
                 raise ValueError(f"multiple primary alignment records for read {qname!r}")
             primary_by_read[qname] = record
+        if flag & 0x100:
+            continue
         if flag & 0x4:
             continue
         if record["rname"] != reference_name:
@@ -1117,6 +1120,8 @@ def validate_alignment_artifacts(
             [*samtools_command, "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=30,
         )
@@ -1135,41 +1140,47 @@ def validate_alignment_artifacts(
         if quickcheck.returncode != 0:
             reason = (quickcheck.stderr or quickcheck.stdout or "samtools quickcheck failed").strip()
             bam_validation = semantic_validation("invalid", "samtools quickcheck", reason)
-            index_validation = semantic_validation("invalid", "samtools idxstats -X", "BAM validation failed")
+            index_validation = semantic_validation("invalid", "samtools idxstats private exact-index sidecar", "BAM validation failed")
             return bam_validation, index_validation, version, commands
         bam_validation = semantic_validation("valid", "samtools quickcheck")
 
         try:
             index_magic = index_path.read_bytes()[:4]
         except OSError as exc:
-            index_validation = semantic_validation("invalid", "BAI/CSI magic and samtools idxstats -X", str(exc))
+            index_validation = semantic_validation("invalid", "BAI/CSI magic and samtools idxstats private exact-index sidecar", str(exc))
             return bam_validation, index_validation, version, commands
         if index_magic not in {b"BAI\x01", b"CSI\x01"}:
             index_validation = semantic_validation(
                 "invalid",
-                "BAI/CSI magic and samtools idxstats -X",
+                "BAI/CSI magic and samtools idxstats private exact-index sidecar",
                 f"unexpected alignment index magic: {index_magic.hex() or 'empty'}",
             )
             return bam_validation, index_validation, version, commands
 
-        idxstats_argv = [*samtools_command, "idxstats", "-X", str(bam_path), str(index_path)]
-        commands.append({"name": "samtools_idxstats_explicit_index", "argv": idxstats_argv})
-        idxstats = subprocess.run(
-            idxstats_argv,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-        )
+        with tempfile.TemporaryDirectory(prefix="biomodstack-index-check-") as temporary_directory:
+            private_root = Path(temporary_directory)
+            private_bam = private_root / "alignment.bam"
+            private_index = private_root / ("alignment.bam.csi" if index_magic == b"CSI\x01" else "alignment.bam.bai")
+            private_bam.symlink_to(bam_path.resolve())
+            private_index.symlink_to(index_path.resolve())
+            idxstats_argv = [*samtools_command, "idxstats", str(private_bam)]
+            commands.append({"name": "samtools_idxstats_private_exact_index", "argv": idxstats_argv})
+            idxstats = subprocess.run(
+                idxstats_argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
         if idxstats.returncode != 0:
             reason = (idxstats.stderr or idxstats.stdout or "samtools idxstats failed").strip()
-            index_validation = semantic_validation("invalid", "samtools idxstats -X", reason)
+            index_validation = semantic_validation("invalid", "samtools idxstats private exact-index sidecar", reason)
         else:
-            index_validation = semantic_validation("valid", "samtools idxstats -X")
+            index_validation = semantic_validation("valid", "samtools idxstats private exact-index sidecar")
     except (OSError, subprocess.SubprocessError) as exc:
         reason = f"samtools validation unavailable: {exc}"
         bam_validation = semantic_validation("invalid", "samtools quickcheck", reason)
-        index_validation = semantic_validation("invalid", "samtools idxstats -X", reason)
+        index_validation = semantic_validation("invalid", "samtools idxstats private exact-index sidecar", reason)
     return bam_validation, index_validation, version, commands
 
 
