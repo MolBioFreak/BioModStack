@@ -4340,9 +4340,13 @@ def _infer_nanopore_stage_outputs(
         ],
         "wf_clone_validation": [
             "assembly/wf_clone.log",
+            "assembly/runtime_provenance.json",
             "assembly/wf_clone_out",
             "assembly/wf_clone_out/wf-clone-validation-report.html",
             "assembly/wf_clone_out/sample_status.txt",
+            "assembly/adapter/adapter_manifest.json",
+            "verification/qc_manifest.json",
+            "verification/verification_summary.tsv",
         ],
     }
 
