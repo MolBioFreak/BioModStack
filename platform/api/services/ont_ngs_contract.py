@@ -97,7 +97,10 @@ ONT_SEQUENCE_QC_MANIFEST_CONTRACT: dict[str, Any] = {
         "plasmid_qc_summary",
         "construct_screening_summary",
         "clone_validation_assembly",
+        "clone_validation_adapter",
         "clone_validation_report",
+        "clone_validation_runtime_provenance",
+        "construct_verification",
         "igv_track_config",
         "igv_report",
         "igv_track",
@@ -230,7 +233,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "per_base_support",
             "consensus",
             "clone_validation_assembly",
+            "clone_validation_adapter",
             "clone_validation_report",
+            "clone_validation_runtime_provenance",
+            "construct_verification",
             "construct_screening_summary",
             "plasmid_qc_summary",
             "igv_track_config",
@@ -314,6 +320,14 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
         "fastq_minimap2_preset": "map-ont",
         "modified_bases": "none",
     },
+    "wf_clone_validation": {
+        "ont_molecule_type": "dna",
+        "run_modkit": False,
+        "run_fastq_qc": True,
+        "modified_bases": "none",
+        "wf_clone_assembly_tool": "flye",
+        "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    },
 }
 
 
@@ -371,5 +385,16 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["dorado_basecall_mode"] = basecall_mode
     normalized["dorado_device"] = normalized.get("dorado_device") or ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
+
+    if canonical_id == "wf_clone_validation":
+        assembly_tool = str(normalized.get("wf_clone_assembly_tool") or "").strip()
+        if assembly_tool not in {"flye", "canu"}:
+            raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
+        model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
+        accepted_model = "dna_r10.4.1_e8.2_400bps_hac@v5.0.0"
+        if model_id != accepted_model:
+            raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
+        normalized["wf_clone_assembly_tool"] = assembly_tool
+        normalized["wf_clone_basecaller_model"] = model_id
 
     return normalized

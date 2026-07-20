@@ -113,7 +113,7 @@ def _record_support(
 
 
 def iter_mapped_sam_lines(bam: Path, samtools_cmd: Sequence[str]) -> Iterable[str]:
-    cmd = [*samtools_cmd, "view", "-F", "4", str(bam)]
+    cmd = [*samtools_cmd, "view", "-F", "260", str(bam)]
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -143,6 +143,8 @@ def consume_sam_record(line: str, ref_name: str, ref_len: int, support: list[Pos
         flag = int(cols[1])
         ref_pos = int(cols[3])
     except ValueError:
+        return
+    if flag & 0x100:
         return
     if ref_pos <= 0 or ref_pos > ref_len:
         return
@@ -182,8 +184,8 @@ def _consensus_and_fraction(item: PositionSupport, reference_base: str) -> tuple
     if depth <= 0:
         return (reference_base if reference_base in BASES else "N", 0.0)
     consensus_base, major_count = max(base_counts.items(), key=lambda kv: (kv[1], "ACGTN".index(kv[0]) * -1))
-    if major_count <= 0:
-        consensus_base = "-" if item.deletion_count > 0 else (reference_base if reference_base in BASES else "N")
+    if item.deletion_count > major_count:
+        consensus_base = "-"
         major_count = item.deletion_count
     return consensus_base, major_count / depth if depth else 0.0
 

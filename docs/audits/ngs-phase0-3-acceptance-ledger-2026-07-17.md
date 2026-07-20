@@ -138,16 +138,16 @@ An immutable review of discarded tree `255f6b0fdb017685336fab5bd027bc0b10857f25`
 
 ## Phase 3 — Pinned `wf-clone-validation` production integration
 
-- [ ] Upstream release is pinned to v1.8.4 commit `b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42`.
-- [ ] Container image and Medaka/Dorado model identities are immutable and recorded.
-- [ ] No runtime `nextflow pull`, runtime source mutation, hidden model download, or silent model substitution.
-- [ ] Upstream output adapter validates schema/version and rejects malformed/missing semantic evidence.
-- [ ] Upstream outputs normalize into the same verification model used by Phase 2.
-- [ ] Exact, deliberate-SNV, mixed-population, and missing/malformed-output fixtures produce expected outcomes.
-- [ ] Container-backed or production-like run proves offline/reproducible execution where prerequisites exist.
-- [ ] UI/API badges distinguish workflow completion from scientific verification.
+- [x] Upstream release is pinned to v1.8.4 commit `b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42` and tree `9cc0a24beee74eccdb07765b755fa64e04bd8141`; patched commit/tree are independently bound.
+- [x] Five exact container files and their live SHA-256 values, Nextflow 25.10.0 build 10289, and exact HAC v5.0.0 model identity/store are immutable and recorded.
+- [x] Runtime has no `nextflow pull`, source copy/mutation, patch/sed/rewrite, hidden model download, fast-to-HAC substitution, or assembly-tool fallback.
+- [x] Adapter schema v1 validates and hashes required/optional outputs and rejects missing, ambiguous, escaped/symlinked, malformed, or contradictory evidence.
+- [x] Upstream final FASTA plus the authoritative original analysis BAM/reference feed the existing Phase-2 verifier; upstream BAM/status/exit zero cannot create PASS.
+- [x] Focused P3 fixtures cover exact runtime, mismatches, adapter happy path, missing/duplicate/malformed/contradictory output, and execution-versus-verdict separation; existing Phase-2 truth fixtures remain the scientific semantic suite.
+- [x] Existing production-like offline run completed all tasks for `sample02` (3,037 bp) from the exact locked assets, and its output passes the new adapter.
+- [x] API/artifact and frontend surfaces expose adapter/runtime provenance plus the separate canonical construct-verification artifact; mutable source/revision/path/profile controls are removed and rejected.
 
-**Phase 3 decision:** PENDING.
+**Phase 3 decision:** IMPLEMENTED LOCAL CANDIDATE; independent review and a fresh full run of the rewritten outer wrapper remain pending. No biological PASS or release-final acceptance is claimed. Exact evidence: `docs/audits/ngs-p3-wf-clone-validation-implementation-2026-07-19.md`.
 
 ## Commit and review ledger
 
@@ -156,4 +156,4 @@ An immutable review of discarded tree `255f6b0fdb017685336fab5bd027bc0b10857f25`
 | Phase 0 documentation | baseline contracts passed; launcher/image isolation limitations and model-inventory erratum recorded | 76 API + 15 frontend; six image digests and three model-directory digests reproduced | APPROVE — fresh independent review, no blockers | this scoped commit | base remote-backed |
 | Phase 1 | adversarial RED covered retired selector, public/unbound BAM provenance, direct numeric injection, unaligned POD5 Modkit, tagged-but-unmapped BAM, duplicate registry modes, and hidden alias | 51 focused; 320 complete matrix; 12/12 frontend; 7/7 profiles; real Dorado tag preservation; real Modkit 0.6.1 | pre-final/discarded cycles recorded above; final exact-candidate PASS sessions in commit trailers | this scoped commit | not pushed |
 | Phase 2 | adversarial RED covered malformed/untrusted evidence, wrong reference, corruption, support/topology/contamination contradictions, non-finite values, inconsistent BAM/stat/support evidence, false linear circularity, sidecar mixing, equal-length wrong references, generic-submit runtime-root injection, stale requests, path escape, symlinks, cross-job artifact IDs, ranges, and repeat/homopolymer orientation normalization | 192 latest combined API; 16 focused frontend; lint/typecheck/production build; hardened synthetic and public BC114 replays; primary production session `ready=true`; browser range/read/cross-job gate | discarded tree review failed and was remediated; **fresh corrected-tree review pending** | pending approvals | not pushed |
-| Phase 3 | pending | pending | pending | pending | pending |
+| Phase 3 | `/tmp/codex-p3-red.txt`: discriminating lock/validator/adapter/runtime/API contracts failed before implementation | focused P3 contracts, related API/NGS matrix, frontend contracts/typecheck, Python/JSON/YAML/Nextflow/static hygiene, live lock validation, official-output adapter replay, and provisioning identity reproduction recorded in `/tmp/codex-p3-summary.txt` | pending | not committed | not pushed |
